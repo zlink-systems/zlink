@@ -460,7 +460,7 @@ export class ZlinkStreamConnectorLifecycle {
     error: ZlinkStreamError,
     origin: ZlinkStreamConnection | undefined,
     generation: number,
-    reason: ZlinkStreamCloseReason = closeReasonFor(error)
+    reason?: ZlinkStreamCloseReason
   ): Promise<void> {
     if (this.closeRequested || this.currentState === ZlinkStreamConnectionState.Closed) {
       return;
@@ -468,7 +468,7 @@ export class ZlinkStreamConnectorLifecycle {
     if (origin !== undefined && !this.isCurrentConnection(origin, generation)) {
       return;
     }
-    this.closeReasonValue = reason;
+    this.closeReasonValue = reason ?? closeReasonFor(error);
     if (this.disconnectTask !== undefined) {
       return await this.disconnectTask;
     }

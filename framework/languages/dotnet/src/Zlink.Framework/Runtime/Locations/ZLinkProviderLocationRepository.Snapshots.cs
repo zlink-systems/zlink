@@ -21,7 +21,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         ZLinkStoreScanCursor? cursor = request.ContinuationToken is { } continuationToken
             ? DecodeContinuationToken(prefix, continuationToken)
             : null;
-        var result = await provider
+        var result = await _provider
             .ScanAsync(new ZLinkStoreScanRequest(prefix, cursor, pageSize), cancellationToken)
             .ConfigureAwait(false);
         if (result is ZLinkStoreScanResult.Expired)

@@ -41,6 +41,7 @@
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
+        <Compile Include="Configuration/StartupDependencyMetadataTests.cs"/>
         <Compile Include="Configuration/Registration/HandlerExposure.cs"/>
         <Compile Include="Configuration/Registration/NodesAndServices.cs"/>
         <Compile Include="Configuration/Registration/Monitoring.cs"/>
@@ -140,6 +141,7 @@
         <Compile Include="Runtime/LocationRuntimeQueryTests.cs"/>
         <Compile Include="Runtime/InstanceSpotActivationJournalTests.cs"/>
         <Compile Include="Runtime/InstanceSpotSendDeadlineTests.cs"/>
+        <Compile Include="Runtime/SpotStoreFailureKindTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeTests.cs"/>
         <Compile Include="Runtime/MaintenanceRuntimeTests.cs"/>
         <Compile Include="Runtime/LogicalMulticastSubmitTests.cs"/>
@@ -223,6 +225,7 @@
         <Compile Include="Runtime/UnhandledDispatchPolicyTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorExactRequestMessageFlowTests.cs"/>
         <Compile Include="Runtime/UserSpotExecutionSchedulerTests.cs"/>
+        <Compile Include="Runtime/SharedSerialGateTests.cs"/>
         <Compile Include="Runtime/WorkerPoolTests.cs"/>
         <Compile Include="Runtime/WeightContractTests.cs"/>
         <Compile Include="../Common/FrameworkGlobalUsings.cs" Link="GlobalUsings.cs"/>

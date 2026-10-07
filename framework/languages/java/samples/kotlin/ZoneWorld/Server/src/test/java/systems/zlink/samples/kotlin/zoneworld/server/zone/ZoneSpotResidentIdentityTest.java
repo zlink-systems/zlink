@@ -36,7 +36,8 @@ final class ZoneSpotResidentIdentityTest {
                                 false,
                                 false,
                                 "",
-                                ""));
+                                "",
+                                1));
         PlayerActor old = new PlayerActor("player-1", proxy(ZLinkActorContext.class, null, null));
         PlayerActor current =
                 new PlayerActor("player-1", proxy(ZLinkActorContext.class, null, null));

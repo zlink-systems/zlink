@@ -2,6 +2,8 @@ package systems.zlink.framework.configuration;
 
 import systems.zlink.framework.streams.ZLinkSession;
 
+import java.time.Duration;
+
 public interface ZLinkStreamNodeBuilder {
     ZLinkStreamNodeBuilder bind(String endpoint);
 
@@ -12,6 +14,10 @@ public interface ZLinkStreamNodeBuilder {
     ZLinkStreamNodeBuilder setBindHost(String host);
 
     ZLinkStreamNodeBuilder setAdvertiseHost(String host);
+
+    ZLinkStreamNodeBuilder heartbeat(Duration interval, Duration timeout);
+
+    ZLinkStreamNodeBuilder idleTimeout(Duration timeout);
 
     ZLinkStreamSocketConfig configureSocket();
 

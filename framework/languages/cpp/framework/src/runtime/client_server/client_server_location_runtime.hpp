@@ -16,6 +16,7 @@
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/contracts/monitoring/client_server_runtime.hpp>
+#include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
 #include <boost/asio/awaitable.hpp>
 
 #include <atomic>
@@ -39,7 +40,7 @@ framework_runtime_state_t client_server_framework_state (mesh::service_node_stat
  * batch budget, or the Application Job Queue supply stops it, as the client turn does. Each
  * record takes its own permit: the first is `application_permit`, the rest are reserved only
  * while the queue has room. */
-task_t<void>
+task_t<bool>
 pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        mesh::service_liveness_registry_t::clock_t::time_point now,
                        std::shared_ptr<application_job_queue_t> application_jobs,
@@ -95,18 +96,23 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     struct snapshot_connection_t;
     struct snapshot_source_t;
     struct worker_lane_snapshot_t;
+    struct worker_request_t;
 
     void start_server (const channel_snapshot_t &channel,
                        const std::optional<location_owner_token_t> &publication_owner);
     void start_client (const channel_snapshot_t &channel);
     void run ();
     void reconcile ();
-    task_t<void> reconcile_task ();
-    task_t<void> reconcile_channel_task (client_channel_t &channel);
-    bool publish_servers ();
+    task_t<void> reconcile_task (raw_client_server_client_t::transport_turn_t transport_turn = {});
+    task_t<void>
+    reconcile_channel_task (client_channel_t &channel,
+                            const raw_client_server_client_t::transport_turn_t &transport_turn);
+    bool request_publication () noexcept;
+    task_t<void> request_transport_turn (std::function<void ()> work);
+    void run_transport_turns ();
     task_t<bool> publish_servers_task ();
     task_t<void> pump ();
-    task_t<worker_lane_snapshot_t> refresh_client_pump_snapshot ();
+    task_t<worker_lane_snapshot_t> run_worker_turn ();
     task_t<void> publish_snapshot_changes ();
     client_server_channel_snapshot_t
     publish_snapshot_locked (client_server_channel_snapshot_t current,
@@ -162,6 +168,9 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     location_repository_t *_store;
     location_repository_t *_leases;
     service_provider_t _services;
+    // Resolved once during configuration. The service registry is not a concurrent
+    // structure, so snapshot turns read this reference instead of resolving again.
+    framework_runtime_t *_framework_runtime;
     serializer_registry_t *_serializers;
     const handler_registry_t *_handlers;
     std::shared_ptr<application_job_queue_t> _application_jobs;
@@ -183,14 +192,13 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::unique_ptr<zlink::poller_t> _transport_poller;
     std::shared_ptr<eventing::runtime_wake_timer_t> _wake_timer =
       std::make_shared<eventing::runtime_wake_timer_t> ();
-    std::atomic_bool _stop{false};
-    // Protects _descriptor_publish_pending/result, _active_application_drains,
-    // server_entry_t::pump_task, and publication of pump_task_state_t::task.
-    // Terminal waits read the published task; its completion uses state->mutex.
+    std::shared_ptr<std::atomic_bool> _stop = std::make_shared<std::atomic_bool> (false);
+    // Guards short updates only and is never held across a wait: queued worker
+    // requests, _active_application_drains, server_entry_t::pump_task and publication of
+    // pump_task_state_t::task. The worker owns poller changes and publication.
     std::mutex _server_progress_mutex;
     std::condition_variable _server_progress_changed;
-    bool _descriptor_publish_pending = false;
-    bool _descriptor_publish_result = false;
+    std::vector<std::shared_ptr<worker_request_t>> _worker_requests;
     std::size_t _active_application_drains = 0;
     std::thread _thread;
 };

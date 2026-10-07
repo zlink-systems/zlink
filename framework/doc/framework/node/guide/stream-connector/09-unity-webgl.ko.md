@@ -29,7 +29,7 @@ C# 표면은 양쪽이 같다. 네임스페이스 `Systems.Zlink.Stream.Connecto
 Package Manager → **Add package from git URL**:
 
 ```
-https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.28.0
+https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.29.0
 ```
 
 태그를 반드시 고정한다. `framework-node/v<version>`은 패키지에 담긴 browser bundle이 나온

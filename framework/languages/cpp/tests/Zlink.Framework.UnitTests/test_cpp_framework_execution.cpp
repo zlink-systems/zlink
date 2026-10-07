@@ -806,7 +806,7 @@ bool verify_suspended_lifecycle_cancellation_releases_fifo ()
             return false;
         }
     }
-    const auto outcome = queue.cancel_submission (submission.value ());
+    const auto outcome = queue.cancel_submission (submission.value ()).result ().value ();
     queue.drain ();
     if (outcome != serial_cancel_submission_outcome_t::active_cancel_requested
         || cancelled.load () != 1 || later_runs.load () != 1 || queue.pending_count () != 0)
@@ -1811,6 +1811,294 @@ bool verify_spot_wide_two_actors_are_serial ()
     return accepted_b && !ran_too_early && ran_after_release;
 }
 
+bool verify_spot_wide_consumer_waits_for_shared_gate ()
+{
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide (), {}, 1);
+    serial_test_blocker_t owner;
+    if (!fixture.serial.execute_spot ("gate-owner", owner.work ()) || !owner.wait_for_entry ())
+        return false;
+
+    bool accepted = true;
+    std::atomic_int started{0};
+    for (const auto *actor : {"actor-a", "actor-b"}) {
+        serial_work_options_t options;
+        options.retained_message = std::make_shared<int> (7);
+        accepted = fixture.serial.execute_actor (
+                     actor, "waiting-actor",
+                     [&] (auto complete) {
+                         started.fetch_add (1, std::memory_order_release);
+                         complete ([] {});
+                     },
+                     options)
+                   && accepted;
+    }
+    // One worker makes this marker follow the existing independent Actor drains.
+    // Admission must finish while the ordinary asynchronous Spot turn is held.
+    serial_test_signal_t marker;
+    const auto marked = fixture.worker->try_submit_internal ([&] { marker.set (); });
+    const auto observed = marked && marker.wait_for ();
+    std::size_t waiting_messages = 0;
+    for (const auto *actor : {"actor-a", "actor-b"})
+        waiting_messages += fixture.serial.actor_executor (actor)
+                              ->queue ()
+                              ->pending_messages ()
+                              .result ()
+                              .value ()
+                              .size ();
+    bool retained = waiting_messages == 2;
+    const auto started_while_held = started.load (std::memory_order_acquire);
+    owner.release ();
+    fixture.spot_queue->drain ();
+    for (const auto *actor : {"actor-a", "actor-b"}) {
+        const auto queue = fixture.serial.actor_executor (actor)->queue ();
+        queue->drain ();
+        retained = queue->pending_messages ().result ().value ().empty () && retained;
+    }
+    const auto started_after_release = started.load (std::memory_order_acquire);
+    std::cout << "SpotWide consumer probe: accepted=" << accepted << " marker=" << observed
+              << " retained-while-held=" << waiting_messages
+              << " handlers-while-held=" << started_while_held
+              << " handlers-after-release=" << started_after_release << '\n';
+    return accepted && observed && retained && started_while_held == 0
+           && started_after_release == 2;
+}
+
+bool verify_spot_wide_cancel_removes_unclaimed_actor_head ()
+{
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    serial_test_blocker_t owner;
+    if (!fixture.serial.execute_spot ("cancel-gate-owner", owner.work ())
+        || !owner.wait_for_entry ())
+        return false;
+
+    std::atomic_int started{0};
+    std::atomic_int cancelled{0};
+    auto submitted = fixture.serial.execute_actor_cancellable (
+      "actor-a", "cancel-before-claim",
+      [&] (auto complete) {
+          ++started;
+          complete ([] {});
+      },
+      [&] { ++cancelled; });
+    if (!submitted) {
+        owner.release ();
+        return false;
+    }
+    const auto outcome =
+      submitted.value ().queue->cancel_submission (submitted.value ().id).result ().value ();
+    owner.release ();
+    fixture.spot_queue->drain ();
+    submitted.value ().queue->drain ();
+    return outcome == serial_cancel_submission_outcome_t::queued_cancelled && started.load () == 0
+           && cancelled.load () == 1 && submitted.value ().queue->pending_count () == 0;
+}
+
+bool verify_spot_wide_control_returns_without_waiting_for_gate ()
+{
+    using namespace zlink::framework::runtime;
+    serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered = false;
+    bool release = false;
+    if (!fixture.spot_queue->try_post ("held-physical-gate", [&] {
+            std::unique_lock lock (mutex);
+            entered = true;
+            changed.notify_all ();
+            changed.wait (lock, [&] { return release; });
+        }))
+        return false;
+    {
+        std::unique_lock lock (mutex);
+        if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return entered; })) {
+            release = true;
+            changed.notify_all ();
+            return false;
+        }
+    }
+    auto actor = fixture.serial.actor_executor ("actor-a");
+    auto submitted = actor->queue ()->try_post_cancellable_async (
+      "control-cancel-target", [] (auto complete) { complete ([] {}); }, [] {});
+    std::atomic_bool returned{false};
+    std::atomic_bool cancelled{false};
+    std::atomic_bool queried{false};
+    std::thread caller ([&] {
+        auto outcome = actor->queue ()->cancel_submission (submitted.value ());
+        auto pending = actor->queue ()->pending_messages ();
+        returned.store (true);
+        [&]<typename T> (T value) {
+            if constexpr (requires { value.result (); })
+                cancelled.store (value.result ().value ()
+                                 == serial_cancel_submission_outcome_t::queued_cancelled);
+            else
+                cancelled.store (value == serial_cancel_submission_outcome_t::queued_cancelled);
+        }(std::move (outcome));
+        const auto messages = pending.result ();
+        queried.store (messages && messages.value ().empty ());
+    });
+    const bool nonblocking = wait_until ([&] { return returned.load (); });
+    {
+        std::lock_guard lock (mutex);
+        release = true;
+    }
+    changed.notify_all ();
+    caller.join ();
+    std::cout << "control returned while physical gate held=" << nonblocking << '\n';
+    return nonblocking && cancelled.load () && queried.load ();
+}
+
+bool verify_spot_wide_stop_settles_queued_actor_rejection ()
+{
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    serial_test_blocker_t owner;
+    if (!fixture.serial.execute_spot ("stop-gate-owner", owner.work ()) || !owner.wait_for_entry ())
+        return false;
+
+    std::atomic_int started{0};
+    std::atomic_int rejected{0};
+    if (!fixture.serial.execute_actor (
+          "actor-a", "stop-before-claim",
+          [&] (auto complete) {
+              ++started;
+              complete ([] {});
+          },
+          {}, false, [&] { ++rejected; })) {
+        owner.release ();
+        return false;
+    }
+    fixture.spot_queue->cancel_pending ();
+    owner.release ();
+    fixture.spot_queue->drain ();
+    fixture.serial.actor_executor ("actor-a")->queue ()->drain ();
+    return started.load () == 0 && rejected.load () == 1;
+}
+
+bool verify_spot_wide_rejects_actor_when_gate_scheduler_stops ()
+{
+    using namespace zlink::framework::runtime;
+
+    class rejected_scheduler_t final : public offload_executor_t
+    {
+      public:
+        rejected_scheduler_t () : offload_executor_t (1, "stopped-spot-gate") {}
+        bool try_submit_internal (std::function<void ()>) override { return false; }
+    } worker;
+    auto gate = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::spot_wide ());
+    auto actor = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::actor_delivery ());
+    actor->attach_spot_gate (gate);
+    const bool accepted =
+      actor->try_post_async ("stopped-before-claim", [] (auto complete) { complete ([] {}); });
+    const auto outcome = actor->cancel_submission (1).result ().value ();
+    actor->cancel_pending ();
+    gate->cancel_pending ();
+    actor->drain ();
+    gate->drain ();
+    return !accepted && outcome == serial_cancel_submission_outcome_t::already_terminal
+           && actor->pending_count () == 0 && gate->pending_count () == 0;
+}
+
+bool verify_spot_wide_actor_ready_lane_tracks_lifecycle ()
+{
+    using namespace zlink::framework::runtime;
+
+    serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    serial_test_blocker_t owner;
+    if (!fixture.serial.execute_spot ("lane-gate-owner", owner.work ()) || !owner.wait_for_entry ())
+        return false;
+    std::mutex order_mutex;
+    std::vector<std::string> order;
+    const auto record = [&] (std::string name) {
+        std::lock_guard lock (order_mutex);
+        order.push_back (std::move (name));
+    };
+    auto actor = fixture.serial.actor_executor ("actor-a");
+    const bool accepted_application =
+      fixture.serial.execute_actor ("actor-a", "queued-application", [&] (auto complete) {
+          record ("application");
+          complete ([] {});
+      });
+    if (!accepted_application || !wait_until ([&] {
+            return fixture.spot_queue->pending_count (serial_work_lane_t::application) >= 2;
+        })) {
+        owner.release ();
+        return false;
+    }
+    const bool accepted_lifecycle =
+      actor->execute_lifecycle ("ready-lifecycle", [&] { record ("lifecycle"); });
+    owner.release ();
+    fixture.spot_queue->drain ();
+    actor->queue ()->drain ();
+    std::lock_guard lock (order_mutex);
+    return accepted_application && accepted_lifecycle
+           && order == std::vector<std::string>{"lifecycle", "application"};
+}
+
+bool verify_spot_wide_handoff_allows_spot_control ()
+{
+    using namespace zlink::framework::runtime;
+    serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    auto actor = fixture.serial.actor_executor ("actor-a");
+    auto reserved = actor->queue ()->reserve_handoff_barrier ("handoff-control");
+    if (!reserved)
+        return false;
+    serial_execution_queue_t::async_completion_t settle;
+    std::mutex mutex;
+    std::atomic_bool reached{false};
+    std::atomic_bool control_ran{false};
+    const auto activated = reserved.value ()->activate_async ([&] (auto complete) {
+        std::lock_guard lock (mutex);
+        settle = [complete = std::move (complete)] (auto finish) mutable {
+            finish ();
+            complete (zlink::framework::result_t<void>::success ());
+        };
+        reached.store (true);
+    });
+    if (!activated || !wait_until ([&] { return reached.load (); }))
+        return false;
+    const bool posted = fixture.serial.execute_spot ("handoff-peer-control", [&] (auto complete) {
+        control_ran.store (true);
+        complete ([] {});
+    });
+    const bool progressed = posted && wait_until ([&] { return control_ran.load (); });
+    {
+        std::lock_guard lock (mutex);
+        settle ([] {});
+    }
+    actor->queue ()->drain ();
+    fixture.spot_queue->drain ();
+    return progressed;
+}
+
+bool verify_spot_wide_terminal_retains_gate_lifetime ()
+{
+    using namespace zlink::framework::runtime;
+    offload_executor_t executor (1);
+    auto queue = std::make_shared<serial_execution_queue_t> (
+      executor, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::spot_wide ());
+    serial_test_blocker_t owner;
+    if (!queue->try_post_async ("lifetime-owner", owner.work ()) || !owner.wait_for_entry ())
+        return false;
+    if (!queue->try_post ("last-context-reference", [retained = queue] {}))
+        return false;
+    queue.reset ();
+    owner.release ();
+    std::atomic_bool settled{false};
+    if (!executor.try_submit_internal ([&] { settled.store (true); }))
+        return false;
+    return wait_until ([&] { return settled.load (); });
+}
+
 bool verify_same_actor_fifo_in_both_modes ()
 {
     using namespace zlink::framework::runtime;
@@ -2459,8 +2747,9 @@ bool verify_cancellable_serial_submission_lifecycle ()
           },
           [&] { ++cancelled; });
         const bool accepted = submission.has_value ();
-        const auto outcome = accepted ? queue.cancel_submission (submission.value ())
-                                      : serial_cancel_submission_outcome_t::already_terminal;
+        const auto outcome = accepted
+                               ? queue.cancel_submission (submission.value ()).result ().value ()
+                               : serial_cancel_submission_outcome_t::already_terminal;
         const bool replacement_accepted =
           queue.try_post ("replacement-after-unlink", [&] { ++replacement_runs; });
 
@@ -2526,8 +2815,9 @@ bool verify_cancellable_serial_submission_lifecycle ()
             return false;
         }
 
-        const auto first_cancel = queue.cancel_submission (submission.value ());
-        const auto repeated_cancel = queue.cancel_submission (submission.value ());
+        const auto first_cancel = queue.cancel_submission (submission.value ()).result ().value ();
+        const auto repeated_cancel =
+          queue.cancel_submission (submission.value ()).result ().value ();
         bool follower_ran_before_ack = false;
         {
             std::unique_lock lock (gate);
@@ -2544,7 +2834,7 @@ bool verify_cancellable_serial_submission_lifecycle ()
         if (first_cancel != serial_cancel_submission_outcome_t::active_cancel_requested
             || repeated_cancel != serial_cancel_submission_outcome_t::active_cancel_requested
             || follower_ran_before_ack || !follower_ran || stop_requests.load () != 1
-            || queue.cancel_submission (submission.value ())
+            || queue.cancel_submission (submission.value ()).result ().value ()
                  != serial_cancel_submission_outcome_t::already_terminal) {
             return false;
         }
@@ -2647,7 +2937,7 @@ bool verify_cancellable_serial_submission_lifecycle ()
             return false;
         }
         queue.cancel_pending ();
-        const auto terminal = queue.cancel_submission (submission.value ());
+        const auto terminal = queue.cancel_submission (submission.value ()).result ().value ();
         const bool rejected_after_close = !queue.try_post ("closed", [] {});
         {
             std::lock_guard lock (worker_gate);
@@ -7362,6 +7652,29 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--spotwide-consumer-gate") {
+        const bool passed = verify_spot_wide_consumer_waits_for_shared_gate ();
+        std::cout << "SpotWide consumer waits for shared gate=" << passed << '\n';
+        return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--spotwide-control-nonblocking")
+        return verify_spot_wide_control_returns_without_waiting_for_gate () ? EXIT_SUCCESS
+                                                                            : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--spotwide-cancel")
+        return verify_spot_wide_cancel_removes_unclaimed_actor_head () ? EXIT_SUCCESS
+                                                                       : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--spotwide-stop")
+        return verify_spot_wide_stop_settles_queued_actor_rejection () ? EXIT_SUCCESS
+                                                                       : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--spotwide-scheduler-stop")
+        return verify_spot_wide_rejects_actor_when_gate_scheduler_stops () ? EXIT_SUCCESS
+                                                                           : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--spotwide-actor-ready-lane")
+        return verify_spot_wide_actor_ready_lane_tracks_lifecycle () ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--spotwide-handoff-control")
+        return verify_spot_wide_handoff_allows_spot_control () ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--spotwide-gate-lifetime")
+        return verify_spot_wide_terminal_retains_gate_lifetime () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--relocation-ready-state-lane") {
         const bool passed = verify_relocation_ready_keeps_registering_turn_across_state_lane ();
         std::cout << "relocation readiness registering turn retained=" << passed << '\n';
@@ -8777,5 +9090,29 @@ int main (int argc, char **argv)
         return 24;
     }
 
+    if (!verify_spot_wide_consumer_waits_for_shared_gate ()) {
+        return EXIT_FAILURE;
+    }
+    if (!verify_spot_wide_cancel_removes_unclaimed_actor_head ()) {
+        return EXIT_FAILURE;
+    }
+    if (!verify_spot_wide_stop_settles_queued_actor_rejection ()) {
+        return EXIT_FAILURE;
+    }
+    if (!verify_spot_wide_rejects_actor_when_gate_scheduler_stops ()) {
+        return EXIT_FAILURE;
+    }
+    if (!verify_spot_wide_actor_ready_lane_tracks_lifecycle ()) {
+        return EXIT_FAILURE;
+    }
+    if (!verify_spot_wide_handoff_allows_spot_control ()) {
+        return EXIT_FAILURE;
+    }
+    if (!verify_spot_wide_terminal_retains_gate_lifetime ()) {
+        return EXIT_FAILURE;
+    }
+    if (!verify_spot_wide_control_returns_without_waiting_for_gate ()) {
+        return EXIT_FAILURE;
+    }
     return 0;
 }

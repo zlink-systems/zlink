@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.28.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.29.0 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
@@ -59,9 +59,9 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.16.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.17.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.16.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.17.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 # The binding and Core package prefixes have three sources, in this order: the
 # two ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_*_PREFIX options, the repository's local
@@ -1337,6 +1337,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-m6-runtime;maintenance;relocation;termination"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_host_startup_failure
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_host_startup_failure.cpp)
+  target_compile_features(test_cpp_framework_host_startup_failure PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_host_startup_failure PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_link_libraries(test_cpp_framework_host_startup_failure PRIVATE
+    zlink_framework Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_host_startup_failure
+    COMMAND test_cpp_framework_host_startup_failure
+    LABELS "framework-unit;framework-contract;termination"
+    TIER unit
+    TIMEOUT 30)
+
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
@@ -1772,6 +1786,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_di.cpp
     "framework-unit;framework-regression;DI;scope")
   add_zlink_framework_test(
+    test_cpp_framework_startup_dependencies
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_startup_dependencies.cpp
+    "framework-unit;DI;framework-host")
+  add_zlink_framework_test(
     test_cpp_framework_runtime_integration
     tests/Zlink.Framework.UnitTests/test_cpp_framework_runtime_integration.cpp
     "framework-unit;framework-integration;runtime"
@@ -1965,6 +1983,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
   add_executable(test_cpp_framework_spot_close_conformance
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_close_conformance.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp)
   target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)
@@ -2253,6 +2272,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp
     "connector-unit;connector-contract;connector-timeout;connector-protocol"
     contract)
+  foreach(_codec_case reentrant order close reconnect)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_stream_codec_${_codec_case}
+      COMMAND test_cpp_stream_connector codec-${_codec_case}
+      LABELS "connector-unit;connector-contract;connector-regression"
+      TIER unit
+      TIMEOUT 10)
+  endforeach()
   target_compile_definitions(test_cpp_stream_revision PRIVATE
     ZLINK_STREAM_PACKET_NAME_FIXTURE_PATH="${CMAKE_CURRENT_LIST_DIR}/../../test/fixtures/stream-packet-name-whitespace.tsv")
   add_executable(test_cpp_stream_connector_no_exceptions

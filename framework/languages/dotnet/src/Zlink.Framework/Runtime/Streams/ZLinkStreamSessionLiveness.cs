@@ -11,17 +11,19 @@ internal enum ZLinkStreamLivenessDecision
 internal sealed class ZLinkStreamSessionLiveness
 {
     public static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(1);
-    public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(1);
-    public static readonly TimeSpan HeartbeatTimeout = TimeSpan.FromSeconds(5);
-    public static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(30);
+    private readonly ZLinkStreamNodeRegistration _options;
 
     private readonly TimeProvider _time;
     private long _lastApplicationInbound;
     private long _lastHeartbeatPing;
     private long _lastInbound;
 
-    public ZLinkStreamSessionLiveness(TimeProvider? timeProvider = null)
+    public ZLinkStreamSessionLiveness(
+        TimeProvider? timeProvider = null,
+        ZLinkStreamNodeRegistration? options = null
+    )
     {
+        _options = options ?? new ZLinkStreamNodeRegistration { StreamNodeName = string.Empty };
         _time = timeProvider ?? TimeProvider.System;
         var connectedAt = _time.GetTimestamp();
         _lastApplicationInbound = connectedAt;
@@ -62,13 +64,17 @@ internal sealed class ZLinkStreamSessionLiveness
             inboundBaseline = Math.Max(inboundBaseline, connectedTimestamp);
             pingBaseline = Math.Max(pingBaseline, connectedTimestamp);
         }
-        if (_time.GetElapsedTime(inboundBaseline, now) >= HeartbeatTimeout)
+        if (_time.GetElapsedTime(inboundBaseline, now) >= _options.HeartbeatTimeout)
             return ZLinkStreamLivenessDecision.HeartbeatTimeout;
 
-        if (_time.GetElapsedTime(Volatile.Read(ref _lastApplicationInbound), now) >= IdleTimeout)
+        if (
+            _options.IdleTimeout > TimeSpan.Zero
+            && _time.GetElapsedTime(Volatile.Read(ref _lastApplicationInbound), now)
+                >= _options.IdleTimeout
+        )
             return ZLinkStreamLivenessDecision.IdleTimeout;
 
-        if (_time.GetElapsedTime(pingBaseline, now) >= HeartbeatInterval)
+        if (_time.GetElapsedTime(pingBaseline, now) >= _options.HeartbeatInterval)
             return ZLinkStreamLivenessDecision.SendHeartbeat;
 
         return ZLinkStreamLivenessDecision.None;

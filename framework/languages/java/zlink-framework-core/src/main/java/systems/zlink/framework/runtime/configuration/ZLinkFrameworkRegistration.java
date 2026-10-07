@@ -185,7 +185,22 @@ public final class ZLinkFrameworkRegistration {
         }
         for (ZLinkScannedHandler handler :
                 ZLinkHandlerScanner.scan(handlerPackageMarkers).handlers()) {
-            types.add(handler.handlerType());
+            boolean selected =
+                    channels.stream()
+                                    .anyMatch(
+                                            channel ->
+                                                    channel.handlerGroups().stream()
+                                                            .anyMatch(handler.groups()::contains))
+                            || meshNodes.stream()
+                                    .anyMatch(
+                                            node ->
+                                                    node.channelHandlerGroups().values().stream()
+                                                            .flatMap(List::stream)
+                                                            .anyMatch(handler.groups()::contains))
+                            || (handler.spotType() != null && types.contains(handler.spotType()));
+            if (selected) {
+                types.add(handler.handlerType());
+            }
         }
         return Set.copyOf(types);
     }
@@ -306,7 +321,7 @@ public final class ZLinkFrameworkRegistration {
         }
         if (relocationStoreRequired && relocationStore == null) {
             throw new ZLinkConfigurationException(
-                    "Recreate or Snapshot relocation policy requires a Relocation Store");
+                    "Relocatable factories or Instance Spot factories require a Relocation Store");
         }
         Set<String> streamSessionTypeNames = new LinkedHashSet<>();
         for (StreamNodeRegistration streamNode : streamNodes) {

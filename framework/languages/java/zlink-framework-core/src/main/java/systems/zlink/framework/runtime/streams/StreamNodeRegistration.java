@@ -6,11 +6,15 @@ import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.streams.ZLinkSession;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
 public final class StreamNodeRegistration {
     private final String name;
+    private Duration heartbeatInterval = Duration.ofSeconds(1);
+    private Duration heartbeatTimeout = Duration.ofSeconds(5);
+    private Duration idleTimeout = Duration.ZERO;
     private final List<String> bindEndpoints = new ArrayList<>();
     private String advertiseHost;
     private TlsServerRegistration tlsServer;
@@ -21,6 +25,36 @@ public final class StreamNodeRegistration {
 
     public StreamNodeRegistration(String name) {
         this.name = name;
+    }
+
+    public Duration heartbeatInterval() {
+        return heartbeatInterval;
+    }
+
+    public Duration heartbeatTimeout() {
+        return heartbeatTimeout;
+    }
+
+    public Duration idleTimeout() {
+        return idleTimeout;
+    }
+
+    void heartbeat(Duration interval, Duration timeout) {
+        if (interval == null || interval.isZero() || interval.isNegative())
+            throw new ZLinkConfigurationException("STREAM heartbeat interval must be positive.");
+        if (timeout == null || timeout.isZero() || timeout.isNegative())
+            throw new ZLinkConfigurationException("STREAM heartbeat timeout must be positive.");
+        if (timeout.compareTo(interval) <= 0)
+            throw new ZLinkConfigurationException(
+                    "STREAM heartbeat timeout must be greater than interval.");
+        heartbeatInterval = interval;
+        heartbeatTimeout = timeout;
+    }
+
+    void idleTimeout(Duration timeout) {
+        if (timeout == null || timeout.isNegative())
+            throw new ZLinkConfigurationException("STREAM idle timeout must not be negative.");
+        idleTimeout = timeout;
     }
 
     public String name() {

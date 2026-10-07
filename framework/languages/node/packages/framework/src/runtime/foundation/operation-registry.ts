@@ -24,7 +24,8 @@ export interface PendingOperation<T> {
   readonly promise: Promise<T>;
 }
 
-interface Entry<T> {
+interface Entry<T, Context> {
+  readonly context: Context | undefined;
   readonly deadlineMs?: number;
   readonly resolve: (value: T | PromiseLike<T>) => void;
   readonly reject: (reason: unknown) => void;
@@ -35,10 +36,10 @@ const systemClock: OperationClock = {
 };
 
 /** Owns request completion so reply, timeout, cancellation, and shutdown race safely. */
-export class OperationRegistry<T> {
-  private readonly entries = new Map<bigint, Entry<T>>();
+export class OperationRegistry<T, Context = unknown> {
+  private readonly entries = new Map<bigint, Entry<T, Context>>();
   private nextId = 1n;
-  private deadlineCursor?: MapIterator<[bigint, Entry<T>]>;
+  private deadlineCursor?: MapIterator<[bigint, Entry<T, Context>]>;
   private closed = false;
 
   constructor(
@@ -48,20 +49,22 @@ export class OperationRegistry<T> {
 
   register(
     timeoutMs: number,
-    timeoutOwner: 'registry' | 'sender' = 'registry'
+    timeoutOwner: 'registry' | 'sender' = 'registry',
+    context?: Context
   ): PendingOperation<T> {
     if (this.closed) throw new Error('Operation registry is closed.');
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw new RangeError('timeoutMs must be a non-negative finite number.');
     }
     const id = this.nextId++;
-    let resolve!: Entry<T>['resolve'];
-    let reject!: Entry<T>['reject'];
+    let resolve!: Entry<T, Context>['resolve'];
+    let reject!: Entry<T, Context>['reject'];
     const promise = new Promise<T>((onResolve, onReject) => {
       resolve = onResolve;
       reject = onReject;
     });
-    const entry: Entry<T> = {
+    const entry: Entry<T, Context> = {
+      context,
       deadlineMs: timeoutOwner === 'registry' ? this.clock.now() + timeoutMs : undefined,
       resolve,
       reject
@@ -93,6 +96,10 @@ export class OperationRegistry<T> {
     return this.entries.has(id);
   }
 
+  context(id: bigint): Context | undefined {
+    return this.entries.get(id)?.context;
+  }
+
   close(reason = 'Operation registry closed.'): void {
     if (this.closed) return;
     this.closed = true;
@@ -121,7 +128,7 @@ export class OperationRegistry<T> {
     return expired;
   }
 
-  private take(id: bigint): Entry<T> | undefined {
+  private take(id: bigint): Entry<T, Context> | undefined {
     const entry = this.entries.get(id);
     if (entry === undefined) return undefined;
     this.entries.delete(id);

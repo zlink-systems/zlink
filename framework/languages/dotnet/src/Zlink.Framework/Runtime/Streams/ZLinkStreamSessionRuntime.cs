@@ -63,7 +63,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         string transport,
         TimeProvider timeProvider,
         bool actorDispatchEnabled = true,
-        bool requireConnectionReady = false
+        bool requireConnectionReady = false,
+        ZLinkStreamNodeRegistration? livenessOptions = null
     )
     {
         AsyncServiceScope scope = default;
@@ -81,7 +82,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 transport,
                 timeProvider,
                 actorDispatchEnabled,
-                requireConnectionReady
+                requireConnectionReady,
+                livenessOptions
             );
             session.Initialize(headerSessionType);
             return session;
@@ -110,7 +112,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         string transport,
         TimeProvider timeProvider,
         bool actorDispatchEnabled,
-        bool requireConnectionReady
+        bool requireConnectionReady,
+        ZLinkStreamNodeRegistration? livenessOptions
     )
     {
         _scope = scope;
@@ -128,7 +131,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             _runtime,
             errorSink: _runtime.ErrorSink
         );
-        _liveness = new ZLinkStreamSessionLiveness(timeProvider);
+        _liveness = new ZLinkStreamSessionLiveness(timeProvider, livenessOptions);
         var handlers = new ZLinkSessionHandlerRegistry(_handlerInstances);
         _context = new ZLinkSessionContext(
             _runtime,

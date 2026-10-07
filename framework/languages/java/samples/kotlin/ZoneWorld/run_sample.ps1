@@ -263,6 +263,7 @@ function Write-ServerConfig {
     }
     $path = Join-Path $ConfigDir "$Name.properties"
     Set-ZlinkSampleProperties -Path $path -Value @(
+        "sample.zone-capacity=$(switch ($Node) { zone-node-1 { 1 } zone-node-2 { 3 } default { 0 } })",
         "sample.role=$Role",
         "sample.node-id=$Node",
         "sample.mesh-endpoint=tcp://${bindHost}:$Mesh",
@@ -501,6 +502,8 @@ try {
     $RunnerLog = Join-Path $LogDir "runner.log"
     New-Item -ItemType File -Force -Path $ClientLog, $ClientErrorLog, $RunnerLog | Out-Null
 
+    if (-not (Invoke-Client "LAYOUT")) { throw "initial Ops layout probe failed" }
+
     if ($G4Proven) { Add-Verdict "ZW-G4" $true }
     if ($B8Proven) { Add-Verdict "ZW-B8" $true }
 
@@ -616,16 +619,13 @@ try {
         Add-Verdict "ZW-F1-population" ($bots.Count -eq 8) "bot roster count=$($bots.Count)"
     }
     if (Test-Scenario "ZW-F2") {
+        $boundary = Select-String -LiteralPath $ClientLog -Pattern 'ops-bot-boundary bot=([^ ]+) source=([^ ]+) target=([^ ]+)' | Select-Object -First 1
+        if (-not $boundary) { throw "Ops did not select a cross-owner X boundary" }
+        $bot = $boundary.Matches[0].Groups[1].Value
+        $target = $boundary.Matches[0].Groups[3].Value
         $crossed = $false
         for ($attempt = 0; $attempt -lt 300 -and -not $crossed; $attempt++) {
-            $node1 = Get-LogText @("zone-node-1")
-            $node2 = Get-LogText @("zone-node-2")
-            $node1Bots = @($node1 -split "`r`n|`n|`r" | Select-String -Pattern 'player=(bot-[^,]+), bot=true, initial=false' |
-                ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique)
-            $node2Bots = @($node2 -split "`r`n|`n|`r" | Select-String -Pattern 'player=(bot-[^,]+), bot=true, initial=false' |
-                ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique)
-            $crossed = @($node1Bots | Where-Object { $node2 -like "*player=$_, bot=true*" }).Count -gt 0 -or
-                @($node2Bots | Where-Object { $node1 -like "*player=$_, bot=true*" }).Count -gt 0
+            $crossed = (Get-LogText @($target)).Contains("player=$bot, bot=true, initial=false")
             if (-not $crossed) { Start-Sleep -Milliseconds 100 }
         }
         Add-Verdict "ZW-F2" $crossed "no correlated cross-owner bot handoff"

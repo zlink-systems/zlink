@@ -79,9 +79,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private static final Logger LOGGER = Logger.getLogger(ZLinkStreamRuntime.class.getName());
     private static final String HEARTBEAT_PING_NAME = "$zlink.heartbeat.ping";
     private static final String HEARTBEAT_PONG_NAME = "$zlink.heartbeat.pong";
-    private static final long HEARTBEAT_INTERVAL_SECONDS = 1;
-    private static final long HEARTBEAT_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(5);
-    private static final long IDLE_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(30);
+
     private static final Duration BOUND_SESSION_REPLACEMENT_CLOSE_DELAY = Duration.ofMillis(100);
     private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
     private final ZLinkBackendContext context;
@@ -376,11 +374,23 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             receiveLoops.add(new StreamReceiveLoop(streamNode, stream));
         }
         receiveLoops.forEach(StreamReceiveLoop::start);
+        long sweepNanos =
+                TimeUnit.NANOSECONDS.convert(
+                        registration.streamNodes().stream()
+                                .map(
+                                        node ->
+                                                !node.idleTimeout().isZero()
+                                                                && node.idleTimeout()
+                                                                                .compareTo(
+                                                                                        node
+                                                                                                .heartbeatInterval())
+                                                                        < 0
+                                                        ? node.idleTimeout()
+                                                        : node.heartbeatInterval())
+                                .min(Duration::compareTo)
+                                .orElseThrow());
         livenessExecutor.scheduleAtFixedRate(
-                this::checkSessionLiveness,
-                HEARTBEAT_INTERVAL_SECONDS,
-                HEARTBEAT_INTERVAL_SECONDS,
-                TimeUnit.SECONDS);
+                this::checkSessionLiveness, sweepNanos, sweepNanos, TimeUnit.NANOSECONDS);
         return this;
     }
 
@@ -1331,6 +1341,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             }
             ZLinkSessionSerialExecutor serials = new ZLinkSessionSerialExecutor(serialExecutor);
             return new SessionState(
+                    streamNode,
                     session,
                     serials,
                     context,
@@ -1516,17 +1527,27 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                 if (sessions.get(entry.getKey()) != state) {
                                     return null;
                                 }
-                                int expired =
-                                        now - state.lastInboundNanos() >= HEARTBEAT_TIMEOUT_NANOS
-                                                ? ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT
-                                                : now - state.lastApplicationNanos()
-                                                                >= IDLE_TIMEOUT_NANOS
-                                                        ? ZLinkSessionClosingControl.IDLE_TIMEOUT
-                                                        : 0;
+                                StreamNodeRegistration settings = state.streamNode;
+                                int expired = 0;
+                                if (now - state.lastInboundNanos()
+                                        >= TimeUnit.NANOSECONDS.convert(
+                                                settings.heartbeatTimeout())) {
+                                    expired = ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT;
+                                } else if (!settings.idleTimeout().isZero()
+                                        && now - state.lastApplicationNanos()
+                                                >= TimeUnit.NANOSECONDS.convert(
+                                                        settings.idleTimeout())) {
+                                    expired = ZLinkSessionClosingControl.IDLE_TIMEOUT;
+                                }
                                 if (expired != 0) {
                                     sessions.remove(entry.getKey());
+                                    return expired;
                                 }
-                                return expired;
+                                if (now - state.lastHeartbeatPingNanos
+                                        < TimeUnit.NANOSECONDS.convert(
+                                                settings.heartbeatInterval())) return null;
+                                state.lastHeartbeatPingNanos = now;
+                                return 0;
                             });
             if (reason == null) {
                 continue;
@@ -1666,6 +1687,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private static final class SessionState {
+        private final StreamNodeRegistration streamNode;
+        private long lastHeartbeatPingNanos;
         private final ZLinkSession session;
         private final ZLinkSessionSerialExecutor serials;
         private final ZLinkStreamSessionContextState context;
@@ -1684,6 +1707,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private long lastInboundNanos;
 
         SessionState(
+                StreamNodeRegistration streamNode,
                 ZLinkSession session,
                 ZLinkSessionSerialExecutor serials,
                 ZLinkStreamSessionContextState context,
@@ -1696,6 +1720,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 ZLinkSessionActorsRuntime actorRuntime,
                 long connectedNanos,
                 long createdNanos) {
+            this.streamNode = streamNode;
+            lastHeartbeatPingNanos = connectedNanos;
             this.session = session;
             this.serials = serials;
             this.context = context;

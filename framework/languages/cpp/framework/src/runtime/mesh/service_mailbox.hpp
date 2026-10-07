@@ -75,7 +75,10 @@ class service_mailbox_t
     bool begin_application_drain (const std::string &owner);
     void end_application_drain (const std::string &owner);
 
-    bool try_enqueue (service_mailbox_record_t &&record);
+    // admitted runs under the mailbox lock once the record is accepted and before any
+    // claim can see it.
+    bool try_enqueue (service_mailbox_record_t &&record,
+                      const std::function<void ()> &admitted = {});
     std::optional<service_mailbox_claim_t> try_claim (service_mailbox_domain_t domain,
                                                       std::size_t message_budget,
                                                       std::size_t byte_budget);

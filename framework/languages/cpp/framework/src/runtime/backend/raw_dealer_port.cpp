@@ -114,13 +114,18 @@ std::optional<raw_message_t> raw_dealer_port_t::try_receive ()
     if (!_socket) {
         return std::nullopt;
     }
-    zlink::poll_event_t event;
-    if (_poller->wait (&event, 1, std::chrono::milliseconds::zero ()) != 1
-        || event.slot != _poller_slot
-        || (static_cast<short> (event.revents)
-            & static_cast<short> (zlink::poll_event_flag_t::pollin))
-             == 0) {
-        return std::nullopt;
+    // Only a poller's owner waits on it. A shared transport poller belongs to the runtime
+    // worker, so this port reads its socket directly and the non-blocking receive below
+    // reports an empty socket.
+    if (_owned_poller) {
+        zlink::poll_event_t event;
+        if (_poller->wait (&event, 1, std::chrono::milliseconds::zero ()) != 1
+            || event.slot != _poller_slot
+            || (static_cast<short> (event.revents)
+                & static_cast<short> (zlink::poll_event_flag_t::pollin))
+                 == 0) {
+            return std::nullopt;
+        }
     }
     const auto result = _socket->recv (_received, zlink::recv_flags_t::dontwait);
     if (result == static_cast<int> (zlink::recv_result_t::no_data)

@@ -13,6 +13,20 @@ import java.lang.invoke.MethodType;
 /** Starts the runtime for the Framework-owned Spring host. */
 public final class ZLinkFrameworkRuntimeBootstrap {
     private static final MethodHandle START = findStart();
+    private static final MethodHandle PREPARE =
+            findHostMethod(
+                    "prepareHost",
+                    ZLinkFrameworkRuntime.class,
+                    DefaultZLinkFrameworkOptions.class,
+                    ZLinkRuntimeEventDispatcher.class);
+    private static final MethodHandle START_PREPARED =
+            findHostMethod(
+                    "startPreparedHost",
+                    void.class,
+                    ZLinkFrameworkRuntime.class,
+                    DefaultZLinkFrameworkOptions.class,
+                    ZLinkBackendAdapterProvider.class,
+                    ZLinkHandlerActivator.class);
 
     private ZLinkFrameworkRuntimeBootstrap() {}
 
@@ -31,22 +45,52 @@ public final class ZLinkFrameworkRuntimeBootstrap {
         }
     }
 
-    private static MethodHandle findStart() {
+    public static ZLinkFrameworkRuntime prepare(
+            DefaultZLinkFrameworkOptions options, ZLinkRuntimeEventDispatcher events) {
         try {
-            MethodHandles.Lookup hostLookup =
-                    MethodHandles.privateLookupIn(
-                            ZLinkFrameworkRuntime.class, MethodHandles.lookup());
-            return hostLookup.findStatic(
-                    ZLinkFrameworkRuntime.class,
-                    "start",
-                    MethodType.methodType(
+            return (ZLinkFrameworkRuntime) PREPARE.invokeExact(options, events);
+        } catch (RuntimeException | Error failure) {
+            throw failure;
+        } catch (Throwable failure) {
+            throw new IllegalStateException("Framework runtime preparation failed", failure);
+        }
+    }
+
+    public static void startPrepared(
+            ZLinkFrameworkRuntime runtime,
+            DefaultZLinkFrameworkOptions options,
+            ZLinkBackendAdapterProvider backend,
+            ZLinkHandlerActivator activator) {
+        try {
+            START_PREPARED.invokeExact(runtime, options, backend, activator);
+        } catch (RuntimeException | Error failure) {
+            throw failure;
+        } catch (Throwable failure) {
+            throw new IllegalStateException("Framework runtime bootstrap failed", failure);
+        }
+    }
+
+    private static MethodHandle findHostMethod(
+            String name, Class<?> result, Class<?>... parameters) {
+        try {
+            return MethodHandles.privateLookupIn(
+                            ZLinkFrameworkRuntime.class, MethodHandles.lookup())
+                    .findStatic(
                             ZLinkFrameworkRuntime.class,
-                            DefaultZLinkFrameworkOptions.class,
-                            ZLinkBackendAdapterProvider.class,
-                            ZLinkHandlerActivator.class,
-                            ZLinkRuntimeEventDispatcher.class));
+                            name,
+                            MethodType.methodType(result, parameters));
         } catch (ReflectiveOperationException failure) {
             throw new ExceptionInInitializerError(failure);
         }
+    }
+
+    private static MethodHandle findStart() {
+        return findHostMethod(
+                "startHost",
+                ZLinkFrameworkRuntime.class,
+                DefaultZLinkFrameworkOptions.class,
+                ZLinkBackendAdapterProvider.class,
+                ZLinkHandlerActivator.class,
+                ZLinkRuntimeEventDispatcher.class);
     }
 }

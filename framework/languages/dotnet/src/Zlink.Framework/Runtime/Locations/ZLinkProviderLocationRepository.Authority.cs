@@ -83,7 +83,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     // remains observable and retryable. The expected version
                     // cannot match the target row, so this batch cannot delete
                     // the target's single authority row.
-                    await provider
+                    await _provider
                         .WriteAsync(
                             new ZLinkStoreWriteRequest(
                                 [
@@ -312,7 +312,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             }
             if (meta is not null)
                 mutations.Add(new ZLinkStoreMutation.Put(metaKey, Encode(meta), null));
-            var result = await provider
+            var result = await _provider
                 .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
                 .ConfigureAwait(false);
             if (result is not ZLinkStoreWriteResult.Applied applied)
@@ -338,7 +338,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         ArgumentNullException.ThrowIfNull(prefix);
         if (limit is < 1 or > 1000)
             throw new ArgumentOutOfRangeException(nameof(limit));
-        var result = await provider
+        var result = await _provider
             .ScanAsync(
                 new ZLinkStoreScanRequest(
                     AuthorityMetaPrefix(prefix),
@@ -471,7 +471,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             var nextCapacity = capacity.Record.Clone();
             ApplyCapacity(nextCapacity, allocation, pendingDelta: 1);
             var metaKey = AuthorityMetaKey(request.Key);
-            var result = await provider
+            var result = await _provider
                 .WriteAsync(
                     new ZLinkStoreWriteRequest(
                         [
@@ -527,38 +527,51 @@ internal sealed partial class ZLinkProviderLocationRepository
             return StaleAuthorityReclaimResult.NotReclaimable;
 
         var ownerKey = OwnerKey(current.Snapshot.OwnerId);
-        var ownerRead = await provider.ReadAsync(ownerKey, cancellationToken).ConfigureAwait(false);
-        ZLinkStoreCondition staleOwnerCondition;
-        if (ownerRead is ZLinkStoreReadResult.Missing)
+        var descriptorKey = MeshKey(
+            current.Snapshot.Allocation.Descriptor.MeshName,
+            current.Snapshot.Allocation.Descriptor.Rid
+        );
+        var ownerRead = await _provider
+            .ReadAsync(ownerKey, cancellationToken)
+            .ConfigureAwait(false);
+        var descriptorRead = await _provider
+            .ReadAsync(descriptorKey, cancellationToken)
+            .ConfigureAwait(false);
+        var ownerLive = false;
+        ZLinkStoreCondition ownerCondition;
+        if (ownerRead is ZLinkStoreReadResult.Found ownerFound)
         {
-            staleOwnerCondition = new ZLinkStoreCondition.Missing(ownerKey);
+            var owner = DecodeOwner(ownerFound.Value.Bytes);
+            if (owner.OwnerId != current.Snapshot.OwnerId || ownerFound.Value.ExpiresAt is null)
+                throw new InvalidDataException("The Location Store owner lease record is invalid.");
+            ownerLive =
+                owner.LeaseGeneration == current.Snapshot.OwnerLeaseGeneration
+                && ownerFound.Value.ExpiresAt > ownerFound.Value.StoreNow;
+            ownerCondition = new ZLinkStoreCondition.Version(ownerKey, ownerFound.Value.Version);
         }
         else
+            ownerCondition = new ZLinkStoreCondition.Missing(ownerKey);
+        ZLinkStoreCondition descriptorCondition;
+        if (descriptorRead is ZLinkStoreReadResult.Found descriptorFound)
         {
-            var ownerFound = (ZLinkStoreReadResult.Found)ownerRead;
-            var owner = DecodeOwner(ownerFound.Value.Bytes);
+            var descriptor = DecodeDescriptor<ZLinkMeshNodeDescriptor>(
+                descriptorFound.Value.Bytes
+            ).Descriptor;
             if (
-                !string.Equals(owner.OwnerId, current.Snapshot.OwnerId, StringComparison.Ordinal)
-                || ownerFound.Value.ExpiresAt is null
-            )
-            {
-                // A lease is always written with a positive TTL, so a missing
-                // expiry is a corrupt record. Reclaiming deletes authority
-                // state, so refuse rather than read the absence as expiry.
-                throw new InvalidDataException("The Location Store owner lease record is invalid.");
-            }
-
-            if (
-                owner.LeaseGeneration == current.Snapshot.OwnerLeaseGeneration
-                && ownerFound.Value.ExpiresAt > ownerFound.Value.StoreNow
+                ownerLive
+                && descriptor.LifecycleGeneration
+                    == current.Snapshot.Allocation.DescriptorLifecycleGeneration
             )
                 return StaleAuthorityReclaimResult.OwnerLive;
-            staleOwnerCondition = new ZLinkStoreCondition.Value(ownerKey, ownerFound.Value.Bytes);
+            descriptorCondition = new ZLinkStoreCondition.Version(
+                descriptorKey,
+                descriptorFound.Value.Version
+            );
         }
+        else
+            descriptorCondition = new ZLinkStoreCondition.Missing(descriptorKey);
 
-        // A relocation record has its own recovery protocol. GetOrCreate may
-        // reclaim only a steady authority or an unfinished creation whose
-        // owner lease ended.
+        // Relocation authority retains its own recovery protocol.
         if (current.Meta.AggregateFence is not null)
             return StaleAuthorityReclaimResult.RecoveryRequired;
         if (
@@ -572,7 +585,8 @@ internal sealed partial class ZLinkProviderLocationRepository
         var conditions = new List<ZLinkStoreCondition>
         {
             new ZLinkStoreCondition.Version(AuthorityMetaKey(current.Key), current.Version),
-            staleOwnerCondition,
+            ownerCondition,
+            descriptorCondition,
         };
         var mutations = new List<ZLinkStoreMutation>
         {
@@ -587,15 +601,31 @@ internal sealed partial class ZLinkProviderLocationRepository
         conditions.Add(capacity.Condition);
         if (current.Meta.ReservedCreation is null)
             return StaleAuthorityReclaimResult.RecoveryRequired;
-        ApplyCapacity(nextCapacity, current.Snapshot.Allocation, pendingDelta: -1);
-        mutations.Add(new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null));
+        if (capacity.Condition is not ZLinkStoreCondition.Missing)
+        {
+            ApplyCapacity(nextCapacity, current.Snapshot.Allocation, pendingDelta: -1);
+            mutations.Add(new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null));
+        }
 
-        var result = await provider
+        var result = await _provider
             .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
             .ConfigureAwait(false);
         return result is ZLinkStoreWriteResult.Applied
             ? StaleAuthorityReclaimResult.Reclaimed
             : StaleAuthorityReclaimResult.Conflict;
+    }
+
+    public async ValueTask<bool> ReleaseEndedReservationAsync(
+        ZLinkAuthorityKey key,
+        string expectedStoreVersion,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var current = await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false);
+        if (current is null || current.Snapshot.StoreVersion != expectedStoreVersion)
+            return false;
+        return await TryReclaimStaleAuthorityAsync(current, cancellationToken).ConfigureAwait(false)
+            == StaleAuthorityReclaimResult.Reclaimed;
     }
 
     public ValueTask<ZLinkObjectCommitResult> CommitAsync(
@@ -723,7 +753,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             {
                 mutations.Add(new ZLinkStoreMutation.Delete(AuthorityMetaKey(reservation.Key)));
             }
-            var result = await provider
+            var result = await _provider
                 .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
                 .ConfigureAwait(false);
             if (result is ZLinkStoreWriteResult.Conflict)
@@ -792,7 +822,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .ConfigureAwait(false);
             var nextCapacity = capacity.Record.Clone();
             ApplyCapacity(nextCapacity, current!.Snapshot.Allocation, pendingDelta: -1);
-            var result = await provider
+            var result = await _provider
                 .WriteAsync(
                     new ZLinkStoreWriteRequest(
                         [
@@ -1073,7 +1103,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             ZLinkStoreWriteResult result;
             try
             {
-                result = await provider
+                result = await _provider
                     .WriteAsync(
                         new ZLinkStoreWriteRequest(conditions, mutations),
                         cancellationToken
@@ -1370,7 +1400,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             ZLinkStoreWriteResult result;
             try
             {
-                result = await provider
+                result = await _provider
                     .WriteAsync(
                         new ZLinkStoreWriteRequest(conditions, mutations),
                         cancellationToken
@@ -1551,7 +1581,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                                 null
                             )
                         );
-                        var result = await provider
+                        var result = await _provider
                             .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), token)
                             .ConfigureAwait(false);
                         if (result is ZLinkStoreWriteResult.Applied)
@@ -1591,7 +1621,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 throw new ZLinkRelocationDataLostException(
                     $"Aggregate '{fence.AggregateId:N}' is not committed."
                 );
-            var result = await provider
+            var result = await _provider
                 .WriteAsync(
                     new ZLinkStoreWriteRequest(
                         [new ZLinkStoreCondition.Version(key, aggregate.Version)],
@@ -1668,7 +1698,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .ConfigureAwait(false);
             if (aggregate is null || aggregate.Record.ParticipantsCleaned)
                 return;
-            var result = await provider
+            var result = await _provider
                 .WriteAsync(
                     new ZLinkStoreWriteRequest(
                         [new ZLinkStoreCondition.Version(key, aggregate.Version)],
@@ -1714,7 +1744,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                         )
                 )
                 .ToArray();
-            await provider
+            await _provider
                 .WriteAsync(new ZLinkStoreWriteRequest([], mutations), cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -1746,7 +1776,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                             )
                     )
                     .ToArray();
-                await provider
+                await _provider
                     .WriteAsync(new ZLinkStoreWriteRequest([], mutations), cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -1803,7 +1833,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         );
         try
         {
-            var claimed = await provider
+            var claimed = await _provider
                 .WriteAsync(
                     new ZLinkStoreWriteRequest(
                         [new ZLinkStoreCondition.Missing(key)],
@@ -1848,7 +1878,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (staging.Record.Status != AggregateStatus.Staging)
             return;
         var key = AggregateKey(fence);
-        var result = await provider
+        var result = await _provider
             .WriteAsync(
                 new ZLinkStoreWriteRequest(
                     [new ZLinkStoreCondition.Version(key, staging.Version)],
@@ -1962,7 +1992,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     return new ZLinkAggregatePrepareResult.Conflict();
                 }
 
-                var abort = await provider
+                var abort = await _provider
                     .WriteAsync(
                         new ZLinkStoreWriteRequest(
                             [
@@ -2053,7 +2083,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         ZLinkStoreScanCursor? cursor = null;
         do
         {
-            var scan = await provider
+            var scan = await _provider
                 .ScanAsync(new ZLinkStoreScanRequest(childPrefix, cursor, 1000), cancellationToken)
                 .ConfigureAwait(false);
             if (scan is ZLinkStoreScanResult.Expired)
@@ -2074,7 +2104,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .Take(maximumDeletesPerBatch)
                 .Select(static key => (ZLinkStoreMutation)new ZLinkStoreMutation.Delete(key))
                 .ToArray();
-            await provider
+            await _provider
                 .WriteAsync(new ZLinkStoreWriteRequest([], mutations), cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -2131,7 +2161,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                             throw new ZLinkRelocationDataLostException(
                                 $"Aggregate '{fence.AggregateId:N}' authority '{key.Value}' has a different fence."
                             );
-                        var result = await provider
+                        var result = await _provider
                             .WriteAsync(
                                 new ZLinkStoreWriteRequest(
                                     [
@@ -2187,7 +2217,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             var expiredRestarts = 0;
             do
             {
-                var scan = await provider
+                var scan = await _provider
                     .ScanAsync(
                         new ZLinkStoreScanRequest(AggregatePrefix, cursor, 256),
                         cancellationToken
@@ -2327,7 +2357,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     ZLinkStoreWriteResult result;
                     try
                     {
-                        result = await provider
+                        result = await _provider
                             .WriteAsync(
                                 new ZLinkStoreWriteRequest(
                                     [
@@ -2657,7 +2687,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                         throw new InvalidDataException(
                             $"Aggregate inventory page {page.Level}:{page.Index} exceeds 1 MiB."
                         );
-                    var result = await provider
+                    var result = await _provider
                         .WriteAsync(
                             new ZLinkStoreWriteRequest(
                                 [new ZLinkStoreCondition.Missing(key)],
@@ -2668,7 +2698,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                         .ConfigureAwait(false);
                     if (result is ZLinkStoreWriteResult.Applied)
                         return;
-                    var read = await provider.ReadAsync(key, token).ConfigureAwait(false);
+                    var read = await _provider.ReadAsync(key, token).ConfigureAwait(false);
                     if (
                         read is not ZLinkStoreReadResult.Found found
                         || !found.Value.Bytes.Span.SequenceEqual(encoded)
@@ -2797,7 +2827,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             )
                 throw InventoryDataLost(fence, "a page reference is invalid or duplicated");
 
-            var read = await provider
+            var read = await _provider
                 .ReadAsync(
                     AggregateInventoryPageKey(fence, reference.Level, reference.Index),
                     cancellationToken
@@ -2950,7 +2980,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                             );
                         if (stored.Record.TargetAuthorityOwnerGeneration == expectedGeneration)
                             return;
-                        var result = await provider
+                        var result = await _provider
                             .WriteAsync(
                                 new ZLinkStoreWriteRequest(
                                     [new ZLinkStoreCondition.Version(key, stored.Version)],
@@ -3037,7 +3067,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                             )
                         )
                             return;
-                        var result = await provider
+                        var result = await _provider
                             .WriteAsync(
                                 new ZLinkStoreWriteRequest(
                                     [
@@ -3087,7 +3117,9 @@ internal sealed partial class ZLinkProviderLocationRepository
     {
         var meta = await ReadRecordAsync<AggregateParticipantRecord>(metaKey, cancellationToken)
             .ConfigureAwait(false);
-        var payload = await provider.ReadAsync(payloadKey, cancellationToken).ConfigureAwait(false);
+        var payload = await _provider
+            .ReadAsync(payloadKey, cancellationToken)
+            .ConfigureAwait(false);
         return meta is not null
             && meta.Record.Index == expected.Index
             && string.Equals(meta.Record.Key, expected.Key, StringComparison.Ordinal)
@@ -3172,7 +3204,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                         ?? throw new ZLinkRelocationDataLostException(
                             $"Aggregate '{fence.AggregateId:N}' participant {index} is missing."
                         );
-                    var payload = await provider
+                    var payload = await _provider
                         .ReadAsync(AggregateParticipantPayloadKey(fence, index), token)
                         .ConfigureAwait(false);
                     if (
@@ -3230,7 +3262,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             ?? throw new ZLinkRelocationDataLostException(
                 $"Aggregate '{fence.AggregateId:N}' participant {index} is missing."
             );
-        var payload = await provider
+        var payload = await _provider
             .ReadAsync(AggregateParticipantPayloadKey(fence, index), cancellationToken)
             .ConfigureAwait(false);
         if (
@@ -3301,7 +3333,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             AggregateInventoryPageReference reference
         )
         {
-            var read = await provider
+            var read = await _provider
                 .ReadAsync(
                     AggregateInventoryPageKey(fence, reference.Level, reference.Index),
                     cancellationToken
@@ -3739,7 +3771,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
         if (aggregate.Record.Status == AggregateStatus.Staging)
         {
-            var stagedAbort = await provider
+            var stagedAbort = await _provider
                 .WriteAsync(
                     new ZLinkStoreWriteRequest(
                         [new ZLinkStoreCondition.Version(key, aggregate.Version)],
@@ -3785,7 +3817,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             ),
             new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null),
         };
-        var result = await provider
+        var result = await _provider
             .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
             .ConfigureAwait(false);
         if (result is not ZLinkStoreWriteResult.Applied)
@@ -3853,7 +3885,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 },
                 ReservedCreation = null,
             };
-            var result = await provider
+            var result = await _provider
                 .WriteAsync(
                     new ZLinkStoreWriteRequest(
                         [
@@ -3933,7 +3965,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         for (var attempt = 0; attempt < 8; attempt++)
         {
             var first = knownMeta is null
-                ? await provider.ReadAsync(metaKey, cancellationToken).ConfigureAwait(false)
+                ? await _provider.ReadAsync(metaKey, cancellationToken).ConfigureAwait(false)
                 : new ZLinkStoreReadResult.Found(knownMeta);
             knownMeta = null;
             if (first is ZLinkStoreReadResult.Missing)
@@ -3977,7 +4009,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                         // with that cleanup. Retry only when the authority meta
                         // version proves that a concurrent normalization won;
                         // otherwise the missing participant is real data loss.
-                        var currentMeta = await provider
+                        var currentMeta = await _provider
                             .ReadAsync(metaKey, cancellationToken)
                             .ConfigureAwait(false);
                         if (
@@ -4057,7 +4089,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     )
     {
         var descriptorKey = MeshKey(key.MeshName, key.Rid);
-        var descriptorRead = await provider
+        var descriptorRead = await _provider
             .ReadAsync(descriptorKey, cancellationToken)
             .ConfigureAwait(false);
         if (descriptorRead is not ZLinkStoreReadResult.Found descriptorFound)
@@ -4117,7 +4149,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken
     )
     {
-        var read = await provider
+        var read = await _provider
             .ReadAsync(OwnerKey(token.OwnerId), cancellationToken)
             .ConfigureAwait(false);
         if (read is not ZLinkStoreReadResult.Found found)
@@ -4134,7 +4166,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     )
     {
         var key = CapacityKey(descriptor);
-        var read = await provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
+        var read = await _provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
         return read switch
         {
             ZLinkStoreReadResult.Missing => new StoredCapacity(
@@ -4157,7 +4189,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     )
     {
         var key = TerminalKey(operation);
-        var read = await provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
+        var read = await _provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
         if (read is not ZLinkStoreReadResult.Found found)
             return null;
         if (found.Value.ExpiresAt is not { } expiresAt)
@@ -4194,7 +4226,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken
     )
     {
-        var read = await provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
+        var read = await _provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
         if (read is not ZLinkStoreReadResult.Found found)
             return null;
         try
@@ -4237,7 +4269,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     )
     {
         var key = AuthorityOwnerGenerationCounterKey();
-        var read = await provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
+        var read = await _provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
         return read switch
         {
             ZLinkStoreReadResult.Missing => new AuthorityOwnerGenerationCounterState(
@@ -4266,7 +4298,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     )
     {
         var key = ObjectGenerationCounterKey();
-        var read = await provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
+        var read = await _provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
         return read switch
         {
             ZLinkStoreReadResult.Missing => new ObjectGenerationCounterState(
@@ -4285,7 +4317,7 @@ internal sealed partial class ZLinkProviderLocationRepository
 
     private async ValueTask<DateTimeOffset> ReadStoreNowAsync(CancellationToken cancellationToken)
     {
-        var read = await provider
+        var read = await _provider
             .ReadAsync(Key(Prefix + "clock"), cancellationToken)
             .ConfigureAwait(false);
         return read switch
@@ -4401,7 +4433,10 @@ internal sealed partial class ZLinkProviderLocationRepository
         record.SpotsPending = checked(record.SpotsPending + vector.Spots * pendingDelta);
         record.SpotsActive = checked(record.SpotsActive + vector.Spots * activeDelta);
         if (vector.SpotType is not { } spotType)
+        {
+            RequireNonNegative(record);
             return;
+        }
         var key = CapacityTypeKey(spotType.ObjectKind, spotType.StableType);
         var current = record.SpotTypes.GetValueOrDefault(key);
         record.SpotTypes[key] = new CapacityCount(

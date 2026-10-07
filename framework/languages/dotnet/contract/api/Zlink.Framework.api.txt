@@ -493,6 +493,8 @@ assembly Zlink.Framework
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder MaxMessageSize(System.Int64 bytes [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder SetAdvertiseHost(System.String advertiseHost [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder SetBindHost(System.String bindHost [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder SetHeartbeat(System.TimeSpan interval [nullability=read:not-null,write:not-null], System.TimeSpan timeout [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder SetIdleTimeout(System.TimeSpan timeout [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder SetTlsServer(System.String certificatePath [nullability=read:not-null,write:not-null], System.String keyPath [nullability=read:not-null,write:not-null], System.Boolean requireClientCertificate = false [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkStreamSocketConfig
     property System.Nullable<System.TimeSpan> ConnectTimeout { get; set; } [nullability=read:nullable,write:nullable]

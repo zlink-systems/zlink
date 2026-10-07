@@ -20,6 +20,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -232,15 +233,44 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
 
     private CompletionStage<Map<String, Applied>> recoverActivations(Map<String, Applied> routes) {
         CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
-        for (Map.Entry<String, Applied> entry : routes.entrySet()) {
+        for (Map.Entry<String, Applied> entry : new ArrayList<>(routes.entrySet())) {
             if (!(entry.getValue() instanceof InstanceApplied instance)
                     || instance.activationRecovery().isEmpty()) {
                 continue;
             }
             ZLinkInternalMeshNode node = meshNodes.get(instance.meshName());
-            if (node == null
-                    || !instance.instance().targetNodeRid().equals(node.routingId())
+            if (node == null) continue;
+            if (!instance.instance().targetNodeRid().equals(node.routingId())
                     || instance.instance().targetNodeGeneration() != node.lifecycleGeneration()) {
+                if (!instance.ready()) {
+                    tail =
+                            tail.thenCompose(
+                                    ignored ->
+                                            store.releaseEndedReservation(
+                                                            entry.getKey(),
+                                                            instance.instance().storeVersion(),
+                                                            OPEN)
+                                                    .thenCompose(
+                                                            released ->
+                                                                    released
+                                                                            ? relocationStore
+                                                                                    .delete(
+                                                                                            instance.activationRecovery()
+                                                                                                    .orElseThrow()
+                                                                                                    .reference(),
+                                                                                            OPEN)
+                                                                                    .thenApply(
+                                                                                            deleted -> {
+                                                                                                routes
+                                                                                                        .remove(
+                                                                                                                entry
+                                                                                                                        .getKey());
+                                                                                                return null;
+                                                                                            })
+                                                                            : CompletableFuture
+                                                                                    .completedFuture(
+                                                                                            null)));
+                }
                 continue;
             }
             tail =

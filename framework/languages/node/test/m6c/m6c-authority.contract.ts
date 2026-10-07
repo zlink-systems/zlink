@@ -1,3 +1,5 @@
+import { ZLinkStatefulAuthorityRouteRuntime } from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
+import { encodeServiceInstanceAuthorityPayload } from '../../packages/framework/src/runtime/foundation/service-authority-payload-codec';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { RequestResult } from '@zlink-systems/zlink';
@@ -64,6 +66,244 @@ const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
   new ZLinkRuntimeTaskErrorSink(),
   new AbortController().signal
 );
+
+for (const scenario of ['live', 'expired', 'missingCapacity', 'underflow'] as const) {
+  test(`ended reservation release preserves Store invariants: ${scenario}`, async () => {
+    let now = new Date(100);
+    const provider = new ZLinkInMemoryProviderLocationStore(() => now);
+    const store = new ZLinkLocationStoreRepository(provider, () => now);
+    await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+    const request = reserveRequest(`release-${scenario}`, target('node-a', 'owner-a'));
+    const first = await store.reserve(request);
+    assert.equal(first.kind, 'reserved');
+    if (first.kind !== 'reserved') throw new Error('reservation missing');
+    const capacityKey = storeKey('zlink:v11:capacity:mesh:node-a');
+    if (scenario === 'missingCapacity' || scenario === 'underflow') {
+      await provider.write({
+        conditions: [],
+        mutations: [
+          scenario === 'missingCapacity'
+            ? { kind: 'delete', key: capacityKey }
+            : {
+                kind: 'put',
+                key: capacityKey,
+                bytes: Buffer.from(
+                  JSON.stringify({
+                    active: { actors: 0, spots: 0, spotTypes: {} },
+                    pending: { actors: 0, spots: 0, spotTypes: {} }
+                  })
+                )
+              }
+        ]
+      });
+    }
+    if (scenario !== 'live') now = new Date(61_000);
+    const key = encodeAuthorityKey('user_spot', request.key.globalId);
+    if (scenario === 'underflow') {
+      const capacityBefore = await provider.read(capacityKey);
+      assert.equal(capacityBefore.kind, 'found');
+      await assert.rejects(
+        store.releaseEndedReservation(key, first.creating.storeVersion.value),
+        /underflow/
+      );
+      const capacityAfter = await provider.read(capacityKey);
+      assert.equal(capacityAfter.kind, 'found');
+      if (capacityBefore.kind === 'found' && capacityAfter.kind === 'found') {
+        assert.equal(capacityBefore.value.version.value, capacityAfter.value.version.value);
+        assert.deepEqual(capacityBefore.value.bytes, capacityAfter.value.bytes);
+      }
+      const current = await store.readAuthority(key);
+      assert.equal(current.kind, 'snapshot');
+      if (current.kind === 'snapshot')
+        assert.equal(current.storeVersion.value, first.creating.storeVersion.value);
+    } else {
+      assert.equal(
+        await store.releaseEndedReservation(key, first.creating.storeVersion.value),
+        scenario !== 'live'
+      );
+      if (scenario === 'live')
+        assert.equal(
+          (
+            await store.commit({
+              key: request.key,
+              target: request.target,
+              reservationId: first.reservationId,
+              expectedStoreVersion: first.creating.storeVersion.value,
+              readyPayload: Buffer.from('ready')
+            })
+          ).kind,
+          'committed'
+        );
+      else {
+        assert.equal((await store.readAuthority(key)).kind, 'missing');
+        assert.equal(
+          (
+            await store.commit({
+              key: request.key,
+              target: request.target,
+              reservationId: first.reservationId,
+              expectedStoreVersion: first.creating.storeVersion.value,
+              readyPayload: Buffer.from('late')
+            })
+          ).kind,
+          'stale'
+        );
+      }
+      if (scenario === 'missingCapacity')
+        assert.equal((await provider.read(capacityKey)).kind, 'missing');
+    }
+  });
+}
+
+test('a late Commit wins against reservation release only by winning the Store batch', async (t) => {
+  const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(100));
+  const store = new ZLinkLocationStoreRepository(provider, () => new Date(100));
+  const descriptor = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+  const request = reserveRequest('release-race', target('node-a', 'owner-a'));
+  const first = await store.reserve(request);
+  if (first.kind !== 'reserved') throw new Error('reservation missing');
+  await store.removeMeshNode({ meshName: 'mesh', rid: 'node-a' }, request.target.owner);
+  const write = provider.write.bind(provider);
+  let committed = false;
+  t.mock.method(provider, 'write', async (...args: Parameters<typeof write>) => {
+    if (
+      !committed &&
+      args[0].mutations.some((m) => m.kind === 'delete' && m.key.value.startsWith('authority'))
+    ) {
+      committed = true;
+      await store.updateMeshNode(descriptor, ZLinkLocationWriteIntent.NewClaim);
+      assert.equal(
+        (
+          await store.commit({
+            key: request.key,
+            target: request.target,
+            reservationId: first.reservationId,
+            expectedStoreVersion: first.creating.storeVersion.value,
+            readyPayload: Buffer.from('ready')
+          })
+        ).kind,
+        'committed'
+      );
+    }
+    return write(...args);
+  });
+  assert.equal(
+    await store.releaseEndedReservation(
+      encodeAuthorityKey('user_spot', request.key.globalId),
+      first.creating.storeVersion.value
+    ),
+    false
+  );
+  assert.equal(committed, true);
+});
+
+test('startup releases previous lifecycle Creating and capacity before deleting its root', async () => {
+  const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(100));
+  const store = new ZLinkLocationStoreRepository(provider, () => new Date(100));
+  const initial = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+  await store.removeMeshNode(
+    { meshName: 'mesh', rid: 'node-a' },
+    target('node-a', 'owner-a').owner
+  );
+  const descriptor = {
+    ...initial,
+    objectCapabilities: [
+      { ...initial.objectCapabilities[0]!, objectKind: 'instance_spot' as const }
+    ],
+    populationCapacity: {
+      ...initial.populationCapacity,
+      spotTypes: [
+        { ...initial.populationCapacity.spotTypes[0]!, objectKind: 'instance_spot' as const }
+      ]
+    }
+  };
+  await store.updateMeshNode(descriptor, ZLinkLocationWriteIntent.NewClaim);
+  const request = {
+    ...reserveRequest('startup-root', target('node-a', 'owner-a')),
+    key: { kind: 'instance_spot' as const, globalId: 'startup-root' },
+    capacity: {
+      actors: 0,
+      spots: 1,
+      spotType: { objectKind: 'instance_spot' as const, stableType: 'room', count: 1 }
+    },
+    creatingPayload: encodeServiceInstanceAuthorityPayload({
+      state: 'coldActivating',
+      stableType: 'room',
+      spotId: 'startup-root',
+      ownerId: 'owner-a',
+      ownerLeaseGeneration: 1n,
+      ownerMeshName: 'mesh',
+      ownerNodeRid: 'node-a',
+      ownerNodeGeneration: 1n
+    })
+  };
+  assert.equal((await store.reserve(request)).kind, 'reserved');
+  await store.removeMeshNode({ meshName: 'mesh', rid: 'node-a' }, request.target.owner);
+  await store.updateMeshNode(
+    { ...descriptor, lifecycleGeneration: 2n },
+    ZLinkLocationWriteIntent.NewClaim
+  );
+  let rootExists = true;
+  const sink = {
+    status: () => ({ routingId: 'node-a', lifecycleGeneration: 2n, descriptorRevision: 1n }),
+    rememberSpotRoute() {},
+    forgetSpotRoute() {},
+    registerInstanceIntent() {},
+    forgetInstanceIntent() {},
+    async recoverInstanceActivation() {
+      throw new Error('old root was replayed');
+    },
+    async recoverPendingInstanceActivation() {
+      throw new Error('old creation was resumed');
+    },
+    async completeRecoveredInstanceActivation() {
+      throw new Error('old creation was completed');
+    }
+  };
+  const runtime = new ZLinkStatefulAuthorityRouteRuntime({
+    store,
+    creationStore: store,
+    relocationStore: {
+      async delete() {
+        assert.equal(
+          (await store.readAuthority(encodeAuthorityKey('instance_spot', 'startup-root'))).kind,
+          'missing'
+        );
+        const capacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-a'));
+        if (capacity.kind !== 'found') throw new Error('capacity missing');
+        assert.equal(JSON.parse(Buffer.from(capacity.value.bytes).toString()).pending.spots, 0);
+        rootExists = false;
+      }
+    } as never,
+    meshNodes: new Map([['mesh', sink as never]]),
+    pollingIntervalMs: 1_000,
+    pageSize: 100,
+    reportError(error) {
+      throw error;
+    }
+  });
+  await runtime.reconcile(undefined, true);
+  assert.equal(rootExists, false);
+});
+
+test('provider reclaims Reserved after descriptor lifecycle replacement with a live lease', async () => {
+  const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(100));
+  const store = new ZLinkLocationStoreRepository(provider, () => new Date(100));
+  const descriptor = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+  const placement = target('node-a', 'owner-a');
+  const first = await store.reserve(reserveRequest('ended-lifecycle', placement));
+  assert.equal(first.kind, 'reserved');
+  await store.removeMeshNode(
+    { meshName: descriptor.meshName, rid: descriptor.rid },
+    placement.owner
+  );
+  const replacement = { ...descriptor, lifecycleGeneration: 2n };
+  await store.updateMeshNode(replacement, ZLinkLocationWriteIntent.NewClaim);
+  const next = await store.reserve(
+    reserveRequest('ended-lifecycle', { ...placement, nodeLifecycleGeneration: 2n })
+  );
+  assert.equal(next.kind, 'reserved');
+});
 
 test('owner lease uses exact claim read renew and release fencing', async () => {
   let now = 100;

@@ -903,8 +903,26 @@ void verify_pending_send_route_removal_and_shutdown ()
 
 }
 
+static void verify_request_deadline_preserves_timeout_boundary ()
+{
+    using namespace zlink::framework;
+    task_completion_source_t<int> operation;
+    auto pending = runtime::messaging::with_request_deadline (operation.task (),
+                                                              std::chrono::steady_clock::now ());
+    const auto expired = pending.result ();
+    assert (!expired);
+    assert (expired.error_kind () == framework_error_kind_t::deadline_exceeded);
+    assert (expired.error () != nullptr);
+    assert (expired.error ()->code () == std::errc::timed_out);
+    operation.complete (result_t<int>::success (7));
+    const auto settled = pending.result ();
+    assert (!settled);
+    assert (settled.exception () == expired.exception ());
+}
+
 int main ()
 {
+    verify_request_deadline_preserves_timeout_boundary ();
     verify_pending_send_route_removal_and_shutdown ();
     verify_immediate_request_has_no_framework_deadline ();
     verify_request_submission_stages ();

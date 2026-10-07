@@ -17,6 +17,8 @@ engines (Unreal, Godot, Cocos), desktop and server applications, and e2e test to
 | 10 | [Packaging](10-packaging.en.md) | Build configuration and the published artifacts |
 | 11 | [Performance](11-performance.en.md) | Where to measure and what can be tuned |
 | 12 | [Game Engine Integration](12-engine-integration.en.md) | Connector choice by engine and the Engine Lobby sample |
+| 13 | [Node Protobuf Messaging](../../../node/guide/stream-connector/40-protobuf.en.md) | protobufjs generation, fixed-type pushes, explicit reply types |
+| 14 | [Node Protobuf Codecs and Types](../../../node/guide/stream-connector/41-protobuf-codecs.en.md) | Codec selection, multiple-message limits, server packet names |
 
 The file number identifies the same chapter in every language. Chapters 1 to 7 are
 shared across all five.

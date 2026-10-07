@@ -131,6 +131,7 @@ public final class ZLinkFrameworkLifecycle
                 Objects.requireNonNull(backendAdapterFactory, "backendAdapterFactory");
         this.handlerFactory = Objects.requireNonNull(handlerFactory, "handlerFactory");
         this.eventDispatcher = new ZLinkRuntimeEventDispatcher();
+        this.runtime = ZLinkFrameworkRuntimeBootstrap.prepare(options, eventDispatcher);
     }
 
     @Override
@@ -138,9 +139,8 @@ public final class ZLinkFrameworkLifecycle
         if (running) {
             return;
         }
-        runtime =
-                ZLinkFrameworkRuntimeBootstrap.start(
-                        options, backendAdapterFactory, handlerFactory, eventDispatcher);
+        ZLinkFrameworkRuntimeBootstrap.startPrepared(
+                requireRuntime(), options, backendAdapterFactory, handlerFactory);
         running = true;
         terminationLogged.set(false);
         installProcessShutdownHook();
@@ -424,11 +424,7 @@ public final class ZLinkFrameworkLifecycle
         return requireRuntime().observe();
     }
 
-    /**
-     * Supplies the runtime instance for the lazy public Spring bean. The bean is resolved after
-     * SmartLifecycle startup, so this method does not start the runtime while the application
-     * context is being built.
-     */
+    /** Supplies the singleton prepared for SmartLifecycle startup. */
     public ZLinkFrameworkRuntime runtimeBean() {
         return requireRuntime();
     }

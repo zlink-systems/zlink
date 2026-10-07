@@ -215,6 +215,9 @@ export interface ZLinkRouteChannelOptions extends ZLinkRouteMeshChannelOptions {
 }
 
 export interface ZLinkStreamNodeOptions {
+  readonly heartbeatIntervalMs?: number;
+  readonly heartbeatTimeoutMs?: number;
+  readonly idleTimeoutMs?: number;
   readonly bind?: string;
   readonly bindHost?: string;
   readonly advertiseHost?: string;

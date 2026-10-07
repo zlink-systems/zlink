@@ -4947,7 +4947,9 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
         missing,
         unreadable,
         forged,
-        no_factory
+        no_factory,
+        reject_while_source_remote,
+        accept_while_source_remote
     };
     const auto run = [] (scenario_t scenario,
                          std::atomic_int &admission_calls) -> result_t<spot_actor_join_result_t> {
@@ -4973,10 +4975,13 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
         node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
 
         spot_actor_admission_callbacks_t callbacks;
-        callbacks.join = [&admission_calls] (void *, std::string_view, const zlink::message_t &,
-                                             serializer_registry_t &) {
+        callbacks.join = [&admission_calls, scenario] (void *, std::string_view,
+                                                       const zlink::message_t &,
+                                                       serializer_registry_t &) {
             admission_calls.fetch_add (1, std::memory_order_acq_rel);
-            return spot_actor_join_result_t::accept ();
+            return scenario == scenario_t::reject_while_source_remote
+                     ? spot_actor_join_result_t::reject ()
+                     : spot_actor_join_result_t::accept ();
         };
         spot->actor_admissions.emplace (std::type_index (typeid (int)), std::move (callbacks));
 
@@ -5026,6 +5031,13 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
         const auto wire_actor = test_actor_ref (
           "actor-owner", scenario == scenario_t::forged ? "ForgedActor" : "StoreActor",
           "store-resolved-actor", 17);
+        if (scenario == scenario_t::reject_while_source_remote
+            || scenario == scenario_t::accept_while_source_remote) {
+            if (!node->actor_transfer_coordinator.try_begin_source_remote (
+                  "StoreActor:store-resolved-actor", "previous-source-transfer"))
+                return result_t<spot_actor_join_result_t>::failure (
+                  framework_error_kind_t::internal_failure, "source transfer setup failed");
+        }
         return spots
           .admit_remote_actor_to_spot (
             "store-resolution-" + std::to_string (static_cast<int> (scenario)), wire_actor,
@@ -5067,7 +5079,14 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
           expect_terminal (scenario_t::no_factory, framework_error_kind_t::rejected, 7);
         no_factory != 0)
         return no_factory;
-    return admission_calls.load () == 1 ? 0 : 8;
+    const auto rejected = run (scenario_t::reject_while_source_remote, admission_calls);
+    if (!rejected || rejected.value ().accepted)
+        return 9;
+    if (const auto conflict = expect_terminal (scenario_t::accept_while_source_remote,
+                                               framework_error_kind_t::unavailable, 10);
+        conflict != 0)
+        return conflict;
+    return admission_calls.load () == 3 ? 0 : 8;
 }
 
 /* A Location Store whose reads complete on the provider's own thread, as a

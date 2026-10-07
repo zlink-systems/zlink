@@ -7,16 +7,14 @@ public sealed class StreamSessionLivenessTests
     {
         using var time = new PausingTimeProvider();
         var liveness = new ZLinkStreamSessionLiveness(time);
-        time.Advance(ZLinkStreamSessionLiveness.HeartbeatInterval);
+        time.Advance(TimeSpan.FromSeconds(1));
         time.PauseNextTimestamp();
         var olderUpdate = Task.Run(liveness.RecordInbound);
         try
         {
             await time.TimestampCaptured.Task.WaitAsync(TimeSpan.FromSeconds(2));
             time.Advance(
-                ZLinkStreamSessionLiveness.HeartbeatTimeout
-                    - ZLinkStreamSessionLiveness.HeartbeatInterval
-                    - TimeSpan.FromMilliseconds(1)
+                TimeSpan.FromSeconds(5) - TimeSpan.FromSeconds(1) - TimeSpan.FromMilliseconds(1)
             );
             liveness.RecordInbound();
         }
@@ -25,7 +23,7 @@ public sealed class StreamSessionLivenessTests
             time.ReleaseTimestamp();
         }
         await olderUpdate.WaitAsync(TimeSpan.FromSeconds(2));
-        time.Advance(ZLinkStreamSessionLiveness.HeartbeatInterval + TimeSpan.FromMilliseconds(1));
+        time.Advance(TimeSpan.FromSeconds(1) + TimeSpan.FromMilliseconds(1));
         Assert.NotEqual(ZLinkStreamLivenessDecision.HeartbeatTimeout, liveness.Evaluate());
     }
 
@@ -66,7 +64,7 @@ public sealed class StreamSessionLivenessTests
         var liveness = new ZLinkStreamSessionLiveness(time);
         for (var cycle = 0; cycle < 3; cycle++)
         {
-            time.Advance(ZLinkStreamSessionLiveness.HeartbeatInterval);
+            time.Advance(TimeSpan.FromSeconds(1));
             Assert.Equal(ZLinkStreamLivenessDecision.SendHeartbeat, liveness.Evaluate());
             liveness.RecordHeartbeatPing();
         }
@@ -79,13 +77,11 @@ public sealed class StreamSessionLivenessTests
         var liveness = new ZLinkStreamSessionLiveness(time);
         for (var cycle = 0; cycle < 3; cycle++)
         {
-            time.Advance(
-                ZLinkStreamSessionLiveness.HeartbeatTimeout - TimeSpan.FromMilliseconds(1)
-            );
+            time.Advance(TimeSpan.FromSeconds(5) - TimeSpan.FromMilliseconds(1));
             liveness.RecordInbound();
             Assert.NotEqual(ZLinkStreamLivenessDecision.HeartbeatTimeout, liveness.Evaluate());
         }
-        time.Advance(ZLinkStreamSessionLiveness.HeartbeatTimeout);
+        time.Advance(TimeSpan.FromSeconds(5));
         Assert.Equal(ZLinkStreamLivenessDecision.HeartbeatTimeout, liveness.Evaluate());
     }
 
@@ -94,12 +90,9 @@ public sealed class StreamSessionLivenessTests
     {
         var time = new ManualTimeProvider();
         var liveness = new ZLinkStreamSessionLiveness(time);
-        time.Advance(ZLinkStreamSessionLiveness.HeartbeatInterval);
+        time.Advance(TimeSpan.FromSeconds(1));
         liveness.RecordHeartbeatPing();
-        time.Advance(
-            ZLinkStreamSessionLiveness.HeartbeatTimeout
-                - ZLinkStreamSessionLiveness.HeartbeatInterval
-        );
+        time.Advance(TimeSpan.FromSeconds(5) - TimeSpan.FromSeconds(1));
         Assert.Equal(ZLinkStreamLivenessDecision.HeartbeatTimeout, liveness.Evaluate());
     }
 
@@ -111,9 +104,7 @@ public sealed class StreamSessionLivenessTests
         liveness.RecordHeartbeatPing();
         for (var cycle = 0; cycle < 3; cycle++)
         {
-            time.Advance(
-                ZLinkStreamSessionLiveness.HeartbeatTimeout - TimeSpan.FromMilliseconds(1)
-            );
+            time.Advance(TimeSpan.FromSeconds(5) - TimeSpan.FromMilliseconds(1));
             liveness.RecordInbound();
             liveness.RecordApplicationInbound();
             Assert.NotEqual(ZLinkStreamLivenessDecision.HeartbeatTimeout, liveness.Evaluate());
@@ -126,11 +117,11 @@ public sealed class StreamSessionLivenessTests
         var time = new ManualTimeProvider();
         var liveness = new ZLinkStreamSessionLiveness(time);
 
-        time.Advance(ZLinkStreamSessionLiveness.HeartbeatInterval);
+        time.Advance(TimeSpan.FromSeconds(1));
         Assert.Equal(ZLinkStreamLivenessDecision.SendHeartbeat, liveness.Evaluate());
         liveness.RecordHeartbeatPing();
 
-        time.Advance(ZLinkStreamSessionLiveness.HeartbeatTimeout);
+        time.Advance(TimeSpan.FromSeconds(5));
 
         Assert.Equal(ZLinkStreamLivenessDecision.HeartbeatTimeout, liveness.Evaluate());
     }
@@ -141,21 +132,118 @@ public sealed class StreamSessionLivenessTests
         var time = new ManualTimeProvider();
         var liveness = new ZLinkStreamSessionLiveness(time);
 
-        time.Advance(ZLinkStreamSessionLiveness.HeartbeatInterval);
+        time.Advance(TimeSpan.FromSeconds(1));
         liveness.RecordHeartbeatPing();
-        time.Advance(ZLinkStreamSessionLiveness.HeartbeatTimeout - TimeSpan.FromMilliseconds(1));
+        time.Advance(TimeSpan.FromSeconds(5) - TimeSpan.FromMilliseconds(1));
         liveness.RecordInbound();
 
         Assert.NotEqual(ZLinkStreamLivenessDecision.HeartbeatTimeout, liveness.Evaluate());
     }
 
     [Fact]
-    public void Control_traffic_does_not_reset_application_idle_timeout()
+    public void Configured_heartbeat_interval_and_timeout_control_decisions()
+    {
+        var time = new ManualTimeProvider();
+        var options = new ZLinkStreamNodeRegistration { StreamNodeName = "test" };
+        new ZLinkStreamNodeBuilder(options).SetHeartbeat(
+            TimeSpan.FromSeconds(2),
+            TimeSpan.FromSeconds(6)
+        );
+        var liveness = new ZLinkStreamSessionLiveness(time, options);
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(ZLinkStreamLivenessDecision.None, liveness.Evaluate());
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal(ZLinkStreamLivenessDecision.SendHeartbeat, liveness.Evaluate());
+        liveness.RecordHeartbeatPing();
+        time.Advance(TimeSpan.FromMilliseconds(3999));
+        Assert.NotEqual(ZLinkStreamLivenessDecision.HeartbeatTimeout, liveness.Evaluate());
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(ZLinkStreamLivenessDecision.HeartbeatTimeout, liveness.Evaluate());
+    }
+
+    [Theory]
+    [InlineData(0, 5000, "STREAM heartbeat interval must be positive.")]
+    [InlineData(-1, 5000, "STREAM heartbeat interval must be positive.")]
+    [InlineData(1000, 0, "STREAM heartbeat timeout must be positive.")]
+    [InlineData(1000, -1, "STREAM heartbeat timeout must be positive.")]
+    [InlineData(1000, 1000, "STREAM heartbeat timeout must be greater than interval.")]
+    [InlineData(1000, 999, "STREAM heartbeat timeout must be greater than interval.")]
+    public void Invalid_heartbeat_settings_are_configuration_errors_before_start(
+        int interval,
+        int timeout,
+        string message
+    )
+    {
+        var builder = new ZLinkStreamNodeBuilder(
+            new ZLinkStreamNodeRegistration { StreamNodeName = "test" }
+        );
+        var error = Assert.Throws<ZLinkConfigurationException>(() =>
+            builder.SetHeartbeat(
+                TimeSpan.FromMilliseconds(interval),
+                TimeSpan.FromMilliseconds(timeout)
+            )
+        );
+        Assert.Equal(message, error.Message);
+    }
+
+    [Fact]
+    public void Idle_setting_rejects_negative_and_accepts_zero_before_start()
+    {
+        var options = new ZLinkStreamNodeRegistration { StreamNodeName = "test" };
+        var builder = new ZLinkStreamNodeBuilder(options);
+        Assert.Equal(
+            "STREAM idle timeout must not be negative.",
+            Assert
+                .Throws<ZLinkConfigurationException>(() =>
+                    builder.SetIdleTimeout(TimeSpan.FromMilliseconds(-1))
+                )
+                .Message
+        );
+        Assert.Same(builder, builder.SetIdleTimeout(TimeSpan.Zero));
+        Assert.Equal(TimeSpan.Zero, options.IdleTimeout);
+    }
+
+    [Fact]
+    public void Large_positive_durations_do_not_expire_early()
+    {
+        var time = new ManualTimeProvider();
+        var options = new ZLinkStreamNodeRegistration { StreamNodeName = "test" };
+        new ZLinkStreamNodeBuilder(options)
+            .SetHeartbeat(TimeSpan.MaxValue - TimeSpan.FromTicks(1), TimeSpan.MaxValue)
+            .SetIdleTimeout(TimeSpan.MaxValue);
+        var liveness = new ZLinkStreamSessionLiveness(time, options);
+        time.Advance(TimeSpan.FromSeconds(35));
+        Assert.Equal(ZLinkStreamLivenessDecision.None, liveness.Evaluate());
+    }
+
+    [Fact]
+    public void Default_idle_timeout_is_disabled_with_heartbeat_traffic()
     {
         var time = new ManualTimeProvider();
         var liveness = new ZLinkStreamSessionLiveness(time);
+        for (var second = 1; second <= 35; second++)
+        {
+            time.Advance(TimeSpan.FromSeconds(1));
+            liveness.RecordInbound();
+            Assert.Equal(ZLinkStreamLivenessDecision.SendHeartbeat, liveness.Evaluate());
+            liveness.RecordHeartbeatPing();
+        }
+    }
 
-        time.Advance(ZLinkStreamSessionLiveness.IdleTimeout);
+    [Fact]
+    public void Control_traffic_does_not_reset_application_idle_timeout()
+    {
+        var time = new ManualTimeProvider();
+        var liveness = new ZLinkStreamSessionLiveness(
+            time,
+            new ZLinkStreamNodeRegistration
+            {
+                StreamNodeName = "test",
+                IdleTimeout = TimeSpan.FromSeconds(30),
+            }
+        );
+
+        time.Advance(TimeSpan.FromSeconds(30));
         liveness.RecordInbound();
 
         Assert.Equal(ZLinkStreamLivenessDecision.IdleTimeout, liveness.Evaluate());
@@ -165,9 +253,16 @@ public sealed class StreamSessionLivenessTests
     public void Application_traffic_resets_idle_timeout()
     {
         var time = new ManualTimeProvider();
-        var liveness = new ZLinkStreamSessionLiveness(time);
+        var liveness = new ZLinkStreamSessionLiveness(
+            time,
+            new ZLinkStreamNodeRegistration
+            {
+                StreamNodeName = "test",
+                IdleTimeout = TimeSpan.FromSeconds(30),
+            }
+        );
 
-        time.Advance(ZLinkStreamSessionLiveness.IdleTimeout - TimeSpan.FromSeconds(1));
+        time.Advance(TimeSpan.FromSeconds(30) - TimeSpan.FromSeconds(1));
         liveness.RecordInbound();
         liveness.RecordApplicationInbound();
         time.Advance(TimeSpan.FromSeconds(1));

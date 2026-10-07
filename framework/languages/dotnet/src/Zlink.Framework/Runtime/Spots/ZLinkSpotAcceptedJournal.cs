@@ -72,10 +72,7 @@ internal static class ZLinkSpotAcceptedJournal
             throw new InvalidOperationException(
                 "An accepted Spot journal record requires the exact ingress request-source fence."
             );
-        if (
-            replyRouteId != 0
-            && (received.RequestSeq != replyRouteId || received.OperationId.Low != replyRouteId)
-        )
+        if (replyRouteId != 0 && received.RequestSeq != replyRouteId)
             throw new InvalidOperationException(
                 "An accepted Spot request must preserve the source-owned operation correlation as its reply route."
             );
@@ -128,39 +125,9 @@ internal static class ZLinkSpotAcceptedJournal
 
     internal static byte[] Encode(ZLinkBackendRouteReceived received, ulong replyRouteId = 0)
     {
-        ArgumentNullException.ThrowIfNull(received);
-        if (
-            received.CanReply && received.OperationId == default
-            || received.TargetNodeGeneration == 0
-            || received.AuthorityOwnerGeneration == 0
-            || received.OwnerLeaseGeneration == 0
-        )
-            throw new InvalidOperationException(
-                "An accepted Spot journal record requires an exact operation and authority fence."
-            );
-        if (
-            received.RequestSource is not { } requestSource
-            || received.SourceNodeRid is not { } sourceNodeRid
-            || requestSource.NodeRid != sourceNodeRid
-            || requestSource.NodeGeneration != received.SourceNodeGeneration
-            || string.IsNullOrWhiteSpace(requestSource.OwnerId)
-            || requestSource.LeaseGeneration == 0
-        )
-            throw new InvalidOperationException(
-                "An accepted Spot journal record requires the exact ingress request-source fence."
-            );
-        if (
-            replyRouteId != 0
-            && (received.RequestSeq != replyRouteId || received.OperationId.Low != replyRouteId)
-        )
-            throw new InvalidOperationException(
-                "An accepted Spot request must preserve the source-owned operation correlation as its reply route."
-            );
-        if (replyRouteId == 0 && received.CanReply)
-            throw new InvalidOperationException(
-                "An accepted Spot request cannot omit its source-owned reply route."
-            );
-        using var stream = new MemoryStream();
+        var length = MeasureEncodedLength(received, replyRouteId);
+        var requestSource = received.RequestSource!.Value;
+        using var stream = new MemoryStream(length);
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         writer.Write(Magic);
         writer.Write(Version);
@@ -181,18 +148,10 @@ internal static class ZLinkSpotAcceptedJournal
         writer.Write(received.MessageFollowHopCount);
         writer.Write(received.InstanceIntent);
         WriteBytes(writer, ZLinkMeshMetadataCodec.Encode(received.Metadata).Span);
-        if (received.Parts.Count > MaxParts)
-            throw new InvalidOperationException(
-                "An accepted Spot journal record contains too many message parts."
-            );
         writer.Write(received.Parts.Count);
         foreach (var part in received.Parts)
             WriteBytes(writer, part.AsReadOnlySpan());
         writer.Flush();
-        if (stream.Length > MaxRecordBytes)
-            throw new InvalidOperationException(
-                $"An accepted Spot journal record cannot exceed {MaxRecordBytes} bytes."
-            );
         return stream.ToArray();
     }
 
@@ -244,8 +203,7 @@ internal static class ZLinkSpotAcceptedJournal
             || targetNodeGeneration == 0
             || authorityOwnerGeneration == 0
             || ownerLeaseGeneration == 0
-            || replyRouteId != 0
-                && (requestSequence != replyRouteId || operationId.Low != replyRouteId)
+            || replyRouteId != 0 && requestSequence != replyRouteId
             || messageFollowHopCount > ZLinkServiceWireCodec.MessageFollowMaximumHopCount
         )
             throw new InvalidDataException("The accepted Spot journal authority fence is invalid.");

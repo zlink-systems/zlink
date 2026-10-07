@@ -70,13 +70,20 @@ class diagnostic_event_sink_t
         fields.push_back (log_field_t{key, std::move (value)});
     }
 
-    static void log_if_configured (const std::optional<logger_t<>> &logger,
+    static bool log_if_configured (const std::optional<logger_t<>> &logger,
                                    log_level_t level,
                                    std::string_view message,
                                    std::vector<log_field_t> fields) noexcept
     {
-        if (logger)
+        if (!logger)
+            return true;
+        try {
             logger->log_with_fields (level, std::string (message), std::move (fields));
+            return true;
+        }
+        catch (const std::exception &) {
+            return false;
+        }
     }
 };
 

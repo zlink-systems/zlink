@@ -656,7 +656,7 @@ internal abstract partial class ZLinkSpotActivation
             parts,
             sourceNodeRid,
             sourceSpotId,
-            request ? operationId.Low : null,
+            request ? originalOperation.ReplyRouteId : null,
             replyCallback,
             metadata: decodedMetadata,
             operationId: operationId,
@@ -673,7 +673,7 @@ internal abstract partial class ZLinkSpotActivation
         {
             acceptedJournalLength = ZLinkSpotAcceptedJournal.MeasureEncodedLength(
                 received,
-                request ? operationId.Low : 0
+                request ? originalOperation.ReplyRouteId : 0
             );
         }
         catch
@@ -682,7 +682,7 @@ internal abstract partial class ZLinkSpotActivation
             throw;
         }
         Func<ReadOnlyMemory<byte>> acceptedJournalFactory = () =>
-            ZLinkSpotAcceptedJournal.Encode(received, request ? operationId.Low : 0);
+            ZLinkSpotAcceptedJournal.Encode(received, request ? originalOperation.ReplyRouteId : 0);
 
         // Spot messaging §4 step 12 with §7 step 1: the first terminal record is
         // the lifecycle item posted before the first message runs, so a Close
@@ -701,10 +701,13 @@ internal abstract partial class ZLinkSpotActivation
                     await turn.YieldFrameworkCallAsync(
                             async token =>
                             {
-                                await completion.Task.ConfigureAwait(false);
+                                await completion.Task.WaitAsync(ct).ConfigureAwait(false);
                                 await recordTerminal(token).ConfigureAwait(false);
                             },
-                            ct
+                            // The accepted terminal record owns its Store completion. Spot
+                            // cancellation must not release this lifecycle item while that
+                            // completion can still mutate the authority being cleaned up.
+                            CancellationToken.None
                         )
                         .ConfigureAwait(false);
                     return true;
@@ -881,14 +884,14 @@ internal abstract partial class ZLinkSpotActivation
         var received = state.Received;
         var journalLength = ZLinkSpotAcceptedJournal.MeasureEncodedLength(
             received,
-            state.Request ? received.OperationId.Low : 0
+            state.Request ? received.RequestSeq!.Value : 0
         );
         var admission = _serial.QueueAcceptedOnLane(
             journalLength,
             () =>
                 ZLinkSpotAcceptedJournal.Encode(
                     received,
-                    state.Request ? received.OperationId.Low : 0
+                    state.Request ? received.RequestSeq!.Value : 0
                 ),
             (activation, ct) => activation.DispatchQueuedApplicationRouteAsync(state, ct),
             state.ReleaseForRelocation,
@@ -979,8 +982,8 @@ internal abstract partial class ZLinkSpotActivation
 
     // Spot messaging §7 step 3: the Reincarnate decision and the end of
     // retained admission for this incarnation are one decision of its queue.
-    internal bool HasPendingCreationIntentOrSealAdmission() =>
-        _serial.HasPendingAcceptedStateOrCloseApplicationAdmission(PendingCreationIntent());
+    internal ValueTask<bool> HasPendingCreationIntentOrSealAdmissionAsync() =>
+        _serial.HasPendingAcceptedStateOrCloseApplicationAdmissionAsync(PendingCreationIntent());
 
     private static Func<object, bool> PendingCreationIntent()
     {
@@ -1009,39 +1012,38 @@ internal abstract partial class ZLinkSpotActivation
     internal ZLinkSpotActivation? CompletedSuccessor =>
         _successor is { Task.IsCompletedSuccessfully: true } outcome ? outcome.Task.Result : null;
 
-    internal void SetSuccessor(
+    internal async ValueTask SetSuccessorAsync(
         ZLinkSpotActivation? successor,
         ZLinkAuthoritySnapshot? authority,
         ZLinkFrameworkException? intentFailure,
-        Action publish
+        Func<ValueTask> publish
     )
     {
-        _serial.VisitPendingAcceptedState(
-            successor?._serial,
-            state =>
-            {
-                if (state is DurableActivationDispatch pending && authority is { } snapshot)
+        await _serial
+            .VisitPendingAcceptedStateAsync(
+                successor?._serial,
+                state =>
                 {
-                    pending.Received.RebindAuthority(
-                        snapshot.Allocation.DescriptorLifecycleGeneration,
-                        snapshot.AuthorityOwnerGeneration,
-                        checked((ulong)snapshot.OwnerLeaseGeneration)
-                    );
-                    _ = successor!.DispatchDurableActivationAsync(pending);
+                    if (state is DurableActivationDispatch pending && authority is { } snapshot)
+                    {
+                        pending.Received.RebindAuthority(
+                            snapshot.Allocation.DescriptorLifecycleGeneration,
+                            snapshot.AuthorityOwnerGeneration,
+                            checked((ulong)snapshot.OwnerLeaseGeneration)
+                        );
+                        _ = successor!.DispatchDurableActivationAsync(pending);
+                    }
                 }
-            },
-            () =>
-            {
-                publish();
-                if (intentFailure is null)
-                    _successor!.TrySetResult(successor);
-                else
-                {
-                    _successor!.TrySetException(intentFailure);
-                    _ = _successor.Task.Exception;
-                }
-            }
-        );
+            )
+            .ConfigureAwait(false);
+        await publish().ConfigureAwait(false);
+        if (intentFailure is null)
+            _successor!.TrySetResult(successor);
+        else
+        {
+            _successor!.TrySetException(intentFailure);
+            _ = _successor.Task.Exception;
+        }
         _serial.SchedulePendingApplications();
     }
 
@@ -1500,7 +1502,6 @@ internal abstract partial class ZLinkSpotActivation
                 received.OperationId == default
                 || received.RequestSeq is not { } correlation
                 || correlation == 0
-                || correlation != received.OperationId.Low
             )
             {
                 operationAdmission.Lease.Dispose();
@@ -1847,7 +1848,7 @@ internal abstract partial class ZLinkSpotActivation
         catch
         {
             if (queueSeal is not null)
-                _serial.TryAbortRelocation(queueSeal);
+                await _serial.TryAbortRelocationAsync(queueSeal).ConfigureAwait(false);
             _timers.Resume();
             throw;
         }
@@ -2409,7 +2410,7 @@ internal abstract partial class ZLinkSpotActivation
     internal async ValueTask<ZLinkSpotRelocationSeal?> TrySealRelocationAsync()
     {
         var logicalTimers = _timers.FreezeRelocation();
-        if (_serial.TrySealRelocation(out var queueSeal))
+        if (await _serial.TrySealRelocationAsync().ConfigureAwait(false) is { } queueSeal)
             return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
         _timers.Resume();
         return null;
@@ -2420,7 +2421,10 @@ internal abstract partial class ZLinkSpotActivation
         if (ExecutionMode != ZLinkUserSpotExecutionMode.PerActor)
             return null;
         var logicalTimers = _timers.FreezeRelocation();
-        if (_serial.TrySealPerActorShellRelocation(out var queueSeal))
+        if (
+            await _serial.TrySealPerActorShellRelocationAsync().ConfigureAwait(false) is
+            { } queueSeal
+        )
             return new ZLinkSpotRelocationSeal(queueSeal, logicalTimers);
         _timers.Resume();
         return null;
@@ -2429,7 +2433,7 @@ internal abstract partial class ZLinkSpotActivation
     internal async ValueTask<bool> AbortRelocationAsync(ZLinkSpotRelocationSeal seal)
     {
         ArgumentNullException.ThrowIfNull(seal);
-        if (!_serial.TryAbortRelocation(seal.QueueSeal))
+        if (!await _serial.TryAbortRelocationAsync(seal.QueueSeal).ConfigureAwait(false))
             return false;
         ResumePendingMessageFollowRoutes();
         _timers.Resume();
@@ -2457,27 +2461,28 @@ internal abstract partial class ZLinkSpotActivation
         return true;
     }
 
-    internal bool CommitRelocation(
-        ZLinkSpotRelocationSeal seal,
-        out IReadOnlyList<ZLinkAcceptedWorkRecord> held,
-        bool preserveActorExecution = false
-    )
+    internal ValueTask<(
+        bool Succeeded,
+        IReadOnlyList<ZLinkAcceptedWorkRecord> Held
+    )> CommitRelocationAsync(ZLinkSpotRelocationSeal seal, bool preserveActorExecution = false)
     {
         ArgumentNullException.ThrowIfNull(seal);
-        return _serial.TryCommitRelocation(seal.QueueSeal, out held, preserveActorExecution);
+        return _serial.TryCommitRelocationAsync(seal.QueueSeal, preserveActorExecution);
     }
 
-    internal bool FreezeRelocationIngress(
-        ZLinkSpotRelocationSeal seal,
-        out IReadOnlyList<ZLinkAcceptedWorkRecord> held
-    )
+    internal async ValueTask<(
+        bool Succeeded,
+        IReadOnlyList<ZLinkAcceptedWorkRecord> Held
+    )> FreezeRelocationIngressAsync(ZLinkSpotRelocationSeal seal)
     {
         ArgumentNullException.ThrowIfNull(seal);
-        AwaitStateLane(_lane.RunAsync(() => _holdIngressForMessageFollow = true));
-        if (_serial.TryFreezeRelocationIngress(seal.QueueSeal, out held))
-            return true;
-        AwaitStateLane(_lane.RunAsync(() => _holdIngressForMessageFollow = false));
-        return false;
+        await _lane.RunAsync(() => _holdIngressForMessageFollow = true).ConfigureAwait(false);
+        var result = await _serial
+            .TryFreezeRelocationIngressAsync(seal.QueueSeal)
+            .ConfigureAwait(false);
+        if (!result.Succeeded)
+            await _lane.RunAsync(() => _holdIngressForMessageFollow = false).ConfigureAwait(false);
+        return result;
     }
 
     private PendingMessageFollowRoute[] TakePendingMessageFollowRoutes() =>

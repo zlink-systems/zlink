@@ -73,7 +73,13 @@ jobs:
 
       - name: Install Conan
         shell: bash
-        run: python -m pip install conan==2.32.0
+        # ConanCenter recipes fetch upstream sources (m4 from ftp.gnu.org); fall back to
+        # ConanCenter's backup of the same sha256 when the upstream mirror is unreachable.
+        run: |
+          python -m pip install conan==2.32.0
+          conan_home="$(conan config home)"
+          mkdir -p "${conan_home}"
+          echo 'core.sources:download_urls=["origin", "https://c3i.jfrog.io/artifactory/conan-center-backup-sources/"]' >> "${conan_home}/global.conf"
 
       - name: Set up MSVC
         if: matrix.platform == 'windows-x64'

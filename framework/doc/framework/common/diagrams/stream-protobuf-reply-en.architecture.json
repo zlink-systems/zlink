@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Explicit Protobuf reply type",
+    "subtitle": "Decode replies through the configured codec",
+    "output": "stream-protobuf-reply-en.html",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [40, 100],
+    "cols": 4,
+    "gapX": 100,
+    "gapY": 82,
+    "cellW": 120,
+    "cellH": 60
+  },
+  "components": [
+    {
+      "id": "request",
+      "type": "frontend",
+      "label": "client request",
+      "sublabel": "Ping instance",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "server",
+      "type": "external",
+      "label": "server",
+      "sublabel": "Pong bytes",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "encoded",
+      "type": "backend",
+      "label": "request builder",
+      "sublabel": "submit(Pong)",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "decode",
+      "type": "frontend",
+      "label": "codec.decode()",
+      "sublabel": "Pong instance",
+      "row": 0,
+      "col": 3
+    }
+  ],
+  "connections": [
+    {
+      "from": "request",
+      "to": "server",
+      "variant": "default",
+      "label": "request: Ping"
+    },
+    {
+      "from": "server",
+      "to": "encoded",
+      "variant": "default",
+      "label": "response: Pong"
+    },
+    {
+      "from": "encoded",
+      "to": "decode",
+      "variant": "default",
+      "label": "type: Pong"
+    }
+  ],
+  "cards": []
+}

@@ -6,6 +6,64 @@ namespace Zlink.Framework.UnitTests;
 public sealed class UserSpotExecutionSchedulerTests
 {
     [Fact]
+    public async Task SpotWide_ActorConsumerWaitsForSharedGateBeforeDequeueAndClaim()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        var selected = NewSignal();
+        var selections = 0;
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            static () => false,
+            CancellationToken.None,
+            errorSink,
+            executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+            actorConsumerSelected: () =>
+            {
+                Interlocked.Increment(ref selections);
+                selected.TrySetResult();
+            }
+        );
+        var spotStarted = NewSignal();
+        var releaseSpot = NewSignal();
+        var spot = executor
+            .ExecuteAsync(
+                async (_, _) =>
+                {
+                    spotStarted.TrySetResult();
+                    await releaseSpot.Task.ConfigureAwait(false);
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        Task? first = null;
+        Task? second = null;
+        try
+        {
+            await spotStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // These synchronous calls publish both Actor records while the
+            // ordinary async Spot handler retains the shared gate.
+            first = RecordActor(executor, "actor-a", null, null, NewSignal());
+            second = RecordActor(executor, "actor-b", null, null, NewSignal());
+            Assert.False(first.IsCompleted);
+            Assert.False(second.IsCompleted);
+            await Assert.ThrowsAsync<TimeoutException>(() =>
+                selected.Task.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.Equal(0, Volatile.Read(ref selections));
+        }
+        finally
+        {
+            releaseSpot.TrySetResult();
+            await Task.WhenAll(new[] { spot, first, second }.OfType<Task>())
+                .WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        // The same observation must record actual consumption after release;
+        // absence while occupied cannot pass because the seam is disconnected.
+        Assert.True(selected.Task.IsCompletedSuccessfully);
+        Assert.Equal(2, Volatile.Read(ref selections));
+    }
+
+    [Fact]
     public void FactoryRegistrationFixesExecutionModeAndRejectsInvalidValues()
     {
         var registration = new ZLinkSpotNodeRegistration { SpotNodeName = "execution-node" };
@@ -500,7 +558,7 @@ public sealed class UserSpotExecutionSchedulerTests
         releaseTimer.TrySetResult();
         await timer.WaitAsync(TimeSpan.FromSeconds(5));
         var seal = await sealTask.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(executor.TryAbortRelocation(seal));
+        Assert.True(await executor.TryAbortRelocationAsync(seal));
 
         static async ValueTask Block(ZLinkSpotActivation _, BlockState state, CancellationToken __)
         {
@@ -550,7 +608,7 @@ public sealed class UserSpotExecutionSchedulerTests
         await terminalContinuation.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var seal = await sealTask.WaitAsync(TimeSpan.FromSeconds(5));
         await operation.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(executor.TryAbortRelocation(seal));
+        Assert.True(await executor.TryAbortRelocationAsync(seal));
     }
 
     [Fact]
@@ -591,7 +649,7 @@ public sealed class UserSpotExecutionSchedulerTests
         release.TrySetResult();
         await current.WaitAsync(TimeSpan.FromSeconds(5));
         var seal = await sealTask.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(executor.TryAbortRelocation(seal));
+        Assert.True(await executor.TryAbortRelocationAsync(seal));
     }
 
     [Fact]
@@ -657,7 +715,7 @@ public sealed class UserSpotExecutionSchedulerTests
 
         Assert.Equal(0, Volatile.Read(ref unexpectedExecutions));
         Assert.Equal(512, Volatile.Read(ref rejectedAdmissions));
-        Assert.True(executor.TryAbortRelocation(seal));
+        Assert.True(await executor.TryAbortRelocationAsync(seal));
     }
 
     [Fact]
@@ -667,11 +725,11 @@ public sealed class UserSpotExecutionSchedulerTests
         await using var executor = CreateExecutor(errorSink, ZLinkUserSpotExecutionMode.PerActor);
 
         var first = await executor.SealRelocationAsync(CancellationToken.None);
-        Assert.True(executor.TryAbortRelocation(first));
+        Assert.True(await executor.TryAbortRelocationAsync(first));
         var second = await executor.SealRelocationAsync(CancellationToken.None);
 
-        Assert.False(executor.TryAbortRelocation(first));
-        Assert.True(executor.TryAbortRelocation(second));
+        Assert.False(await executor.TryAbortRelocationAsync(first));
+        Assert.True(await executor.TryAbortRelocationAsync(second));
 
         var ran = NewSignal();
         await RecordActor(executor, "actor-1", null, null, ran).WaitAsync(TimeSpan.FromSeconds(5));
@@ -685,7 +743,7 @@ public sealed class UserSpotExecutionSchedulerTests
         await using var executor = CreateExecutor(errorSink, ZLinkUserSpotExecutionMode.SpotWide);
 
         var stale = await executor.SealRelocationAsync(CancellationToken.None);
-        Assert.True(executor.TryAbortRelocation(stale));
+        Assert.True(await executor.TryAbortRelocationAsync(stale));
         var current = await executor.SealRelocationAsync(CancellationToken.None);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -716,7 +774,7 @@ public sealed class UserSpotExecutionSchedulerTests
             .AsTask()
             .WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(ran.Task.IsCompleted);
-        Assert.True(executor.TryAbortRelocation(current));
+        Assert.True(await executor.TryAbortRelocationAsync(current));
     }
 
     [Fact]
@@ -851,6 +909,25 @@ public sealed class UserSpotExecutionSchedulerTests
     }
 
     [Fact]
+    public async Task SpotWideReplayPublicationDoesNotHoldGateBeforeCallbackIsReady()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errors, ZLinkUserSpotExecutionMode.SpotWide);
+        var seal = await executor.SealRelocationAsync(CancellationToken.None);
+        var reserved = executor.ReserveRelocationActorQueue(seal, "actor-1");
+        var abort = executor.TryAbortRelocationAsync(seal).AsTask();
+        try
+        {
+            Assert.True(await abort.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            reserved.Discard();
+            await abort.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
     public async Task SpotWideRelocationReplay_ReservesSharedQueueBeforeDirectIngress()
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
@@ -875,7 +952,7 @@ public sealed class UserSpotExecutionSchedulerTests
         // Simulate authority publication. Message Follow and fresh direct
         // ingress can now submit, but both must remain behind the replay
         // positions reserved while the target admission seal was active.
-        Assert.True(executor.TryAbortRelocation(seal));
+        Assert.True(await executor.TryAbortRelocationAsync(seal));
         var sourceFollow = RecordActor(executor, "actor-1", order, "source-follow", NewSignal());
         var direct = RecordActor(executor, "actor-1", order, "direct", NewSignal());
 
@@ -951,7 +1028,7 @@ public sealed class UserSpotExecutionSchedulerTests
 
         release.TrySetResult();
         var seal = await sealTask.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(executor.TryAbortRelocation(seal));
+        Assert.True(await executor.TryAbortRelocationAsync(seal));
     }
 
     [Fact]
@@ -1082,13 +1159,14 @@ public sealed class UserSpotExecutionSchedulerTests
             .AsTask();
         await actorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.True(executor.TrySealPerActorShellRelocation(out var seal));
+        var seal = await executor.TrySealPerActorShellRelocationAsync();
+        Assert.NotNull(seal);
         var nextActorRan = NewSignal();
         var nextActor = RecordActor(executor, "actor-b", order: null, marker: null, nextActorRan);
         await nextActorRan.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(executor.Queue(static (_, _) => ValueTask.CompletedTask));
 
-        Assert.True(executor.TryAbortRelocation(seal));
+        Assert.True(await executor.TryAbortRelocationAsync(seal));
         releaseActor.TrySetResult();
         await Task.WhenAll(actor, nextActor);
     }
@@ -1114,8 +1192,13 @@ public sealed class UserSpotExecutionSchedulerTests
             .AsTask();
         await firstActorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.True(executor.TrySealPerActorShellRelocation(out var seal));
-        Assert.True(executor.TryCommitRelocation(seal, out var held, preserveActorExecution: true));
+        var seal = await executor.TrySealPerActorShellRelocationAsync();
+        Assert.NotNull(seal);
+        var (heldSucceeded, held) = await executor.TryCommitRelocationAsync(
+            seal,
+            preserveActorExecution: true
+        );
+        Assert.True(heldSucceeded);
         Assert.Empty(held);
 
         var nextActorRan = NewSignal();

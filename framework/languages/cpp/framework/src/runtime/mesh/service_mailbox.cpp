@@ -39,7 +39,8 @@ const service_mailbox_t::domain_t &service_mailbox_t::domain (service_mailbox_do
     return value == service_mailbox_domain_t::application ? _application : _infrastructure;
 }
 
-bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record)
+bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
+                                     const std::function<void ()> &admitted)
 {
     if (record.owner.empty () || (record.parts.empty () && !record.application)) {
         throw std::invalid_argument (
@@ -55,6 +56,8 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record)
     auto &queue = target.owners[owner];
     if (record.domain == service_mailbox_domain_t::application && _application_prepare)
         _application_prepare (record);
+    if (admitted)
+        admitted ();
     queue.bytes += retained;
     ++queue.messages;
     queue.records.push_back (std::move (record));
