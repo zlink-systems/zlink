@@ -233,10 +233,10 @@ struct client_server_location_runtime_t::pump_task_state_t
     }
 };
 
-struct client_server_location_runtime_t::publication_request_t
+struct client_server_location_runtime_t::worker_request_t
 {
-    bool completed = false;
-    bool published = false;
+    std::function<void ()> transport_turn;
+    task_completion_source_t<bool> completion;
 };
 
 struct client_server_location_runtime_t::ready_waiter_t
@@ -779,23 +779,68 @@ bool client_server_location_runtime_t::republish_after_store_recovery ()
 
 bool client_server_location_runtime_t::request_publication () noexcept
 {
-    auto request = std::make_shared<publication_request_t> ();
+    auto request = std::make_shared<worker_request_t> ();
+    auto result = request->completion.task ();
     {
         std::lock_guard lock (_server_progress_mutex);
         if (_stop->load (std::memory_order_acquire))
             return false;
-        _publication_requests.push_back (request);
+        _worker_requests.push_back (request);
     }
     _wake_timer->signal ();
 
     std::unique_lock lock (_server_progress_mutex);
     if (!runtime::infrastructure_wait_guard::condition_wait_for (
           _server_progress_changed, lock, std::chrono::seconds (5),
-          [&request] { return request->completed; }, "client-server/descriptor-publish",
+          [&result] { return result.await_ready (); }, "client-server/descriptor-publish",
           runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
         return false;
     }
-    return request->published;
+    return result.result () && result.result ().value ();
+}
+
+task_t<void> client_server_location_runtime_t::request_transport_turn (std::function<void ()> work)
+{
+    auto request = std::make_shared<worker_request_t> ();
+    request->transport_turn = std::move (work);
+    auto result = request->completion.task ();
+    {
+        std::lock_guard lock (_server_progress_mutex);
+        _worker_requests.push_back (request);
+    }
+    _wake_timer->signal ();
+    co_await result;
+}
+
+void client_server_location_runtime_t::run_transport_turns ()
+{
+    for (;;) {
+        std::shared_ptr<worker_request_t> request;
+        {
+            std::lock_guard lock (_server_progress_mutex);
+            const auto found =
+              std::find_if (_worker_requests.begin (), _worker_requests.end (),
+                            [] (const auto &value) { return bool (value->transport_turn); });
+            if (found == _worker_requests.end ())
+                return;
+            request = std::move (*found);
+            _worker_requests.erase (found);
+        }
+        auto result = [&] {
+            try {
+                request->transport_turn ();
+                return result_t<bool>::success (true);
+            }
+            catch (const framework_exception_t &error) {
+                return result_t<bool>::failure (error.kind (), error.what ());
+            }
+            catch (const std::exception &error) {
+                return result_t<bool>::failure (framework_error_kind_t::internal_failure,
+                                                error.what ());
+            }
+        }();
+        request->completion.complete (std::move (result));
+    }
 }
 
 void client_server_location_runtime_t::run ()
@@ -805,9 +850,11 @@ void client_server_location_runtime_t::run ()
     std::shared_ptr<task_t<bool>> pending_maintenance;
     std::shared_ptr<task_t<void>> pending_reconcile;
     // Requests taken by the in-flight maintenance turn; empty for a periodic turn.
-    std::vector<std::shared_ptr<publication_request_t>> serving;
+    std::vector<std::shared_ptr<worker_request_t>> serving;
     std::optional<std::chrono::steady_clock::time_point> next_worker_deadline;
     for (;;) {
+        // Reconcile can await registration while the worker remains the poller owner.
+        run_transport_turns ();
         if (pending_maintenance && pending_maintenance->await_ready ()) {
             auto completed = std::move (pending_maintenance);
             const auto &result = completed->result ();
@@ -818,16 +865,17 @@ void client_server_location_runtime_t::run ()
             if (!reconcile_after_publish) {
                 {
                     std::lock_guard lock (_server_progress_mutex);
-                    for (const auto &request : serving) {
-                        request->published = published;
-                        request->completed = true;
-                    }
+                    for (const auto &request : serving)
+                        request->completion.complete (result_t<bool>::success (published));
                 }
                 serving.clear ();
                 _server_progress_changed.notify_all ();
             }
             if (reconcile_after_publish && result && !_stop->load (std::memory_order_acquire)) {
-                pending_reconcile = std::make_shared<task_t<void>> (reconcile_task ());
+                pending_reconcile = std::make_shared<task_t<void>> (
+                  reconcile_task ([this] (std::function<void ()> work) {
+                      return request_transport_turn (std::move (work));
+                  }));
                 detail::observe_task_terminal (
                   *pending_reconcile,
                   [wake = _wake_timer] (const result_t<void> &) { wake->signal (); });
@@ -859,7 +907,7 @@ void client_server_location_runtime_t::run ()
             && !pending_worker_snapshot) {
             {
                 std::lock_guard lock (_server_progress_mutex);
-                serving.swap (_publication_requests);
+                serving.swap (_worker_requests);
             }
             if (!serving.empty () || now >= next_reconcile) {
                 _client_pump_snapshot.clear ();
@@ -995,13 +1043,15 @@ void client_server_location_runtime_t::reconcile ()
     reconcile_task ().result ().value ();
 }
 
-task_t<void> client_server_location_runtime_t::reconcile_task ()
+task_t<void> client_server_location_runtime_t::reconcile_task (
+  raw_client_server_client_t::transport_turn_t transport_turn)
 {
     for (auto &[_, channel] : _clients)
-        co_await reconcile_channel_task (*channel);
+        co_await reconcile_channel_task (*channel, transport_turn);
 }
 
-task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_channel_t &channel)
+task_t<void> client_server_location_runtime_t::reconcile_channel_task (
+  client_channel_t &channel, const raw_client_server_client_t::transport_turn_t &transport_turn)
 {
     std::map<std::string, client_server_server_descriptor_t> desired;
     location_page_request_t page;
@@ -1085,7 +1135,7 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_ch
         options.control_reply_parked = [wake = _wake_timer] { wake->signal (); };
         auto raw = std::make_shared<raw_client_server_client_t> (std::move (options),
                                                                  _channel_runtime.core_context ());
-        co_await raw->start_task ();
+        co_await raw->start_task (transport_turn);
         co_await _lane.run_task ([&] {
             channel.selector_dirty = true;
             channel.connections.emplace (key, client_connection_t{descriptor, std::move (raw)});
@@ -1132,7 +1182,7 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (client_ch
         });
     }
     for (auto &owner : close)
-        co_await owner->close_task ();
+        co_await owner->close_task (transport_turn);
 }
 
 task_t<void> client_server_location_runtime_t::pump ()
@@ -1807,9 +1857,12 @@ void client_server_location_runtime_t::stop ()
     const bool was_stopped = _stop->exchange (true, std::memory_order_acq_rel);
     {
         std::lock_guard lock (_server_progress_mutex);
-        for (const auto &request : _publication_requests)
-            request->completed = true;
-        _publication_requests.clear ();
+        std::erase_if (_worker_requests, [] (const auto &request) {
+            if (request->transport_turn)
+                return false;
+            request->completion.complete (result_t<bool>::success (false));
+            return true;
+        });
     }
     _server_progress_changed.notify_all ();
     _wake_timer->signal ();
