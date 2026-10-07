@@ -1918,9 +1918,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
 
         provider.ThrowAfterNextWrite = true;
         provider.BlockWritesAfterThrownResponse = true;
-        await Assert.ThrowsAsync<IOException>(async () =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.CommitAggregateAsync(prepared.Fence)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.IsType<IOException>(failure.InnerException);
 
         var visible = Assert
             .IsType<ZLinkAuthorityReadResult.Found>(
@@ -2670,9 +2672,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         // sequence. The retry must fill any rows that were not written.
         provider.SkipWritesBeforeThrow = 2;
         provider.BlockWritesAfterThrownResponse = true;
-        await Assert.ThrowsAnyAsync<IOException>(async () =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.CommitAggregateAsync(prepared.Fence)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.IsType<IOException>(failure.InnerException);
 
         foreach (var participant in participants)
         {
@@ -2808,9 +2812,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         provider.ThrowAfterNextWrite = true;
         provider.SkipWritesBeforeThrow = 1;
         provider.BlockWritesAfterThrownResponse = true;
-        await Assert.ThrowsAsync<IOException>(async () =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.PrepareAggregateAsync(request)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.IsType<IOException>(failure.InnerException);
         Assert.Equal(
             ZLinkAggregateCommitResult.Stale,
             await repository.CommitAggregateAsync(fence)
@@ -3011,9 +3017,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         provider.ThrowAfterNextWrite = true;
         provider.SkipWritesBeforeThrow = 1;
         provider.BlockWritesAfterThrownResponse = true;
-        await Assert.ThrowsAsync<IOException>(async () =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.PrepareAggregateAsync(abandoned)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.IsType<IOException>(failure.InnerException);
         provider.BlockWrites = false;
         await BackdateAggregateRootAsync(inner, abandonedFence);
         Assert.Equal(
@@ -3326,9 +3334,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
 
         provider.ThrowAfterNextWrite = true;
         provider.BlockWritesAfterThrownResponse = true;
-        await Assert.ThrowsAsync<IOException>(async () =>
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.CommitAggregateAsync(prepared.Fence)
         );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.IsType<IOException>(failure.InnerException);
         provider.ResetInventoryReadCount();
         for (var index = 0; index < projectedCount; index++)
         {

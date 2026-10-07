@@ -110,7 +110,7 @@ final class ZLinkSameNodeJoinCommitTest {
                     assertInstanceOf(
                             ZLinkActorJoinCompletion.Failed.class,
                             join(runtime, ACTOR, new Join(null, false, true)));
-            assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, entryFailed.kind());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, entryFailed.kind());
             assertEquals(List.of("store-failed", "completion"), EVENTS);
             assertEquals(
                     userAuthority,
@@ -142,7 +142,7 @@ final class ZLinkSameNodeJoinCommitTest {
                     assertInstanceOf(
                             ZLinkActorJoinCompletion.Failed.class,
                             join(runtime, ACTOR, new Join(TARGET, false, true)));
-            assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, failed.kind());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failed.kind());
             assertEquals(List.of("admission", "store-failed", "completion"), EVENTS);
 
             var spotsField = runtime.getClass().getDeclaredField("spots");
