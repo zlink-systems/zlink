@@ -148,8 +148,6 @@ inline role_config_t read_role_config (int argc, char **argv)
     if (!file)
         throw std::invalid_argument (std::string ("Cannot read role config ") + argv[2]);
     auto config = json::parse (file).get<role_config_t> ();
-    if (port_of (config.metrics_url) == port_of (config.application_trigger_url))
-        throw std::invalid_argument ("Admin and application trigger require separate listeners.");
     return config;
 }
 

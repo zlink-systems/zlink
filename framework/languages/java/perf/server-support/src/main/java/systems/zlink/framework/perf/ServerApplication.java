@@ -73,11 +73,6 @@ public final class ServerApplication {
             throw new IllegalArgumentException(
                     "Role config is unreadable: " + error.getMessage(), error);
         }
-        if (URI.create(config.metricsUrl()).getPort()
-                == URI.create(config.applicationTriggerUrl()).getPort()) {
-            throw new IllegalArgumentException(
-                    "Admin and application trigger require separate listeners.");
-        }
         return config;
     }
 
@@ -188,6 +183,28 @@ public final class ServerApplication {
                                 "/perf/reset", this::reset)));
         servers.add(
                 listen(config.applicationTriggerUrl(), Map.of("/app/perf/start", this::trigger)));
+        Path startupFile = Path.of((String) config.provenance().get("startupFile"));
+        Path temporary = Path.of(startupFile + ".tmp");
+        try {
+            Files.writeString(
+                    temporary,
+                    PerfJson.write(
+                            Map.of(
+                                    "role",
+                                    config.role(),
+                                    "roleInstance",
+                                    config.roleInstance(),
+                                    "metricsUrl",
+                                    "http://127.0.0.1:" + servers.get(0).getAddress().getPort(),
+                                    "applicationTriggerUrl",
+                                    "http://127.0.0.1:"
+                                            + servers.get(1).getAddress().getPort()
+                                            + "/app/perf/start")),
+                    java.nio.file.StandardOpenOption.CREATE_NEW);
+            Files.move(temporary, startupFile, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException error) {
+            throw new IllegalStateException("Cannot publish HTTP startup endpoints", error);
+        }
         SpringApplicationBuilder builder =
                 new SpringApplicationBuilder(PerfRoleApplication.class)
                         .web(WebApplicationType.NONE)

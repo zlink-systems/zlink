@@ -11,7 +11,6 @@ from pathlib import Path
 import resource
 import select
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -174,23 +173,8 @@ class OwnedProcesses:
         self.redis_container_id = redis_container_id
         self.processes: list[tuple[str, subprocess.Popen]] = []
         self.logs = []
-        self.reservations: list[socket.socket] = []
-
-    def reserve(self) -> int:
-        reserved = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        reserved.bind(("127.0.0.1", 0))
-        self.reservations.append(reserved)
-        return reserved.getsockname()[1]
-
-    def release(self, ports: list[int]) -> None:
-        for reserved in list(self.reservations):
-            if reserved.getsockname()[1] in ports:
-                reserved.close()
-                self.reservations.remove(reserved)
-
-    def start(self, name: str, command: list[str], ports: list[int], client: bool = False,
+    def start(self, name: str, command: list[str], client: bool = False,
               diagnostics: str | None = None) -> subprocess.Popen:
-        self.release(ports)
         log = (self.cell / "logs" / (name + ".log")).open("x")
         self.logs.append(log)
         process = subprocess.Popen(command, cwd=ROOT, stdin=subprocess.PIPE if client else subprocess.DEVNULL,
@@ -206,9 +190,6 @@ class OwnedProcesses:
                 raise RuntimeError(f"Owned process {name} PID {process.pid} exited {process.returncode}; logs/{name}.log")
 
     def cleanup(self) -> None:
-        for reserved in self.reservations:
-            reserved.close()
-        self.reservations.clear()
         # Popen handles are the only process authority. Never search by process name or prefix.
         for _, process in reversed(self.processes):
             if process.poll() is None:
@@ -346,6 +327,9 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell:
         owned.check()
         for role in list(pending):
             key = role["role"] + "-" + str(role["roleInstance"])
+            if role["metrics"]["baseUrl"] is None and not publish_http_endpoints(
+                    role, cell / "tmp" / ("server-" + key + "-startup.json")):
+                continue
             try:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -380,8 +364,33 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell:
     return list(observed.values())
 
 
+def publish_http_endpoints(role: dict, path: Path) -> bool:
+    """Read the role's atomic startup report before making its first HTTP request."""
+    try:
+        report = json.loads(path.read_text())
+    except FileNotFoundError:
+        return False
+    if not isinstance(report, dict):
+        raise RuntimeError("HTTP startup report must be an object.")
+    if (report.get("role"), report.get("roleInstance")) != (role["role"], role["roleInstance"]):
+        raise RuntimeError("HTTP startup report identity differs from the role.")
+    addresses = [report.get("metricsUrl"), report.get("applicationTriggerUrl")]
+    for address in addresses:
+        if not isinstance(address, str):
+            raise RuntimeError("HTTP startup report is missing an endpoint.")
+        parsed = urlsplit(address)
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or not parsed.port:
+            raise RuntimeError("HTTP startup report did not report a bound loopback endpoint.")
+    if urlsplit(addresses[0]).port == urlsplit(addresses[1]).port:
+        raise RuntimeError("Admin and application trigger must report separate listeners.")
+    if urlsplit(addresses[0]).path or urlsplit(addresses[1]).path != "/app/perf/start":
+        raise RuntimeError("HTTP startup report endpoint paths differ from the harness contract.")
+    role["metrics"]["baseUrl"], role["applicationTriggerUrl"] = addresses
+    return True
+
+
 def publish_listener_endpoints(role: dict, ready: dict) -> None:
-    """Replace wildcard listener addresses with the role's public bound endpoints."""
+    """Publish only the role's public bound transport endpoints."""
     configured = role["transportEndpoints"]
     event = next(
         (
@@ -497,8 +506,8 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
                   if config["diagnostics"] == "Normal" else None,
                   "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
                                  "loadedArtifactsFile": "loaded-artifacts.json", "commit": env["commit"], "serializer": env["serializer"],
-                                 "listenerReservation": "control HTTP ports are OS-reserved; Framework listeners bind wildcard ports"}}
-        planned = plan_roles(cell_spec, values(scenario, args), common, language.stream_scheme, owned.reserve)
+                                 "listenerBinding": "Every listener binds port 0; manifests use only reported bound endpoints"}}
+        planned = plan_roles(cell_spec, values(scenario, args), common, language.stream_scheme)
         manifests = {}
         for role in planned:
             server_files.append(role.name + ".json")
@@ -507,6 +516,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             roles.append(manifest)
 
         def start_role(role):
+            role.config["provenance"]["startupFile"] = str(cell / "tmp" / (role.name + "-startup.json"))
             write_json(cell / role.config_file, role.config)
             owned.start(
                 role.name,
@@ -515,7 +525,6 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
                     "--config",
                     str(cell / role.config_file),
                 ],
-                role.ports,
                 diagnostics=args.language if role.config["diagnostics"] is not None else None,
             )
 
@@ -563,7 +572,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
         for index in range(config["workload"]["clientCount"]):
             name = f"client-{index}"
             process = owned.start(name, [*language.command(args.perf_dir, CLIENT), "--endpoint-config", str(cell / "endpoints.json"),
-                                        "--client-index", str(index)], [], client=True)
+                                        "--client-index", str(index)], client=True)
             client = ClientControl(process, cell / "logs" / (name + "-control.log"))
             clients.append(client)
         setup_snapshots = []

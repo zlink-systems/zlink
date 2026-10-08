@@ -1,5 +1,7 @@
 import 'reflect-metadata';
 import * as http from 'node:http';
+import * as fs from 'node:fs';
+import type { AddressInfo } from 'node:net';
 import * as path from 'node:path';
 import { Module, Provider, Type } from '@nestjs/common';
 import { INestApplicationContext } from '@nestjs/common';
@@ -63,8 +65,6 @@ export function readConfig(argv: string[]): { config: RoleConfig; cellDirectory:
   if (argv.length !== 2 || argv[0] !== '--config')
     throw new Error('Server requires --config <file> only.');
   const config = readJson<RoleConfig>(argv[1]);
-  if (new URL(config.metricsUrl).port === new URL(config.applicationTriggerUrl).port)
-    throw new Error('Admin and application trigger require separate listeners.');
   // role-configs/<role>.json sits one folder below the cell directory (perf §15.1), where the sequence originals are written.
   return { config, cellDirectory: path.dirname(path.dirname(path.resolve(argv[1]))) };
 }
@@ -179,9 +179,12 @@ class AdminServer {
   async listen(): Promise<void> {
     const metricsPort = Number(new URL(this.config.metricsUrl).port);
     const triggerPort = Number(new URL(this.config.applicationTriggerUrl).port);
-    for (const port of [metricsPort, triggerPort]) {
+    for (const [isMetrics, port] of [
+      [true, metricsPort],
+      [false, triggerPort]
+    ] as const) {
       const server = http.createServer(
-        (request, response) => void this.handle(port === metricsPort, request, response)
+        (request, response) => void this.handle(isMetrics, request, response)
       );
       // Admin traffic is few, large-body-free calls; never let keep-alive hold the process open on shutdown.
       server.keepAliveTimeout = 1000;
@@ -191,6 +194,18 @@ class AdminServer {
       });
       this.servers.push(server);
     }
+    const startupFile = String(this.config.provenance.startupFile);
+    fs.writeFileSync(
+      startupFile + '.tmp',
+      toJson({
+        role: this.config.role,
+        roleInstance: this.config.roleInstance,
+        metricsUrl: `http://127.0.0.1:${(this.servers[0].address() as AddressInfo).port}`,
+        applicationTriggerUrl: `http://127.0.0.1:${(this.servers[1].address() as AddressInfo).port}/app/perf/start`
+      }),
+      { flag: 'wx' }
+    );
+    fs.renameSync(startupFile + '.tmp', startupFile);
   }
 
   private async handle(

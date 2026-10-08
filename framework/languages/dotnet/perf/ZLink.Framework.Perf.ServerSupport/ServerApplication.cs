@@ -29,10 +29,6 @@ public static class ServerApplication
         if (args.Length != 2 || args[0] != "--config")
             throw new ArgumentException("Server requires --config <file> only.");
         var config = PerfJson.Read<RoleConfig>(File.ReadAllText(args[1]));
-        if (new Uri(config.metricsUrl).Port == new Uri(config.applicationTriggerUrl).Port)
-            throw new ArgumentException(
-                "Admin and application trigger require separate listeners."
-            );
         return config;
     }
 
@@ -45,10 +41,14 @@ public static class ServerApplication
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
-        builder.WebHost.UseUrls(
-            config.metricsUrl,
-            new Uri(config.applicationTriggerUrl).GetLeftPart(UriPartial.Authority)
-        );
+        builder.WebHost.ConfigureKestrel(server =>
+        {
+            server.Listen(System.Net.IPAddress.Loopback, new Uri(config.metricsUrl).Port);
+            server.Listen(
+                System.Net.IPAddress.Loopback,
+                new Uri(config.applicationTriggerUrl).Port
+            );
+        });
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(new Measurement(config, config.source));
         builder.Services.AddSingleton<PublicMetricCollector>();
@@ -100,6 +100,27 @@ public static class ServerApplication
         measurement.CoreVersion = $"{coreVersion.Major}.{coreVersion.Minor}.{coreVersion.Patch}";
         var runtime = app.Services.GetRequiredService<IZLinkFrameworkRuntime>();
         var provider = app.Services.GetRequiredService<PublicMetricCollector>();
+        app.Lifetime.ApplicationStarted.Register(() =>
+        {
+            if (app.Urls.Count != 2)
+                throw new InvalidOperationException(
+                    "Admin and trigger require two bound HTTP listeners."
+                );
+            var path = config.provenance["startupFile"]!.ToString()!;
+            File.WriteAllText(
+                path + ".tmp",
+                PerfJson.Write(
+                    new
+                    {
+                        config.role,
+                        config.roleInstance,
+                        metricsUrl = app.Urls.First(),
+                        applicationTriggerUrl = app.Urls.Last() + "/app/perf/start",
+                    }
+                )
+            );
+            File.Move(path + ".tmp", path);
+        });
         if (config.diagnostics is not null)
             _ = app.Services.GetRequiredService<MessageFlowFileListener>();
         measurement.SamplePublicState = () =>
@@ -118,8 +139,8 @@ public static class ServerApplication
             async (context, next) =>
             {
                 var correctPort = context.Request.Path.StartsWithSegments("/perf")
-                    ? new Uri(config.metricsUrl).Port
-                    : new Uri(config.applicationTriggerUrl).Port;
+                    ? new Uri(app.Urls.First()).Port
+                    : new Uri(app.Urls.Last()).Port;
                 if (context.Connection.LocalPort != correctPort)
                 {
                     context.Response.StatusCode = 404;

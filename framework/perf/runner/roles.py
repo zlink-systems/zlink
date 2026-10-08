@@ -6,7 +6,6 @@ that into files. It knows nothing about how a language launches a role.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
 
 from scenarios import ROLE_KINDS, Cell, Listen, RoleUse, instances
 
@@ -18,7 +17,6 @@ class PlannedRole:
     config_file: str
     config: dict
     manifest: dict
-    ports: list[int]
     source: bool
     peer_target: str | None
     peer_endpoint_key: str | None
@@ -45,22 +43,21 @@ def awaits_remote_targets(scenario, role: RoleUse, mode: str) -> bool:
     return not (role.source and role.object_role == "ObjectClient" and mode == "send-send" and scenario.channel)
 
 
-def plan_roles(cell: Cell, values: dict, common: dict, stream_scheme: str, reserve: Callable[[], int]) -> list[PlannedRole]:
+def plan_roles(cell: Cell, values: dict, common: dict, stream_scheme: str) -> list[PlannedRole]:
     """`common` carries what every role config shares: runId, cellId, configHash, workload, worker, store,
-    diagnostics(name -> dict|None), provenance. `reserve` returns a fresh OS-reserved loopback port."""
+    diagnostics(name -> dict|None), provenance. Each listener binds port 0 in its role process."""
     scenario = cell.scenario
     ids = object_ids(cell, values, common["configHash"])
     uses = [(role, index) for role in scenario.roles for index in instances(role, cell.subscriber_count)]
-    endpoints, admin, trigger = {}, {}, {}
+    endpoints = {}
     for role, index in uses:
         key = (role.kind, index)
-        admin[key], trigger[key] = reserve(), reserve()
         endpoints[key] = {}
         for listen in role.listens:
             name = endpoint_key(listen, cell.topology)
             if name is not None:
                 scheme = stream_scheme if name == "stream" else "tcp"
-                endpoints[key][name] = f"{scheme}://127.0.0.1:*"
+                endpoints[key][name] = f"{scheme}://127.0.0.1:0"
     target = next(((r.kind, i) for r, i in uses if not r.source), None)
     mesh_name = "perf-mesh" if any("mesh" in found for found in endpoints.values()) else None
     channel_name = "perf-" + common["runId"] + "-" + common["configHash"][:12] if scenario.channel else None
@@ -68,7 +65,6 @@ def plan_roles(cell: Cell, values: dict, common: dict, stream_scheme: str, reser
     for role, index in uses:
         key = (role.kind, index)
         listeners = endpoints[key]
-        peer = None
         peer_target = f"server-{target[0]}-{target[1]}" if role.peer and target else None
         peer_endpoint_key = (
             next(iter(endpoints[target]), None) if role.peer and target else None
@@ -77,9 +73,9 @@ def plan_roles(cell: Cell, values: dict, common: dict, stream_scheme: str, reser
         config = {**{k: common[k] for k in ("runId", "cellId", "configHash", "language")},
                   "role": role.kind, "roleInstance": index, "scenario": scenario.name, "mode": cell.mode,
                   "terminal": cell.terminal, "topology": cell.topology, "channelName": channel_name, "meshName": mesh_name,
-                  "transportEndpoints": listeners, "peerEndpoint": peer,
-                  "metricsUrl": f"http://127.0.0.1:{admin[key]}",
-                  "applicationTriggerUrl": f"http://127.0.0.1:{trigger[key]}/app/perf/start", "source": role.source,
+                  "transportEndpoints": listeners, "peerEndpoint": None,
+                  "metricsUrl": "http://127.0.0.1:0",
+                  "applicationTriggerUrl": "http://127.0.0.1:0/app/perf/start", "source": role.source,
                   "objectRole": role.object_role, "awaitRemoteTargets": awaits_remote_targets(scenario, role, cell.mode), "store": common["store"],
                   "spotIds": ids["spot"] if role.objects == "spot" else [],
                   "actorIds": ids["actor"] if role.objects == "actor" else [],
@@ -88,12 +84,11 @@ def plan_roles(cell: Cell, values: dict, common: dict, stream_scheme: str, reser
                   "diagnostics": common["diagnostics"](name),
                   "provenance": {**common["provenance"], "processKey": name,
                                  **({"fanout": {"noDrop": True}} if role.kind == "publisher" else {})}}
-        manifest = {"role": role.kind, "roleInstance": index, "streamEndpoint": listeners.get("stream"),
-                    "applicationTriggerUrl": config["applicationTriggerUrl"],
-                    "metrics": {"transport": "http", "baseUrl": config["metricsUrl"]},
-                    "transportEndpoints": {**listeners, **({"peer": peer} if peer else {})},
+        manifest = {"role": role.kind, "roleInstance": index, "streamEndpoint": None,
+                    "applicationTriggerUrl": None,
+                    "metrics": {"transport": "http", "baseUrl": None},
+                    "transportEndpoints": {key: None for key in listeners},
                     "spotIds": config["spotIds"], "actorIds": config["actorIds"]}
-        ports = [admin[key], trigger[key]]
         planned.append(PlannedRole(name, ROLE_KINDS[role.kind], f"role-configs/{role.kind}-{index}.json",
-                                   config, manifest, ports, role.source, peer_target, peer_endpoint_key))
+                                   config, manifest, role.source, peer_target, peer_endpoint_key))
     return planned
