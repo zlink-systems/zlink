@@ -553,6 +553,11 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (active && request?.ObjectKind != ZLinkPlacementObjectKind.Actor)
             return StaleAuthorityReclaimResult.NotReclaimable;
 
+        // Relocation authority retains its own recovery protocol.
+        if (current.Meta.AggregateFence is not null)
+            return StaleAuthorityReclaimResult.RecoveryRequired;
+        if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _))
+            return StaleAuthorityReclaimResult.RecoveryRequired;
         var ownerKey = OwnerKey(current.Snapshot.OwnerId);
         var descriptorKey = MeshKey(
             current.Snapshot.Allocation.Descriptor.MeshName,
@@ -608,11 +613,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         else
             descriptorCondition = new ZLinkStoreCondition.Missing(descriptorKey);
 
-        // Relocation authority retains its own recovery protocol.
-        if (current.Meta.AggregateFence is not null)
-            return StaleAuthorityReclaimResult.RecoveryRequired;
-        if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _))
-            return StaleAuthorityReclaimResult.RecoveryRequired;
         var conditions = new List<ZLinkStoreCondition>
         {
             new ZLinkStoreCondition.Version(AuthorityMetaKey(current.Key), current.Version),

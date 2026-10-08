@@ -33,6 +33,8 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     [InlineData("capacityRace", false)]
     [InlineData("relocation", false)]
     [InlineData("relocation", true)]
+    [InlineData("relocationRecreate", false)]
+    [InlineData("relocationRecreate", true)]
     public async Task EndedActiveActorRecreation(string scenario, bool inMemory)
     {
         var time = new ManualTimeProvider();
@@ -52,21 +54,20 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         var first = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await repository.ReserveAsync(request)
         );
-        var readyPayload =
-            scenario == "relocation"
-                ? ZLinkRelocationAuthorityPayloadCodec.Encode(
-                    new ZLinkRelocationAuthorityPayload(
-                        "reclaim-relocation",
-                        0,
-                        Guid.NewGuid(),
-                        1,
-                        new byte[32],
-                        "reclaim-target",
-                        1,
-                        new byte[] { 9 }
-                    )
+        var readyPayload = scenario is "relocation" or "relocationRecreate"
+            ? ZLinkRelocationAuthorityPayloadCodec.Encode(
+                new ZLinkRelocationAuthorityPayload(
+                    "reclaim-relocation",
+                    0,
+                    Guid.NewGuid(),
+                    1,
+                    new byte[32],
+                    "reclaim-target",
+                    1,
+                    new byte[] { 9 }
                 )
-                : new byte[] { 9 };
+            )
+            : new byte[] { 9 };
         _ = Assert.IsType<ZLinkObjectCreationCompleteResult.Created>(
             await repository.CompleteCreationAsync(
                 first.Reservation,
@@ -93,10 +94,9 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         _ = await repository.UpdateMeshNodeAsync(newDescriptor, ZLinkLocationWriteIntent.NewClaim);
         var next = Reservation("reclaim-actor", newDescriptor, newOwner) with
         {
-            ActorRelocationPolicy =
-                scenario == "recreate"
-                    ? ZLinkObjectRelocationRegistration.RecreatePolicy
-                    : ZLinkObjectRelocationRegistration.DisabledPolicy,
+            ActorRelocationPolicy = scenario is "recreate" or "relocationRecreate"
+                ? ZLinkObjectRelocationRegistration.RecreatePolicy
+                : ZLinkObjectRelocationRegistration.DisabledPolicy,
             StableType = scenario == "typeMismatch" ? "different" : "player",
         };
         if (scenario == "recreate")
@@ -106,7 +106,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             );
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
         }
-        else if (scenario == "relocation")
+        else if (scenario is "relocation" or "relocationRecreate")
         {
             Assert.IsType<ZLinkObjectReserveResult.AlreadyExists>(
                 await repository.ReserveAsync(next)

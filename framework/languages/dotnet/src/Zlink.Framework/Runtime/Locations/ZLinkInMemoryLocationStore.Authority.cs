@@ -628,17 +628,17 @@ internal sealed partial class ZLinkInMemoryLocationStore
             ) || IsAuthorityInPreparedAggregate(key)
         )
             return false;
+        var active = current.Allocation.State == ZLinkPlacementAllocationState.Active;
+        if (active && ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Payload.Span, out _))
+            return false;
         var descriptorKey = ZLinkLocationKeyCodec.EncodeMeshNodeKey(current.Allocation.Descriptor);
         var ownerLive = MatchesLiveOwnerLease(
             new ZLinkLocationOwnerToken(current.OwnerId, current.OwnerLeaseGeneration),
             now
         );
-        var active = current.Allocation.State == ZLinkPlacementAllocationState.Active;
         if (active)
         {
             if (ownerLive)
-                return false;
-            if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Payload.Span, out _))
                 return false;
             if (request?.ActorRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
                 throw new ZLinkFrameworkException(
