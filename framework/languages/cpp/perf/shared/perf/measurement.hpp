@@ -390,7 +390,7 @@ class measurement_t
             again.state = "alreadyStarted";
             return again;
         }
-        if (!_phase_complete || _inflight != 0 || _active_handlers != 0
+        if (!_phase_complete || !is_drained ()
             || (trigger.phase == "warmup" ? _phase != "setup" : _phase != "reset"))
             return ack (trigger, false, "rejected", "Previous phase has not drained and reset.");
         _phase = trigger.phase;
@@ -426,8 +426,8 @@ class measurement_t
     {
         const auto requested = parse_u64 (request.reset_seq);
         std::lock_guard lock (_gate);
-        const bool drained = _phase_complete && (_start == 0 || now_ticks () >= _end)
-                             && _inflight == 0 && _active_handlers == 0;
+        const bool drained =
+          _phase_complete && (_start == 0 || now_ticks () >= _end) && is_drained ();
         if (request.run_id == _config.run_id && request.cell_id == _config.cell_id && _reset_ack
             && (*_reset_ack)["resetSeq"] == request.reset_seq && drained)
             return {*_reset_ack, 200};
@@ -516,6 +516,8 @@ class measurement_t
         if (_sealed)
             return false;
         --_inflight;
+        if (is_drained ())
+            _phase_done.notify_all ();
         if (completed >= _end)
             return false;
         if (!error) {
@@ -536,6 +538,8 @@ class measurement_t
     {
         std::lock_guard lock (_gate);
         --_active_handlers;
+        if (is_drained ())
+            _phase_done.notify_all ();
     }
     int active_handlers () const
     {
@@ -805,12 +809,15 @@ class measurement_t
         }
         // Setup requires every warmup callback to reach a terminal result before reset clears its counters.
         loops->wait_idle ();
-        std::lock_guard lock (_gate);
+        std::unique_lock lock (_gate);
+        _phase_done.wait (lock, [this] { return is_drained (); });
         _sealed = true;
         _phase = "complete";
         _phase_complete = true;
         _phase_done.notify_all ();
     }
+
+    bool is_drained () const { return _inflight == 0 && _active_handlers == 0; }
 
     void add_public_state (json state)
     {

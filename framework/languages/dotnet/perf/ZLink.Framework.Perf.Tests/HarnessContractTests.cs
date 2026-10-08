@@ -127,6 +127,75 @@ public sealed class HarnessContractTests
         await measurement.PhaseTask.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task WarmupWaitsForOperationsAndHandlersBeforeCompleting(
+        bool pendingOperation,
+        bool handlerLast
+    )
+    {
+        using var measurement = new Measurement(Config(), true);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        long started = 0;
+        var handlerActive = false;
+        var operationActive = false;
+        Assert.True(
+            measurement
+                .Start(
+                    Trigger(measurement, "warmup", "0"),
+                    () =>
+                    {
+                        measurement.HandlerEnter();
+                        handlerActive = true;
+                        if (pendingOperation)
+                        {
+                            Assert.True(measurement.BeginOperation(out started));
+                            operationActive = true;
+                        }
+                        entered.SetResult();
+                        return Task.CompletedTask;
+                    }
+                )
+                .accepted
+        );
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            await Task.Delay(80);
+            if (pendingOperation)
+            {
+                if (handlerLast)
+                {
+                    measurement.CompleteOperation(started);
+                    operationActive = false;
+                }
+                else
+                {
+                    measurement.HandlerExit();
+                    handlerActive = false;
+                }
+            }
+            var reset = measurement.Reset(Reset(measurement), null);
+            Assert.False(
+                measurement.PhaseTask.IsCompleted,
+                $"Warmup completed with unfinished work; reset ok={reset.ok}, reason={reset.reason}"
+            );
+            Assert.False(measurement.WaitForOperationsAsync().IsCompleted);
+            Assert.False(reset.ok);
+        }
+        finally
+        {
+            if (operationActive)
+                measurement.CompleteOperation(started);
+            if (handlerActive)
+                measurement.HandlerExit();
+            await measurement.PhaseTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        Assert.True(measurement.Reset(Reset(measurement), null).ok);
+    }
+
     [Fact]
     public async Task MeasuredPhaseSealsAtWindowEndWithAnOutstandingOperation()
     {

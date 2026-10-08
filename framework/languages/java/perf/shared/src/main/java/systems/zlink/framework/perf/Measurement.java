@@ -144,13 +144,16 @@ public final class Measurement {
         return localDriver ? timeout.plusMillis(config.workload().drainTimeoutMs()) : timeout;
     }
 
+    private boolean isDrained() {
+        return outstandingOperations == 0 && activeHandlers == 0;
+    }
+
     /**
-     * Completes when all operations this measurement has started have reached their public
-     * terminal.
+     * Completes when all submitted operations and active handlers have finished.
      */
     public CompletableFuture<Void> operationsDrained() {
         synchronized (gate) {
-            if (outstandingOperations == 0) {
+            if (isDrained()) {
                 return CompletableFuture.completedFuture(null);
             }
             if (operationsDrained == null) {
@@ -330,8 +333,7 @@ public final class Measurement {
                 return previous.withState("alreadyStarted");
             }
             if (!phaseTask.isDone()
-                    || ("0".equals(resetSeq) && outstandingOperations != 0)
-                    || activeHandlers != 0
+                    || !isDrained()
                     || ("warmup".equals(trigger.phase())
                             ? !"setup".equals(phase)
                             : !"reset".equals(phase))) {
@@ -419,6 +421,7 @@ public final class Measurement {
             } catch (RuntimeException error) {
                 recordDiagnostic(error);
             }
+            operationsDrained().join();
         }
         synchronized (gate) {
             endUnix = PerfClock.unixMs();
@@ -434,10 +437,7 @@ public final class Measurement {
         long requested = DecimalText.u64(request.resetSeq());
         synchronized (gate) {
             boolean drained =
-                    phaseTask.isDone()
-                            && (start == 0 || PerfClock.now() >= end)
-                            && outstandingOperations == 0
-                            && activeHandlers == 0;
+                    phaseTask.isDone() && (start == 0 || PerfClock.now() >= end) && isDrained();
             if (config.runId().equals(request.runId())
                     && config.cellId().equals(request.cellId())
                     && resetAck != null
@@ -555,7 +555,7 @@ public final class Measurement {
         boolean counted = false;
         synchronized (gate) {
             outstandingOperations--;
-            if (outstandingOperations == 0) {
+            if (isDrained()) {
                 drained = operationsDrained;
                 operationsDrained = null;
             }
@@ -589,8 +589,16 @@ public final class Measurement {
     }
 
     public void handlerExit() {
+        CompletableFuture<Void> drained = null;
         synchronized (gate) {
             activeHandlers--;
+            if (isDrained()) {
+                drained = operationsDrained;
+                operationsDrained = null;
+            }
+        }
+        if (drained != null) {
+            drained.complete(null);
         }
     }
 

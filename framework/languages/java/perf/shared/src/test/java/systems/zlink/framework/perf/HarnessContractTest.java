@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Base64;
@@ -247,6 +248,56 @@ class HarnessContractTest {
         assertEquals("java", config.language());
         assertEquals(30000, config.workload().drainTimeoutMs());
         assertEquals(3, config.worker().taskMillis());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,true", "true,true", "true,false"})
+    void warmupWaitsForOperationsAndHandlersBeforeCompleting(
+            boolean pendingOperation, boolean handlerLast) throws Exception {
+        Measurement measurement = new Measurement(config(.05), true);
+        CompletableFuture<Void> entered = new CompletableFuture<>();
+        long[] started = {-1};
+        boolean[] active = {false, false};
+        assertTrue(
+                measurement
+                        .start(
+                                trigger(measurement, "warmup", "0"),
+                                () -> {
+                                    measurement.handlerEnter();
+                                    active[0] = true;
+                                    if (pendingOperation) {
+                                        started[0] = measurement.beginOperation();
+                                        assertTrue(started[0] >= 0);
+                                        active[1] = true;
+                                    }
+                                    entered.complete(null);
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .accepted());
+        entered.get(5, TimeUnit.SECONDS);
+        try {
+            Thread.sleep(80);
+            if (pendingOperation) {
+                if (handlerLast) {
+                    measurement.completeOperation(started[0]);
+                    active[1] = false;
+                } else {
+                    measurement.handlerExit();
+                    active[0] = false;
+                }
+            }
+            ResetReply reset = measurement.reset(reset(measurement, "1"), null);
+            assertFalse(
+                    measurement.phaseTask().isDone(),
+                    "Warmup completed with unfinished work; reset ok=" + reset.ok());
+            assertFalse(measurement.operationsDrained().isDone());
+            assertFalse(reset.ok());
+        } finally {
+            if (active[1]) measurement.completeOperation(started[0]);
+            if (active[0]) measurement.handlerExit();
+            measurement.phaseTask().get(5, TimeUnit.SECONDS);
+        }
+        assertTrue(measurement.reset(reset(measurement, "1"), null).ok());
     }
 
     @Test

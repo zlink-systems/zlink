@@ -101,10 +101,12 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
         return TimeSpan.FromMilliseconds(milliseconds);
     }
 
+    private bool IsDrained() => inflight == 0 && activeHandlers == 0;
+
     public Task WaitForOperationsAsync()
     {
         lock (gate)
-            return inflight == 0
+            return IsDrained()
                 ? Task.CompletedTask
                 : (drainWaiter ??= new(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
     }
@@ -218,8 +220,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
                 return previous with { state = "alreadyStarted" };
             if (
                 !phaseTask.IsCompleted
-                || inflight != 0
-                || activeHandlers != 0
+                || !IsDrained()
                 || (trigger.phase == "warmup" ? phase != "setup" : phase != "reset")
             )
                 return Ack(trigger, false, "rejected", "Previous phase has not drained and reset.");
@@ -330,10 +331,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
         lock (gate)
         {
             var drained =
-                phaseTask.IsCompleted
-                && (start == 0 || PerfClock.Now >= end)
-                && inflight == 0
-                && activeHandlers == 0;
+                phaseTask.IsCompleted && (start == 0 || PerfClock.Now >= end) && IsDrained();
             if (
                 request.runId == config.runId
                 && request.cellId == config.cellId
@@ -428,7 +426,7 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
             if (sealedResults)
                 return false;
             inflight--;
-            if (inflight == 0)
+            if (IsDrained())
                 drainWaiter?.TrySetResult();
             if (completed >= end)
                 return false;
@@ -452,7 +450,11 @@ public sealed class Measurement(RoleConfig config, bool primary) : IDisposable
     public void HandlerExit()
     {
         lock (gate)
+        {
             activeHandlers--;
+            if (IsDrained())
+                drainWaiter?.TrySetResult();
+        }
     }
 
     public void RecordReply(PerfEchoRequest request) => RecordApplicationCall(request, "reply");

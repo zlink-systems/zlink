@@ -9,6 +9,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <system_error>
 #include <thread>
@@ -50,6 +51,51 @@ trigger_request_t trigger (const std::string &phase, const std::string &reset_se
 json measured_snapshot (measurement_t &measurement)
 {
     return measurement.snapshot (json::object ());
+}
+
+void test_warmup_waits_for_operations_and_handlers ()
+{
+    for (const auto [pending_operation, handler_last] :
+         {std::pair{false, true}, std::pair{true, true}, std::pair{true, false}}) {
+        auto cfg = config ();
+        cfg.workload.warmup_seconds = 0.05;
+        measurement_t measurement (cfg, true);
+        std::promise<void> entered;
+        std::int64_t started = 0;
+        require (measurement
+                   .start (trigger ("warmup", "0"),
+                           [&] (const loops_t &) {
+                               measurement.handler_enter ();
+                               if (pending_operation)
+                                   require (measurement.begin_operation (started),
+                                            "warmup operation did not start");
+                               entered.set_value ();
+                           })
+                   .accepted,
+                 "warmup did not start");
+        entered.get_future ().get ();
+        std::this_thread::sleep_for (std::chrono::milliseconds (80));
+        if (pending_operation) {
+            if (handler_last)
+                measurement.complete_operation (started);
+            else
+                measurement.handler_exit ();
+        }
+        const bool completed = measurement.phase () == "complete";
+        const auto [before, status] =
+          measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
+        if (pending_operation && !handler_last)
+            measurement.complete_operation (started);
+        else
+            measurement.handler_exit ();
+        measurement.wait_phase ();
+        require (!completed, "warmup completed with unfinished work and reset rejected it");
+        require (status != 200 && !before.at ("ok").get<bool> (), "reset accepted unfinished work");
+        require (
+          measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {}).second
+            == 200,
+          "drained warmup reset failed");
+    }
 }
 
 void test_phase_deadlines ()
@@ -467,6 +513,7 @@ int main ()
 {
     try {
         test_terminal_window_and_inflight_accounting ();
+        test_warmup_waits_for_operations_and_handlers ();
         test_phase_deadlines ();
         test_driver_latency_uses_result_window ();
         test_public_error_classification ();
