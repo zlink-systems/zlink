@@ -1335,7 +1335,8 @@ final class ZLinkChannelSocketRegistry {
                         // Started inside the lane: a close that reads this owner finds it
                         // running or ended, never not yet started.
                         connection.receiveOwner =
-                                Thread.ofVirtual()
+                                Thread.ofPlatform()
+                                        .daemon()
                                         .name("zlink-client-server-control")
                                         .start(() -> runClientServerControlReceive(connection));
                     }
