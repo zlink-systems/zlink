@@ -588,10 +588,11 @@ class provider_location_repository_t final : public location_repository_t
                                              std::stop_token cancellation = {}) override
     {
         object_reservation_fence_t fence;
+        std::optional<store_version_t> reclaim_version;
         for (;;) {
             bool retry_reclaim = false;
-            auto result =
-              co_await await_result (reserve_once (request, cancellation, &retry_reclaim, fence));
+            auto result = co_await await_result (
+              reserve_once (request, cancellation, &retry_reclaim, fence, reclaim_version));
             if (!result)
                 co_return std::move (result);
 
@@ -642,7 +643,8 @@ class provider_location_repository_t final : public location_repository_t
     task_t<object_reserve_result_t> reserve_once (const object_reserve_request_t &request,
                                                   std::stop_token cancellation,
                                                   bool *retry_reclaim,
-                                                  object_reservation_fence_t &fence)
+                                                  object_reservation_fence_t &fence,
+                                                  std::optional<store_version_t> &reclaim_version)
     {
         if (cancellation.stop_requested ())
             co_return detail::result_access_t::failure<object_reserve_result_t> (
@@ -657,31 +659,53 @@ class provider_location_repository_t final : public location_repository_t
         auto creation_target = request.target;
         const auto authority_key = key_authority (object_key (request.key));
         auto authority = co_await _store.read (authority_key);
+        const auto store_now = std::holds_alternative<store_found_t> (authority)
+                                 ? std::get<store_found_t> (authority).value.store_now
+                                 : std::get<store_missing_t> (authority).store_now;
+        if (request.operation_deadline != std::chrono::system_clock::time_point{}
+            && store_now >= request.operation_deadline)
+            co_return detail::result_access_t::failure<object_reserve_result_t> (
+              std::make_exception_ptr (framework_exception_t (
+                framework_error_kind_t::deadline_exceeded, "Actor creation deadline expired")));
+        std::optional<authority_snapshot_t> decoded_current;
+        if (const auto *found = std::get_if<store_found_t> (&authority)) {
+            decoded_current =
+              decode_authority (found->value.bytes, found->value.version, found->value.store_now);
+            if (decoded_current->allocation.object_kind != request.key.kind
+                || decoded_current->allocation.stable_type != request.intent.stable_type)
+                co_return object_reserve_result_t{
+                  object_type_mismatch_t{std::move (*decoded_current)}};
+        }
         if (co_await authority_mutation_locked_async (object_key (request.key))) {
             auto current = co_await read_authority_value_async (object_key (request.key));
             co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
         }
         if (const auto *found = std::get_if<store_found_t> (&authority)) {
-            auto current =
-              decode_authority (found->value.bytes, found->value.version, found->value.store_now);
-            if (current.allocation.stable_type != request.intent.stable_type)
-                co_return object_reserve_result_t{object_type_mismatch_t{std::move (current)}};
-            if (current.allocation.state == placement_allocation_state_t::active)
+            auto current = std::move (*decoded_current);
+            if (reclaim_version && found->value.version.value != reclaim_version->value)
+                co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
+            if (current.allocation.state == placement_allocation_state_t::active
+                && request.key.kind != placement_object_kind_t::actor)
                 co_return object_reserve_result_t{object_already_exists_t{std::move (current)}};
-            const auto reclaim =
-              co_await try_reclaim_reserved_authority_async (authority_key, *found, current);
+            const auto reclaim = co_await try_reclaim_reserved_authority_async (
+              authority_key, *found, current, &request);
             if (reclaim == stale_authority_reclaim_result_t::reclaimed
                 || reclaim == stale_authority_reclaim_result_t::conflict) {
-                *retry_reclaim = reclaim == stale_authority_reclaim_result_t::reclaimed;
-                if (!*retry_reclaim)
-                    *retry_reclaim = co_await conflict_qualification_unchanged (
-                      authority_key, found->value.version, creation_target.owner,
-                      request.operation_deadline);
-                auto observed = co_await read_authority_value_async (object_key (request.key));
-                co_return object_reserve_result_t{object_reserve_conflict_t{std::move (observed)}};
+                reclaim_version = reclaim == stale_authority_reclaim_result_t::conflict
+                                    ? std::make_optional (found->value.version)
+                                    : std::nullopt;
+                *retry_reclaim = true;
+                co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
             }
+            if (current.allocation.state == placement_allocation_state_t::active
+                && reclaim == stale_authority_reclaim_result_t::owner_live)
+                co_return object_reserve_result_t{object_already_exists_t{std::move (current)}};
             co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
         }
+
+        if (reclaim_version)
+            co_return object_reserve_result_t{
+              object_reserve_conflict_t{authority_missing_t{store_now}}};
 
         auto target = co_await read_target_descriptor_async (creation_target);
         if (!target) {
@@ -775,10 +799,14 @@ class provider_location_repository_t final : public location_repository_t
           object_reserved_t{std::move (fence), std::move (creating)}};
     }
 
-    task_t<stale_authority_reclaim_result_t> try_reclaim_reserved_authority_async (
-      store_key_t authority_key, store_found_t stored_authority, authority_snapshot_t current)
+    task_t<stale_authority_reclaim_result_t>
+    try_reclaim_reserved_authority_async (store_key_t authority_key,
+                                          store_found_t stored_authority,
+                                          authority_snapshot_t current,
+                                          const object_reserve_request_t *request = nullptr)
     {
-        if (current.allocation.state != placement_allocation_state_t::reserved)
+        const bool active = current.allocation.state == placement_allocation_state_t::active;
+        if (active && (!request || request->key.kind != placement_object_kind_t::actor))
             co_return stale_authority_reclaim_result_t::recovery_required;
         const auto owner_key = key_owner (current.owner.owner_id);
         auto owner = co_await _store.read (owner_key);
@@ -792,6 +820,13 @@ class provider_location_repository_t final : public location_repository_t
             owner_live = lease.token.lease_generation == current.owner.lease_generation
                          && lease.lease_expires_at > lease.store_now;
             stale_owner_condition = version_condition (owner_key, found->value.version);
+        }
+        if (active) {
+            if (owner_live)
+                co_return stale_authority_reclaim_result_t::owner_live;
+            if (request->actor_relocation_policy != detail::factory_relocation_kind_t::disabled)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Actor owner lease is unavailable");
         }
         const auto descriptor_key = key_mesh (
           current.allocation.target.mesh_name,
@@ -813,7 +848,7 @@ class provider_location_repository_t final : public location_repository_t
         const auto actor = decode_direct_actor_authority_payload (current.payload);
         if (actor && actor->has_relocation_state)
             co_return stale_authority_reclaim_result_t::recovery_required;
-        if (!current.pending_creation)
+        if (!active && !current.pending_creation)
             co_return stale_authority_reclaim_result_t::recovery_required;
 
         auto capacity = co_await read_capacity_async (current.allocation.target);
@@ -822,9 +857,15 @@ class provider_location_repository_t final : public location_repository_t
            std::move (stale_owner_condition), std::move (descriptor_condition), capacity.condition},
           {store_delete_t{authority_key}}};
         if (!std::holds_alternative<store_missing_condition_t> (capacity.condition)) {
-            if (!adjust_capacity (capacity.record, current.allocation.capacity_bundle, -1, 0))
+            if (!adjust_capacity (capacity.record, current.allocation.capacity_bundle,
+                                  active ? 0 : -1, active ? -1 : 0)) {
+                const auto observed = co_await _store.read (authority_key);
+                const auto *found = std::get_if<store_found_t> (&observed);
+                if (!found || found->value.version.value != stored_authority.value.version.value)
+                    co_return stale_authority_reclaim_result_t::conflict;
                 throw framework_exception_t (framework_error_kind_t::data_lost,
                                              "Location Store capacity record is inconsistent");
+            }
             write_request.mutations.push_back (
               store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt});
         }

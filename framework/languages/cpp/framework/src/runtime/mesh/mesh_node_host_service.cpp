@@ -709,8 +709,6 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                 if (descriptor.state != framework_runtime_state_t::serving
                     || descriptor.object_role != object_role_t::server
                     || descriptor.placement_weight <= 0
-                    || !placement_capacity_available (descriptor, placement_object_kind_t::actor,
-                                                      stable_type)
                     || capability == descriptor.object_capabilities.end ())
                     continue;
                 if (descriptor.rid == source_rid) {
@@ -795,6 +793,13 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                                                           stable_type, actor_id, target),
       .capacity_bundle = {.actor_slots = 1},
       .operation_deadline = operation_deadline};
+    const auto &source_registration =
+      _registrations[static_cast<std::size_t> (std::distance (_nodes.begin (), source_runtime))];
+    if (source_registration && source_registration->spot_state) {
+        const auto factory = source_registration->spot_state->actor_factories.find (stable_type);
+        if (factory != source_registration->spot_state->actor_factories.end ())
+            reserve.actor_relocation_policy = factory->second.relocation.kind;
+    }
     while (std::chrono::steady_clock::now () < deadline) {
         const auto reserved = co_await _location_store->reserve (reserve);
         if (const auto *existing = std::get_if<object_already_exists_t> (&reserved)) {

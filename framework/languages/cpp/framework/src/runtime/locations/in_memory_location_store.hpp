@@ -805,13 +805,14 @@ class in_memory_location_repository_t : public location_repository_t
               }
               auto authority = _authorities.find (key);
               if (authority != _authorities.end ()
-                  && release_ended_reservation_on_lane (key, authority->second, now))
+                  && (authority->second.allocation.object_kind != request.key.kind
+                      || authority->second.allocation.stable_type != request.intent.stable_type))
+                  return completed (
+                    object_reserve_result_t{object_type_mismatch_t{authority->second}});
+              if (authority != _authorities.end ()
+                  && release_ended_reservation_on_lane (key, authority->second, now, &request))
                   authority = _authorities.end ();
               if (authority != _authorities.end ()) {
-                  const auto type = _object_types.find (key);
-                  if (type != _object_types.end () && type->second != request.intent.stable_type)
-                      return completed (
-                        object_reserve_result_t{object_type_mismatch_t{authority->second}});
                   if (authority->second.allocation.state == placement_allocation_state_t::reserved)
                       return completed (
                         object_reserve_result_t{object_reserve_conflict_t{authority->second}});
@@ -1288,10 +1289,12 @@ class in_memory_location_repository_t : public location_repository_t
 
     bool release_ended_reservation_on_lane (const std::string &key,
                                             const authority_snapshot_t &snapshot,
-                                            clock_t::time_point now)
+                                            clock_t::time_point now,
+                                            const object_reserve_request_t *request = nullptr)
     {
-        if (snapshot.allocation.state != placement_allocation_state_t::reserved
-            || !snapshot.pending_creation)
+        const bool active = snapshot.allocation.state == placement_allocation_state_t::active;
+        if (active ? !request || request->key.kind != placement_object_kind_t::actor
+                   : !snapshot.pending_creation)
             return false;
         for (const auto &[id, aggregate] : _aggregates)
             if (aggregate.status == aggregate_status_t::prepared)
@@ -1299,16 +1302,29 @@ class in_memory_location_repository_t : public location_repository_t
                     if (participant.key.value == key)
                         return false;
         const auto &target = snapshot.allocation.target;
+        const bool owner_live = owner_token_is_live (snapshot.owner, now);
+        if (active) {
+            if (owner_live)
+                return false;
+            if (request->actor_relocation_policy != detail::factory_relocation_kind_t::disabled)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Actor owner lease is unavailable");
+        }
         const auto descriptor = _mesh_nodes.find (
           mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
-        if (owner_token_is_live (snapshot.owner, now) && descriptor != _mesh_nodes.end ()
+        if (owner_live && descriptor != _mesh_nodes.end ()
             && descriptor->second.lifecycle_generation == target.node_lifecycle_generation)
             return false;
         const auto reservation = _reservations.find (key);
-        if (reservation == _reservations.end ())
-            return false;
-        release_pending (reservation->second);
-        reservation->second.status = reservation_status_t::aborted;
+        if (active) {
+            apply_capacity_bundle (_active_by_placement, snapshot.allocation.target,
+                                   snapshot.allocation.capacity_bundle, false);
+        } else {
+            if (reservation == _reservations.end ())
+                return false;
+            release_pending (reservation->second);
+            reservation->second.status = reservation_status_t::aborted;
+        }
         _authorities.erase (key);
         _object_types.erase (key);
         return true;
