@@ -490,6 +490,12 @@ placement candidate nodes. Even if concurrently sent first messages arrive
 at different targets, only the target that obtains creation authority in
 the Store runs the factory. The other targets don't create a local Spot.
 
+**A target keeps only one local activation per Spot ID.** An Instance-intent operation that arrives
+at that target while an activation of the same Spot is in progress joins that activation instead of
+trying `Reserve` again. Joined operations enter the queue in their arrival order at the target after
+the activation becomes `Ready`. If the activation fails, the joined operations end with the same
+terminal. The `Reserve` loser rule below applies only to competition between different targets.
+
 A target that loses `Reserve` does not select the current owner again or forward the first
 operation. That target preserves the original operation ID, payload, absolute deadline, reply
 correlation, and reply route and produces one `Unavailable` terminal. For a request still within its original deadline it returns the error on the original reply
