@@ -188,12 +188,14 @@ class OwnedProcesses:
                 reserved.close()
                 self.reservations.remove(reserved)
 
-    def start(self, name: str, command: list[str], ports: list[int], client: bool = False) -> subprocess.Popen:
+    def start(self, name: str, command: list[str], ports: list[int], client: bool = False,
+              diagnostics: str | None = None) -> subprocess.Popen:
         self.release(ports)
         log = (self.cell / "logs" / (name + ".log")).open("x")
         self.logs.append(log)
         process = subprocess.Popen(command, cwd=ROOT, stdin=subprocess.PIPE if client else subprocess.DEVNULL,
-                                   stdout=subprocess.PIPE if client else log, stderr=log, text=False, close_fds=True)
+                                   stdout=subprocess.PIPE if client else log, stderr=log, text=False, close_fds=True,
+                                   env=os.environ | {"ZLINK_CPP_MESH_TRACE": "1"} if diagnostics == "cpp" else None)
         self.processes.append((name, process))
         write_json(self.cell / "tmp" / (name + "-process.json"), {"pid": process.pid, "command": command})
         return process
@@ -492,7 +494,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
                   "workload": config["workload"],
                   "worker": comparable["worker"], "store": store.config(config_hash) if scenario.store else None,
                   "diagnostics": lambda name: {"level": "Normal", "flowFile": str(cell / "logs" / ("message-flow-" + name.removeprefix("server-") + ".log"))}
-                  if args.operation == "diagnostic" else None,
+                  if config["diagnostics"] == "Normal" else None,
                   "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
                                  "loadedArtifactsFile": "loaded-artifacts.json", "commit": env["commit"], "serializer": env["serializer"],
                                  "listenerReservation": "control HTTP ports are OS-reserved; Framework listeners bind wildcard ports"}}
@@ -514,6 +516,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
                     str(cell / role.config_file),
                 ],
                 role.ports,
+                diagnostics=args.language if role.config["diagnostics"] is not None else None,
             )
 
         peer_targets = {role.peer_target for role in planned if role.peer_target is not None}

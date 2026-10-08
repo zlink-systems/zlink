@@ -21,7 +21,7 @@ const frameworkPackages = [
   '@zlink-systems/nestjs',
   '@zlink-systems/stream-connector'
 ];
-const sharedNestPackages = ['@nestjs/common', '@nestjs/core'];
+const sharedWorkspacePackages = ['@nestjs/common', '@nestjs/core', '@opentelemetry/api-logs'];
 for (const name of frameworkPackages) {
   if (manifest.dependencies?.[name] !== frameworkVersion) {
     throw new Error(
@@ -35,7 +35,7 @@ if (Object.hasOwn(manifest.dependencies ?? {}, '@zlink-systems/zlink')) {
 
 if (packageSource === 'local') {
   process.env.ZLINK_NODE_SAMPLES_PACKAGE_MODE = '0';
-  for (const name of [...frameworkPackages, '@zlink-systems/zlink', ...sharedNestPackages])
+  for (const name of [...frameworkPackages, '@zlink-systems/zlink', ...sharedWorkspacePackages])
     removeInstalledPackage(name);
 } else {
   process.env.ZLINK_NODE_SAMPLES_PACKAGE_MODE = '1';
@@ -68,7 +68,7 @@ for (const name of frameworkPackages) {
 }
 
 if (packageSource === 'local') verifyLocalBinding();
-if (packageSource === 'local') linkWorkspaceNestPackages();
+if (packageSource === 'local') linkWorkspacePackages();
 
 process.stdout.write(
   `perf_dependency_source=${packageSource} framework_version=${frameworkVersion}\n`
@@ -105,13 +105,15 @@ function verifyLocalBinding() {
   process.stdout.write(`local_node_binding=${root} version=${binding.version}\n`);
 }
 
-function linkWorkspaceNestPackages() {
-  for (const name of sharedNestPackages) {
+function linkWorkspacePackages() {
+  const lock = readJson(path.join(perfRoot, 'package-lock.json'));
+  for (const name of sharedWorkspacePackages) {
     const source = installedPackage(name, nodeRoot);
     const actual = readJson(path.join(source, 'package.json')).version;
-    if (actual !== manifest.dependencies[name]) {
+    const expected = lock.packages[`node_modules/${name}`]?.version;
+    if (actual !== expected) {
       throw new Error(
-        `${name} in the Node workspace is ${actual}; perf requires ${manifest.dependencies[name]}.`
+        `${name} in the Node workspace is ${actual}; perf lock requires ${expected}.`
       );
     }
     const target = path.join(perfRoot, 'node_modules', ...name.split('/'));

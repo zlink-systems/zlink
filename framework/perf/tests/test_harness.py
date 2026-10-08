@@ -18,6 +18,7 @@ from launchers import declared_framework_version, launcher
 from results import BOUNDS, MAX_U64, _validate_null_reasons, aggregate, export_latency, histogram_merge, u64, write_json
 from roles import plan_roles
 from runner import (
+    OwnedProcesses,
     agreed_core_version,
     agreed_framework_version,
     build,
@@ -29,6 +30,27 @@ from runner import (
 )
 from scenarios import BY_NAME, ROLE_KINDS, SCENARIOS, expand
 from store import RunStore
+
+
+class DiagnosticEnvironmentTests(unittest.TestCase):
+    def test_cpp_diagnostic_enables_the_framework_mesh_trace(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cell = Path(folder)
+            (cell / "logs").mkdir()
+            (cell / "tmp").mkdir()
+            owned = OwnedProcesses(cell, None)
+            with patch("runner.subprocess.Popen") as start, patch("runner.write_json"):
+                try:
+                    owned.start("server", ["server"], [], diagnostics="cpp")
+                    self.assertEqual(start.call_args.kwargs["env"]["ZLINK_CPP_MESH_TRACE"], "1")
+                    owned.start("server-normal", ["server"], [])
+                    self.assertIsNone(start.call_args.kwargs["env"])
+                    owned.start("server-node", ["server"], [], diagnostics="node")
+                    self.assertIsNone(start.call_args.kwargs["env"])
+                finally:
+                    for log in owned.logs:
+                        log.close()
+
 
 COMMON = ["--language", "dotnet", "--perf-dir", "/tmp/perf"]
 
