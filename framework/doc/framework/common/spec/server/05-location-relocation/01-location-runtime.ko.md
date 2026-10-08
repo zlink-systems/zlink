@@ -766,14 +766,14 @@ Target owner lease가 유효하고 descriptor가 같은 lifecycle이면 해제�
 
 **Owner가 끝난 Actor의 `Active` record도 다시 만들 때 해제한다.** Actor `Create`·`GetOrCreate`가 같은
 ActorId의 `Active` record를 읽었고, 그 record의 owner lease가 없거나 다른 `LeaseGeneration`이거나
-만료됐으며, 생성하는 node에 등록된 그 Actor type의 relocation 정책이 `Disabled`이면 Location
+만료됐으며, 생성하는 node에서 그 Actor type의 relocation 정책이 `Disabled`이거나 relocation을 등록하지 않았으면 Location
 repository가 그 record를 해제한다. Relocation 진행 정보나 aggregate에 속한 record는 이 해제 대상이
 아니며 그 relocation의 복구 절차를 따른다. 해제는 위 reservation 해제와 같은 조건(authority `StoreVersion`,
 owner lease 상태, descriptor 상태, 수용 공간 record)을 한 batch로 검사하고, authority와 그 incarnation의
 membership을 함께 지우며 active 수용 공간을 반납한다. 해제한 뒤에는 `Missing`에서 새 incarnation을
 만든다 — 이전 incarnation의 상태는 복원하지 않는다. 해제 판정 전에 stable type이 같은지 확인한다(다르면 기존
 `TypeMismatch`). Owner lease가 유효하면 type과 operation에 따른 기존 결과를 반환한다. Owner lease가
-무효이고 생성 node의 해당 Actor type 정책이 `Disabled`가 아니면 `Unavailable`을 반환한다. 이 해제는
+무효이고 생성 node에서 해당 Actor type에 `Disabled`가 아닌 relocation 정책을 등록했으면 `Unavailable`을 반환한다. 이 해제는
 유효한 owner lease를 요구하는 `Delete`와 다른, repository의 조건부 batch다.
 
 **`Conflict`를 받은 작업은 작업 자격을 다시 확인해 이어 간다.** Provider `Conflict`는 아무것도 변경하지
