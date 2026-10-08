@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -370,6 +372,58 @@ final class ZLinkActorDispatchSerialsTest {
         assertFalse(barrier.isDone());
         actorB.complete(null);
         barrier.join();
+    }
+
+    @Test
+    void teardownWaitsForAcceptedTurnsBeforeTheFirstDrain() throws Exception {
+        LinkedBlockingQueue<Runnable> ready = new LinkedBlockingQueue<>();
+        ZLinkActorDispatchSerials dispatches =
+                new ZLinkActorDispatchSerials(new Object(), ready::add, null);
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        CompletableFuture<Void> started = new CompletableFuture<>();
+        AtomicInteger completedTurns = new AtomicInteger();
+        AtomicInteger cleanupCount = new AtomicInteger();
+        var active =
+                dispatches.enqueue(
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
+                        () -> {
+                            started.complete(null);
+                            return release.thenRun(completedTurns::incrementAndGet);
+                        });
+        var accepted =
+                dispatches.enqueue(
+                        dispatches.prepareAsync("actor-1").toCompletableFuture().join(),
+                        () -> {
+                            completedTurns.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
+        var teardown =
+                dispatches.beginTeardown(
+                        "actor-1",
+                        () -> {
+                            assertEquals(2, completedTurns.get());
+                            cleanupCount.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
+        while (!started.isDone() && !teardown.toCompletableFuture().isDone()) {
+            java.util.Objects.requireNonNull(ready.poll(3, TimeUnit.SECONDS)).run();
+        }
+        try {
+            assertFalse(teardown.toCompletableFuture().isDone());
+            assertEquals(0, cleanupCount.get());
+        } finally {
+            release.complete(null);
+        }
+        var terminal =
+                CompletableFuture.allOf(
+                        active.toCompletableFuture(),
+                        accepted.toCompletableFuture(),
+                        teardown.toCompletableFuture());
+        while (!terminal.isDone()) {
+            java.util.Objects.requireNonNull(ready.poll(3, TimeUnit.SECONDS)).run();
+        }
+        terminal.join();
+        assertEquals(1, cleanupCount.get());
     }
 
     @Test

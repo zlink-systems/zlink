@@ -51,10 +51,8 @@ export class ZLinkSpotSerialExecutor {
     operation: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
-    return this.actorExecutor(actorId).execute(
-      () => operation(this.actorSerial(actorId)),
-      workOptions
-    );
+    const serial = this.actorSerial(actorId);
+    return this.actorExecutor(actorId).execute(() => operation(serial), workOptions);
   }
 
   /** @internal Restores a durable Actor FIFO prefix without starting it. */
@@ -100,6 +98,14 @@ export class ZLinkSpotSerialExecutor {
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
     return this.spotSerial.execute(operation, { ...workOptions, lane: 'lifecycle' });
+  }
+
+  async terminateActor(actorId: string, terminal: () => Promise<void>): Promise<void> {
+    const executor = this.actorExecutor(actorId);
+    await executor.close();
+    await terminal();
+    if (this.actorExecutors.get(actorId) === executor) this.actorExecutors.delete(actorId);
+    this.actorSerials.delete(actorId);
   }
 
   /**

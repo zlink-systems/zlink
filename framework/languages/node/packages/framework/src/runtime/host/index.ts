@@ -2016,6 +2016,7 @@ export class ZLinkFrameworkRuntimeHost
     | 'actorRefResolver'
     | 'actorCreatedNotifier'
     | 'actorDestroyedCleanup'
+    | 'terminateActorActivation'
     | 'locationLifecycle'
     | 'boundSessionFactory'
     | 'shutdownSignal'
@@ -2592,6 +2593,8 @@ export class ZLinkFrameworkRuntimeHost
 
   private actorRuntimeOptionsFactory(): ZLinkActorRuntimeOptionsFactory {
     return new ZLinkActorRuntimeOptionsFactory({
+      terminateActorActivation: (actor, terminal) =>
+        this.spotNodeRuntime?.terminateActorActivation(actor, terminal) ?? terminal(),
       registration: this.options.registration,
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       routeTransport: this.routeTransport,

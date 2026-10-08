@@ -378,6 +378,10 @@ export class ZLinkEntrySpotActivation {
     return this.spotSerialExecutor.executeActor(actorId, operation);
   }
 
+  terminateActor(actorId: string, terminal: () => Promise<void>): Promise<void> {
+    return this.spotSerialExecutor.terminateActor(actorId, terminal);
+  }
+
   /**
    * Entry Spot membership does not have an application admission callback.
    * The shared core round-trip therefore accepts a valid returning Actor and

@@ -108,6 +108,153 @@ function createActorManager(options = {}) {
   return new framework.DefaultZLinkActorManager(options, actorTaskRunner);
 }
 
+for (const executionMode of [
+  framework.ZLinkUserSpotExecutionMode.PerActor,
+  framework.ZLinkUserSpotExecutionMode.SpotWide
+]) {
+  test(`Actor destroy closes admission and waits for accepted terminals before scope disposal (${executionMode})`, async () => {
+    const {
+      ZLinkSpotSerialExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+    const {
+      ZLinkSpotSerialTurnExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+    const serial = new ZLinkSpotSerialExecutor(
+      new ZLinkSpotSerialTurnExecutor(false),
+      executionMode,
+      'entry'
+    );
+    const events = [];
+    const manager = createActorManager({
+      actorFactories: new Map([['player', { create: (context) => ({ context }) }]]),
+      terminateActorActivation: (actor, terminal) =>
+        serial.terminateActor(actor.context.actorId, terminal)
+    });
+    const actor = await manager.getOrCreateActor('teardown', 'player');
+    class Handler {
+      dispose() {
+        events.push('disposed');
+      }
+    }
+    await resolveLifecycleHandler(actor, Handler);
+    let release;
+    const barrier = new Promise((resolve) => {
+      release = resolve;
+    });
+    const active = serial.executeActor('teardown', async () => {
+      await barrier;
+      events.push('active-terminal');
+    });
+    const accepted = serial.executeActor('teardown', () => {
+      events.push('accepted-terminal');
+    });
+    const destroy = manager.destroyActor({}, rid('entry'), actor);
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(events, []);
+      await assert.rejects(
+        serial.executeActor('teardown', async () => {}),
+        /closed/
+      );
+    } finally {
+      release();
+    }
+    await Promise.all([active, accepted, destroy]);
+    assert.deepEqual(events, ['active-terminal', 'accepted-terminal', 'disposed']);
+  });
+
+  test(`Actor self destroy drains accepted work and awaits asynchronous dependency disposal (${executionMode})`, async () => {
+    const {
+      ZLinkSpotSerialExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+    const {
+      ZLinkSpotSerialTurnExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+    const {
+      runWithLifecycleHandler
+    } = require('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
+    const serial = new ZLinkSpotSerialExecutor(
+      new ZLinkSpotSerialTurnExecutor(false),
+      executionMode,
+      'entry'
+    );
+    const manager = createActorManager({
+      actorFactories: new Map([['player', { create: (context) => ({ context }) }]]),
+      terminateActorActivation: (actor, terminal) =>
+        serial.terminateActor(actor.context.actorId, terminal)
+    });
+    const actor = await manager.getOrCreateActor('self-teardown', 'player');
+    const events = [];
+    let entered;
+    const disposing = new Promise((resolve) => {
+      entered = resolve;
+    });
+    let finish;
+    const disposal = new Promise((resolve) => {
+      finish = resolve;
+    });
+    class Handler {
+      async dispose() {
+        events.push('disposing');
+        entered();
+        await disposal;
+        events.push('disposed');
+      }
+    }
+    const active = serial.executeActor(actor.context.actorId, () =>
+      runWithLifecycleHandler(actor, Handler, undefined, async () => {
+        await manager.destroyActor({}, rid('entry'), actor);
+        events.push('active-terminal');
+      })
+    );
+    const accepted = serial.executeActor(actor.context.actorId, () => {
+      events.push('accepted-terminal');
+    });
+    await Promise.all([active, accepted, disposing]);
+    let externalCompleted = false;
+    const externalDestroy = manager.destroyActor({}, rid('entry'), actor).then(() => {
+      externalCompleted = true;
+    });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(externalCompleted, false);
+      assert.notEqual(manager.getState(actor.context.actorId), undefined);
+      assert.deepEqual(events, ['active-terminal', 'accepted-terminal', 'disposing']);
+    } finally {
+      finish();
+    }
+    await disposal;
+    await externalDestroy;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(manager.getState(actor.context.actorId), undefined);
+    assert.equal(events.at(-1), 'disposed');
+  });
+
+  test(`Spot close drains Actor callbacks accepted before child serials retire (${executionMode})`, async () => {
+    const {
+      ZLinkSpotSerialExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+    const {
+      ZLinkSpotSerialTurnExecutor
+    } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+    const serial = new ZLinkSpotSerialExecutor(
+      new ZLinkSpotSerialTurnExecutor(false),
+      executionMode,
+      'entry'
+    );
+    const events = [];
+    const first = serial.executeActor('retiring', () => {
+      events.push('first');
+    });
+    const second = serial.executeActor('retiring', () => {
+      events.push('second');
+    });
+    const close = serial.closeChildren();
+    await Promise.all([first, second, close]);
+    assert.deepEqual(events, ['first', 'second']);
+  });
+}
+
 function lifecycleContext(actorId, actorType = 'player', membershipEpoch = 1n) {
   return {
     actorId,

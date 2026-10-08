@@ -783,6 +783,13 @@ export class ZLinkSpotNodeRuntimeManager {
     return activation?.notifyJoinActor(actor, signal) ?? Promise.resolve();
   }
 
+  terminateActorActivation(actor: ZLinkActor, terminal: () => Promise<void>): Promise<void> {
+    const activation = this.entryActivations.get(actor.context.meshName);
+    return activation === undefined
+      ? terminal()
+      : activation.terminateActor(actor.context.actorId, terminal);
+  }
+
   notifyPrimaryEntrySpotActorLeft(
     actor: ZLinkActor,
     signal?: AbortSignal,
