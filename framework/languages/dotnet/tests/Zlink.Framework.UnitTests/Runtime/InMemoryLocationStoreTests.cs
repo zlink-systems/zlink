@@ -44,14 +44,18 @@ public sealed class InMemoryLocationStoreTests
 
         var first = await CreateAuthorityAsync(store, OwnerA, "actor-1");
 
-        // Owner A stops heartbeating; its lease expires and its rows become
-        // claimable without any row write.
+        // Location runtime §6.1 requires Disabled on the creating node before
+        // releasing an ended Active Actor. This request carries no such policy.
         time.Advance(LeaseTtl + TimeSpan.FromSeconds(1));
 
-        var existing = Assert.IsType<ZLinkObjectReserveResult.AlreadyExists>(
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await ReserveAuthorityAsync(store, OwnerB, "actor-1")
         );
-        Assert.Equal(first.StoreVersion, existing.Current.StoreVersion);
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+        var existing = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await store.ReadAuthorityAsync(AuthorityKey("actor-1"))
+        );
+        Assert.Equal(first.StoreVersion, existing.Snapshot.StoreVersion);
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(
             await store.CompareExchangeAuthorityAsync(
                 AuthorityKey("actor-1"),

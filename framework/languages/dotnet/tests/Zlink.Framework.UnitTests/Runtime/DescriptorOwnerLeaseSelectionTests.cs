@@ -414,7 +414,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task ReadyActor_ExpiredOwnerIsUnavailableAndAuthorityRemains()
+    public async Task ReadyActor_ExpiredOwnerWithDisabledPolicyCreatesNewIncarnation()
     {
         var fixture = await CreateReadyAuthorityFixtureAsync(
             "expired-ready-actor-owner",
@@ -424,31 +424,21 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         try
         {
+            var previous = await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey);
             fixture.Time.Advance(TimeSpan.FromSeconds(2));
             var manager = new ZLinkActorManagerService(fixture.Runtime);
-
-            var started = Stopwatch.GetTimestamp();
-            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-                await manager
-                    .GetOrCreate(fixture.ObjectId, fixture.StableType)
-                    .InMesh("entry")
-                    .Timeout(JoinDecisionRequestTimeout)
-                    .Async()
-            );
-            var elapsed = Stopwatch.GetElapsedTime(started);
-
-            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
-            Assert.Equal($"Actor '{fixture.ObjectId}' owner lease is not live.", error.Message);
-            Assert.Equal(ZLinkRetryAdvice.RetryAfterStateChange, error.RetryAdvice);
-            Assert.True(
-                elapsed < JoinDecisionBudget,
-                $"The join consumed {elapsed} of the {JoinDecisionRequestTimeout} "
-                    + "request timeout instead of deciding on the owner lease."
-            );
-            Assert.Equal(
-                fixture.Owner.OwnerId,
-                (await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey)).OwnerId
-            );
+            // Location runtime §6.1 permits explicit creation after conditional release.
+            var result = await manager
+                .GetOrCreate(fixture.ObjectId, fixture.StableType)
+                .InMesh("entry")
+                .Timeout(JoinDecisionRequestTimeout)
+                .Async();
+            var created = Assert.IsType<ZLinkActorCreateResult.Created>(result);
+            var current = await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey);
+            Assert.True(created.Actor.ObjectGeneration > previous.ObjectGeneration);
+            Assert.Equal(created.Actor.ObjectGeneration, current.ObjectGeneration);
+            Assert.NotEqual(previous.OwnerId, current.OwnerId);
+            Assert.NotEqual(previous.StoreVersion, current.StoreVersion);
         }
         finally
         {
