@@ -493,8 +493,11 @@ the Store runs the factory. The other targets don't create a local Spot.
 **A target keeps only one local activation per Spot ID.** An Instance-intent operation that arrives
 at that target while an activation of the same Spot is in progress joins that activation instead of
 trying `Reserve` again. Joined operations enter the queue in their arrival order at the target after
-the activation becomes `Ready`. If the activation fails, the joined operations end with the same
-terminal. The `Reserve` loser rule below applies only to competition between different targets.
+the activation becomes `Ready`. An activation failure is handled by the existing completion contract
+of each joined operation, preserving its original identity, deadline, reply correlation, and reply
+route. A request keeps a terminal that is already settled and, while still valid, returns the
+activation error once on its original reply route. A one-way send whose outbound admission has
+finished keeps its completion result, and the failure is recorded in the existing diagnostics. The `Reserve` loser rule below applies only to competition between different targets.
 
 A target that loses `Reserve` does not select the current owner again or forward the first
 operation. That target preserves the original operation ID, payload, absolute deadline, reply
