@@ -10,11 +10,6 @@
 메시지 종류가 255개여도 codec을 255개 만들 필요는 없다. 각 생성 클래스를 handler에 전달한다.
 타입 선택과 이름의 관계는 [Protobuf codec과 타입](41-protobuf-codecs.ko.md)이 설명한다.
 
-!!! note "수정 버전"
-
-    이 장은 [#1503](https://github.com/zlink-systems/zlink/issues/1503)의 codec 수정 동작을 설명한다.
-    배포된 0.28.0은 handler 타입을 사용하지 않는다. `submit(Pong)`과 `submitCallback`도 이 수정의 추가 API다. 배포 전 검증에는 수정한 로컬 package를 사용한다.
-
 ## 1. 메시지 코드 생성
 
 `.proto`는 메시지의 field 번호와 타입을 정의하는 파일이다. 이 예제는 문자열을 보내는 `Ping`과
