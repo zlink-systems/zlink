@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
-// §4.2, §13: a server-driven workload is `logicalStreams` independent streams, each with `inflight` closed-loop operations.
-// This is only the fan-out of loops and the per-stream sequence source; what one operation calls stays in the scenario file.
+// §4.3: server-driven requests are submitted continuously; one-way calls wait for their admission terminal.
+// The scenarios own one operation, while this file owns the next-call rule.
 
 #include <perf/server/server_application.hpp>
 
@@ -13,18 +13,70 @@ class stream_sequences_t
 {
   public:
     explicit stream_sequences_t (int streams) : _values (static_cast<std::size_t> (streams)) {}
-    std::uint64_t next (int stream) { return _values[static_cast<std::size_t> (stream) % _values.size ()].fetch_add (1) + 1; }
+    std::uint64_t next (int stream)
+    {
+        return _values[static_cast<std::size_t> (stream) % _values.size ()].fetch_add (1) + 1;
+    }
 
   private:
     std::vector<std::atomic<std::uint64_t>> _values;
 };
 
-// Starts stream x inflight loop coroutines; `loop(stream)` is the scenario's measured loop and returns when the window closes.
-template <typename TLoop> void spawn_stream_loops (const loops_t &loops, role_t &role, TLoop loop)
+// One-way operations advance only after their public admission terminal.
+template <typename TOperation>
+fw::task_t<void> admission_stream (role_t &role, TOperation operation, int stream)
+{
+    while (role.measurement.can_issue ())
+        co_await operation (stream);
+}
+
+template <typename TOperation>
+void spawn_stream_loops (const loops_t &loops, role_t &role, TOperation operation)
 {
     for (int stream = 0; stream < *role.config.workload.logical_streams; ++stream)
-        for (int slot = 0; slot < role.config.workload.inflight; ++slot)
-            loops->spawn (loop (stream), [&role] (std::exception_ptr error) { role.measurement.record_diagnostic (std::move (error)); });
+        loops->spawn (admission_stream (role, operation, stream),
+                      [&role] (std::exception_ptr error) {
+                          role.measurement.record_diagnostic (std::move (error));
+                      });
+}
+
+// One producer rotates over logical streams outside the Framework execution context. Every public async request
+// owns its own completion task, so submission does not wait for the previous reply.
+template <typename TOperation>
+void spawn_request_streams (const loops_t &loops, role_t &role, TOperation operation)
+{
+    loops->enter ();
+    try {
+        std::thread ([loops, &role, operation = std::move (operation)] () mutable {
+            try {
+                const int streams = *role.config.workload.logical_streams;
+                int stream = 0;
+                while (role.measurement.can_issue ()) {
+                    loops->spawn (operation (stream), [&role] (std::exception_ptr error) {
+                        role.measurement.record_diagnostic (std::move (error));
+                    });
+                    if (++stream == streams) {
+                        stream = 0;
+                        std::this_thread::yield ();
+                    }
+                }
+            }
+            catch (...) {
+                role.measurement.record_diagnostic (std::current_exception ());
+            }
+            loops->leave ();
+        }).detach ();
+    }
+    catch (...) {
+        loops->leave ();
+        throw;
+    }
+}
+
+inline fw::task_t<void> observe_send_echo (role_t &role, send_send_correlation_t::entry_ptr_t entry)
+{
+    const auto [result, completed] = co_await role.correlations->complete (entry);
+    role.measurement.complete_operation (entry->started_ticks, result, completed);
 }
 
 // The return Channel handler of a send/send caller (§10.4, §10.10): the echo arrives as a second one-way send and the

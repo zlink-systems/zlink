@@ -89,7 +89,6 @@ OPTIONS = {
     "connections": Option(10000, lambda s: s.driver == "clients"),
     "logical_streams": Option(10000, lambda s: s.driver == "source"),
     "client_count": Option(1, lambda s: True),
-    "inflight": Option(1, lambda s: True),
     "connect_concurrency": Option(256, lambda s: True),  # §5: CS connector setup, and a source role's object preparation and probes
     "spot_count": Option(16, lambda s: s.uses(objects="spot")),
     "subscriber_count": Option(8, lambda s: s.uses(count="subscribers")),

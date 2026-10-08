@@ -5,12 +5,17 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
-// The harness correlation of a send/send operation (§13): the first public send and the return send are two one-way
-// calls, tied together only by the correlationId in the DTO. The first result of a correlation stands; a reply that
-// arrives after that is only counted (duplicate, late or unknown). The table clears with the window at reset.
+// The harness correlation of a send/send operation (§13): the first public send and the return send
+// are two one-way
+// calls, tied together only by the correlationId in the DTO. The first result of a correlation
+// stands; a reply that
+// arrives after that is only counted (duplicate, late or unknown). The table clears with the window
+// at reset.
 //
-// Order of one operation: register (right before the first public send, fixing the expiry deadline), then
-// firstSendEnded with that send's terminal, then completeAsync for the final result. The return handler calls reply.
+// Order of one operation: register (right before the first public send, fixing the expiry
+// deadline), then
+// firstSendEnded with that send's terminal, then completeAsync for the final result. The return
+// handler calls reply.
 public final class SendSendCorrelation {
     private static final int PENDING = 0;
     private static final int SUCCEEDED = 1;
@@ -44,18 +49,24 @@ public final class SendSendCorrelation {
 
     public SendSendCorrelation(Measurement measurement, ScenarioMetrics metrics) {
         this.measurement = measurement;
-        this.metrics = metrics.counters("messages.admitted", "messages.expired", "messages.duplicateReply",
-                "messages.lateReply", "messages.unknownCorrelation");
+        this.metrics =
+                metrics.counters(
+                        "messages.admitted",
+                        "messages.expired",
+                        "messages.duplicateReply",
+                        "messages.lateReply",
+                        "messages.unknownCorrelation");
         metrics.onReset(entries::clear);
     }
 
     public Entry register(PerfEchoRequest request, long startedTicks) {
-        Entry entry = new Entry(request, startedTicks,
-                PerfClock.now() + measurement.config().workload().correlationExpiryMs() * 1_000_000L);
+        Entry entry = new Entry(request, startedTicks, measurement.callDeadlineTicks());
         if (entries.putIfAbsent(request.correlationId(), entry) != null) {
-            throw new PerfValidationException("IdentityMismatch", "A correlationId was issued twice.");
+            throw new PerfValidationException(
+                    "IdentityMismatch", "A correlationId was issued twice.");
         }
-        CompletableFuture.delayedExecutor(Math.max(0, entry.expiresAtTicks - PerfClock.now()), TimeUnit.NANOSECONDS)
+        CompletableFuture.delayedExecutor(
+                        Math.max(0, entry.expiresAtTicks - PerfClock.now()), TimeUnit.NANOSECONDS)
                 .execute(() -> expireIfDue(entry));
         return entry;
     }
@@ -64,7 +75,10 @@ public final class SendSendCorrelation {
         return entries.get(correlationId);
     }
 
-    /** The terminal of the first public send: a normal admission is counted; a failure is the final result unless the echo was already fixed first. */
+    /**
+     * The terminal of the first public send: a normal admission is counted; a failure is the final
+     * result unless the echo was already fixed first.
+     */
     public void firstSendEnded(Entry entry, Throwable error) {
         synchronized (entry) {
             long now = PerfClock.now();
@@ -103,14 +117,18 @@ public final class SendSendCorrelation {
             long now = PerfClock.now();
             expireIfDue(entry, now);
             if (!close(entry, invalid == null ? SUCCEEDED : FAILED, invalid, now)) {
-                metrics.count(entry.state == SUCCEEDED ? "messages.duplicateReply" : "messages.lateReply");
+                metrics.count(
+                        entry.state == SUCCEEDED
+                                ? "messages.duplicateReply"
+                                : "messages.lateReply");
             }
         }
     }
 
     /**
-     * The final result once the first send has ended: the first result of the correlation, or its expiry. The time is
-     * when that result was fixed, so an echo seen before the first send's terminal keeps its own time.
+     * The final result once the first send has ended: the first result of the correlation, or its
+     * expiry. The time is when that result was fixed, so an echo seen before the first send's
+     * terminal keeps its own time.
      */
     public CompletionStage<Result> completeAsync(Entry entry) {
         expireIfDue(entry);
@@ -145,6 +163,7 @@ public final class SendSendCorrelation {
     }
 
     private static PerfValidationException expiredError() {
-        return new PerfValidationException("CorrelationExpired", "No return send arrived before the correlation deadline.");
+        return new PerfValidationException(
+                "CorrelationExpired", "No return send arrived before the correlation deadline.");
     }
 }

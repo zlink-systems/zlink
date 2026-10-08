@@ -1302,6 +1302,24 @@ int main ()
     }
     if (!saw_stream_session_flow.load (std::memory_order_acquire))
         return 229;
+    // Spec 26 §2.1: the typed handler start of a STREAM packet records `dispatched` once, after `received`.
+    {
+        std::vector<zlink::framework::message_flow_outcome_t> move_phases;
+        for (const auto &event : stream_flow_events) {
+            if (event.surface == zlink::framework::dispatch_error_surface_t::stream_session
+                && event.packet_name == std::optional<std::string> ("move"))
+                move_phases.push_back (event.outcome);
+        }
+        const auto received = std::find (move_phases.begin (), move_phases.end (),
+                                         zlink::framework::message_flow_outcome_t::received);
+        const auto dispatched = std::find (move_phases.begin (), move_phases.end (),
+                                           zlink::framework::message_flow_outcome_t::dispatched);
+        if (dispatched == move_phases.end () || received > dispatched
+            || std::count (move_phases.begin (), move_phases.end (),
+                           zlink::framework::message_flow_outcome_t::dispatched)
+                 != 1)
+            return 336;
+    }
     if (!session.last_can_reply || session.last_actor_id
         || session.last_metadata.find ("trace") != "42"
         || session.last_metadata.find ("content_type") != "application/json") {

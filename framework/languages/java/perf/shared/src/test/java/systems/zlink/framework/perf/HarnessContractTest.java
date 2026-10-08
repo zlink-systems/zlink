@@ -16,27 +16,70 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
-// The harness contract of the perf README §4, §13, §15: what the .NET HarnessContractTests check, for the Java harness.
+// The harness contract of the perf README §4, §13, §15: what the .NET HarnessContractTests check,
+// for the Java harness.
 class HarnessContractTest {
     private static RoleConfig config(double seconds) {
         return config("java", 0, 1, 1, seconds);
     }
 
-    private static RoleConfig config(String language, int roleInstance, Integer connections, int clientCount, double seconds) {
-        return new RoleConfig("test", "session-echo-only/1024/test", "a".repeat(64), language, "client", roleInstance,
-                "session-echo-only", "request",
-                "ordinary", null, null, null, Map.of(), null, "", "", false, "None", true, null, List.of(), List.of(), null, null,
-                null, "Immediate", new RoleConfig.Workload(1024, seconds, seconds, 1, connections, null, clientCount, 1,
-                        1000, 1000, 2000, 30000, 5000, 1000), null, Map.of());
+    private static RoleConfig config(
+            String language,
+            int roleInstance,
+            Integer connections,
+            int clientCount,
+            double seconds) {
+        return new RoleConfig(
+                "test",
+                "session-echo-only/1024/test",
+                "a".repeat(64),
+                language,
+                "client",
+                roleInstance,
+                "session-echo-only",
+                "request",
+                "ordinary",
+                null,
+                null,
+                null,
+                Map.of(),
+                null,
+                "",
+                "",
+                false,
+                "None",
+                true,
+                null,
+                List.of(),
+                List.of(),
+                null,
+                null,
+                null,
+                "Immediate",
+                new RoleConfig.Workload(
+                        1024,
+                        seconds,
+                        seconds,
+                        connections,
+                        null,
+                        clientCount,
+                        1,
+                        30000,
+                        30000,
+                        5000,
+                        1000),
+                null,
+                Map.of());
     }
 
     private static PerfTriggerRequest trigger(Measurement measurement, String phase, String seq) {
-        return new PerfTriggerRequest(measurement.config().runId(), measurement.config().cellId(), seq, phase);
+        return new PerfTriggerRequest(
+                measurement.config().runId(), measurement.config().cellId(), seq, phase);
     }
 
     private static ResetRequest reset(Measurement measurement, String seq) {
@@ -54,7 +97,8 @@ class HarnessContractTest {
             bytes[size - 1] ^= 1;
             String tampered = Base64.getEncoder().encodeToString(bytes);
             assertThrows(PerfValidationException.class, () -> pattern.validate(tampered));
-            assertThrows(PerfValidationException.class, () -> pattern.validate(pattern.base64() + "\n"));
+            assertThrows(
+                    PerfValidationException.class, () -> pattern.validate(pattern.base64() + "\n"));
         }
     }
 
@@ -81,7 +125,8 @@ class HarnessContractTest {
         assertEquals("HISTOGRAM_OVERFLOW", reasons.get("/metrics/latency.p95Ms").code());
         assertEquals(100000.0, reasons.get("/metrics/latency.p95Ms").lowerBoundMs());
         assertEquals(100024.000001, (Double) metrics.get("latency.maxMs"), 1e-9);
-        assertEquals("nearest-rank-bucket-upper-bound-capped-by-max", snapshot.get("percentileMethod"));
+        assertEquals(
+                "nearest-rank-bucket-upper-bound-capped-by-max", snapshot.get("percentileMethod"));
     }
 
     @Test
@@ -89,7 +134,8 @@ class HarnessContractTest {
         Histogram histogram = new Histogram();
         histogram.record(1_001_000);
         Map<String, Object> metrics = new LinkedHashMap<>();
-        histogram.export("latencyMs", "latency", metrics, new LinkedHashMap<>(), new LinkedHashMap<>());
+        histogram.export(
+                "latencyMs", "latency", metrics, new LinkedHashMap<>(), new LinkedHashMap<>());
 
         assertEquals(1.001, metrics.get("latency.p50Ms"));
         assertEquals(1.001, metrics.get("latency.p95Ms"));
@@ -109,33 +155,115 @@ class HarnessContractTest {
     @ParameterizedTest
     @ValueSource(strings = {"01", "+1", "-0", "18446744073709551616"})
     void decimalU64RejectsNoncanonicalOrOutOfRange(String value) {
-        PerfValidationException error = assertThrows(PerfValidationException.class, () -> DecimalText.u64(value));
+        PerfValidationException error =
+                assertThrows(PerfValidationException.class, () -> DecimalText.u64(value));
         assertEquals("SchemaMismatch", error.kind());
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"01", "+1", "-0", "9223372036854775808"})
     void decimalI64RejectsNoncanonicalOrOutOfRange(String value) {
-        PerfValidationException error = assertThrows(PerfValidationException.class, () -> DecimalText.i64(value));
+        PerfValidationException error =
+                assertThrows(PerfValidationException.class, () -> DecimalText.i64(value));
         assertEquals("SchemaMismatch", error.kind());
     }
 
     @Test
     void jsonRejectsMissingFieldsAndWrongTypes() {
-        assertThrows(PerfJson.PerfJsonException.class, () -> PerfJson.read("{\"runId\":\"a\",\"cellId\":\"b\",\"resetSeq\":1}", ResetRequest.class));
-        assertThrows(PerfJson.PerfJsonException.class, () -> PerfJson.read("{\"runId\":\"a\",\"unknown\":\"b\"}", ResetRequest.class));
-        assertEquals("1", PerfJson.read("{\"runId\":\"a\",\"cellId\":\"b\",\"resetSeq\":\"1\"}", ResetRequest.class).resetSeq());
+        assertThrows(
+                PerfJson.PerfJsonException.class,
+                () ->
+                        PerfJson.read(
+                                "{\"runId\":\"a\",\"cellId\":\"b\",\"resetSeq\":1}",
+                                ResetRequest.class));
+        assertThrows(
+                PerfJson.PerfJsonException.class,
+                () -> PerfJson.read("{\"runId\":\"a\",\"unknown\":\"b\"}", ResetRequest.class));
+        assertEquals(
+                "1",
+                PerfJson.read(
+                                "{\"runId\":\"a\",\"cellId\":\"b\",\"resetSeq\":\"1\"}",
+                                ResetRequest.class)
+                        .resetSeq());
+    }
+
+    @Test
+    void roleConfigReadsTheCurrentRunnerShape() {
+        String json =
+                """
+                {
+                  "runId": "run",
+                  "cellId": "spot-worker-offload-echo/1024/test",
+                  "configHash": "%s",
+                  "language": "java",
+                  "role": "spot",
+                  "roleInstance": 0,
+                  "scenario": "spot-worker-offload-echo",
+                  "mode": "request",
+                  "terminal": "yield",
+                  "topology": "routemesh",
+                  "channelName": null,
+                  "meshName": "perf-mesh",
+                  "transportEndpoints": {"mesh": "tcp://127.0.0.1:30001"},
+                  "peerEndpoint": null,
+                  "metricsUrl": "http://127.0.0.1:30002",
+                  "applicationTriggerUrl": "http://127.0.0.1:30003/app/perf/start",
+                  "source": true,
+                  "objectRole": "ObjectServer",
+                  "awaitRemoteTargets": true,
+                  "store": null,
+                  "spotIds": ["spot-0"],
+                  "actorIds": [],
+                  "spotCount": 1,
+                  "subscriberCount": null,
+                  "worker": {
+                    "algorithm": "xorshift32-v1",
+                    "taskMillis": 3,
+                    "minThreads": 1,
+                    "maxThreads": 2,
+                    "idleTimeoutMs": 60000
+                  },
+                  "executionMode": "Immediate",
+                  "workload": {
+                    "payloadSize": 1024,
+                    "durationSeconds": 2,
+                    "warmupSeconds": 1,
+                    "connections": null,
+                    "logicalStreams": 100,
+                    "clientCount": 1,
+                    "connectConcurrency": null,
+                    "drainTimeoutMs": 30000,
+                    "setupTimeoutMs": 30000,
+                    "adminTimeoutMs": 5000,
+                    "socketSendTimeoutMs": 33000
+                  },
+                  "diagnostics": null,
+                  "provenance": {}
+                }
+                """
+                        .formatted("a".repeat(64));
+
+        RoleConfig config = PerfJson.read(json, RoleConfig.class);
+        assertEquals("java", config.language());
+        assertEquals(30000, config.workload().drainTimeoutMs());
+        assertEquals(3, config.worker().taskMillis());
     }
 
     @Test
     void resetRejectsAnOutstandingWarmupAndMeasuredCannotStartBeforeReset() throws Exception {
         Measurement measurement = new Measurement(config(.05), true);
         CompletableFuture<Void> outstanding = new CompletableFuture<>();
-        assertTrue(measurement.start(trigger(measurement, "warmup", "0"), () -> {
-            long started = measurement.beginOperation();
-            assertTrue(started >= 0);
-            return outstanding.thenRun(() -> measurement.completeOperation(started));
-        }).accepted());
+        assertTrue(
+                measurement
+                        .start(
+                                trigger(measurement, "warmup", "0"),
+                                () -> {
+                                    long started = measurement.beginOperation();
+                                    assertTrue(started >= 0);
+                                    return outstanding.thenRun(
+                                            () -> measurement.completeOperation(started));
+                                })
+                        .accepted());
         Thread.sleep(80); // The test controls a pending operation beyond the warmup window.
         assertFalse(measurement.reset(reset(measurement, "1"), null).ok());
         assertFalse(measurement.start(trigger(measurement, "measured", "1"), null).accepted());
@@ -154,14 +282,18 @@ class HarnessContractTest {
     @Test
     void publicStatusSamplingDoesNotHoldTheApplicationCounterLock() throws Exception {
         Measurement measurement = new Measurement(config(.12), true);
-        measurement.samplePublicState(() -> {
-            CompletableFuture<String> read = CompletableFuture.supplyAsync(measurement::phase);
-            try {
-                return Map.of("phase", read.get(1, TimeUnit.SECONDS));
-            } catch (Exception error) {
-                throw new AssertionError("Public status observation held the application counter lock.", error);
-            }
-        });
+        measurement.samplePublicState(
+                () -> {
+                    CompletableFuture<String> read =
+                            CompletableFuture.supplyAsync(measurement::phase);
+                    try {
+                        return Map.of("phase", read.get(1, TimeUnit.SECONDS));
+                    } catch (Exception error) {
+                        throw new AssertionError(
+                                "Public status observation held the application counter lock.",
+                                error);
+                    }
+                });
         assertTrue(measurement.start(trigger(measurement, "warmup", "0"), null).accepted());
         measurement.phaseTask().get(5, TimeUnit.SECONDS);
         assertFalse(measurement.hasErrors());
@@ -176,13 +308,14 @@ class HarnessContractTest {
         CompletableFuture<Void> pending = new CompletableFuture<>();
         CompletableFuture<Void> entered = new CompletableFuture<>();
         int[] calls = {0};
-        java.util.function.Supplier<CompletionStage<Void>> workload = () -> {
-            calls[0]++;
-            long started = measurement.beginOperation();
-            assertTrue(started >= 0);
-            entered.complete(null);
-            return pending.thenRun(() -> measurement.completeOperation(started));
-        };
+        java.util.function.Supplier<CompletionStage<Void>> workload =
+                () -> {
+                    calls[0]++;
+                    long started = measurement.beginOperation();
+                    assertTrue(started >= 0);
+                    entered.complete(null);
+                    return pending.thenRun(() -> measurement.completeOperation(started));
+                };
         PerfTriggerRequest trigger = trigger(measurement, "measured", "1");
         assertTrue(measurement.start(trigger, workload).accepted());
         assertEquals("alreadyStarted", measurement.start(trigger, workload).state());
@@ -219,11 +352,14 @@ class HarnessContractTest {
         assertTrue(measurement.reset(reset(measurement, "1"), null).ok());
         boolean[] success = {true};
 
-        measurement.start(trigger(measurement, "measured", "1"), () -> {
-            long started = measurement.beginOperation();
-            success[0] = measurement.completeOperation(started, null, measurement.endTicks());
-            return CompletableFuture.completedFuture(null);
-        });
+        measurement.start(
+                trigger(measurement, "measured", "1"),
+                () -> {
+                    long started = measurement.beginOperation();
+                    success[0] =
+                            measurement.completeOperation(started, null, measurement.endTicks());
+                    return CompletableFuture.completedFuture(null);
+                });
         measurement.phaseTask().get(5, TimeUnit.SECONDS);
 
         PerfSnapshot snapshot = measurement.snapshot(null);
@@ -239,8 +375,12 @@ class HarnessContractTest {
         measurement.start(trigger(measurement, "warmup", "0"), null);
         measurement.phaseTask().get(5, TimeUnit.SECONDS);
         assertTrue(measurement.reset(reset(measurement, "1"), null).ok());
-        assertTrue(measurement.start(trigger(measurement, "measured", "1"),
-                () -> CompletableFuture.completedFuture(null)).accepted());
+        assertTrue(
+                measurement
+                        .start(
+                                trigger(measurement, "measured", "1"),
+                                () -> CompletableFuture.completedFuture(null))
+                        .accepted());
         long started = measurement.beginOperation();
         assertTrue(started >= 0);
         long terminalTicks = PerfClock.now();
@@ -257,16 +397,23 @@ class HarnessContractTest {
         measurement.start(trigger(measurement, "warmup", "0"), null);
         measurement.phaseTask().get(5, TimeUnit.SECONDS);
         assertTrue(measurement.reset(reset(measurement, "1"), null).ok());
-        assertTrue(measurement.start(trigger(measurement, "measured", "1"),
-                () -> CompletableFuture.completedFuture(null)).accepted());
+        assertTrue(
+                measurement
+                        .start(
+                                trigger(measurement, "measured", "1"),
+                                () -> CompletableFuture.completedFuture(null))
+                        .accepted());
         long started = measurement.beginOperation();
         assertTrue(started >= 0);
         measurement.phaseTask().get(5, TimeUnit.SECONDS);
         PerfSnapshot sealed = measurement.snapshot(null);
         measurement.completeOperation(started);
         PerfSnapshot after = measurement.snapshot(null);
-        assertEquals(sealed.metrics.get("messages.completed"), after.metrics.get("messages.completed"));
-        assertEquals(sealed.metrics.get("messages.inflightAtEnd"), after.metrics.get("messages.inflightAtEnd"));
+        assertEquals(
+                sealed.metrics.get("messages.completed"), after.metrics.get("messages.completed"));
+        assertEquals(
+                sealed.metrics.get("messages.inflightAtEnd"),
+                after.metrics.get("messages.inflightAtEnd"));
         assertEquals(sealed.histograms.get("latencyMs"), after.histograms.get("latencyMs"));
         assertTrue(measurement.reset(reset(measurement, "2"), null).ok());
     }
@@ -278,11 +425,13 @@ class HarnessContractTest {
         measurement.phaseTask().get(5, TimeUnit.SECONDS);
         assertTrue(measurement.reset(reset(measurement, "1"), null).ok());
 
-        measurement.start(trigger(measurement, "measured", "1"), () -> {
-            long started = measurement.beginOperation();
-            measurement.completeOperation(started, new CancellationException("cancelled"));
-            return CompletableFuture.completedFuture(null);
-        });
+        measurement.start(
+                trigger(measurement, "measured", "1"),
+                () -> {
+                    long started = measurement.beginOperation();
+                    measurement.completeOperation(started, new CancellationException("cancelled"));
+                    return CompletableFuture.completedFuture(null);
+                });
         measurement.phaseTask().get(5, TimeUnit.SECONDS);
 
         PerfSnapshot snapshot = measurement.snapshot(null);
@@ -298,11 +447,13 @@ class HarnessContractTest {
         measurement.phaseTask().get(5, TimeUnit.SECONDS);
         assertTrue(measurement.reset(reset(measurement, "1"), null).ok());
         boolean[] counted = {false};
-        measurement.start(trigger(measurement, "measured", "1"), () -> {
-            long started = measurement.beginOperation();
-            counted[0] = measurement.completeOperation(started, null, PerfClock.now());
-            return CompletableFuture.completedFuture(null);
-        });
+        measurement.start(
+                trigger(measurement, "measured", "1"),
+                () -> {
+                    long started = measurement.beginOperation();
+                    counted[0] = measurement.completeOperation(started, null, PerfClock.now());
+                    return CompletableFuture.completedFuture(null);
+                });
         measurement.phaseTask().get(5, TimeUnit.SECONDS);
         assertTrue(counted[0]);
         assertEquals("1", measurement.snapshot(null).metrics.get("messages.completed"));
@@ -318,11 +469,13 @@ class HarnessContractTest {
     void warmupSuccessReturnsCountedIndependentlyOfPhase() throws Exception {
         Measurement measurement = new Measurement(config(.05), true);
         boolean[] counted = {false};
-        measurement.start(trigger(measurement, "warmup", "0"), () -> {
-            long started = measurement.beginOperation();
-            counted[0] = measurement.completeOperation(started);
-            return CompletableFuture.completedFuture(null);
-        });
+        measurement.start(
+                trigger(measurement, "warmup", "0"),
+                () -> {
+                    long started = measurement.beginOperation();
+                    counted[0] = measurement.completeOperation(started);
+                    return CompletableFuture.completedFuture(null);
+                });
         measurement.phaseTask().get(5, TimeUnit.SECONDS);
         assertTrue(counted[0]);
     }
@@ -331,9 +484,28 @@ class HarnessContractTest {
     void snapshotCarriesTheSameTopLevelKeysAsTheDotnetOriginal() {
         Measurement measurement = new Measurement(config("kotlin", 0, 1, 1, .05), true);
         Map<String, Object> document = measurement.snapshot(null).toMap();
-        assertEquals(List.of("schemaVersion", "runId", "cellId", "resetSeq", "language", "role", "roleInstance", "configHash",
-                "phase", "window", "clock", "serializedMessageBytes", "metrics", "histograms", "nullReasons", "publicStatus",
-                "publicMetrics", "runtimeMetrics", "provenance"), List.copyOf(document.keySet()));
+        assertEquals(
+                List.of(
+                        "schemaVersion",
+                        "runId",
+                        "cellId",
+                        "resetSeq",
+                        "language",
+                        "role",
+                        "roleInstance",
+                        "configHash",
+                        "phase",
+                        "window",
+                        "clock",
+                        "serializedMessageBytes",
+                        "metrics",
+                        "histograms",
+                        "nullReasons",
+                        "publicStatus",
+                        "publicMetrics",
+                        "runtimeMetrics",
+                        "provenance"),
+                List.copyOf(document.keySet()));
         assertEquals("kotlin", document.get("language"));
         assertNotEquals(0, document.size());
     }

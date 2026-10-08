@@ -6,7 +6,7 @@
 // (Object Client) x1. The driver sends PerfDriveRequest to the Spot with `route_client_t.request_to_spot`; the Spot handler
 // registers the correlation, makes the first `send_to_channel` and returns once that send is admitted, so the turn is free when
 // the Channel's send comes back to the Spot's return handler. The driver, outside the turn, waits for the correlation and
-// keeps the in-flight slot until the echo is validated (§13). One operation: correlation registration / first send -> return
+// records completion when the echo is validated (§13). One operation: correlation registration / first send -> return
 // handler echo validation. The DTO's returnSpotId names the source User SpotId. send-send; ordinary; payload 4096 bytes.
 // Store: run Docker Redis. Null: physical connections, worker, Actor, fanout; Spot internals are not observable.
 
@@ -66,7 +66,8 @@ class s2s_send_send_spot_t final : public perf_spot_base_t<s2s_send_send_spot_t>
                 measurement.complete_operation (started, failure);
             std::rethrow_exception (failure);
         }
-        co_return drive_reply_t{true, std::nullopt}; // send/send: the reply is only the first send's acknowledgement
+        co_return drive_reply_t{
+          true, std::nullopt}; // send/send: the reply is only the first send's acknowledgement
     }
 
     // The return send arrives as its own Spot packet: the correlation decides the operation's first result.
@@ -90,7 +91,9 @@ class s2s_spot_to_channel_send_send_echo_scenario_t
     explicit s2s_spot_to_channel_send_send_echo_scenario_t (role_t &role) :
         _role (role), _sequences (*role.config.workload.logical_streams)
     {
-        role.metrics.counters ({"driver.issued", "driver.notStarted", "driver.failed", "spot.applicationHandlerEntries"})
+        role.metrics
+          .counters ({"driver.issued", "driver.notStarted", "driver.failed",
+                      "spot.applicationHandlerEntries"})
           .latency ("driverLatencyMs", "driver.latency")
           .spot_internals_unsupported ();
     }
@@ -100,42 +103,52 @@ class s2s_spot_to_channel_send_send_echo_scenario_t
         auto &measurement = _role.measurement;
         const auto &config = _role.config;
         const auto objects = create_spots (_role, stopping);
-        wait_for_public (_role, stopping, [&] {
-            const auto status = _role.mesh.load ()->snapshot (*config.mesh_name);
-            return std::any_of (status.channels.begin (), status.channels.end (), [&] (const auto &c) {
-                return c.channel_name == config.channel_name && c.is_ready && c.ready_target_count > 0;
-            });
-        }, "a ready Channel target");
+        wait_for_public (
+          _role, stopping,
+          [&] {
+              const auto status = _role.mesh.load ()->snapshot (*config.mesh_name);
+              return std::any_of (status.channels.begin (), status.channels.end (),
+                                  [&] (const auto &c) {
+                                      return c.channel_name == config.channel_name && c.is_ready
+                                             && c.ready_target_count > 0;
+                                  });
+          },
+          "a ready Channel target");
         auto &route = _role.service<fw::route_client_t> ();
         json probes = json::array ();
         for (std::size_t target = 0; target < config.spot_ids.size (); ++target) {
-            auto echo = measurement.request (static_cast<int> (target), _sequences.next (static_cast<int> (target)), true);
+            auto echo = measurement.request (static_cast<int> (target),
+                                             _sequences.next (static_cast<int> (target)), true);
             echo.return_spot_id = config.spot_ids[target];
-            const auto driven = route.request_to_spot (config.spot_ids[target], drive_request_t{echo})
-                                  .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms))
-                                  .async<drive_reply_t> ()
-                                  .result ()
-                                  .value ();
+            const auto driven =
+              route.request_to_spot (config.spot_ids[target], drive_request_t{echo})
+                .timeout (measurement.call_timeout (true))
+                .async<drive_reply_t> ()
+                .result ()
+                .value ();
             if (!driven.started)
                 throw validation_error_t ("IdentityMismatch", "The setup probe was not started.");
             const auto entry = _role.correlations->find (echo.correlation_id);
             if (!entry)
-                throw validation_error_t ("UnknownCorrelation", "The setup probe registered no correlation.");
+                throw validation_error_t ("UnknownCorrelation",
+                                          "The setup probe registered no correlation.");
             const auto [error, completed] = _role.correlations->complete (entry).result ().value ();
             (void) completed;
             if (error)
                 std::rethrow_exception (error);
             probes.push_back ({{"correlationId", echo.correlation_id}});
         }
-        publish_spots (_role, objects); // objectsReady only after every probe, so warmup never overlaps one
-        measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeEcho"},
-                                                       {"source", "Spot send_to_channel -> Channel send_to_spot -> Spot return handler"},
-                                                       {"observedValue", probes}}}));
+        publish_spots (
+          _role, objects); // objectsReady only after every probe, so warmup never overlaps one
+        measurement.set_setup_evidence (json::array (
+          {{{"kind", "typedProbeEcho"},
+            {"source", "Spot send_to_channel -> Channel send_to_spot -> Spot return handler"},
+            {"observedValue", probes}}}));
     }
 
     void run (const loops_t &loops)
     {
-        spawn_stream_loops (loops, _role, [this] (int stream) { return loop (stream); });
+        spawn_request_streams (loops, _role, [this] (int stream) { return loop (stream); });
     }
 
   private:
@@ -144,39 +157,40 @@ class s2s_spot_to_channel_send_send_echo_scenario_t
         auto &measurement = _role.measurement;
         auto &route = _role.service<fw::route_client_t> ();
         const auto &config = _role.config;
-        const auto &spot_id = config.spot_ids[static_cast<std::size_t> (stream) % config.spot_ids.size ()];
-        while (measurement.can_issue ()) {
-            auto echo = measurement.request (stream, _sequences.next (stream));
-            echo.return_spot_id = spot_id;
-            const auto driver_started = now_ticks ();
-            _role.metrics.count ("driver.issued");
-            std::optional<drive_reply_t> driven;
-            std::optional<std::int64_t> driver_finished;
-            try {
-                driven = co_await route.request_to_spot (spot_id, drive_request_t{echo})
-                           .timeout (std::chrono::milliseconds (config.workload.driver_timeout_ms)).async<drive_reply_t> ();
-                driver_finished = now_ticks ();
-            }
-            catch (...) {
-                _role.metrics.count ("driver.failed");
-                measurement.record_diagnostic (std::current_exception ());
-            }
-            if (driven && !driven->started) {
-                _role.metrics.count ("driver.notStarted");
-                continue;
-            }
-            // A failed driver call can race an operation the Spot already started; its correlation still closes it (§13).
-            const auto entry = _role.correlations->find (echo.correlation_id);
-            if (!entry) {
-                if (driven)
-                    measurement.record_diagnostic (std::make_exception_ptr (
-                      validation_error_t ("UnknownCorrelation", "The started drive registered no correlation.")));
-                continue;
-            }
-            const auto [result, completed] = co_await _role.correlations->complete (entry);
-            if (measurement.complete_operation (entry->started_ticks, result, completed) && driver_finished)
-                _role.metrics.record ("driverLatencyMs", driver_started, *driver_finished);
+        const auto &spot_id =
+          config.spot_ids[static_cast<std::size_t> (stream) % config.spot_ids.size ()];
+        auto echo = measurement.request (stream, _sequences.next (stream));
+        echo.return_spot_id = spot_id;
+        const auto driver_started = now_ticks ();
+        _role.metrics.count ("driver.issued");
+        std::optional<drive_reply_t> driven;
+        std::optional<std::int64_t> driver_finished;
+        try {
+            driven = co_await route.request_to_spot (spot_id, drive_request_t{echo})
+                       .timeout (measurement.call_timeout (true))
+                       .async<drive_reply_t> ();
+            driver_finished = now_ticks ();
         }
+        catch (...) {
+            _role.metrics.count ("driver.failed");
+            measurement.record_diagnostic (std::current_exception ());
+        }
+        if (driven && !driven->started) {
+            _role.metrics.count ("driver.notStarted");
+            co_return;
+        }
+        // A failed driver call can race an operation the Spot already started; its correlation still closes it (§13).
+        const auto entry = _role.correlations->find (echo.correlation_id);
+        if (!entry) {
+            if (driven)
+                measurement.record_diagnostic (std::make_exception_ptr (validation_error_t (
+                  "UnknownCorrelation", "The started drive registered no correlation.")));
+            co_return;
+        }
+        const auto [result, completed] = co_await _role.correlations->complete (entry);
+        if (measurement.complete_operation (entry->started_ticks, result, completed)
+            && driver_finished)
+            _role.metrics.record ("driverLatencyMs", driver_started, *driver_finished);
     }
 
     role_t &_role;

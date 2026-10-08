@@ -56,28 +56,29 @@ class SessionEchoScenario(
     private fun create(endpoint: URI): ZLinkStreamConnector {
         val workload = manifest.workload()
         val defaults = ZLinkStreamConnectorOptions.createDefault(endpoint)
-        val options = ZLinkStreamConnectorOptions(
-            endpoint,
-            ZLinkStreamDispatchMode.IMMEDIATE,
-            Duration.ofMillis(workload.requestTimeoutMs().toLong()),
-            defaults.waitTimeout(),
-            defaults.maxReconnectAttempts(),
-            Duration.ofMillis(workload.setupTimeoutMs().toLong()),
-            defaults.maxSendPayloadSize(),
-            defaults.maxReceivePayloadSize(),
-            defaults.heartbeatEnabled(),
-            defaults.heartbeatInterval(),
-            defaults.heartbeatTimeout(),
-            defaults.reconnectEnabled(),
-            defaults.reconnectInitialDelay(),
-            defaults.reconnectMaxDelay(),
-            defaults.reconnectBackoffFactor(),
-            defaults.skipServerCertificateValidation(),
-            defaults.compression(),
-            defaults.compressionCodec(),
-            defaults.nameResolver(),
-            defaults.typedCodec(),
-        )
+        val options =
+            ZLinkStreamConnectorOptions(
+                endpoint,
+                ZLinkStreamDispatchMode.IMMEDIATE,
+                Duration.ofMillis(workload.setupTimeoutMs().toLong()),
+                defaults.waitTimeout(),
+                defaults.maxReconnectAttempts(),
+                Duration.ofMillis(workload.setupTimeoutMs().toLong()),
+                defaults.maxSendPayloadSize(),
+                defaults.maxReceivePayloadSize(),
+                defaults.heartbeatEnabled(),
+                defaults.heartbeatInterval(),
+                defaults.heartbeatTimeout(),
+                defaults.reconnectEnabled(),
+                defaults.reconnectInitialDelay(),
+                defaults.reconnectMaxDelay(),
+                defaults.reconnectBackoffFactor(),
+                defaults.skipServerCertificateValidation(),
+                defaults.compression(),
+                defaults.compressionCodec(),
+                defaults.nameResolver(),
+                defaults.typedCodec(),
+            )
         return ZLinkStreamConnectorFactory.create(options)
     }
 
@@ -85,58 +86,77 @@ class SessionEchoScenario(
         val total = count()
         val first = first()
         sequences = AtomicLongArray(total)
-        val endpoint = URI.create(manifest.roles().first { it.streamEndpoint() != null }.streamEndpoint())
+        val endpoint =
+            URI.create(manifest.roles().first { it.streamEndpoint() != null }.streamEndpoint())
         val evidence = arrayOfNulls<Any>(total)
         val next = AtomicInteger()
         val successes = AtomicInteger()
         val failures = AtomicInteger()
         val lanes = minOf(manifest.workload().connectConcurrency(), maxOf(1, total))
         coroutineScope {
-            (0 until lanes).map {
-                async(Dispatchers.IO) {
-                    while (true) {
-                        val local = next.getAndIncrement()
-                        if (local >= total) break
-                        val id = first + local
-                        val started = PerfClock.now()
-                        try {
-                            val connector = create(endpoint)
-                            owned.add(connector)
-                            val setupRequest = measurement.request(id, sequences.incrementAndGet(local), true)
-                            val wrapper = connector.kotlin()
-                            wrapper.connect().await()
-                            val reply = wrapper.request<PerfEchoReply>(setupRequest)
-                                .timeout(Duration.ofMillis(manifest.workload().setupTimeoutMs().toLong()))
-                                .await()
-                            PayloadPattern.validateIdentity(setupRequest, reply)
-                            measurement.pattern().validate(reply.payload())
-                            if (!wrapper.isConnected) error("Connector lost its connection during setup.")
-                            connectors.add(Connected(id, connector))
-                            successes.incrementAndGet()
-                            val observed = LinkedHashMap<String, Any>()
-                            observed["clientId"] = id
-                            observed["state"] = wrapper.state.toString()
-                            observed["isConnected"] = wrapper.isConnected
-                            observed["setupLatencyNs"] = DecimalText.of(PerfClock.now() - started)
-                            observed["correlationId"] = setupRequest.correlationId()
-                            evidence[local] = Evidence.of(
-                                "connectorSetupAndTypedProbe",
-                                "Kotlin connector wrapper connect().await + request<PerfEchoReply>().await",
-                                observed,
-                            )
-                        } catch (error: Exception) {
-                            if (error is CancellationException) throw error
-                            failures.incrementAndGet()
-                            val cause = Measurement.unwrap(error)
-                            val observed = LinkedHashMap<String, Any?>()
-                            observed["clientId"] = id
-                            observed["message"] = cause.message
-                            observed["setupLatencyNs"] = DecimalText.of(PerfClock.now() - started)
-                            evidence[local] = Evidence.of("connectorSetupFailure", cause.javaClass.name, observed)
+            (0 until lanes)
+                .map {
+                    async(Dispatchers.IO) {
+                        while (true) {
+                            val local = next.getAndIncrement()
+                            if (local >= total) break
+                            val id = first + local
+                            val started = PerfClock.now()
+                            try {
+                                val connector = create(endpoint)
+                                owned.add(connector)
+                                val setupRequest =
+                                    measurement.request(id, sequences.incrementAndGet(local), true)
+                                val wrapper = connector.kotlin()
+                                wrapper.connect().await()
+                                val reply =
+                                    wrapper
+                                        .request<PerfEchoReply>(setupRequest)
+                                        .timeout(
+                                            Duration.ofMillis(
+                                                manifest.workload().setupTimeoutMs().toLong()
+                                            )
+                                        )
+                                        .await()
+                                PayloadPattern.validateIdentity(setupRequest, reply)
+                                measurement.pattern().validate(reply.payload())
+                                if (!wrapper.isConnected)
+                                    error("Connector lost its connection during setup.")
+                                connectors.add(Connected(id, connector))
+                                successes.incrementAndGet()
+                                val observed = LinkedHashMap<String, Any>()
+                                observed["clientId"] = id
+                                observed["state"] = wrapper.state.toString()
+                                observed["isConnected"] = wrapper.isConnected
+                                observed["setupLatencyNs"] =
+                                    DecimalText.of(PerfClock.now() - started)
+                                observed["correlationId"] = setupRequest.correlationId()
+                                evidence[local] =
+                                    Evidence.of(
+                                        "connectorSetupAndTypedProbe",
+                                        "Kotlin connector wrapper connect().await + request<PerfEchoReply>().await",
+                                        observed,
+                                    )
+                            } catch (error: Exception) {
+                                if (error is CancellationException) throw error
+                                failures.incrementAndGet()
+                                val cause = Measurement.unwrap(error)
+                                val observed = LinkedHashMap<String, Any?>()
+                                observed["clientId"] = id
+                                observed["message"] = cause.message
+                                observed["setupLatencyNs"] =
+                                    DecimalText.of(PerfClock.now() - started)
+                                evidence[local] =
+                                    Evidence.of(
+                                        "connectorSetupFailure",
+                                        cause.javaClass.name,
+                                        observed,
+                                    )
+                            }
                         }
                     }
                 }
-            }.awaitAll()
+                .awaitAll()
         }
         measurement.connected(successes.get().toLong())
         measurement.connectionFailures(failures.get().toLong())
@@ -147,23 +167,30 @@ class SessionEchoScenario(
     override fun run(): CompletionStage<Void> = completionStage {
         val first = first()
         coroutineScope {
-            connectors.flatMap { entry ->
-                (0 until manifest.workload().inflight()).map { slot ->
+            connectors
+                .map { entry ->
                     launch(Dispatchers.IO) {
                         while (measurement.canIssue()) {
                             val local = entry.id - first
-                            val request = measurement.request(entry.id, sequences.incrementAndGet(local), false)
+                            val request =
+                                measurement.request(
+                                    entry.id,
+                                    sequences.incrementAndGet(local),
+                                    false,
+                                )
                             val started = measurement.beginOperation()
                             if (started < 0) break
                             try {
 
-                                    val sent = request.withSentTicks(started)
-                                    val reply = entry.connector.kotlin()
+                                val sent = request.withSentTicks(started)
+                                val reply =
+                                    entry.connector
+                                        .kotlin()
                                         .request<PerfEchoReply>(sent)
-                                        .timeout(Duration.ofMillis(manifest.workload().requestTimeoutMs().toLong()))
+                                        .timeout(measurement.callTimeout())
                                         .await()
-                                    PayloadPattern.validateIdentity(sent, reply)
-                                    measurement.pattern().validate(reply.payload())
+                                PayloadPattern.validateIdentity(sent, reply)
+                                measurement.pattern().validate(reply.payload())
                                 measurement.completeOperation(started)
                             } catch (error: Exception) {
                                 measurement.completeOperation(started, error)
@@ -172,7 +199,7 @@ class SessionEchoScenario(
                         }
                     }
                 }
-            }.forEach { it.join() }
+                .forEach { it.join() }
         }
         null
     }

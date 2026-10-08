@@ -1,18 +1,40 @@
 import { Inject, Injectable, Scope } from '@nestjs/common';
-import { ZLINK_ROUTE_MESH_RUNTIME, ZLINK_SPOT_MANAGER, ZLINK_SPOT_OUTBOUND, zlinkSpotPacketHandler } from '@zlink-systems/nestjs';
-import type { ZLinkMessageContext, ZLinkRouteMeshRuntime, ZLinkSpotManager, ZLinkSpotOutbound, ZLinkSpotRequestHandler } from '@zlink-systems/framework';
+import {
+  ZLINK_ROUTE_MESH_RUNTIME,
+  ZLINK_SPOT_MANAGER,
+  ZLINK_SPOT_OUTBOUND,
+  zlinkSpotPacketHandler
+} from '@zlink-systems/nestjs';
+import type {
+  ZLinkMessageContext,
+  ZLinkRouteMeshRuntime,
+  ZLinkSpotManager,
+  ZLinkSpotOutbound,
+  ZLinkSpotRequestHandler
+} from '@zlink-systems/framework';
 import { PerfClock } from '../shared/clock';
-import { DecimalText, PerfEchoReply, PerfEchoRequest, RoleConfig, WorkerObservation } from '../shared/contracts';
+import {
+  DecimalText,
+  PerfEchoReply,
+  PerfEchoRequest,
+  RoleConfig,
+  WorkerObservation
+} from '../shared/contracts';
 import { LATENCY_SUFFIXES } from '../shared/histogram';
 import { Measurement } from '../shared/measurement';
 import { PayloadPattern } from '../shared/payload';
 import { ScenarioMetrics } from '../server-support/scenario-metrics';
 import { ObjectsReadiness, ROLE_CONFIG, runRole } from '../server-support/server-application';
-import { runLoops } from '../server-support/wait';
+import { runRequestStreams } from '../server-support/wait';
 import { ActorlessSpot, configureSpotRole, createSpots, publishSpots } from './spot-role';
 
 const WORKER_TIMINGS = Symbol('perf.WorkerTimings');
-interface WorkerTimings { submitted: bigint; resumed: bigint; started: bigint; ended: bigint }
+interface WorkerTimings {
+  submitted: bigint;
+  resumed: bigint;
+  started: bigint;
+  ended: bigint;
+}
 
 // §10.8 spot-worker-offload-echo. Question: how much a CPU worker call and the delivery of its result add to the
 // local Spot echo of §10.7. Roles: HTTP Client x1, Spot process (Object Server + local driver + Framework worker,
@@ -20,16 +42,21 @@ interface WorkerTimings { submitted: bigint; resumed: bigint; started: bigint; e
 // interval is the primary latency; the Spot handler runs one runCpuWorker call per request:
 // Yield (default) hands the turn back while the worker runs, ordinary keeps it. The worker callback is the
 // self-contained xorshift32-v1 task of worker-task-millis (no sleep); it checks time and cancellation every 1024
-// iterations. Public worker options carry min/max threads and idle timeout; the call timeout is the workerTimeoutMs.
+// iterations. Public worker options carry min/max threads and idle timeout; Measurement owns the call deadline.
 // worker-offload; payload 1024 bytes. Store: run Docker Redis (Spot addresses). Null: worker queue depth and Spot
 // internals have no public observation; remote call, Actor, fanout do not apply.
 export class SpotWorkerOffloadEchoScenario {
   private sequences: number[] = [];
 
   constructor(
-    private readonly spots: ZLinkSpotOutbound, private readonly manager: ZLinkSpotManager, private readonly measurement: Measurement,
-    private readonly config: RoleConfig, private readonly meshRuntime: ZLinkRouteMeshRuntime, private readonly readiness: ObjectsReadiness,
-    private readonly metrics: ScenarioMetrics, private readonly workerTimings: Map<string, WorkerTimings>
+    private readonly spots: ZLinkSpotOutbound,
+    private readonly manager: ZLinkSpotManager,
+    private readonly measurement: Measurement,
+    private readonly config: RoleConfig,
+    private readonly meshRuntime: ZLinkRouteMeshRuntime,
+    private readonly readiness: ObjectsReadiness,
+    private readonly metrics: ScenarioMetrics,
+    private readonly workerTimings: Map<string, WorkerTimings>
   ) {}
 
   async prepare(): Promise<void> {
@@ -40,48 +67,76 @@ export class SpotWorkerOffloadEchoScenario {
       this.sequences = new Array<number>(config.workload.logicalStreams as number).fill(0);
       const probes: unknown[] = [];
       for (let target = 0; target < config.spotIds.length; target++) {
-        const request = measurement.request(target, ++this.sequences[target % this.sequences.length], true);
-        const reply = await this.spots.requestToSpot(config.spotIds[target], request).timeout(config.workload.requestTimeoutMs).submit<PerfEchoReply>();
+        const request = measurement.request(
+          target,
+          ++this.sequences[target % this.sequences.length],
+          true
+        );
+        const reply = await this.spots
+          .requestToSpot(config.spotIds[target], request)
+          .timeout(measurement.callTimeout())
+          .submit<PerfEchoReply>();
         PayloadPattern.validateIdentity(request, reply);
         measurement.pattern.validate(reply.payload);
-        probes.push({ correlationId: request.correlationId, receivedTicks: reply.receivedTicks, clockDomainId: reply.clockDomainId });
+        probes.push({
+          correlationId: request.correlationId,
+          receivedTicks: reply.receivedTicks,
+          clockDomainId: reply.clockDomainId
+        });
       }
       publishSpots(this.readiness, objects); // objectsReady only after every probe, so warmup never overlaps one
-      measurement.setupEvidence = [{ kind: 'typedProbeEcho', source: 'ZLinkSpotOutbound.requestToSpot -> runCpuWorker', observedValue: probes }];
+      measurement.setupEvidence = [
+        {
+          kind: 'typedProbeEcho',
+          source: 'ZLinkSpotOutbound.requestToSpot -> runCpuWorker',
+          observedValue: probes
+        }
+      ];
     } catch (error) {
       measurement.recordDiagnostic(error);
     }
   }
 
-  run = (): Promise<void> => runLoops(this.config.workload.logicalStreams as number, this.config.workload.inflight, (stream) => this.loop(stream));
+  run = (): Promise<void> =>
+    runRequestStreams(
+      this.config.workload.logicalStreams as number,
+      () => this.measurement.canIssue,
+      (stream) => this.loop(stream),
+      (error) => this.measurement.recordDiagnostic(error)
+    );
 
   private async loop(stream: number): Promise<void> {
     const { config, measurement } = this;
     const spotId = config.spotIds[stream % config.spotIds.length];
-    while (measurement.canIssue) {
-      let request = measurement.request(stream, ++this.sequences[stream]);
-      const started = measurement.beginOperation();
-      if (started === undefined) break;
-      request = request.with({ sentTicks: DecimalText.of(started) });
-      let reply: PerfEchoReply;
-      try {
-        reply = await this.spots.requestToSpot(spotId, request).timeout(config.workload.requestTimeoutMs).submit<PerfEchoReply>();
-        PayloadPattern.validateIdentity(request, reply);
-        measurement.pattern.validate(reply.payload);
-      } catch (error) {
-        measurement.completeOperation(started, error, PerfClock.now());
-        this.workerTimings.delete(request.correlationId);
-        continue;
-      }
-      const completed = PerfClock.now();
-      const windowSuccess = measurement.completeOperation(started, undefined, completed);
-      const worker = this.workerTimings.get(request.correlationId);
+    if (!measurement.canIssue) return;
+    let request = measurement.request(stream, ++this.sequences[stream]);
+    const started = measurement.beginOperation();
+    if (started === undefined) return;
+    request = request.with({ sentTicks: DecimalText.of(started) });
+    let reply: PerfEchoReply;
+    try {
+      reply = await this.spots
+        .requestToSpot(spotId, request)
+        .timeout(measurement.callTimeout())
+        .submit<PerfEchoReply>();
+      PayloadPattern.validateIdentity(request, reply);
+      measurement.pattern.validate(reply.payload);
+    } catch (error) {
+      measurement.completeOperation(started, error, PerfClock.now());
       this.workerTimings.delete(request.correlationId);
-      if (windowSuccess && measurement.phase === 'measured') {
-        if (!worker) throw new Error(`The successful operation '${request.correlationId}' has no worker timing evidence.`);
-        this.metrics.record('workerCallLatencyMs', worker.submitted, worker.resumed, completed);
-        this.metrics.record('workerTaskLatencyMs', worker.started, worker.ended, completed);
-      }
+      return;
+    }
+    const completed = PerfClock.now();
+    const windowSuccess = measurement.completeOperation(started, undefined, completed);
+    const worker = this.workerTimings.get(request.correlationId);
+    this.workerTimings.delete(request.correlationId);
+    if (windowSuccess && measurement.phase === 'measured') {
+      if (!worker)
+        throw new Error(
+          `The successful operation '${request.correlationId}' has no worker timing evidence.`
+        );
+      this.metrics.record('workerCallLatencyMs', worker.submitted, worker.resumed, completed);
+      this.metrics.record('workerTaskLatencyMs', worker.started, worker.ended, completed);
     }
   }
 }
@@ -118,17 +173,27 @@ export function xorshift32Work(taskMillis: number): (signal: AbortSignal) => Wor
 // The Spot handler: one CPU worker call, then the typed echo. The worker callback returns its own timing evidence.
 @zlinkSpotPacketHandler({ spot: () => SpotWorkerOffloadSpot, packetName: 'PerfEchoRequest' })
 @Injectable()
-export class SpotWorkerOffloadHandler implements ZLinkSpotRequestHandler<SpotWorkerOffloadSpot, PerfEchoRequest, PerfEchoReply> {
+export class SpotWorkerOffloadHandler implements ZLinkSpotRequestHandler<
+  SpotWorkerOffloadSpot,
+  PerfEchoRequest,
+  PerfEchoReply
+> {
   private readonly work: (signal: AbortSignal) => WorkerObservation;
 
   constructor(
-    @Inject(Measurement) private readonly measurement: Measurement, @Inject(ScenarioMetrics) private readonly metrics: ScenarioMetrics,
-    @Inject(ROLE_CONFIG) private readonly config: RoleConfig, @Inject(WORKER_TIMINGS) private readonly workerTimings: Map<string, WorkerTimings>
+    @Inject(Measurement) private readonly measurement: Measurement,
+    @Inject(ScenarioMetrics) private readonly metrics: ScenarioMetrics,
+    @Inject(ROLE_CONFIG) private readonly config: RoleConfig,
+    @Inject(WORKER_TIMINGS) private readonly workerTimings: Map<string, WorkerTimings>
   ) {
     this.work = xorshift32Work(config.worker!.taskMillis);
   }
 
-  async handle(spot: SpotWorkerOffloadSpot, request: PerfEchoRequest, _context: ZLinkMessageContext): Promise<PerfEchoReply> {
+  async handle(
+    spot: SpotWorkerOffloadSpot,
+    request: PerfEchoRequest,
+    _context: ZLinkMessageContext
+  ): Promise<PerfEchoReply> {
     const received = PerfClock.now();
     const { measurement, metrics, config } = this;
     measurement.handlerEnter();
@@ -136,7 +201,7 @@ export class SpotWorkerOffloadHandler implements ZLinkSpotRequestHandler<SpotWor
       measurement.validateRequest(request);
       if (request.phase === 'measured') metrics.count('spot.applicationHandlerEntries');
       const submitted = PerfClock.now();
-      const call = spot.context.runCpuWorker(this.work).timeoutMs(config.worker!.workerTimeoutMs);
+      const call = spot.context.runCpuWorker(this.work).timeoutMs(measurement.callTimeout());
       let observation: WorkerObservation;
       if (config.terminal === 'yield') {
         metrics.count('spot.applicationYieldCalls');
@@ -147,8 +212,18 @@ export class SpotWorkerOffloadHandler implements ZLinkSpotRequestHandler<SpotWor
       const reply = PayloadPattern.reply(request, received);
       if (measurement.phase !== 'setup') this.workerTimings.set(request.correlationId, timing);
       measurement.recordReply(request);
-      if (measurement.phase === 'setup' && !config.source) measurement.setupEvidence = [{ kind: 'typedProbeReply', source: 'ZLinkSpotRequestHandler -> runCpuWorker',
-        observedValue: { correlationId: request.correlationId, iterations: observation.iterations, checksum: observation.checksum } }];
+      if (measurement.phase === 'setup' && !config.source)
+        measurement.setupEvidence = [
+          {
+            kind: 'typedProbeReply',
+            source: 'ZLinkSpotRequestHandler -> runCpuWorker',
+            observedValue: {
+              correlationId: request.correlationId,
+              iterations: observation.iterations,
+              checksum: observation.checksum
+            }
+          }
+        ];
       return reply;
     } catch (error) {
       measurement.recordDiagnostic(error);
@@ -158,45 +233,101 @@ export class SpotWorkerOffloadHandler implements ZLinkSpotRequestHandler<SpotWor
     }
   }
 
-  private workerTiming(observation: WorkerObservation, submitted: bigint, resumed: bigint): WorkerTimings {
-    if (observation.clockDomainId !== WORKER_CLOCK_DOMAIN || DecimalText.u64(observation.iterations) === 0n)
+  private workerTiming(
+    observation: WorkerObservation,
+    submitted: bigint,
+    resumed: bigint
+  ): WorkerTimings {
+    if (
+      observation.clockDomainId !== WORKER_CLOCK_DOMAIN ||
+      DecimalText.u64(observation.iterations) === 0n
+    )
       throw new Error('The worker observation is not from the worker callback or is empty.');
-    return { submitted, resumed, started: DecimalText.i64(observation.startedTicks), ended: DecimalText.i64(observation.endedTicks) };
+    return {
+      submitted,
+      resumed,
+      started: DecimalText.i64(observation.startedTicks),
+      ended: DecimalText.i64(observation.endedTicks)
+    };
   }
 }
 
 export async function runSpotWorkerOffloadEcho(config: RoleConfig): Promise<void> {
-  if (config.role !== 'spot' || !config.source || !config.worker) throw new Error('The Spot role with worker config is the source of this scenario.');
+  if (config.role !== 'spot' || !config.source || !config.worker)
+    throw new Error('The Spot role with worker config is the source of this scenario.');
   const worker = config.worker;
   const measurement = new Measurement(config, config.source);
   const workerTimings = new Map<string, WorkerTimings>();
-  const clockKeys = ['worker.submitToStart', 'worker.resultToContinuation'].flatMap((prefix) => LATENCY_SUFFIXES.map((suffix) => `${prefix}.${suffix}`));
+  const clockKeys = ['worker.submitToStart', 'worker.resultToContinuation'].flatMap((prefix) =>
+    LATENCY_SUFFIXES.map((suffix) => `${prefix}.${suffix}`)
+  );
   const metrics = new ScenarioMetrics(measurement)
     .counters('spot.applicationHandlerEntries', 'spot.applicationYieldCalls')
-    .latency('workerCallLatencyMs', 'worker.callLatency').latency('workerTaskLatencyMs', 'worker.taskLatency')
-    .markUnsupported('CLOCK_DOMAIN_UNVERIFIED', 'The worker thread clock is not verified to share the main thread epoch (§15.2); this interval crosses both.', ...clockKeys)
-    .markHistogramsUnsupported('CLOCK_DOMAIN_UNVERIFIED', 'The worker thread clock is not verified to share the main thread epoch (§15.2); this interval crosses both.',
-      'workerSubmitToStartMs', 'workerResultToContinuationMs')
-    .markUnsupported('PUBLIC_OBSERVATION_UNSUPPORTED', 'Public worker options are settings; no queue depth snapshot exists.', 'worker.pool.queueDepth.max', 'worker.pool.queueDepth.mean')
+    .latency('workerCallLatencyMs', 'worker.callLatency')
+    .latency('workerTaskLatencyMs', 'worker.taskLatency')
+    .markUnsupported(
+      'CLOCK_DOMAIN_UNVERIFIED',
+      'The worker thread clock is not verified to share the main thread epoch (§15.2); this interval crosses both.',
+      ...clockKeys
+    )
+    .markHistogramsUnsupported(
+      'CLOCK_DOMAIN_UNVERIFIED',
+      'The worker thread clock is not verified to share the main thread epoch (§15.2); this interval crosses both.',
+      'workerSubmitToStartMs',
+      'workerResultToContinuationMs'
+    )
+    .markUnsupported(
+      'PUBLIC_OBSERVATION_UNSUPPORTED',
+      'Public worker options are settings; no queue depth snapshot exists.',
+      'worker.pool.queueDepth.max',
+      'worker.pool.queueDepth.mean'
+    )
     .spotInternalsUnsupported()
     .provenance('workerOptions', {
-      algorithm: worker.algorithm, taskMillis: worker.taskMillis, applied: { minThreads: worker.minThreads, maxThreads: worker.maxThreads, idleTimeoutMs: worker.idleTimeoutMs },
-      callTimeoutMs: worker.workerTimeoutMs
+      algorithm: worker.algorithm,
+      taskMillis: worker.taskMillis,
+      applied: {
+        minThreads: worker.minThreads,
+        maxThreads: worker.maxThreads,
+        idleTimeoutMs: worker.idleTimeoutMs
+      },
+      callDeadlineRule: 'phaseEnd+drainTimeoutMs'
     });
   const readiness = new ObjectsReadiness(false, 'This cell has not created its User Spots yet.');
   let scenario: SpotWorkerOffloadEchoScenario | undefined;
-  await runRole({
-    config,
-    objects: readiness,
-    // §5.2: only the public worker options; the Node.js options carry no queue length.
-    worker: { minThreads: worker.minThreads, maxThreads: worker.maxThreads, idleTimeoutMs: worker.idleTimeoutMs },
-    providers: [{ provide: ScenarioMetrics, useValue: metrics }, { provide: WORKER_TIMINGS, useValue: workerTimings }, SpotWorkerOffloadSpot, SpotWorkerOffloadHandler],
-    configureFramework: (builder) => configureSpotRole(builder, config, false, SpotWorkerOffloadSpot),
-    workload: () => scenario?.run,
-    prepare: async (app) => {
-      scenario = new SpotWorkerOffloadEchoScenario(app.get<ZLinkSpotOutbound>(ZLINK_SPOT_OUTBOUND, { strict: false }), app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER, { strict: false }),
-        measurement, config, app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }), readiness, metrics, workerTimings);
-      await scenario.prepare();
-    }
-  }, measurement);
+  await runRole(
+    {
+      config,
+      objects: readiness,
+      // §5.2: only the public worker options; the Node.js options carry no queue length.
+      worker: {
+        minThreads: worker.minThreads,
+        maxThreads: worker.maxThreads,
+        idleTimeoutMs: worker.idleTimeoutMs
+      },
+      providers: [
+        { provide: ScenarioMetrics, useValue: metrics },
+        { provide: WORKER_TIMINGS, useValue: workerTimings },
+        SpotWorkerOffloadSpot,
+        SpotWorkerOffloadHandler
+      ],
+      configureFramework: (builder) =>
+        configureSpotRole(builder, config, false, SpotWorkerOffloadSpot),
+      workload: () => scenario?.run,
+      prepare: async (app) => {
+        scenario = new SpotWorkerOffloadEchoScenario(
+          app.get<ZLinkSpotOutbound>(ZLINK_SPOT_OUTBOUND, { strict: false }),
+          app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER, { strict: false }),
+          measurement,
+          config,
+          app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }),
+          readiness,
+          metrics,
+          workerTimings
+        );
+        await scenario.prepare();
+      }
+    },
+    measurement
+  );
 }

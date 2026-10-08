@@ -27,18 +27,26 @@ class actor_no_bind_request_echo_scenario_t
         const auto created = create_actors (_role, stopping);
         auto &actors = _role.service<fw::actor_client_t> ();
         // §5: one probe echo per prepared target (bounded by connect-concurrency).
-        for_each_concurrently (*config.workload.logical_streams, *config.workload.connect_concurrency, [&] (int stream) {
-            const auto request = measurement.request (stream, _sequences.next (stream), true);
-            const auto reply = actors.request (fw::actor_id_t (config.actor_ids[static_cast<std::size_t> (stream)]), request)
-                                 .timeout (std::chrono::milliseconds (config.workload.setup_timeout_ms))
-                                 .async<echo_reply_t> ()
-                                 .result ()
-                                 .value ();
-            payload_pattern_t::validate_identity (request, reply);
-            measurement.pattern ().validate (reply.payload);
-        });
-        measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeEcho"}, {"source", "actor_client_t.request.async<PerfEchoReply>"},
-                                                       {"observedValue", {{"probes", *config.workload.logical_streams}, {"streams", *config.workload.logical_streams}}}}}));
+        for_each_concurrently (
+          *config.workload.logical_streams, *config.workload.connect_concurrency, [&] (int stream) {
+              const auto request = measurement.request (stream, _sequences.next (stream), true);
+              const auto reply =
+                actors
+                  .request (fw::actor_id_t (config.actor_ids[static_cast<std::size_t> (stream)]),
+                            request)
+                  .timeout (std::chrono::milliseconds (config.workload.setup_timeout_ms))
+                  .async<echo_reply_t> ()
+                  .result ()
+                  .value ();
+              payload_pattern_t::validate_identity (request, reply);
+              measurement.pattern ().validate (reply.payload);
+          });
+        measurement.set_setup_evidence (
+          json::array ({{{"kind", "typedProbeEcho"},
+                         {"source", "actor_client_t.request.async<PerfEchoReply>"},
+                         {"observedValue",
+                          {{"probes", *config.workload.logical_streams},
+                           {"streams", *config.workload.logical_streams}}}}}));
         // §16.1: objectsReady means the create and the probe echo of every Actor are done, so warmup starts on quiet roles.
         json evidence = json::array ({created});
         for (const auto &item : measurement.setup_evidence ())
@@ -48,7 +56,7 @@ class actor_no_bind_request_echo_scenario_t
 
     void run (const loops_t &loops)
     {
-        spawn_stream_loops (loops, _role, [this] (int stream) { return loop (stream); });
+        spawn_request_streams (loops, _role, [this] (int stream) { return loop (stream); });
     }
 
   private:
@@ -58,25 +66,23 @@ class actor_no_bind_request_echo_scenario_t
         auto &actors = _role.service<fw::actor_client_t> ();
         const auto &config = _role.config;
         const fw::actor_id_t actor_id (config.actor_ids[static_cast<std::size_t> (stream)]);
-        while (measurement.can_issue ()) {
-            auto request = measurement.request (stream, _sequences.next (stream));
-            std::int64_t started = 0;
-            if (!measurement.begin_operation (started))
-                break;
-            request.sent_ticks = dec (started);
-            std::exception_ptr error;
-            try {
-                const auto reply = co_await actors.request (actor_id, request)
-                                     .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
-                                     .async<echo_reply_t> ();
-                payload_pattern_t::validate_identity (request, reply);
-                measurement.pattern ().validate (reply.payload);
-            }
-            catch (...) {
-                error = std::current_exception ();
-            }
-            measurement.complete_operation (started, error);
+        auto request = measurement.request (stream, _sequences.next (stream));
+        std::int64_t started = 0;
+        if (!measurement.begin_operation (started))
+            co_return;
+        request.sent_ticks = dec (started);
+        std::exception_ptr error;
+        try {
+            const auto reply = co_await actors.request (actor_id, request)
+                                 .timeout (measurement.call_timeout ())
+                                 .async<echo_reply_t> ();
+            payload_pattern_t::validate_identity (request, reply);
+            measurement.pattern ().validate (reply.payload);
         }
+        catch (...) {
+            error = std::current_exception ();
+        }
+        measurement.complete_operation (started, error);
     }
 
     role_t &_role;

@@ -52,22 +52,51 @@ json measured_snapshot (measurement_t &measurement)
     return measurement.snapshot (json::object ());
 }
 
+void test_phase_deadlines ()
+{
+    auto cfg = config ();
+    cfg.workload.drain_timeout_ms = 100;
+    cfg.workload.setup_timeout_ms = 100;
+    measurement_t measurement (cfg, true);
+    require (measurement.call_timeout ()
+               == std::chrono::milliseconds (cfg.workload.setup_timeout_ms),
+             "setup calls must use the setup timeout");
+    require (measurement.start (trigger ("warmup", "0"), {}).accepted, "warmup did not start");
+    const auto deadline = measurement.call_deadline_ticks ();
+    require (deadline == measurement.end_ticks () + 100'000'000,
+             "deadline must equal phase end plus drain");
+    std::this_thread::sleep_for (std::chrono::milliseconds (2));
+    require (measurement.call_deadline_ticks () == deadline,
+             "later submissions must share the phase deadline");
+    require (measurement.call_timeout (true) - measurement.call_timeout ()
+               >= std::chrono::milliseconds (99),
+             "the driver must receive an additional drain interval");
+    measurement.wait_phase ();
+}
+
 void test_terminal_window_and_inflight_accounting ()
 {
     measurement_t measurement (config (), true);
+    require (!measured_snapshot (measurement).at ("metrics").contains ("load.inflightPerStream"),
+             "the removed load window must not appear in the result schema");
     require (measured_snapshot (measurement).at ("metrics").at ("messages.inflightAtEnd") == "0",
              "inflightAtEnd must be numeric before the measured window");
     require (measurement.start (trigger ("warmup", "0"), {}).accepted, "warmup did not start");
     measurement.wait_phase ();
-    const auto [reset, status] = measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
+    const auto [reset, status] =
+      measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
     require (status == 200 && reset.at ("ok").get<bool> (), "reset did not advance to measured");
-    require (measurement.start (trigger ("measured", "1"), {}).accepted, "measured phase did not start");
+    require (measurement.start (trigger ("measured", "1"), {}).accepted,
+             "measured phase did not start");
 
     std::int64_t inside = 0, after = 0;
     require (measurement.begin_operation (inside), "inside-window operation was rejected");
+    require (measured_snapshot (measurement).at ("metrics").at ("load.inflight.max") == "1",
+             "observed outstanding work must be reported without a configured window");
     require (measurement.complete_operation (inside, nullptr, inside + 1),
              "an unsealed success before endTicks must return true");
-    require (measurement.begin_operation (after), "late-terminal operation was rejected before the end");
+    require (measurement.begin_operation (after),
+             "late-terminal operation was rejected before the end");
     require (!measurement.complete_operation (after, nullptr, measurement.end_ticks () + 1),
              "a terminal at or after endTicks must return false");
     measurement.wait_phase ();
@@ -75,8 +104,10 @@ void test_terminal_window_and_inflight_accounting ()
     const auto snapshot = measured_snapshot (measurement);
     const auto &metrics = snapshot.at ("metrics");
     require (metrics.at ("messages.sent") == "2", "both started operations must be sent");
-    require (metrics.at ("messages.completed") == "1", "only terminalTicks < endTicks may complete");
-    require (metrics.contains ("messages.inflightAtEnd") && metrics.at ("messages.inflightAtEnd") == "1",
+    require (metrics.at ("messages.completed") == "1",
+             "only terminalTicks < endTicks may complete");
+    require (metrics.contains ("messages.inflightAtEnd")
+               && metrics.at ("messages.inflightAtEnd") == "1",
              "a terminal after endTicks belongs in inflightAtEnd");
     require (snapshot.at ("histograms").at ("latencyMs").at ("count") == "1",
              "late terminal must not enter the measured latency histogram");
@@ -103,7 +134,8 @@ void test_driver_latency_uses_result_window ()
     metrics.latency ("driverLatencyMs", "driver.latency");
     require (measurement.start (trigger ("warmup", "0"), {}).accepted, "warmup did not start");
     measurement.wait_phase ();
-    const auto [reset, status] = measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
+    const auto [reset, status] =
+      measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
     require (status == 200, "driver reset failed");
     require (measurement.start (trigger ("measured", "1"), {}).accepted, "measured did not start");
     const auto began = measurement.start_ticks ();
@@ -121,29 +153,35 @@ void test_public_error_classification ()
     measurement_t measurement (config (), true);
     require (measurement.start (trigger ("warmup", "0"), {}).accepted, "warmup did not start");
     measurement.wait_phase ();
-    const auto [reset, status] = measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
+    const auto [reset, status] =
+      measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
     require (status == 200 && reset.at ("ok").get<bool> (), "reset did not advance to measured");
-    require (measurement.start (trigger ("measured", "1"), {}).accepted, "measured phase did not start");
+    require (measurement.start (trigger ("measured", "1"), {}).accepted,
+             "measured phase did not start");
 
     std::int64_t timeout = 0, cancelled = 0, invalid = 0, unrelated = 0;
     require (measurement.begin_operation (timeout), "timeout operation was rejected");
     measurement.complete_operation (timeout, system_error (std::errc::timed_out), timeout + 1);
     require (measurement.begin_operation (cancelled), "cancelled operation was rejected");
-    measurement.complete_operation (cancelled, system_error (std::errc::operation_canceled), cancelled + 1);
+    measurement.complete_operation (cancelled, system_error (std::errc::operation_canceled),
+                                    cancelled + 1);
     require (measurement.begin_operation (invalid), "invalid-operation case was rejected");
     measurement.complete_operation (
       invalid,
-      std::make_exception_ptr (fw::framework_exception_t (fw::framework_error_kind_t::invalid_operation, "public invalid operation")),
+      std::make_exception_ptr (fw::framework_exception_t (
+        fw::framework_error_kind_t::invalid_operation, "public invalid operation")),
       invalid + 1);
     require (measurement.begin_operation (unrelated), "unrelated system-error case was rejected");
-    measurement.complete_operation (unrelated, system_error (std::errc::operation_not_permitted), unrelated + 1);
+    measurement.complete_operation (unrelated, system_error (std::errc::operation_not_permitted),
+                                    unrelated + 1);
     measurement.wait_phase ();
 
     const auto snapshot = measured_snapshot (measurement);
     const auto &metrics = snapshot.at ("metrics");
     require (metrics.at ("messages.timeout") == "1", "timed_out must be timeout");
     require (metrics.at ("messages.cancelled") == "1", "operation_canceled must be cancelled");
-    require (metrics.at ("messages.failed") == "2", "Framework InvalidOperation and unrelated errors must stay failed");
+    require (metrics.at ("messages.failed") == "2",
+             "Framework InvalidOperation and unrelated errors must stay failed");
 }
 
 void test_histogram_percentile_cap ()
@@ -152,7 +190,8 @@ void test_histogram_percentile_cap ()
     histogram.record (2'250'000);
     json metrics = json::object (), histograms = json::object (), reasons = json::object ();
     histogram.export_to ("latencyMs", "latency", metrics, histograms, reasons);
-    require (metrics.at ("latency.p50Ms") == 2.25, "nearest-rank percentile must not exceed the exact observed maximum");
+    require (metrics.at ("latency.p50Ms") == 2.25,
+             "nearest-rank percentile must not exceed the exact observed maximum");
     require (histograms.at ("latencyMs").value ("percentileMethod", std::string ())
                == "nearest-rank-bucket-upper-bound-capped-by-max",
              "histogram metadata must describe the capped percentile");
@@ -164,7 +203,9 @@ void test_removed_unique_delivery_metric ()
     require (!measured_snapshot (measurement).at ("metrics").contains ("fanout.uniqueDelivered"),
              "the removed uniqueDelivered metric must not appear in a baseline snapshot");
 
-    json snapshot{{"metrics", json::object ()}, {"histograms", json::object ()}, {"nullReasons", json::object ()}};
+    json snapshot{{"metrics", json::object ()},
+                  {"histograms", json::object ()},
+                  {"nullReasons", json::object ()}};
     fanout_metrics::apply_common (snapshot, true);
     require (!snapshot.at ("metrics").contains ("fanout.uniqueDelivered"),
              "the removed uniqueDelivered metric must not appear in a fanout snapshot");
@@ -179,19 +220,24 @@ void test_return_spot_address ()
     request.return_spot_id = "spot-0";
     bool rejected = false;
     try {
-        measurement.validate_request (request, std::nullopt, cfg.spot_ids[request.client_id % cfg.spot_ids.size ()]);
+        measurement.validate_request (request, std::nullopt,
+                                      cfg.spot_ids[request.client_id % cfg.spot_ids.size ()]);
     }
-    catch (const validation_error_t &) { rejected = true; }
+    catch (const validation_error_t &) {
+        rejected = true;
+    }
     require (rejected, "a present but wrong return SpotId must be rejected");
     request.return_spot_id = "spot-1";
-    measurement.validate_request (request, std::nullopt, cfg.spot_ids[request.client_id % cfg.spot_ids.size ()]);
+    measurement.validate_request (request, std::nullopt,
+                                  cfg.spot_ids[request.client_id % cfg.spot_ids.size ()]);
 
     role_t role (cfg, false);
     fw::route_client_t route;
     s2s_return_to_spot_handler_t handler (role, route);
     request.return_spot_id = "spot-0";
     const auto handled = handler.handle (request).result ();
-    require (!handled.has_value (), "Channel target must reject a wrong return SpotId before sending");
+    require (!handled.has_value (),
+             "Channel target must reject a wrong return SpotId before sending");
     const auto errors = role.measurement.error_evidence ();
     require (!errors.empty () && errors.back ().at ("harnessKind") == "IdentityMismatch",
              "Channel target must classify the wrong return SpotId as IdentityMismatch");
@@ -204,15 +250,17 @@ void test_subscriber_entry_time_survives_snapshot ()
     cfg.role_instance = 0;
     cfg.source = false;
     role_t role (cfg, false);
-    const auto directory = std::filesystem::temp_directory_path () /
-                           ("cpp-perf-receipts-" + std::to_string (now_ticks ()));
+    const auto directory = std::filesystem::temp_directory_path ()
+                           / ("cpp-perf-receipts-" + std::to_string (now_ticks ()));
     std::filesystem::create_directory (directory);
     fanout_receipts_t receipts (role, directory.string ());
     require (role.measurement.start (trigger ("warmup", "0"), {}).accepted, "warmup did not start");
     role.measurement.wait_phase ();
-    const auto [reset, status] = role.measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
+    const auto [reset, status] =
+      role.measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
     require (status == 200, "subscriber reset failed");
-    require (role.measurement.start (trigger ("measured", "1"), {}).accepted, "measured did not start");
+    require (role.measurement.start (trigger ("measured", "1"), {}).accepted,
+             "measured did not start");
     const auto entry = now_ticks ();
     publish_event_t event;
     event.run_id = cfg.run_id;
@@ -234,21 +282,27 @@ void test_subscriber_entry_time_survives_snapshot ()
     receipts.record (event, role.measurement.end_ticks () + 1);
     role.measurement.set_final_snapshot (false);
     const auto snapshot = role.measurement.snapshot (json::object ());
-    require (snapshot.at ("runtimeMetrics").at ("fanoutReceipts").at ("value").at ("uniqueInWindow") == "1",
+    require (snapshot.at ("runtimeMetrics").at ("fanoutReceipts").at ("value").at ("uniqueInWindow")
+               == "1",
              "a handler entry inside the window must count after snapshot");
     require (snapshot.at ("metrics").at ("fanout.duplicateEvents") == "2",
              "repeated measured events are duplicates even outside the window");
-    require (snapshot.at ("runtimeMetrics").at ("fanoutReceipts").at ("value").at ("measuredEventsSeen") == "2",
-             "seen includes first receipt inside and first receipt outside the window");
-    require (snapshot.at ("runtimeMetrics").at ("fanoutReceipts").at ("value").at ("measuredOutsideWindow") == "1",
-             "a first-seen event after endTicks is outside the window");
+    require (
+      snapshot.at ("runtimeMetrics").at ("fanoutReceipts").at ("value").at ("measuredEventsSeen")
+        == "2",
+      "seen includes first receipt inside and first receipt outside the window");
+    require (
+      snapshot.at ("runtimeMetrics").at ("fanoutReceipts").at ("value").at ("measuredOutsideWindow")
+        == "1",
+      "a first-seen event after endTicks is outside the window");
     std::filesystem::remove_all (directory);
 }
 
 void test_correlation_releases_request_after_close ()
 {
     auto cfg = config ();
-    cfg.workload.correlation_expiry_ms = 100;
+    cfg.workload.drain_timeout_ms = 100;
+    cfg.workload.setup_timeout_ms = 100;
     measurement_t measurement (cfg, true);
     scenario_metrics_t metrics (measurement);
     send_send_correlation_t correlations (measurement, metrics);
@@ -264,14 +318,15 @@ void test_correlation_releases_request_after_close ()
 void test_correlation_owner_completes_once ()
 {
     auto cfg = config ();
-    cfg.workload.correlation_expiry_ms = 100;
+    cfg.workload.drain_timeout_ms = 100;
     cfg.workload.duration_seconds = 0.25;
     measurement_t measurement (cfg, true);
     scenario_metrics_t metrics (measurement);
     send_send_correlation_t correlations (measurement, metrics);
     require (measurement.start (trigger ("warmup", "0"), {}).accepted, "warmup did not start");
     measurement.wait_phase ();
-    const auto [reset, status] = measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
+    const auto [reset, status] =
+      measurement.reset (reset_request_t{"test-run", "cpp-perf-contract-test", "1"}, {});
     require (status == 200, "correlation reset failed");
     require (measurement.start (trigger ("measured", "1"), {}).accepted, "measured did not start");
 
@@ -284,16 +339,20 @@ void test_correlation_owner_completes_once ()
              "correlation does not own operation accounting");
     correlations.first_send_ended (entry, nullptr);
     const auto [error, completed] = correlations.complete (entry).result ().value ();
-    require (!error && completed == entry->closed_ticks, "first valid reply must close with its own time");
+    require (!error && completed == entry->closed_ticks,
+             "first valid reply must close with its own time");
     require (entry->started_ticks == started, "correlation must retain the operation start time");
-    require (measurement.complete_operation (started, error, completed), "owner must count the first success");
+    require (measurement.complete_operation (started, error, completed),
+             "owner must count the first success");
     correlations.reply (payload_pattern_t::reply (request, now_ticks ()));
     require (measured_snapshot (measurement).at ("metrics").at ("messages.completed") == "1",
              "duplicate reply must not account a second operation");
-    require (measured_snapshot (measurement).at ("metrics").at ("messages.duplicateReply") == "1", "duplicate family counter must count");
+    require (measured_snapshot (measurement).at ("metrics").at ("messages.duplicateReply") == "1",
+             "duplicate family counter must count");
 
     std::int64_t raced_started = 0;
-    require (measurement.begin_operation (raced_started, "send"), "raced correlation did not start");
+    require (measurement.begin_operation (raced_started, "send"),
+             "raced correlation did not start");
     auto raced = measurement.request (0, 3);
     auto raced_entry = correlations.register_request (raced, raced_started);
     const auto raced_reply = payload_pattern_t::reply (raced, now_ticks ());
@@ -301,8 +360,10 @@ void test_correlation_owner_completes_once ()
     std::thread second_reply ([&] { correlations.reply (raced_reply); });
     first_reply.join ();
     second_reply.join ();
-    const auto [raced_error, raced_completed] = correlations.complete (raced_entry).result ().value ();
-    require (!raced_error && measurement.complete_operation (raced_started, raced_error, raced_completed),
+    const auto [raced_error, raced_completed] =
+      correlations.complete (raced_entry).result ().value ();
+    require (!raced_error
+               && measurement.complete_operation (raced_started, raced_error, raced_completed),
              "one raced reply must complete the owner operation");
     require (measured_snapshot (measurement).at ("metrics").at ("messages.completed") == "2",
              "two simultaneous replies must complete one operation once");
@@ -310,30 +371,43 @@ void test_correlation_owner_completes_once ()
              "the losing simultaneous reply must count as duplicate");
 
     std::int64_t late_started = 0;
-    require (measurement.begin_operation (late_started, "send"), "second correlation did not start");
+    require (measurement.begin_operation (late_started, "send"),
+             "second correlation did not start");
     auto late = measurement.request (0, 2);
     auto late_entry = correlations.register_request (late, late_started);
-    std::this_thread::sleep_for (std::chrono::milliseconds (110));
+    require (late_entry->expires_at_ticks == measurement.call_deadline_ticks (),
+             "a send/send correlation must expire at the phase call deadline");
+    std::this_thread::sleep_for (
+      std::chrono::nanoseconds (late_entry->expires_at_ticks - now_ticks ())
+      + std::chrono::milliseconds (10));
     correlations.reply (payload_pattern_t::reply (late, now_ticks ()));
     const auto [late_error, late_completed] = correlations.complete (late_entry).result ().value ();
     require (late_error && late_entry->state == send_send_correlation_t::expired,
              "reply at or after deadline must expire");
-    require (!measurement.complete_operation (late_started, late_error, late_completed), "expiry must not count success");
+    require (!measurement.complete_operation (late_started, late_error, late_completed),
+             "expiry must not count success");
     correlations.reply (payload_pattern_t::reply (late, now_ticks ()));
-    require (measured_snapshot (measurement).at ("metrics").at ("messages.expired") == "1", "expiry counter must count");
-    require (measured_snapshot (measurement).at ("metrics").at ("messages.lateReply") == "2", "both replies after expiry must count as late");
+    require (measured_snapshot (measurement).at ("metrics").at ("messages.expired") == "1",
+             "expiry counter must count");
+    require (measured_snapshot (measurement).at ("metrics").at ("messages.lateReply") == "2",
+             "both replies after expiry must count as late");
     auto unknown = payload_pattern_t::reply (late, now_ticks ());
     unknown.correlation_id = "unknown";
     correlations.reply (unknown);
-    require (measured_snapshot (measurement).at ("metrics").at ("messages.unknownCorrelation") == "1", "unknown reply counter must count");
+    require (measured_snapshot (measurement).at ("metrics").at ("messages.unknownCorrelation")
+               == "1",
+             "unknown reply counter must count");
     measurement.wait_phase ();
     correlations.reply (payload_pattern_t::reply (request, now_ticks ()));
     correlations.reply (payload_pattern_t::reply (late, now_ticks ()));
     correlations.reply (unknown);
     const auto after_window = measured_snapshot (measurement).at ("metrics");
-    require (after_window.at ("messages.duplicateReply") == "3", "duplicate counter must continue after window");
-    require (after_window.at ("messages.lateReply") == "3", "late counter must continue after window");
-    require (after_window.at ("messages.unknownCorrelation") == "2", "unknown counter must continue after window");
+    require (after_window.at ("messages.duplicateReply") == "3",
+             "duplicate counter must continue after window");
+    require (after_window.at ("messages.lateReply") == "3",
+             "late counter must continue after window");
+    require (after_window.at ("messages.unknownCorrelation") == "2",
+             "unknown counter must continue after window");
 }
 
 void test_readiness_uses_probe_evidence_not_setup_evidence ()
@@ -343,9 +417,14 @@ void test_readiness_uses_probe_evidence_not_setup_evidence ()
     const auto setup_only = role.ready ();
     require (!setup_only.at ("consumersReady").get<bool> (),
              "session actor create/bind evidence alone must not mark consumers ready");
-    const bool actor_setup_is_visible = std::any_of (setup_only.at ("evidence").begin (), setup_only.at ("evidence").end (),
-                                                     [] (const json &item) { return item.value ("kind", std::string ()) == "actorCreateAndBind"; });
-    require (actor_setup_is_visible, "session actor create/bind evidence must remain visible before the relay probe succeeds");
+    const bool actor_setup_is_visible =
+      std::any_of (setup_only.at ("evidence").begin (), setup_only.at ("evidence").end (),
+                   [] (const json &item) {
+                       return item.value ("kind", std::string ()) == "actorCreateAndBind";
+                   });
+    require (
+      actor_setup_is_visible,
+      "session actor create/bind evidence must remain visible before the relay probe succeeds");
     role.measurement.set_setup_evidence (
       json::array ({{{"kind", "typedProbeRelay"}, {"observedValue", {{"completed", 1}}}}}));
     require (role.ready ().at ("consumersReady").get<bool> (),
@@ -360,9 +439,11 @@ void test_readiness_uses_probe_evidence_not_setup_evidence ()
 
 void test_sequence_original_collision ()
 {
-    const auto path = std::filesystem::temp_directory_path ()
-                      / ("cpp-perf-sequences-"
-                         + std::to_string (std::chrono::steady_clock::now ().time_since_epoch ().count ()) + ".json");
+    const auto path =
+      std::filesystem::temp_directory_path ()
+      / ("cpp-perf-sequences-"
+         + std::to_string (std::chrono::steady_clock::now ().time_since_epoch ().count ())
+         + ".json");
     std::error_code ignored;
     std::filesystem::remove (path, ignored);
     write_once (path.string (), json{{"original", 1}});
@@ -377,7 +458,8 @@ void test_sequence_original_collision ()
     const auto original = json::parse (file);
     std::filesystem::remove (path, ignored);
     require (rejected, "a second sequence original must fail instead of replacing the first");
-    require (original.at ("original") == 1, "a collision must preserve the first sequence original");
+    require (original.at ("original") == 1,
+             "a collision must preserve the first sequence original");
 }
 } // namespace
 
@@ -385,6 +467,7 @@ int main ()
 {
     try {
         test_terminal_window_and_inflight_accounting ();
+        test_phase_deadlines ();
         test_driver_latency_uses_result_window ();
         test_public_error_classification ();
         test_histogram_percentile_cap ();

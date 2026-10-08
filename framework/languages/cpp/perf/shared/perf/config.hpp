@@ -15,26 +15,22 @@ struct workload_t
 {
     int payload_size = 0;
     double duration_seconds = 0, warmup_seconds = 0;
-    int inflight = 1;
     std::optional<int> connections, logical_streams;
     int client_count = 1;
     std::optional<int> connect_concurrency;
-    int request_timeout_ms = 0, correlation_expiry_ms = 0, driver_timeout_ms = 0, setup_timeout_ms = 0,
-        admin_timeout_ms = 0, socket_send_timeout_ms = 0;
+    int drain_timeout_ms = 0, setup_timeout_ms = 0, admin_timeout_ms = 0,
+        socket_send_timeout_ms = 0;
 };
 inline void from_json (const json &in, workload_t &v)
 {
     v.payload_size = in.at ("payloadSize").get<int> ();
     v.duration_seconds = in.at ("durationSeconds").get<double> ();
     v.warmup_seconds = in.at ("warmupSeconds").get<double> ();
-    v.inflight = in.at ("inflight").get<int> ();
     v.connections = in.at ("connections").get<std::optional<int>> ();
     v.logical_streams = in.at ("logicalStreams").get<std::optional<int>> ();
     v.client_count = in.at ("clientCount").get<int> ();
     v.connect_concurrency = in.at ("connectConcurrency").get<std::optional<int>> ();
-    v.request_timeout_ms = in.at ("requestTimeoutMs").get<int> ();
-    v.correlation_expiry_ms = in.at ("correlationExpiryMs").get<int> ();
-    v.driver_timeout_ms = in.at ("driverTimeoutMs").get<int> ();
+    v.drain_timeout_ms = in.at ("drainTimeoutMs").get<int> ();
     v.setup_timeout_ms = in.at ("setupTimeoutMs").get<int> ();
     v.admin_timeout_ms = in.at ("adminTimeoutMs").get<int> ();
     v.socket_send_timeout_ms = in.at ("socketSendTimeoutMs").get<int> ();
@@ -59,7 +55,7 @@ inline void from_json (const json &in, store_config_t &v)
 struct worker_config_t
 {
     std::string algorithm;
-    int task_millis = 0, min_threads = 0, max_threads = 0, idle_timeout_ms = 0, worker_timeout_ms = 0;
+    int task_millis = 0, min_threads = 0, max_threads = 0, idle_timeout_ms = 0;
 };
 inline void from_json (const json &in, worker_config_t &v)
 {
@@ -68,7 +64,6 @@ inline void from_json (const json &in, worker_config_t &v)
     v.min_threads = in.at ("minThreads").get<int> ();
     v.max_threads = in.at ("maxThreads").get<int> ();
     v.idle_timeout_ms = in.at ("idleTimeoutMs").get<int> ();
-    v.worker_timeout_ms = in.at ("workerTimeoutMs").get<int> ();
 }
 
 struct diagnostics_config_t
@@ -101,7 +96,8 @@ struct role_config_t
     // The role's first listener; roles with several transports read transport_endpoints by key.
     std::optional<std::string> listener_endpoint () const
     {
-        return transport_endpoints.empty () ? std::nullopt : std::optional (transport_endpoints.begin ()->second);
+        return transport_endpoints.empty () ? std::nullopt
+                                            : std::optional (transport_endpoints.begin ()->second);
     }
 };
 inline void from_json (const json &in, role_config_t &v)
@@ -129,7 +125,8 @@ inline void from_json (const json &in, role_config_t &v)
     v.workload = in.at ("workload").get<workload_t> ();
     v.provenance = in.at ("provenance");
     if (const auto found = in.find ("diagnostics"); found != in.end () && !found->is_null ())
-        v.diagnostics = diagnostics_config_t{found->at ("level").get<std::string> (), found->at ("flowFile").get<std::string> ()};
+        v.diagnostics = diagnostics_config_t{found->at ("level").get<std::string> (),
+                                             found->at ("flowFile").get<std::string> ()};
     v.mode = in.at ("mode").get<std::string> ();
     v.terminal = in.at ("terminal").get<std::string> ();
     v.spot_count = in.at ("spotCount").get<std::optional<int>> ();
@@ -180,7 +177,8 @@ inline void from_json (const json &in, endpoint_manifest_t &v)
     v.workload = in.at ("workload").get<workload_t> ();
     v.provenance = in.at ("provenance");
     for (const auto &role : in.at ("roles"))
-        v.roles.push_back ({role.at ("role").get<std::string> (), role.at ("roleInstance").get<int> (),
+        v.roles.push_back ({role.at ("role").get<std::string> (),
+                            role.at ("roleInstance").get<int> (),
                             role.at ("streamEndpoint").get<std::optional<std::string>> (),
                             role.at ("applicationTriggerUrl").get<std::string> (),
                             role.at ("metrics").at ("baseUrl").get<std::string> ()});

@@ -139,10 +139,7 @@ class role_t
     }
 
     // Select topology from the role config; runtime status is present only after its public interface is bound.
-    std::optional<std::string> observed_topology () const
-    {
-        return config.topology;
-    }
+    std::optional<std::string> observed_topology () const { return config.topology; }
     json public_status () const
     {
         json status = {
@@ -154,6 +151,35 @@ class role_t
             status["clientServer"] =
               client_server_status (client_server.load ()->snapshot (*config.channel_name));
         return status;
+    }
+    json bound_transport_endpoints () const
+    {
+        json endpoints = json::object ();
+        const auto *host = runtime.load ();
+        if (!host)
+            return endpoints;
+        for (const auto &entry : config.transport_endpoints) {
+            const auto &key = entry.first;
+            fw::listener_kind_t kind;
+            std::string name;
+            if (key == "stream") {
+                kind = fw::listener_kind_t::stream;
+                name = "perf-session";
+            } else if (key == "mesh") {
+                kind = fw::listener_kind_t::route_mesh;
+                name = config.mesh_name.value_or ("");
+            } else if (key == "clientserver") {
+                kind = fw::listener_kind_t::client_server;
+                name = config.channel_name.value_or ("");
+            } else if (key == "fanout") {
+                kind = fw::listener_kind_t::fanout;
+                name = config.channel_name.value_or ("");
+            } else {
+                throw std::runtime_error ("Unknown perf listener key '" + key + "'.");
+            }
+            endpoints[key] = host->listener_status (kind, std::move (name)).endpoint;
+        }
+        return endpoints;
     }
     json sample_public_state () const
     {
@@ -199,14 +225,15 @@ class role_t
         const auto setup_evidence = measurement.setup_evidence ();
         const bool probe = setup_evidence.is_array () && !setup_evidence.empty ();
         const bool objects_ready = objects ? objects->ready () : true;
+        const json transport_endpoints =
+          infrastructure ? bound_transport_endpoints () : json::object ();
         json evidence = json::array ({{{"kind", "publicStatus"},
                                        {"source", "public Framework runtime status"},
                                        {"observedValue", public_status ()}}});
-        if (!config.transport_endpoints.empty ())
-            evidence.push_back (
-              {{"kind", "verifiedListenerReservation"},
-               {"source", "role config; coordinator OS bind reservation and public host startup"},
-               {"observedValue", config.transport_endpoints}});
+        if (!transport_endpoints.empty ())
+            evidence.push_back ({{"kind", "boundTransportEndpoints"},
+                                 {"source", "public Framework listener status"},
+                                 {"observedValue", transport_endpoints}});
         if (objects)
             for (const auto &item : objects->evidence ())
                 evidence.push_back (item);
@@ -220,7 +247,8 @@ class role_t
         if (!objects_ready)
             reasons.push_back (objects->reason ());
         if (!probe)
-            reasons.push_back ("No successful typed probe echo or fanout warmup marker has been observed.");
+            reasons.push_back (
+              "No successful typed probe echo or fanout warmup marker has been observed.");
         if (measurement.has_errors ())
             reasons.push_back ("Application preparation or phase failed.");
         return {{"runId", config.run_id},
@@ -447,7 +475,7 @@ inline void configure_base (fw::zlink_framework_options_t &options, role_t &role
 {
     const auto &config = role.config;
     options.set_default_request_timeout (
-      std::chrono::milliseconds (config.workload.request_timeout_ms));
+      std::chrono::milliseconds (config.workload.setup_timeout_ms));
     options.configure_network ().set_bind_host ("127.0.0.1");
     options.configure_network ().set_advertise_host (std::optional<std::string> ("127.0.0.1"));
     // Perf spec §20: the run-owned Docker Redis, one namespace per cell; only Store scenarios carry it.

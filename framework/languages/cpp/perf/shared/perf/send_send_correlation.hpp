@@ -23,7 +23,8 @@ class send_send_correlation_t
     struct entry_t
     {
         entry_t (echo_request_t request_, std::int64_t started, std::int64_t expires) :
-            request (std::make_shared<const echo_request_t> (std::move (request_))), started_ticks (started),
+            request (std::make_shared<const echo_request_t> (std::move (request_))),
+            started_ticks (started),
             expires_at_ticks (expires)
         {
         }
@@ -46,7 +47,8 @@ class send_send_correlation_t
                 if (closed_ticks >= expires_at_ticks) {
                     to = expired;
                     why = std::make_exception_ptr (validation_error_t (
-                      "CorrelationExpired", "No return send arrived before the correlation deadline."));
+                      "CorrelationExpired",
+                      "No return send arrived before the correlation deadline."));
                 }
                 request.reset ();
                 error = std::move (why);
@@ -61,8 +63,8 @@ class send_send_correlation_t
     send_send_correlation_t (measurement_t &measurement, scenario_metrics_t &metrics) :
         _measurement (measurement), _metrics (metrics)
     {
-        _metrics.counters ({"messages.admitted", "messages.expired", "messages.duplicateReply", "messages.lateReply",
-                            "messages.unknownCorrelation"});
+        _metrics.counters ({"messages.admitted", "messages.expired", "messages.duplicateReply",
+                            "messages.lateReply", "messages.unknownCorrelation"});
         _metrics.on_reset ([this] {
             std::lock_guard lock (_gate);
             _entries.clear ();
@@ -84,9 +86,8 @@ class send_send_correlation_t
 
     entry_ptr_t register_request (const echo_request_t &request, std::int64_t started_ticks)
     {
-        auto entry = std::make_shared<entry_t> (
-          request, started_ticks,
-          now_ticks () + static_cast<std::int64_t> (_measurement.config ().workload.correlation_expiry_ms) * 1'000'000);
+        auto entry =
+          std::make_shared<entry_t> (request, started_ticks, _measurement.call_deadline_ticks ());
         {
             std::lock_guard lock (_gate);
             if (!_entries.emplace (request.correlation_id, entry).second)
@@ -114,8 +115,7 @@ class send_send_correlation_t
         if (!error) {
             if (_measurement.phase () != "setup")
                 _metrics.count ("messages.admitted");
-        }
-        else
+        } else
             close (entry, failed, std::move (error));
     }
 
@@ -152,13 +152,15 @@ class send_send_correlation_t
         expire_if_due (entry, now);
         if (close (entry, invalid ? failed : succeeded, invalid))
             return;
-        _metrics.count (entry->state.load () == succeeded ? "messages.duplicateReply" : "messages.lateReply");
+        _metrics.count (entry->state.load () == succeeded ? "messages.duplicateReply"
+                                                          : "messages.lateReply");
     }
 
     // The final result after the correlation closes: the first result of the correlation, or its expiry (closed by
     // the expiry thread). The time is when that result was fixed, so an echo seen before the first send's terminal
     // keeps its own time.
-    zlink::framework::task_t<std::pair<std::exception_ptr, std::int64_t>> complete (entry_ptr_t entry)
+    zlink::framework::task_t<std::pair<std::exception_ptr, std::int64_t>>
+    complete (entry_ptr_t entry)
     {
         auto waiting = entry->result.task ();
         (void) co_await waiting;
@@ -177,8 +179,10 @@ class send_send_correlation_t
     bool expire_if_due (const entry_ptr_t &entry, std::int64_t now)
     {
         return now >= entry->expires_at_ticks
-               && close (entry, expired, std::make_exception_ptr (validation_error_t (
-                    "CorrelationExpired", "No return send arrived before the correlation deadline.")));
+               && close (entry, expired,
+                         std::make_exception_ptr (validation_error_t (
+                           "CorrelationExpired",
+                           "No return send arrived before the correlation deadline.")));
     }
 
     void expire_loop ()

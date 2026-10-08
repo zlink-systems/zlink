@@ -11,6 +11,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import systems.zlink.framework.actors.ZLinkActorClient
+import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToActor
 import systems.zlink.framework.perf.Evidence
 import systems.zlink.framework.perf.Measurement
 import systems.zlink.framework.perf.ObjectsReadiness
@@ -19,8 +21,6 @@ import systems.zlink.framework.perf.PerfEchoReply
 import systems.zlink.framework.perf.RoleConfig
 import systems.zlink.framework.perf.ServerApplication
 import systems.zlink.framework.perf.kotlin.completionStage
-import systems.zlink.framework.kotlin.kotlin
-import systems.zlink.framework.kotlin.requestToActor
 
 class ActorNoBindRequestEchoScenario(
     private val config: RoleConfig,
@@ -33,15 +33,31 @@ class ActorNoBindRequestEchoScenario(
 
     companion object {
         fun run(config: RoleConfig) {
-            val app = ServerApplication.create(config)
-                .configure { options -> ServerApplication.routeMesh(options, config, "perf-actor-caller").objects().client() }
-                .bean(ObjectsReadiness::class.java) { ObjectsReadiness(false, "Actors are not yet created and probed through the public API.") }
-                .bean(ActorCallerSetup::class.java)
-                .bean(ActorNoBindRequestEchoScenario::class.java)
-                .workload(ActorNoBindRequestEchoScenario::class.java, ActorNoBindRequestEchoScenario::run)
+            val app =
+                ServerApplication.create(config)
+                    .configure { options ->
+                        ServerApplication.routeMesh(options, config, "perf-actor-caller")
+                            .objects()
+                            .client()
+                    }
+                    .bean(ObjectsReadiness::class.java) {
+                        ObjectsReadiness(
+                            false,
+                            "Actors are not yet created and probed through the public API.",
+                        )
+                    }
+                    .bean(ActorCallerSetup::class.java)
+                    .bean(ActorNoBindRequestEchoScenario::class.java)
+                    .workload(
+                        ActorNoBindRequestEchoScenario::class.java,
+                        ActorNoBindRequestEchoScenario::run,
+                    )
             val context = app.start()
-            context.getBean(ActorNoBindRequestEchoScenario::class.java).prepare()
-                .exceptionally { error -> app.measurement().recordDiagnostic(error); null }
+            context.getBean(ActorNoBindRequestEchoScenario::class.java).prepare().exceptionally {
+                error ->
+                app.measurement().recordDiagnostic(error)
+                null
+            }
         }
     }
 
@@ -53,17 +69,28 @@ class ActorNoBindRequestEchoScenario(
             config.actorIds().forEachIndexed { stream, actorId ->
                 launch(Dispatchers.IO) {
                     probes.withPermit {
-                        val request = measurement.request(stream, sequences.incrementAndGet(stream), true)
-                        val reply = actorClient.kotlin().requestToActor<PerfEchoReply>(actorId, request)
-                            .timeout(Duration.ofMillis(config.workload().setupTimeoutMs().toLong())).await()
+                        val request =
+                            measurement.request(stream, sequences.incrementAndGet(stream), true)
+                        val reply =
+                            actorClient
+                                .kotlin()
+                                .requestToActor<PerfEchoReply>(actorId, request)
+                                .timeout(
+                                    Duration.ofMillis(config.workload().setupTimeoutMs().toLong())
+                                )
+                                .await()
                         PayloadPattern.validateIdentity(request, reply)
                         measurement.pattern().validate(reply.payload())
                     }
                 }
             }
         }
-        val typedProbe = Evidence.of("typedProbeEcho", "Kotlin Actor wrapper requestToActor<PerfEchoReply>().await()",
-            mapOf("probes" to sequences.length(), "streams" to sequences.length()))
+        val typedProbe =
+            Evidence.of(
+                "typedProbeEcho",
+                "Kotlin Actor wrapper requestToActor<PerfEchoReply>().await()",
+                mapOf("probes" to sequences.length(), "streams" to sequences.length()),
+            )
         measurement.setupEvidence(listOf(typedProbe))
         readiness.set(true, "", listOf(created))
     }
@@ -71,24 +98,27 @@ class ActorNoBindRequestEchoScenario(
     fun run(): CompletionStage<Void> = completionStage {
         coroutineScope {
             repeat(config.workload().logicalStreams()) { stream ->
-                repeat(config.workload().inflight()) {
-                    launch(Dispatchers.IO) {
-                        while (measurement.canIssue()) {
-                            val request = measurement.request(stream, sequences.incrementAndGet(stream), false)
-                            val started = measurement.beginOperation()
-                            if (started < 0) break
-                            try {
+                launch(Dispatchers.IO) {
+                    while (measurement.canIssue()) {
+                        val request =
+                            measurement.request(stream, sequences.incrementAndGet(stream), false)
+                        val started = measurement.beginOperation()
+                        if (started < 0) break
+                        try {
 
-                                    val sent = request.withSentTicks(started)
-                                    val reply = actorClient.kotlin().requestToActor<PerfEchoReply>(config.actorIds()[stream], sent)
-                                        .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong())).await()
-                                    PayloadPattern.validateIdentity(sent, reply)
-                                    measurement.pattern().validate(reply.payload())
-                                measurement.completeOperation(started)
-                            } catch (error: Exception) {
-                                measurement.completeOperation(started, error)
-                                if (error is CancellationException) throw error
-                            }
+                            val sent = request.withSentTicks(started)
+                            val reply =
+                                actorClient
+                                    .kotlin()
+                                    .requestToActor<PerfEchoReply>(config.actorIds()[stream], sent)
+                                    .timeout(measurement.callTimeout())
+                                    .await()
+                            PayloadPattern.validateIdentity(sent, reply)
+                            measurement.pattern().validate(reply.payload())
+                            measurement.completeOperation(started)
+                        } catch (error: Exception) {
+                            measurement.completeOperation(started, error)
+                            if (error is CancellationException) throw error
                         }
                     }
                 }

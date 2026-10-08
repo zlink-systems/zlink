@@ -1836,6 +1836,27 @@ test('Nest fanout builder forwards NoDrop and subscriptions unchanged to framewo
   assert.deepEqual(channel.subscriptions, ['orders.created']);
 });
 
+test('Nest fanout builder forwards publisher send timeout and uses framework validation', async () => {
+  const builder = nestjs.zlinkFramework();
+  builder.addFanoutChannel('events')
+    .enablePublisher('tcp://127.0.0.1:9412')
+    .setSendTimeout(37);
+
+  const registration = await resolveFrameworkRegistration(
+    nestjs.ZLinkModule.forRoot(builder.build())
+  );
+  assert.equal(registration.channels.get('events').publisher.sendTimeoutMs, 37);
+
+  const invalidBuilder = nestjs.zlinkFramework();
+  invalidBuilder.addFanoutChannel('invalid').enablePublisher().setSendTimeout(0);
+  await assert.rejects(
+    () => resolveFrameworkRegistration(
+      nestjs.ZLinkModule.forRoot(invalidBuilder.build())
+    ),
+    /publisher sendTimeoutMs must be an integer between 1 and 2147483647 milliseconds/
+  );
+});
+
 test('Nest builders preserve process listener identity and global Actor dispatch enablement', async () => {
   class GatewaySession {}
   const builder = nestjs.zlinkFramework();

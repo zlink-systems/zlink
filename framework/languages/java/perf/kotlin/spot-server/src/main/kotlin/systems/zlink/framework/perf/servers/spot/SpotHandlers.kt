@@ -1,14 +1,14 @@
 package systems.zlink.framework.perf.servers.spot
 
-import java.time.Duration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.future.await
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotRequestHandler
+import systems.zlink.framework.kotlin.awaitReply
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.requestToChannel
-import systems.zlink.framework.kotlin.awaitReply
 import systems.zlink.framework.kotlin.yieldReply
+import systems.zlink.framework.perf.DecimalText
 import systems.zlink.framework.perf.Evidence
 import systems.zlink.framework.perf.Measurement
 import systems.zlink.framework.perf.PayloadPattern
@@ -22,17 +22,19 @@ import systems.zlink.framework.perf.RoleConfig
 import systems.zlink.framework.perf.ScenarioMetrics
 import systems.zlink.framework.perf.SendSendCorrelation
 import systems.zlink.framework.perf.WorkerObservation
-import systems.zlink.framework.perf.DecimalText
-import systems.zlink.framework.perf.servers.spot.PerfSpot
-import systems.zlink.framework.spots.ZLinkWorkerCancellation
 import systems.zlink.framework.spots.ZLinkSpotContext
+import systems.zlink.framework.spots.ZLinkWorkerCancellation
 
 class KotlinPerfEchoSpot(context: ZLinkSpotContext) : PerfSpot(context) {
-    init { context.handlers().addHandler(KotlinPerfEchoRequestHandler::class.java) }
+    init {
+        context.handlers().addHandler(KotlinPerfEchoRequestHandler::class.java)
+    }
 }
 
-class KotlinPerfEchoRequestHandler(private val measurement: Measurement, private val metrics: ScenarioMetrics) :
-    ZLinkSuspendingSpotRequestHandler<KotlinPerfEchoSpot, PerfEchoRequest, PerfEchoReply> {
+class KotlinPerfEchoRequestHandler(
+    private val measurement: Measurement,
+    private val metrics: ScenarioMetrics,
+) : ZLinkSuspendingSpotRequestHandler<KotlinPerfEchoSpot, PerfEchoRequest, PerfEchoReply> {
     override suspend fun handle(spot: KotlinPerfEchoSpot, request: PerfEchoRequest): PerfEchoReply {
         val received = PerfClock.now()
         measurement.handlerEnter()
@@ -44,7 +46,15 @@ class KotlinPerfEchoRequestHandler(private val measurement: Measurement, private
             val reply = PayloadPattern.reply(request, received)
             measurement.recordReply(request)
             if (measurement.phase() == "setup") {
-                measurement.setupEvidence(listOf(Evidence.of("typedProbeReply", "Kotlin suspending Spot request handler", request.correlationId())))
+                measurement.setupEvidence(
+                    listOf(
+                        Evidence.of(
+                            "typedProbeReply",
+                            "Kotlin suspending Spot request handler",
+                            request.correlationId(),
+                        )
+                    )
+                )
             }
             return reply
         } catch (error: RuntimeException) {
@@ -57,7 +67,9 @@ class KotlinPerfEchoRequestHandler(private val measurement: Measurement, private
 }
 
 class KotlinChannelToSpotSendSpot(context: ZLinkSpotContext) : PerfSpot(context) {
-    init { context.handlers().addHandler(KotlinChannelToSpotSendHandler::class.java) }
+    init {
+        context.handlers().addHandler(KotlinChannelToSpotSendHandler::class.java)
+    }
 }
 
 class KotlinChannelToSpotSendHandler(private val measurement: Measurement) :
@@ -67,13 +79,25 @@ class KotlinChannelToSpotSendHandler(private val measurement: Measurement) :
         measurement.handlerEnter()
         try {
             val returnChannel = message.returnChannel()
-            if (returnChannel.isNullOrEmpty()) throw PerfValidationException("IdentityMismatch", "No return Channel in the request.")
+            if (returnChannel.isNullOrEmpty())
+                throw PerfValidationException(
+                    "IdentityMismatch",
+                    "No return Channel in the request.",
+                )
             measurement.validateRequest(message, returnChannel, null)
             val reply = PayloadPattern.reply(message, received)
             measurement.recordApplicationCall(message, "send")
             spot.context().outbound().kotlin().sendToChannel(returnChannel, reply).await()
             if (measurement.phase() == "setup") {
-                measurement.setupEvidence(listOf(Evidence.of("typedProbeReply", "Kotlin Spot outbound sendToChannel(...).await()", message.correlationId())))
+                measurement.setupEvidence(
+                    listOf(
+                        Evidence.of(
+                            "typedProbeReply",
+                            "Kotlin Spot outbound sendToChannel(...).await()",
+                            message.correlationId(),
+                        )
+                    )
+                )
             }
         } catch (error: RuntimeException) {
             measurement.recordDiagnostic(error)
@@ -85,7 +109,9 @@ class KotlinChannelToSpotSendHandler(private val measurement: Measurement) :
 }
 
 class S2sRemoteRequestSpot(context: ZLinkSpotContext) : PerfSpot(context) {
-    init { context.handlers().addHandler(S2sRemoteRequestDriveHandler::class.java) }
+    init {
+        context.handlers().addHandler(S2sRemoteRequestDriveHandler::class.java)
+    }
 }
 
 class S2sRemoteRequestDriveHandler(
@@ -93,7 +119,10 @@ class S2sRemoteRequestDriveHandler(
     private val measurement: Measurement,
     private val metrics: ScenarioMetrics,
 ) : ZLinkSuspendingSpotRequestHandler<S2sRemoteRequestSpot, PerfDriveRequest, PerfDriveReply> {
-    override suspend fun handle(spot: S2sRemoteRequestSpot, drive: PerfDriveRequest): PerfDriveReply {
+    override suspend fun handle(
+        spot: S2sRemoteRequestSpot,
+        drive: PerfDriveRequest,
+    ): PerfDriveReply {
         measurement.handlerEnter()
         try {
             val request = drive.echo()
@@ -102,23 +131,38 @@ class S2sRemoteRequestDriveHandler(
             val probe = measurement.phase() == "setup"
             val started = if (probe) PerfClock.now() else measurement.beginOperation()
             if (started < 0) return PerfDriveReply(false, null)
-            val reply = try {
-                val sent = request.withSentTicks(started)
-                val call = spot.context().outbound().requestToChannel(config.channelName(), sent)
-                    .timeout(Duration.ofMillis(config.workload().requestTimeoutMs().toLong()))
-                if (config.terminal() == "yield") metrics.count("spot.applicationYieldCalls")
-                val echoed = if (config.terminal() == "yield") call.yieldReply<PerfEchoReply>() else call.awaitReply<PerfEchoReply>()
-                PayloadPattern.validateIdentity(sent, echoed)
-                measurement.pattern().validate(echoed.payload())
-                echoed
-            } catch (error: Throwable) {
-                if (probe) throw error
-                measurement.completeOperation(started, error)
-                if (error is CancellationException || error !is Exception) throw error
-                return PerfDriveReply(true, null)
-            }
+            val reply =
+                try {
+                    val sent = request.withSentTicks(started)
+                    val call =
+                        spot
+                            .context()
+                            .outbound()
+                            .requestToChannel(config.channelName(), sent)
+                            .timeout(measurement.callTimeout())
+                    if (config.terminal() == "yield") metrics.count("spot.applicationYieldCalls")
+                    val echoed =
+                        if (config.terminal() == "yield") call.yieldReply<PerfEchoReply>()
+                        else call.awaitReply<PerfEchoReply>()
+                    PayloadPattern.validateIdentity(sent, echoed)
+                    measurement.pattern().validate(echoed.payload())
+                    echoed
+                } catch (error: Throwable) {
+                    if (probe) throw error
+                    measurement.completeOperation(started, error)
+                    if (error is CancellationException || error !is Exception) throw error
+                    return PerfDriveReply(true, null)
+                }
             if (probe) {
-                measurement.setupEvidence(listOf(Evidence.of("typedProbeReply", "Kotlin Spot outbound awaitReply/yieldReply", request.correlationId())))
+                measurement.setupEvidence(
+                    listOf(
+                        Evidence.of(
+                            "typedProbeReply",
+                            "Kotlin Spot outbound awaitReply/yieldReply",
+                            request.correlationId(),
+                        )
+                    )
+                )
                 return PerfDriveReply(true, reply)
             }
             measurement.completeOperation(started)
@@ -127,7 +171,6 @@ class S2sRemoteRequestDriveHandler(
             measurement.handlerExit()
         }
     }
-
 }
 
 class S2sSendSendSpot(context: ZLinkSpotContext) : PerfSpot(context) {
@@ -148,19 +191,24 @@ class S2sSendDriveHandler(
         try {
             val request = drive.echo()
             val returnSpotId = request.returnSpotId()
-            if (returnSpotId.isNullOrEmpty()) throw PerfValidationException("IdentityMismatch", "No return SpotId in the request.")
+            if (returnSpotId.isNullOrEmpty())
+                throw PerfValidationException(
+                    "IdentityMismatch",
+                    "No return SpotId in the request.",
+                )
             measurement.validateRequest(request, null, returnSpotId)
             if (request.phase() == "measured") metrics.count("spot.applicationHandlerEntries")
             val probe = measurement.phase() == "setup"
             val started = if (probe) PerfClock.now() else measurement.beginOperation("send")
             if (started < 0) return PerfDriveReply(false, null)
-            val (sent, entry) = try {
-                val sent = request.withSentTicks(started)
-                sent to correlations.register(sent, started)
-            } catch (error: Throwable) {
-                if (!probe) measurement.completeOperation(started, error)
-                throw error
-            }
+            val (sent, entry) =
+                try {
+                    val sent = request.withSentTicks(started)
+                    sent to correlations.register(sent, started)
+                } catch (error: Throwable) {
+                    if (!probe) measurement.completeOperation(started, error)
+                    throw error
+                }
             try {
                 spot.context().outbound().kotlin().sendToChannel(config.channelName(), sent).await()
                 correlations.firstSendEnded(entry, null)
@@ -177,11 +225,15 @@ class S2sSendDriveHandler(
 
 class S2sSendReturnHandler(private val correlations: SendSendCorrelation) :
     ZLinkSuspendingSpotPacketHandler<S2sSendSendSpot, PerfEchoReply> {
-    override suspend fun handle(spot: S2sSendSendSpot, message: PerfEchoReply) { correlations.reply(message) }
+    override suspend fun handle(spot: S2sSendSendSpot, message: PerfEchoReply) {
+        correlations.reply(message)
+    }
 }
 
 class SpotWorkerOffloadSpot(context: ZLinkSpotContext) : PerfSpot(context) {
-    init { context.handlers().addHandler(SpotWorkerOffloadHandler::class.java) }
+    init {
+        context.handlers().addHandler(SpotWorkerOffloadHandler::class.java)
+    }
 }
 
 class SpotWorkerOffloadHandler(
@@ -189,15 +241,22 @@ class SpotWorkerOffloadHandler(
     private val measurement: Measurement,
     private val metrics: ScenarioMetrics,
 ) : ZLinkSuspendingSpotRequestHandler<SpotWorkerOffloadSpot, PerfEchoRequest, PerfEchoReply> {
-    override suspend fun handle(spot: SpotWorkerOffloadSpot, request: PerfEchoRequest): PerfEchoReply {
+    override suspend fun handle(
+        spot: SpotWorkerOffloadSpot,
+        request: PerfEchoRequest,
+    ): PerfEchoReply {
         val received = PerfClock.now()
         measurement.handlerEnter()
         try {
             measurement.validateRequest(request)
             if (request.phase() == "measured") metrics.count("spot.applicationHandlerEntries")
             val submitted = PerfClock.now()
-            val call = spot.context().runCpuWorker({ worker -> xorShift32(config.worker().taskMillis(), worker) })
-                .timeout(Duration.ofMillis(config.worker().workerTimeoutMs().toLong())).kotlin()
+            val call =
+                spot
+                    .context()
+                    .runCpuWorker({ worker -> xorShift32(config.worker().taskMillis(), worker) })
+                    .timeout(measurement.callTimeout())
+                    .kotlin()
             if (config.terminal() == "yield") metrics.count("spot.applicationYieldCalls")
             val observation = if (config.terminal() == "yield") call.yield() else call.await()
             val resumed = PerfClock.now()
@@ -205,12 +264,21 @@ class SpotWorkerOffloadHandler(
             val reply = PayloadPattern.reply(request, received)
             measurement.recordReply(request)
             if (measurement.phase() == "setup" && !config.source()) {
-                val observed = linkedMapOf<String, Any>(
-                    "correlationId" to request.correlationId(),
-                    "iterations" to observation.iterations(),
-                    "checksum" to observation.checksum(),
+                val observed =
+                    linkedMapOf<String, Any>(
+                        "correlationId" to request.correlationId(),
+                        "iterations" to observation.iterations(),
+                        "checksum" to observation.checksum(),
+                    )
+                measurement.setupEvidence(
+                    listOf(
+                        Evidence.of(
+                            "typedProbeReply",
+                            "Kotlin suspending Spot handler -> runCpuWorker",
+                            observed,
+                        )
+                    )
                 )
-                measurement.setupEvidence(listOf(Evidence.of("typedProbeReply", "Kotlin suspending Spot handler -> runCpuWorker", observed)))
             }
             return reply
         } catch (error: Throwable) {
@@ -221,7 +289,10 @@ class SpotWorkerOffloadHandler(
         }
     }
 
-    private fun xorShift32(taskMillis: Int, cancellation: ZLinkWorkerCancellation): WorkerObservation {
+    private fun xorShift32(
+        taskMillis: Int,
+        cancellation: ZLinkWorkerCancellation,
+    ): WorkerObservation {
         val started = PerfClock.now()
         val target = started + taskMillis * 1_000_000L
         var value = 0x12345678
@@ -235,14 +306,30 @@ class SpotWorkerOffloadHandler(
             iterations += 1024
             cancellation.throwIfCancellationRequested()
         } while (PerfClock.now() < target)
-        return WorkerObservation(DecimalText.of(started), DecimalText.of(PerfClock.now()), PerfClock.DOMAIN,
-            DecimalText.of(iterations), Integer.toUnsignedLong(value))
+        return WorkerObservation(
+            DecimalText.of(started),
+            DecimalText.of(PerfClock.now()),
+            PerfClock.DOMAIN,
+            DecimalText.of(iterations),
+            Integer.toUnsignedLong(value),
+        )
     }
 
-    private fun recordWorker(request: PerfEchoRequest, observation: WorkerObservation, submitted: Long, resumed: Long) {
+    private fun recordWorker(
+        request: PerfEchoRequest,
+        observation: WorkerObservation,
+        submitted: Long,
+        resumed: Long,
+    ) {
         if (request.phase() != "measured") return
-        if (PerfClock.DOMAIN != observation.clockDomainId() || DecimalText.u64(observation.iterations()) == 0L) {
-            throw PerfValidationException("SchemaMismatch", "The worker observation is not from this clock domain or is empty.")
+        if (
+            PerfClock.DOMAIN != observation.clockDomainId() ||
+                DecimalText.u64(observation.iterations()) == 0L
+        ) {
+            throw PerfValidationException(
+                "SchemaMismatch",
+                "The worker observation is not from this clock domain or is empty.",
+            )
         }
         val started = DecimalText.i64(observation.startedTicks())
         val completed = DecimalText.i64(observation.endedTicks())

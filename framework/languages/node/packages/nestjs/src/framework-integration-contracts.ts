@@ -193,6 +193,7 @@ export interface ZLinkPublisherCapabilityOptions {
   readonly bindHost?: string;
   readonly advertiseHost?: string;
   readonly port?: number;
+  readonly sendTimeoutMs?: number;
 }
 
 export interface ZLinkRouteMeshChannelOptions {

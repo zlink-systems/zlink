@@ -32,7 +32,8 @@ private const val RETURN_GROUP = "perf-kotlin-actor-caller-return"
 private class ActorCallerHandlerMarker
 
 @ZLinkHandlerGroup(RETURN_GROUP)
-class KotlinActorReturnHandler(private val correlations: SendSendCorrelation) : ZLinkSuspendingSendHandler<PerfEchoReply> {
+class KotlinActorReturnHandler(private val correlations: SendSendCorrelation) :
+    ZLinkSuspendingSendHandler<PerfEchoReply> {
     override suspend fun handle(message: PerfEchoReply, context: ZLinkMessageContext) {
         correlations.reply(message)
     }
@@ -59,15 +60,29 @@ class ActorNoBindSendSendEchoScenario(
                 mesh.objects().client()
                 mesh.channelName(config.channelName()).server().addHandlerGroup(RETURN_GROUP)
             }
-            app.bean(ObjectsReadiness::class.java) { ObjectsReadiness(false, "Actors are not yet created and probed through the public API.") }
-                .bean(ScenarioMetrics::class.java) { ScenarioMetrics(app.measurement()).latency("sourceAdmissionMs", "actor.sourceAdmission.latency") }
+            app.bean(ObjectsReadiness::class.java) {
+                    ObjectsReadiness(
+                        false,
+                        "Actors are not yet created and probed through the public API.",
+                    )
+                }
+                .bean(ScenarioMetrics::class.java) {
+                    ScenarioMetrics(app.measurement())
+                        .latency("sourceAdmissionMs", "actor.sourceAdmission.latency")
+                }
                 .bean(SendSendCorrelation::class.java)
                 .bean(ActorCallerSetup::class.java)
                 .bean(ActorNoBindSendSendEchoScenario::class.java)
-                .workload(ActorNoBindSendSendEchoScenario::class.java, ActorNoBindSendSendEchoScenario::run)
+                .workload(
+                    ActorNoBindSendSendEchoScenario::class.java,
+                    ActorNoBindSendSendEchoScenario::run,
+                )
             val context = app.start()
-            context.getBean(ActorNoBindSendSendEchoScenario::class.java).prepare()
-                .exceptionally { error -> app.measurement().recordDiagnostic(error); null }
+            context.getBean(ActorNoBindSendSendEchoScenario::class.java).prepare().exceptionally {
+                error ->
+                app.measurement().recordDiagnostic(error)
+                null
+            }
         }
     }
 
@@ -79,17 +94,26 @@ class ActorNoBindSendSendEchoScenario(
             config.actorIds().forEachIndexed { stream, actorId ->
                 launch(Dispatchers.IO) {
                     probes.withPermit {
-                        val request = measurement.request(stream, sequences.incrementAndGet(stream), true).withReturnChannel(config.channelName())
+                        val request =
+                            measurement
+                                .request(stream, sequences.incrementAndGet(stream), true)
+                                .withReturnChannel(config.channelName())
                         val entry = correlations.register(request, PerfClock.now())
                         actorClient.kotlin().sendToActor(actorId, request).await()
                         val result = correlations.completeAsync(entry).await()
-                        check(result.error() == null) { "Actor send/send setup probe failed: ${result.error()?.message}" }
+                        check(result.error() == null) {
+                            "Actor send/send setup probe failed: ${result.error()?.message}"
+                        }
                     }
                 }
             }
         }
-        val typedProbe = Evidence.of("typedProbeEcho", "Kotlin Actor sendToActor(...).await() -> return Channel handler",
-            mapOf("probes" to sequences.length(), "streams" to sequences.length()))
+        val typedProbe =
+            Evidence.of(
+                "typedProbeEcho",
+                "Kotlin Actor sendToActor(...).await() -> return Channel handler",
+                mapOf("probes" to sequences.length(), "streams" to sequences.length()),
+            )
         measurement.setupEvidence(listOf(typedProbe))
         readiness.set(true, "", listOf(created))
     }
@@ -97,22 +121,31 @@ class ActorNoBindSendSendEchoScenario(
     fun run(): CompletionStage<Void> = completionStage {
         coroutineScope {
             repeat(config.workload().logicalStreams()) { stream ->
-                repeat(config.workload().inflight()) {
-                    launch(Dispatchers.IO) {
-                        while (measurement.canIssue()) {
-                            val request = measurement.request(stream, sequences.incrementAndGet(stream), false)
+                launch(Dispatchers.IO) {
+                    while (measurement.canIssue()) {
+                        val request =
+                            measurement
+                                .request(stream, sequences.incrementAndGet(stream), false)
                                 .withReturnChannel(config.channelName())
-                            val started = measurement.beginOperation("send")
-                            if (started < 0) break
-                            val entry = try {
+                        val started = measurement.beginOperation("send")
+                        if (started < 0) break
+                        val entry =
+                            try {
                                 val sent = request.withSentTicks(started)
                                 correlations.register(sent, started)
                             } catch (error: Throwable) {
                                 measurement.completeOperation(started, error)
                                 throw error
                             }
-                            val fatal = try {
-                                actorClient.kotlin().sendToActor(config.actorIds()[stream], request.withSentTicks(started)).await()
+                        val fatal =
+                            try {
+                                actorClient
+                                    .kotlin()
+                                    .sendToActor(
+                                        config.actorIds()[stream],
+                                        request.withSentTicks(started),
+                                    )
+                                    .await()
                                 correlations.firstSendEnded(entry, null)
                                 metrics.record("sourceAdmissionMs", started, PerfClock.now())
                                 null
@@ -120,12 +153,16 @@ class ActorNoBindSendSendEchoScenario(
                                 correlations.firstSendEnded(entry, error)
                                 error.takeIf { it is CancellationException || it !is Exception }
                             }
-                            val accounted = correlations.completeAsync(entry).thenAccept { result ->
-                                measurement.completeOperation(started, result.error(), result.completedTicks())
+                        val accounted =
+                            correlations.completeAsync(entry).thenAccept { result ->
+                                measurement.completeOperation(
+                                    started,
+                                    result.error(),
+                                    result.completedTicks(),
+                                )
                             }
-                            if (fatal != null) throw fatal
-                            accounted.await()
-                        }
+                        if (fatal != null) throw fatal
+                        accounted.await()
                     }
                 }
             }

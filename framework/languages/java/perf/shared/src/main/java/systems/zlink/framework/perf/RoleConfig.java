@@ -3,8 +3,10 @@ package systems.zlink.framework.perf;
 import java.util.List;
 import java.util.Map;
 
-// The role config file the common runner writes before a role starts (§5.1); the role executable reads only this.
-// Field names are the runner's (framework/perf/runner/roles.py); an unknown property is a schema mismatch.
+// The role config file the common runner writes before a role starts (§5.1); the role executable
+// reads only this.
+// Field names are the runner's (framework/perf/runner/roles.py); an unknown property is a schema
+// mismatch.
 public record RoleConfig(
         String runId,
         String cellId,
@@ -46,29 +48,34 @@ public record RoleConfig(
             int payloadSize,
             double durationSeconds,
             double warmupSeconds,
-            int inflight,
             Integer connections,
             Integer logicalStreams,
             int clientCount,
             Integer connectConcurrency,
-            int requestTimeoutMs,
-            int correlationExpiryMs,
-            int driverTimeoutMs,
+            int drainTimeoutMs,
             int setupTimeoutMs,
             int adminTimeoutMs,
             int socketSendTimeoutMs) {}
 
     // §20: the run-owned Redis and this cell's namespace; null when the scenario needs no Store.
-    public record StoreConfig(String provider, String endpoint, String containerId, String image, String imageDigest,
+    public record StoreConfig(
+            String provider,
+            String endpoint,
+            String containerId,
+            String image,
+            String imageDigest,
             String namespace) {}
 
     // §5.2: the public worker options and the CPU task every callback runs (§10.8).
-    public record WorkerConfig(String algorithm, int taskMillis, int minThreads, int maxThreads,
-            int idleTimeoutMs, int workerTimeoutMs) {}
+    public record WorkerConfig(
+            String algorithm, int taskMillis, int minThreads, int maxThreads, int idleTimeoutMs) {}
 
     public record DiagnosticsConfig(String level, String flowFile) {}
 
-    /** The role's first listener; roles with several transports read {@link #transportEndpoints} by key. */
+    /**
+     * The role's first listener; roles with several transports read {@link #transportEndpoints} by
+     * key.
+     */
     public String listenerEndpoint() {
         return transportEndpoints.isEmpty() ? null : transportEndpoints.values().iterator().next();
     }

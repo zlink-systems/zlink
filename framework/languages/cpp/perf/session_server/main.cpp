@@ -25,7 +25,9 @@ class perf_session_t final : public fw::packet_stream_session_t
         co_return;
     }
 
-    fw::task_t<void> on_packet (fw::stream_t &stream, const fw::session_message_context_t &, const zlink::message_t &payload) override
+    fw::task_t<void> on_packet (fw::stream_t &stream,
+                                const fw::session_message_context_t &,
+                                const zlink::message_t &payload) override
     {
         const auto received = now_ticks ();
         auto &measurement = _role.measurement;
@@ -37,8 +39,10 @@ class perf_session_t final : public fw::packet_stream_session_t
             measurement.record_reply (request);
             co_await stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             if (measurement.phase () == "setup")
-                measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeReply"}, {"source", "perf_session_t::on_packet stream.reply_packet.async"},
-                                                               {"observedValue", request.correlation_id}}}));
+                measurement.set_setup_evidence (
+                  json::array ({{{"kind", "typedProbeReply"},
+                                 {"source", "perf_session_t::on_packet stream.reply_packet.async"},
+                                 {"observedValue", request.correlation_id}}}));
         }
         catch (...) {
             measurement.record_diagnostic (std::current_exception ());
@@ -54,23 +58,33 @@ class perf_session_t final : public fw::packet_stream_session_t
 int main (int argc, char **argv)
 {
     auto config = perf::read_role_config (argc, argv);
-    if (config.role != "session" || config.source || (config.scenario != "session-echo-only" && config.scenario != "cs-remote-session-actor-echo"))
-        throw std::invalid_argument ("SessionServer supports the session receiver roles of §10.2 and §11.1.");
+    if (config.role != "session" || config.source
+        || (config.scenario != "session-echo-only"
+            && config.scenario != "cs-remote-session-actor-echo"))
+        throw std::invalid_argument (
+          "SessionServer supports the session receiver roles of §10.2 and §11.1.");
     const bool baseline = config.scenario == "session-echo-only";
-    auto role = std::make_unique<perf::role_t> (std::move (config), false);
+    // §16.1: the §10.2 Session binds the cell's Actors, so its objectsReady is that create/bind result.
+    auto role = std::make_unique<perf::role_t> (std::move (config), !baseline);
     const auto &settings = role->config;
     const auto stream_endpoint = settings.transport_endpoints.at ("stream");
-    return perf::run_role (std::move (role), [&] (fw::zlink_framework_options_t &options, fw::app_t &) {
-        if (baseline) {
-            options.add_stream_node ("perf-session").bind (stream_endpoint).register_session<perf_session_t> ();
-            return;
-        }
-        // §10.2: an Object Client node; the Actors live in the separate Actor process.
-        auto mesh = options.add_route_mesh (*settings.mesh_name);
-        mesh.set_automatic_routing_id_prefix ("perf-session");
-        mesh.listen (settings.transport_endpoints.at ("mesh"));
-        mesh.objects ().client ();
-        options.services ().add_singleton<session_actor_setup_t, role_t> ();
-        options.add_stream_node ("perf-session").bind (stream_endpoint).enable_actor_dispatch ().register_session<perf_actor_relay_session_t> ();
-    });
+    return perf::run_role (std::move (role),
+                           [&] (fw::zlink_framework_options_t &options, fw::app_t &) {
+                               if (baseline) {
+                                   options.add_stream_node ("perf-session")
+                                     .bind (stream_endpoint)
+                                     .register_session<perf_session_t> ();
+                                   return;
+                               }
+                               // §10.2: an Object Client node; the Actors live in the separate Actor process.
+                               auto mesh = options.add_route_mesh (*settings.mesh_name);
+                               mesh.set_automatic_routing_id_prefix ("perf-session");
+                               mesh.listen (settings.transport_endpoints.at ("mesh"));
+                               mesh.objects ().client ();
+                               options.services ().add_singleton<session_actor_setup_t, role_t> ();
+                               options.add_stream_node ("perf-session")
+                                 .bind (stream_endpoint)
+                                 .enable_actor_dispatch ()
+                                 .register_session<perf_actor_relay_session_t> ();
+                           });
 }
