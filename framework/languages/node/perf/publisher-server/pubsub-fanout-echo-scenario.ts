@@ -170,6 +170,7 @@ export async function runPubSubFanoutEcho(
       objects: readiness,
       providers: [],
       configureFramework: (builder) => {
+        // #1586: classic fanout uses the Framework default send timeout in Node.
         builder
           .addFanoutChannel(config.channelName!)
           .enablePublisher(config.transportEndpoints.fanout)

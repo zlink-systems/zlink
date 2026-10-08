@@ -457,7 +457,11 @@ def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, s
                   "runtimeSettings": env.get("runtimeSettings", {}), "installedRuntimes": env.get("installedRuntimes"),
                   "workloadHash": None, "repetition": None}
     if scenario.name == "pubsub-fanout-echo":
-        comparable["publisherChannel"] = {"noDrop": True}
+        # #1586: Node uses the Framework default; other drivers apply the workload timeout.
+        comparable["publisherChannel"] = {
+            "noDrop": True,
+            "sendTimeoutMs": None if args.language == "node" else workload["socketSendTimeoutMs"],
+        }
     comparable["diagnostics"] = "Normal" if args.operation == "diagnostic" else "Off"
     exact = json.dumps(comparable, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
     return comparable, exact

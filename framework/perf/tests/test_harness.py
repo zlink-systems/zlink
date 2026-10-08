@@ -352,6 +352,17 @@ class HarnessTests(unittest.TestCase):
         b.connections = 9
         self.assertNotEqual(comparison(a, cell_a, env)[1], comparison(b, cell_b, env)[1])
 
+    def test_fanout_comparison_records_language_timeout_configuration(self):
+        env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
+        env["serializer"] = {"name": "typed JSON"}
+        for language in ("node", "dotnet", "java", "cpp"):
+            with self.subTest(language=language):
+                args = options(["single", "--scenario", "pubsub-fanout-echo", "--language", language, "--perf-dir", "/tmp/perf"])
+                comparable, exact = comparison(args, expand(args, False)[0], env)
+                expected = None if language == "node" else comparable["workload"]["socketSendTimeoutMs"]
+                self.assertEqual(comparable["publisherChannel"].get("sendTimeoutMs", "missing"), expected)
+                self.assertEqual(json.loads(exact)["publisherChannel"]["sendTimeoutMs"], expected)
+
     def test_load_config_has_no_window_and_publisher_records_no_drop(self):
         env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
         env["serializer"] = {"name": "typed JSON"}
@@ -360,7 +371,7 @@ class HarnessTests(unittest.TestCase):
         comparable = comparison(args, cell, env)[0]
         workload = comparable["workload"]
         self.assertNotIn("inflight", workload)
-        self.assertEqual(comparable["publisherChannel"], {"noDrop": True})
+        self.assertEqual(comparable["publisherChannel"], {"noDrop": True, "sendTimeoutMs": workload["socketSendTimeoutMs"]})
         common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "language": "cpp",
                   "workload": workload, "worker": None, "store": None, "diagnostics": lambda name: None, "provenance": {}}
         ports = iter(range(20000, 30000))
