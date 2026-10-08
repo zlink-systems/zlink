@@ -855,7 +855,9 @@ lease is valid and the descriptor is the same lifecycle, the reservation isn't r
 **An `Active` Actor record whose owner has ended is also released on re-creation.** When an Actor
 `Create` or `GetOrCreate` reads an `Active` record for the same ActorId whose owner lease is missing,
 has a different `LeaseGeneration`, or has expired, and the relocation policy registered on the
-creating node for that Actor type is `Disabled`, the Location repository releases that record. The
+creating node for that Actor type is `Disabled`, the Location repository releases that record. A record that carries relocation progress or
+belongs to an aggregate isn't subject to this release and follows that relocation's recovery
+procedure. The
 release checks, in one batch, the same conditions as the reservation release above (authority
 `StoreVersion`, owner lease state, descriptor state, and capacity record), removes the authority
 together with that incarnation's membership, and returns the active capacity. After the release, a
