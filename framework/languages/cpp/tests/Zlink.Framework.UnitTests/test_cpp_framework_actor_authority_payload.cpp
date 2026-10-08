@@ -1,5 +1,6 @@
-#include "../support/actor_authority_fixture.hpp"
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+
+#include "../support/actor_authority_fixture.hpp"
 
 #include "runtime/locations/actor_authority_payload.hpp"
 

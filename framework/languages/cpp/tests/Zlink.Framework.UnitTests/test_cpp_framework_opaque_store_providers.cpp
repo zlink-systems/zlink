@@ -640,7 +640,7 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
     const auto first =
       std::get<object_reserved_t> (repository.reserve (request).result ().value ());
     auto ready_payload = bytes ("old-state-and-membership");
-    if (scenario == "relocation") {
+    if ((scenario == "relocation" || scenario == "relocationRecreate")) {
         auto canonical = encode_actor_authority_payload (actor_authority_payload_t{
           .stable_type = "player",
           .actor_id = "reclaim-actor",
@@ -668,7 +668,7 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
     if (scenario != "live" && scenario != "liveDescriptorGone")
         repository.release_owner_lease (old_owner).result ().value ();
     request.target = {"reclaim-mesh", node_rid_t::from_string ("reclaim-target"), 1, new_owner};
-    if (scenario == "recreate")
+    if (scenario == "recreate" || scenario == "relocationRecreate")
         request.actor_relocation_policy = detail::factory_relocation_kind_t::recreate;
     if (scenario == "typeMismatch")
         request.intent.stable_type = "different";
@@ -690,23 +690,17 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
         return;
     }
     if (scenario == "recreate") {
-        try {
-            const auto next = repository.reserve (request).result ();
-            EXPECT_FALSE (next);
-            if (!next)
-                EXPECT_EQ (next.error_kind (), framework_error_kind_t::unavailable);
-        }
-        catch (const framework_exception_t &error) {
-            EXPECT_EQ (error.kind (), framework_error_kind_t::unavailable);
-        }
+        const auto next = repository.reserve (request).result ();
+        ASSERT_FALSE (next);
+        EXPECT_EQ (next.error_kind (), framework_error_kind_t::unavailable);
         return;
     }
     const auto retained_before =
       repository.read_authority (actor_authority_key (request.key.global_id)).result ().value ();
     const auto next = repository.reserve (request).result ();
     ASSERT_TRUE (next);
-    if (scenario == "relocation") {
-        EXPECT_FALSE (std::holds_alternative<object_reserved_t> (next.value ()));
+    if ((scenario == "relocation" || scenario == "relocationRecreate")) {
+        EXPECT_TRUE (std::holds_alternative<object_already_exists_t> (next.value ()));
         const auto retained_after =
           repository.read_authority (actor_authority_key (request.key.global_id))
             .result ()
@@ -739,7 +733,8 @@ INSTANTIATE_TEST_SUITE_P (RepositoryImplementations,
                                                                  "recreate",
                                                                  "typeMismatch",
                                                                  "race",
-                                                                 "relocation")));
+                                                                 "relocation",
+                                                                 "relocationRecreate")));
 
 class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
 {

@@ -793,78 +793,89 @@ class in_memory_location_repository_t : public location_repository_t
         if (request.creating_payload.size () > location_record_payload_limit
             || request.intent.request_encoded_size > location_record_payload_limit)
             throw std::invalid_argument ("object reservation payload exceeds 1 MiB");
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              const auto key = object_key (request.key);
-              if (request.key.kind != placement_object_kind_t::actor) {
-                  const auto claim = _entry_spot_id_claims.find (request.key.global_id);
-                  if (claim != _entry_spot_id_claims.end ()
-                      && owner_token_is_live (claim->second.owner, now))
+        try {
+            return _lane
+              .run ([&] {
+                  const auto now = clock_t::now ();
+                  const auto key = object_key (request.key);
+                  if (request.key.kind != placement_object_kind_t::actor) {
+                      const auto claim = _entry_spot_id_claims.find (request.key.global_id);
+                      if (claim != _entry_spot_id_claims.end ()
+                          && owner_token_is_live (claim->second.owner, now))
+                          return completed (object_reserve_result_t{
+                            object_reserve_conflict_t{authority_missing_t{now}}});
+                  }
+                  auto authority = _authorities.find (key);
+                  if (authority != _authorities.end ()
+                      && (authority->second.allocation.object_kind != request.key.kind
+                          || authority->second.allocation.stable_type
+                               != request.intent.stable_type))
+                      return completed (
+                        object_reserve_result_t{object_type_mismatch_t{authority->second}});
+                  if (authority != _authorities.end ()
+                      && release_ended_reservation_on_lane (key, authority->second, now, &request))
+                      authority = _authorities.end ();
+                  if (authority != _authorities.end ()) {
+                      if (authority->second.allocation.state
+                          == placement_allocation_state_t::reserved)
+                          return completed (
+                            object_reserve_result_t{object_reserve_conflict_t{authority->second}});
+                      return completed (
+                        object_reserve_result_t{object_already_exists_t{authority->second}});
+                  }
+                  const auto target_descriptor = live_target_descriptor (
+                    request.target, request.key.kind, request.intent.stable_type, now, true);
+                  if (!target_descriptor)
                       return completed (object_reserve_result_t{
                         object_reserve_conflict_t{authority_missing_t{now}}});
-              }
-              auto authority = _authorities.find (key);
-              if (authority != _authorities.end ()
-                  && (authority->second.allocation.object_kind != request.key.kind
-                      || authority->second.allocation.stable_type != request.intent.stable_type))
-                  return completed (
-                    object_reserve_result_t{object_type_mismatch_t{authority->second}});
-              if (authority != _authorities.end ()
-                  && release_ended_reservation_on_lane (key, authority->second, now, &request))
-                  authority = _authorities.end ();
-              if (authority != _authorities.end ()) {
-                  if (authority->second.allocation.state == placement_allocation_state_t::reserved)
+                  if (!bundle_matches_object (request.capacity_bundle, request.key.kind,
+                                              request.intent.stable_type))
+                      throw std::invalid_argument (
+                        "object reservation capacity bundle does not match the object");
+                  if (!capacity_available (*target_descriptor, request.target,
+                                           request.capacity_bundle))
                       return completed (
-                        object_reserve_result_t{object_reserve_conflict_t{authority->second}});
-                  return completed (
-                    object_reserve_result_t{object_already_exists_t{authority->second}});
-              }
-              const auto target_descriptor = live_target_descriptor (
-                request.target, request.key.kind, request.intent.stable_type, now, true);
-              if (!target_descriptor)
-                  return completed (
-                    object_reserve_result_t{object_reserve_conflict_t{authority_missing_t{now}}});
-              if (!bundle_matches_object (request.capacity_bundle, request.key.kind,
-                                          request.intent.stable_type))
-                  throw std::invalid_argument (
-                    "object reservation capacity bundle does not match the object");
-              if (!capacity_available (*target_descriptor, request.target, request.capacity_bundle))
-                  return completed (
-                    object_reserve_result_t{object_placement_capacity_exhausted_t{}});
-              if (!store_revisions_available ()
-                  || !issue_generations (
-                    {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
-                  return completed (object_reserve_result_t{authority_generation_exhausted_t{}});
+                        object_reserve_result_t{object_placement_capacity_exhausted_t{}});
+                  if (!store_revisions_available ()
+                      || !issue_generations (
+                        {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
+                      return completed (
+                        object_reserve_result_t{authority_generation_exhausted_t{}});
 
-              const auto store_version = next_store_version ();
-              object_reservation_fence_t fence{
-                "reservation-" + store_version, store_version,  _object_generation,
-                _authority_owner_generation,    request.target, request.capacity_bundle};
-              authority_snapshot_t creating{
-                store_version,
-                request.creating_payload,
-                _object_generation,
-                _authority_owner_generation,
-                request.target.owner,
-                now,
-                {placement_allocation_state_t::reserved, request.key.kind,
-                 request.intent.stable_type, request.target, request.capacity_bundle},
-                pending_object_creation_t{
-                  fence.reservation_id, request.intent.request_content_reference,
-                  request.intent.request_sha256,
-                  static_cast<std::uint32_t> (request.intent.request_encoded_size)}};
-              reservation_state_t reservation{request, fence, creating,
-                                              reservation_status_t::prepared};
-              _authorities[key] = creating;
-              _object_types[key] = request.intent.stable_type;
-              _reservations[key] = std::move (reservation);
-              apply_capacity_bundle (_pending_by_placement, request.target, request.capacity_bundle,
-                                     true);
-              return completed (object_reserve_result_t{
-                object_reserved_t{std::move (fence), std::move (creating)}});
-          })
-          .get ();
+                  const auto store_version = next_store_version ();
+                  object_reservation_fence_t fence{
+                    "reservation-" + store_version, store_version,  _object_generation,
+                    _authority_owner_generation,    request.target, request.capacity_bundle};
+                  authority_snapshot_t creating{
+                    store_version,
+                    request.creating_payload,
+                    _object_generation,
+                    _authority_owner_generation,
+                    request.target.owner,
+                    now,
+                    {placement_allocation_state_t::reserved, request.key.kind,
+                     request.intent.stable_type, request.target, request.capacity_bundle},
+                    pending_object_creation_t{
+                      fence.reservation_id, request.intent.request_content_reference,
+                      request.intent.request_sha256,
+                      static_cast<std::uint32_t> (request.intent.request_encoded_size)}};
+                  reservation_state_t reservation{request, fence, creating,
+                                                  reservation_status_t::prepared};
+                  _authorities[key] = creating;
+                  _object_types[key] = request.intent.stable_type;
+                  _reservations[key] = std::move (reservation);
+                  apply_capacity_bundle (_pending_by_placement, request.target,
+                                         request.capacity_bundle, true);
+                  return completed (object_reserve_result_t{
+                    object_reserved_t{std::move (fence), std::move (creating)}});
+              })
+              .get ();
+        }
+        catch (const framework_exception_t &error) {
+            return task_t<object_reserve_result_t> (
+              detail::result_access_t::failure<object_reserve_result_t> (
+                std::make_exception_ptr (error)));
+        }
     }
 
     task_t<object_commit_result_t> commit (object_commit_request_t request,
@@ -1302,13 +1313,15 @@ class in_memory_location_repository_t : public location_repository_t
                 for (const auto &participant : aggregate.request.participants)
                     if (participant.key.value == key)
                         return false;
+        if (active) {
+            const auto actor = decode_direct_actor_authority_payload (snapshot.payload);
+            if (actor && actor->has_relocation_state)
+                return false;
+        }
         const auto &target = snapshot.allocation.target;
         const bool owner_live = owner_token_is_live (snapshot.owner, now);
         if (active) {
             if (owner_live)
-                return false;
-            const auto actor = decode_direct_actor_authority_payload (snapshot.payload);
-            if (actor && actor->has_relocation_state)
                 return false;
             if (request->actor_relocation_policy != detail::factory_relocation_kind_t::disabled)
                 throw framework_exception_t (framework_error_kind_t::unavailable,

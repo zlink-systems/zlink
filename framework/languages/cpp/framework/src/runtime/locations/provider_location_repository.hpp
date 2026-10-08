@@ -677,6 +677,10 @@ class provider_location_repository_t final : public location_repository_t
                   object_type_mismatch_t{std::move (*decoded_current)}};
         }
         if (co_await authority_mutation_locked_async (object_key (request.key))) {
+            if (decoded_current
+                && decoded_current->allocation.state == placement_allocation_state_t::active)
+                co_return object_reserve_result_t{
+                  object_already_exists_t{std::move (*decoded_current)}};
             auto current = co_await read_authority_value_async (object_key (request.key));
             co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
         }
@@ -697,8 +701,7 @@ class provider_location_repository_t final : public location_repository_t
                 *retry_reclaim = true;
                 co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
             }
-            if (current.allocation.state == placement_allocation_state_t::active
-                && reclaim == stale_authority_reclaim_result_t::owner_live)
+            if (current.allocation.state == placement_allocation_state_t::active)
                 co_return object_reserve_result_t{object_already_exists_t{std::move (current)}};
             co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
         }
@@ -808,6 +811,10 @@ class provider_location_repository_t final : public location_repository_t
         const bool active = current.allocation.state == placement_allocation_state_t::active;
         if (active && (!request || request->key.kind != placement_object_kind_t::actor))
             co_return stale_authority_reclaim_result_t::recovery_required;
+        // Relocation authority retains its own recovery protocol.
+        const auto actor = decode_direct_actor_authority_payload (current.payload);
+        if (actor && actor->has_relocation_state)
+            co_return stale_authority_reclaim_result_t::recovery_required;
         const auto owner_key = key_owner (current.owner.owner_id);
         auto owner = co_await _store.read (owner_key);
         auto stale_owner_condition = missing_condition (owner_key);
@@ -844,10 +851,6 @@ class provider_location_repository_t final : public location_repository_t
             descriptor_condition = version_condition (descriptor_key, found->value.version);
         }
 
-        // Relocation authority retains its own recovery protocol.
-        const auto actor = decode_direct_actor_authority_payload (current.payload);
-        if (actor && actor->has_relocation_state)
-            co_return stale_authority_reclaim_result_t::recovery_required;
         if (!active && !current.pending_creation)
             co_return stale_authority_reclaim_result_t::recovery_required;
 
