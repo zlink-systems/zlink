@@ -6,11 +6,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 
 import java.io.ByteArrayInputStream;
@@ -819,14 +822,9 @@ final class ZLinkProviderAuthorityRepository {
                                                                             .OWNER_LIVE);
                                                         if (!(request.actorRelocationPolicy()
                                                                 instanceof
-                                                                systems.zlink.framework.runtime
-                                                                        .internal.configuration
-                                                                        .ZLinkObjectFactoryRegistration
-                                                                        .RelocationPolicy.Disabled))
-                                                            throw new systems.zlink.framework.errors
-                                                                    .ZLinkFrameworkException(
-                                                                    systems.zlink.framework.errors
-                                                                            .ZLinkFrameworkErrorKind
+                                                                RelocationPolicy.Disabled))
+                                                            throw new ZLinkFrameworkException(
+                                                                    ZLinkFrameworkErrorKind
                                                                             .UNAVAILABLE,
                                                                     "Actor owner lease is unavailable");
                                                     }

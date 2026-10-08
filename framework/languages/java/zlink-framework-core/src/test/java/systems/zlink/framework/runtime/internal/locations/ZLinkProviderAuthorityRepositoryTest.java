@@ -84,7 +84,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
         "typeMismatch,true",
         "race,false",
         "race,true",
-        "capacityRace,false"
+        "capacityRace,false",
+        "relocation,false",
+        "relocation,true",
+        "relocationRecreate,false",
+        "relocationRecreate,true"
     })
     void endedActiveActorRecreation(String scenario, boolean inMemory) throws Exception {
         var provider = new TemporaryCommitConflictStore(new ZLinkInMemoryProviderLocationStore());
@@ -147,10 +151,52 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         ZLinkCreationTerminalState.CREATED,
                         new byte[] {1},
                         Instant.now().plusSeconds(300));
+        byte[] readyPayload = new byte[] {9};
+        if (scenario.equals("relocation") || scenario.equals("relocationRecreate")) {
+            byte[] canonical =
+                    new ZLinkActorAuthorityPayloadCodec()
+                            .encode(
+                                    ZLinkActorAuthorityPayloadCodec.State.READY,
+                                    "player",
+                                    "reclaim-actor",
+                                    "reclaim-entry",
+                                    1,
+                                    1,
+                                    owner.ownerId(),
+                                    owner.leaseGeneration(),
+                                    descriptor.meshName(),
+                                    descriptor.rid(),
+                                    1);
+            var relocation =
+                    new ZLinkAggregateRelocationCoordinator.Request(
+                            new UUID(0, 9),
+                            1,
+                            2,
+                            List.of(
+                                    new ZLinkAggregateRelocationCoordinator.Participant(
+                                            key,
+                                            ZLinkPlacementObjectKind.ACTOR,
+                                            1,
+                                            1,
+                                            "1",
+                                            ZLinkAuthorityGenerationTransition.PRESERVE,
+                                            canonical,
+                                            new byte[0])),
+                            goldenRoot(),
+                            request.targetDescriptor(),
+                            1,
+                            ZLinkPlacementCapacityBundle.actor(1),
+                            owner,
+                            "1");
+            readyPayload =
+                    ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                            canonical, relocation, ZLinkAuthorityGenerationTransition.PRESERVE);
+            assertTrue(ZLinkCanonicalRelocationAuthorityStateCodec.decode(readyPayload) != null);
+        }
         assertEquals(
                 ZLinkObjectCommitResult.COMMITTED,
                 repository
-                        .commit(first, new byte[] {9}, terminal, () -> false)
+                        .commit(first, readyPayload, terminal, () -> false)
                         .toCompletableFuture()
                         .get());
         if (scenario.equals("liveDescriptorGone"))
@@ -186,10 +232,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         newOwner,
                         new byte[] {2},
                         ZLinkPlacementCapacityBundle.actor(1),
-                        scenario.equals("recreate")
+                        (scenario.equals("recreate") || scenario.equals("relocationRecreate"))
                                 ? new systems.zlink.framework.runtime.internal.configuration
                                         .ZLinkObjectFactoryRegistration.RelocationPolicy.Recreate()
                                 : policy);
+        var retainedBefore = repository.read(key, () -> false).toCompletableFuture().get();
         if (scenario.equals("recreate")) {
             var failure =
                     inMemory
@@ -209,6 +256,18 @@ final class ZLinkProviderAuthorityRepositoryTest {
             assertEquals(
                     systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
                     failure.kind());
+        } else if (scenario.equals("relocation") || scenario.equals("relocationRecreate")) {
+            assertInstanceOf(
+                    ZLinkObjectAlreadyExists.class,
+                    repository.reserve(next, () -> false).toCompletableFuture().get());
+            var before = assertInstanceOf(ZLinkAuthoritySnapshot.class, retainedBefore);
+            var after =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            repository.read(key, () -> false).toCompletableFuture().get());
+            assertEquals(before.storeVersion(), after.storeVersion());
+            assertEquals(before.objectGeneration(), after.objectGeneration());
+            assertArrayEquals(readyPayload, after.payload());
         } else if (scenario.equals("capacityRace")) {
             var winner =
                     new java.util.concurrent.atomic.AtomicReference<ZLinkObjectReserveResult>();
