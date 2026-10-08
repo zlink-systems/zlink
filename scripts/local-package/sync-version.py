@@ -674,11 +674,11 @@ def update_node_registry_package_block(
     marker = f'    "node_modules/{package_name}": {{'
     start = source.find(marker)
     if start < 0:
-        raise SyncError(f"Node quickstart lockfile has no {package_name} entry")
+        raise SyncError(f"Node lockfile has no {package_name} entry")
     end = source.find('\n    },\n    "node_modules/', start)
     if end < 0:
         raise SyncError(
-            f"Node quickstart lockfile entry for {package_name} is not structurally bounded"
+            f"Node lockfile entry for {package_name} is not structurally bounded"
         )
     end += len("\n    },")
     block = source[start:end]
@@ -698,7 +698,7 @@ def update_node_registry_package_block(
     )
     if version_count != 1 or resolved_count != 1:
         raise SyncError(
-            f"Node quickstart lockfile entry for {package_name} lacks version/resolved fields"
+            f"Node lockfile entry for {package_name} lacks version/resolved fields"
         )
     if block != original_block:
         block = re.sub(
@@ -710,24 +710,45 @@ def update_node_registry_package_block(
     return source[:start] + block + source[end:]
 
 
-def update_node_quickstart_framework_lock(source: str, version: str) -> str:
+# Lockfiles of published-package consumers (quickstart, tutorial StreamClient): the
+# Framework pins and the installed registry entries follow the Node Framework version.
+NODE_REGISTRY_CONSUMER_LOCKS = (
+    (
+        "framework/languages/node/quickstart/package-lock.json",
+        6,
+        (
+            "@zlink-systems/framework",
+            "@zlink-systems/http-client",
+            "@zlink-systems/nestjs",
+            "@zlink-systems/stream-wire",
+        ),
+    ),
+    (
+        "framework/languages/node/tutorial/StreamClient/package-lock.json",
+        6,
+        (
+            "@zlink-systems/framework-codec-protobuf",
+            "@zlink-systems/stream-connector",
+            "@zlink-systems/stream-wire",
+        ),
+    ),
+)
+
+
+def update_node_registry_consumer_lock(
+    source: str, version: str, relative: str, expected: int, packages: tuple[str, ...]
+) -> str:
     pattern = node_internal_dependency_pattern()
     source, count = re.subn(
         pattern,
         lambda match: replace_version_group(match, version),
         source,
     )
-    if count != 6:
+    if count != expected:
         raise SyncError(
-            "Node quickstart lockfile expected 6 Framework dependency pins, "
-            f"found {count}"
+            f"{relative} expected {expected} Framework dependency pins, found {count}"
         )
-    for package_name in (
-        "@zlink-systems/framework",
-        "@zlink-systems/http-client",
-        "@zlink-systems/nestjs",
-        "@zlink-systems/stream-wire",
-    ):
+    for package_name in packages:
         source = update_node_registry_package_block(source, package_name, version)
     return source
 
@@ -789,10 +810,15 @@ def synchronize_framework(sync: Synchronizer, versions: dict[str, str]) -> None:
         lambda match, version=version: replace_version_group(match, version),
         1,
     )
-    sync.transform(
-        "framework/languages/node/quickstart/package-lock.json",
-        lambda source: update_node_quickstart_framework_lock(source, version),
-    )
+    for relative, expected, packages in NODE_REGISTRY_CONSUMER_LOCKS:
+        sync.transform(
+            relative,
+            lambda source, relative=relative, expected=expected, packages=packages: (
+                update_node_registry_consumer_lock(
+                    source, version, relative, expected, packages
+                )
+            ),
+        )
     sync.regex(
         node_lock,
         internal_dependency_pattern,
