@@ -59,6 +59,17 @@ import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 
 final class ZLinkProviderAuthorityRepositoryTest {
+    private record ReclaimActor(systems.zlink.framework.actors.ZLinkActorContext context)
+            implements systems.zlink.framework.actors.ZLinkActor {}
+
+    private static final class ReclaimFactory
+            implements systems.zlink.framework.actors.ZLinkActorFactory {
+        public CompletionStage<systems.zlink.framework.actors.ZLinkActor> create(
+                systems.zlink.framework.actors.ZLinkActorContext context) {
+            return CompletableFuture.completedFuture(new ReclaimActor(context));
+        }
+    }
+
     @ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({
         "expired,false",
@@ -96,9 +107,17 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 .get();
 
         var key = ZLinkAuthorityKeyCodec.actor("reclaim-actor");
-        var policy =
-                new systems.zlink.framework.runtime.internal.configuration
-                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled();
+        var registration =
+                new systems.zlink.framework.runtime.mesh.MeshNodeRegistration("reclaim-source");
+        registration
+                .objects()
+                .server()
+                .addActorFactory(
+                        "player",
+                        ReclaimActor.class,
+                        ReclaimFactory.class,
+                        factory -> factory.disableRelocation());
+        var policy = registration.actorRelocationPolicy("player");
         var request =
                 new ZLinkObjectReservationRequest(
                         ZLinkPlacementObjectKind.ACTOR,
@@ -1152,11 +1171,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
             var nodeMarker =
                     mapper.readTree(
                             """
-                    {"aggregateId":"%s",
-                     "aggregateGeneration":"1","index":0,"expectedStoreVersion":"%s",
-                     "ownerTransition":"%s","targetAuthorityOwnerGeneration":"%s",
-                     "authorityPayloadSha256":"%s","membershipMutationSha256":"%s"}
-                    """
+                            {"aggregateId":"%s",
+                             "aggregateGeneration":"1","index":0,"expectedStoreVersion":"%s",
+                             "ownerTransition":"%s","targetAuthorityOwnerGeneration":"%s",
+                             "authorityPayloadSha256":"%s","membershipMutationSha256":"%s"}
+                            """
                                     .formatted(
                                             request.aggregateId(),
                                             current.storeVersion(),
