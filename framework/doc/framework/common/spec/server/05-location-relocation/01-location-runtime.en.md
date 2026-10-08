@@ -870,8 +870,7 @@ which requires a valid owner lease.
 `Conflict` changed nothing but doesn't say which condition failed. The Framework re-reads the
 authority record and checks that the first-read state (still `Missing` if it was `Missing`, otherwise
 the first-read `StoreVersion`) and the reservation identity the operation has are unchanged and
-that the Location repository still judges the operation's §6.1 eligibility to hold (a valid owner
-lease for most operations, an ended owner for a conditional release). If so, it re-reads the capacity, counter, and descriptor records the request
+that the Location repository still judges the operation's §6.1 eligibility to hold. If so, it re-reads the capacity, counter, and descriptor records the request
 needs, rebuilds all of its conditions and changes, and requests it again. Otherwise the operation's
 existing result classification applies. Factories and application callbacks aren't run again. This
 repetition happens within the operation's deadline with no separate retry cap, except that

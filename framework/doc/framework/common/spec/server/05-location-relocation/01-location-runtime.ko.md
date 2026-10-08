@@ -778,8 +778,7 @@ membership을 함께 지우며 active 수용 공간을 반납한다. 해제한 �
 **`Conflict`를 받은 작업은 작업 자격을 다시 확인해 이어 간다.** Provider `Conflict`는 아무것도 변경하지
 않았지만 어느 조건이 맞지 않았는지는 알려 주지 않는다. Framework는 authority record를 다시 읽어, 처음
 읽은 상태(처음에 `Missing`이었으면 여전히 `Missing`, 아니면 처음 읽은 `StoreVersion`)와 그 작업에 있는
-reservation identity가 그대로이고 그 작업의 §6.1 자격(대부분의 작업은 유효한 owner lease, 조건부 해제는
-끝난 owner)이 유지되는지 Location repository가 다시 판정한다. 그대로면 요청 계산에 필요한 수용 공간·
+reservation identity가 그대로이고 그 작업의 §6.1 자격이 유지되는지 Location repository가 다시 판정한다. 그대로면 요청 계산에 필요한 수용 공간·
 counter·descriptor record를 다시 읽어 조건과 변경 전체를 다시 구성해 요청한다. 그렇지 않으면 그 작업의
 기존 결과 분류를 따른다. Factory와 application callback은 다시 실행하지 않는다. 이 반복은 그 operation의
 deadline 안에서 하며 별도 횟수 상한을 두지 않는다. 다만 relocation target의 `NewOwner`와 `SpotWide`
