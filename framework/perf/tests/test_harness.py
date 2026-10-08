@@ -18,6 +18,7 @@ from launchers import declared_framework_version, launcher
 from results import BOUNDS, MAX_U64, _validate_null_reasons, aggregate, export_latency, histogram_merge, u64, write_json
 from roles import plan_roles
 from runner import (
+    OwnedProcesses,
     agreed_core_version,
     agreed_framework_version,
     build,
@@ -29,6 +30,89 @@ from runner import (
 )
 from scenarios import BY_NAME, ROLE_KINDS, SCENARIOS, expand
 from store import RunStore
+
+
+class DiagnosticEnvironmentTests(unittest.TestCase):
+    def test_cpp_diagnostic_enables_the_framework_mesh_trace(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cell = Path(folder)
+            (cell / "logs").mkdir()
+            (cell / "tmp").mkdir()
+            owned = OwnedProcesses(cell, None)
+            with patch("runner.subprocess.Popen") as start, patch("runner.write_json"):
+                try:
+                    owned.start("server", ["server"], diagnostics="cpp")
+                    self.assertEqual(start.call_args.kwargs["env"]["ZLINK_CPP_MESH_TRACE"], "1")
+                    owned.start("server-normal", ["server"])
+                    self.assertIsNone(start.call_args.kwargs["env"])
+                    owned.start("server-node", ["server"], diagnostics="node")
+                    self.assertIsNone(start.call_args.kwargs["env"])
+                finally:
+                    for log in owned.logs:
+                        log.close()
+
+
+class ListenerOwnershipTests(unittest.TestCase):
+    def test_roles_only_request_os_binding_and_have_no_runner_reservation(self):
+        args = options(["single", "--scenario", "pubsub-fanout-echo", "--subscriber-count", "2", *COMMON])
+        cell = expand(args, False)[0]
+        common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "language": "cpp",
+                  "workload": {}, "worker": None, "store": None,
+                  "diagnostics": lambda name: None, "provenance": {}}
+        roles = plan_roles(cell, {"logical_streams": 4}, common, "tcp")
+        for role in roles:
+            self.assertEqual(role.config["metricsUrl"], "http://127.0.0.1:0")
+            self.assertEqual(role.config["applicationTriggerUrl"], "http://127.0.0.1:0/app/perf/start")
+            self.assertTrue(all(endpoint.endswith(":0") for endpoint in role.config["transportEndpoints"].values()))
+            self.assertIsNone(role.manifest["metrics"]["baseUrl"])
+            self.assertIsNone(role.manifest["applicationTriggerUrl"])
+        owned = OwnedProcesses(Path("/unused"), None)
+        self.assertFalse(hasattr(owned, "reserve"))
+        self.assertFalse(hasattr(owned, "release"))
+        self.assertFalse(hasattr(owned, "reservations"))
+
+    def test_http_manifest_uses_only_the_atomic_startup_report(self):
+        from runner import publish_http_endpoints
+        role = {"role": "session", "roleInstance": 0, "metrics": {"baseUrl": None},
+                "applicationTriggerUrl": None}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "startup.json"
+            self.assertFalse(publish_http_endpoints(role, path))
+            self.assertIsNone(role["metrics"]["baseUrl"])
+            report = {"role": "session", "roleInstance": 0, "metricsUrl": "http://127.0.0.1:41001",
+                      "applicationTriggerUrl": "http://127.0.0.1:41002/app/perf/start"}
+            path.write_text(json.dumps(report))
+            self.assertTrue(publish_http_endpoints(role, path))
+            self.assertEqual(role["metrics"]["baseUrl"], report["metricsUrl"])
+            self.assertEqual(role["applicationTriggerUrl"], report["applicationTriggerUrl"])
+            report["metricsUrl"] = "http://127.0.0.1:0"
+            path.write_text(json.dumps(report))
+            with self.assertRaises(RuntimeError):
+                publish_http_endpoints(role, path)
+            path.write_text("[]")
+            with self.assertRaises(RuntimeError):
+                publish_http_endpoints(role, path)
+
+    def test_readiness_never_calls_http_before_the_startup_report(self):
+        from runner import wait_ready
+        with tempfile.TemporaryDirectory() as directory:
+            cell = Path(directory)
+            (cell / "tmp").mkdir()
+            role = {"role": "session", "roleInstance": 0, "metrics": {"baseUrl": None},
+                    "applicationTriggerUrl": None}
+            owned = OwnedProcesses(cell, None)
+            workload = {"setupTimeoutMs": 1000, "adminTimeoutMs": 500}
+            with patch("runner.get_json") as get, patch("runner.time.monotonic", side_effect=[0, 1]):
+                with self.assertRaises(TimeoutError):
+                    wait_ready(owned, [role], False, cell, "infrastructure", launcher("node"), workload)
+                get.assert_not_called()
+            (cell / "tmp/server-session-0-startup.json").write_text(json.dumps({
+                "role": "session", "roleInstance": 0, "metricsUrl": "http://127.0.0.1:41001",
+                "applicationTriggerUrl": "http://127.0.0.1:41002/app/perf/start"}))
+            with patch("runner.get_json", return_value={"infrastructureReady": True}) as get:
+                wait_ready(owned, [role], False, cell, "infrastructure", launcher("node"), workload)
+                self.assertEqual(get.call_args.args[0], "http://127.0.0.1:41001/perf/ready")
+
 
 COMMON = ["--language", "dotnet", "--perf-dir", "/tmp/perf"]
 
@@ -216,9 +300,8 @@ class HarnessTests(unittest.TestCase):
         for scenario in SCENARIOS:
             args = options(["single", "--scenario", scenario.name, *(["--subscriber-count", "3"] if scenario.uses(count="subscribers") else []), *COMMON])
             cell = expand(args, False)[0]
-            port = iter(range(20000, 30000))
             for role in plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4},
-                                  common, launcher("dotnet").stream_scheme, lambda: next(port)):
+                                  common, launcher("dotnet").stream_scheme):
                 if not role.config["awaitRemoteTargets"]:
                     skipping.add((scenario.name, role.config["role"]))
         # Bad direction: the receivers, the request sources and the server-side send/send source (10.6) still wait.
@@ -230,22 +313,20 @@ class HarnessTests(unittest.TestCase):
         for scenario in SCENARIOS:
             args = options(["single", "--scenario", scenario.name, *(["--subscriber-count", "3"] if scenario.uses(count="subscribers") else []), *COMMON])
             cell = expand(args, False)[0]
-            port = iter(range(20000, 30000))
             common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "language": "dotnet",
                       "workload": {}, "worker": None, "store": None,
                       "diagnostics": lambda name: None, "provenance": {}}
             planned = plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4},
-                                 common, launcher("dotnet").stream_scheme, lambda: next(port))
+                                 common, launcher("dotnet").stream_scheme)
             expected = sum(3 if role.count else 1 for role in scenario.roles)
             self.assertEqual(len(planned), expected)
             self.assertEqual(sum(role.source for role in planned), 0 if scenario.driver == "clients" else 1)
             for role in planned:
                 seen.add(role.config["role"])
                 self.assertEqual(role.config["language"], "dotnet")
-                self.assertEqual(role.manifest["metrics"]["baseUrl"], role.config["metricsUrl"])
-                self.assertEqual(role.manifest["streamEndpoint"], role.config["transportEndpoints"].get("stream"))
+                self.assertIsNone(role.manifest["metrics"]["baseUrl"])
+                self.assertIsNone(role.manifest["streamEndpoint"])
                 self.assertEqual(role.config["spotIds"] == [], not any(r.objects == "spot" and r.kind == role.config["role"] for r in scenario.roles))
-                self.assertEqual(len(role.ports), len(set(role.ports)))
             if scenario.name == "s2s-spot-to-channel-send-send-echo":
                 role_by_kind = {role.config["role"]: role for role in planned}
                 self.assertEqual(role_by_kind["channel"].config["spotIds"], role_by_kind["spot"].config["spotIds"])
@@ -288,24 +369,22 @@ class HarnessTests(unittest.TestCase):
             "diagnostics": lambda name: None,
             "provenance": {},
         }
-        ports = iter(range(20000, 30000))
         role = plan_roles(
             cell,
             {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4},
             common,
             "tcp",
-            lambda: next(ports),
         )[0]
 
-        self.assertEqual(role.config["transportEndpoints"]["stream"], "tcp://127.0.0.1:*")
-        self.assertEqual(role.ports, [20000, 20001])
+        self.assertEqual(role.config["transportEndpoints"]["stream"], "tcp://127.0.0.1:0")
+        self.assertFalse(hasattr(role, "ports"))
 
     def test_role_manifest_uses_publicly_reported_bound_endpoint(self):
         role = {
             "role": "session",
             "roleInstance": 0,
-            "transportEndpoints": {"stream": "tcp://127.0.0.1:*"},
-            "streamEndpoint": "tcp://127.0.0.1:*",
+            "transportEndpoints": {"stream": None},
+            "streamEndpoint": None,
         }
         ready = {
             "evidence": [
@@ -329,17 +408,16 @@ class HarnessTests(unittest.TestCase):
                   "workload": {}, "worker": None, "store": None, "diagnostics": lambda name: None, "provenance": {}}
         expected = {"dotnet": "tcp", "java": "tcp", "kotlin": "tcp", "node": "ws", "cpp": "tcp"}
         for language, scheme in expected.items():
-            port = iter(range(20000, 30000))
             common["language"] = language
             planned = plan_roles(cell, {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4},
-                                 common, launcher(language).stream_scheme, lambda: next(port))
+                                 common, launcher(language).stream_scheme)
             stream_roles = [role for role in planned if role.config["transportEndpoints"].get("stream")]
             self.assertTrue(stream_roles)
             for role in stream_roles:
                 self.assertEqual(role.config["language"], language)
                 endpoint = role.config["transportEndpoints"]["stream"]
                 self.assertTrue(endpoint.startswith(scheme + "://"))
-                self.assertEqual(role.manifest["streamEndpoint"], endpoint)
+                self.assertIsNone(role.manifest["streamEndpoint"])
 
     def test_cell_comparison_excludes_run_identity_but_keeps_workload(self):
         env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
@@ -374,9 +452,8 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(comparable["publisherChannel"], {"noDrop": True, "sendTimeoutMs": workload["socketSendTimeoutMs"]})
         common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "language": "cpp",
                   "workload": workload, "worker": None, "store": None, "diagnostics": lambda name: None, "provenance": {}}
-        ports = iter(range(20000, 30000))
         roles = plan_roles(cell, {"subscriber_count": cell.subscriber_count, "logical_streams": 4},
-                           common, "tcp", lambda: next(ports))
+                           common, "tcp")
         publisher = next(role.config for role in roles if role.config["role"] == "publisher")
         self.assertIs(publisher["provenance"]["fanout"]["noDrop"], True)
 

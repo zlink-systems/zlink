@@ -8,6 +8,7 @@
 #include <perf/send_send_correlation.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <zlink/core/api.h>
 #include <zlink/locations/redis.hpp>
 
@@ -403,6 +404,21 @@ class runtime_binding_service_t final : public fw::hosted_service_t
         if (const auto client_server = services.get<fw::client_server_runtime_t> ())
             _role.client_server = &client_server->get ();
         _role.runtime = &services.get_required<fw::framework_runtime_t> ();
+        const auto listeners = _role.runtime.load ()->http_listener_statuses ();
+        if (listeners.size () != 2)
+            throw std::runtime_error ("Admin and trigger require two bound HTTP listeners.");
+        const auto path = _role.config.provenance.at ("startupFile").get<std::string> ();
+        {
+            std::ofstream output (path + ".tmp");
+            output.exceptions (std::ios::failbit | std::ios::badbit);
+            output << json ({{"role", _role.config.role},
+                             {"roleInstance", _role.config.role_instance},
+                             {"metricsUrl", listeners[0].bound_url},
+                             {"applicationTriggerUrl", listeners[1].bound_url + "/app/perf/start"}})
+                        .dump ();
+            output.close ();
+        }
+        std::filesystem::rename (path + ".tmp", path);
         co_return;
     }
     void stop () noexcept override {}
