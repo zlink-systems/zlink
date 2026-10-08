@@ -1991,14 +1991,14 @@ final class ZLinkChannelSocketRegistry {
         if (router == null) {
             return;
         }
-        for (String endpoint : channel.routeBinds()) {
+        for (int index = 0; index < channel.routeBinds().size(); index++) {
             surfaces.add(
                     new ZLinkChannelRuntime.AutoConnectSurface(
                             ZLinkAutoConnectType.ROUTE_MESH,
                             channel.name(),
                             ZLinkLocationRole.ROUTER,
                             channel.routeRoutingId(),
-                            advertisedEndpoint(endpoint, router),
+                            ZLinkListenerIdentity.advertisedEndpoint(router.lastEndpoint(), null),
                             router.peerWeight(),
                             router,
                             channel.routeManualEndpoints()));
@@ -2015,43 +2015,6 @@ final class ZLinkChannelSocketRegistry {
                             router,
                             channel.routeManualEndpoints()));
         }
-    }
-
-    private static String advertisedEndpoint(
-            String configuredEndpoint, ZLinkBackendRouterSocket router) {
-        return advertisedEndpoint(configuredEndpoint, router, null);
-    }
-
-    static String advertisedEndpoint(
-            String configuredEndpoint, ZLinkBackendRouterSocket router, String advertiseHost) {
-        String endpoint = configuredEndpoint;
-        if (!configuredEndpoint.endsWith(":0")) {
-            endpoint = configuredEndpoint;
-        } else {
-            String boundEndpoint = router.lastEndpoint();
-            endpoint =
-                    boundEndpoint == null || boundEndpoint.isBlank()
-                            ? configuredEndpoint
-                            : boundEndpoint;
-        }
-        return ZLinkListenerIdentity.advertisedEndpoint(endpoint, advertiseHost);
-    }
-
-    static String advertisedEndpoint(
-            String configuredEndpoint,
-            ZLinkBackendPublisherSocket publisher,
-            String advertiseHost) {
-        String endpoint;
-        if (!configuredEndpoint.endsWith(":0")) {
-            endpoint = configuredEndpoint;
-        } else {
-            String boundEndpoint = publisher.lastEndpoint();
-            endpoint =
-                    boundEndpoint == null || boundEndpoint.isBlank()
-                            ? configuredEndpoint
-                            : boundEndpoint;
-        }
-        return ZLinkListenerIdentity.advertisedEndpoint(endpoint, advertiseHost);
     }
 
     private static void closeAll(

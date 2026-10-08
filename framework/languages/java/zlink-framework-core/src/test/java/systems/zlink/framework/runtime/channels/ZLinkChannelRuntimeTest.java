@@ -2447,13 +2447,22 @@ final class ZLinkChannelRuntimeTest {
     }
 
     private static final class FakePublisherSocket implements ZLinkBackendPublisherSocket {
+        private String boundEndpoint;
+
         @Override
         public String name() {
             return "publisher";
         }
 
         @Override
-        public void bind(String endpoint) {}
+        public void bind(String endpoint) {
+            boundEndpoint = endpoint;
+        }
+
+        @Override
+        public String lastEndpoint() {
+            return boundEndpoint;
+        }
 
         @Override
         public void close() {}
@@ -2568,6 +2577,8 @@ final class ZLinkChannelRuntimeTest {
     }
 
     private static final class FakeRouterSocket implements ZLinkBackendRouterSocket {
+        private String boundEndpoint;
+
         final java.util.concurrent.Semaphore readable = new java.util.concurrent.Semaphore(0);
         final java.util.Queue<ZLinkBackendReceived> inbound =
                 new java.util.concurrent.ConcurrentLinkedQueue<>();
@@ -2619,7 +2630,14 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public void bind(String endpoint) {}
+        public void bind(String endpoint) {
+            boundEndpoint = endpoint;
+        }
+
+        @Override
+        public String lastEndpoint() {
+            return boundEndpoint;
+        }
 
         @Override
         public void connect(String endpoint) {}
