@@ -42,11 +42,13 @@ import type {
 } from './internal-location-contracts';
 import { encodeAuthorityKey } from './authority-key-codec';
 import { creationTerminalPreimage } from './opaque-record-key';
+import { ServiceRelocationAuthorityPayloadCodec } from '../foundation/service-relocation-runtime';
 
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 const MAX_U64 = UINT64_MAX;
+const relocationAuthorityCodec = new ServiceRelocationAuthorityPayloadCodec();
 
 export interface ZLinkInMemoryAuthorityValidation {
   isOwnerLive(owner: ZLinkLocationOwnerToken): boolean;
@@ -318,6 +320,7 @@ export class ZLinkInMemoryAuthorityStore {
         })
       )
         return false;
+      if (relocationAuthorityCodec.read(current.snapshot.payload) !== undefined) return false;
       if (request?.actorRelocationPolicy !== 'disabled')
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,

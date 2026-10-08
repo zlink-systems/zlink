@@ -34,6 +34,10 @@ import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locatio
 import { ZLinkUserSpotCreationCoordinator } from '../../packages/framework/src/runtime/host/user-spot-creation-coordinator';
 import { ZLinkActorPlacementCoordinator } from '../../packages/framework/src/runtime/host/actor-placement-coordinator';
 import { randomOperationId } from '../../packages/framework/src/runtime/locations/creation-operation-id';
+import { createFrameworkOptions } from '../../packages/framework/src/contracts/Configuration/RegistrationBuilders';
+import type { ZLinkActorContext } from '../../packages/framework/src/contracts/Actors/ZLinkActorContext';
+import type { ZLinkSpotNodeOptions } from '../../packages/framework/src/contracts/Configuration/RegistrationTypes';
+import { ServiceRelocationAuthorityPayloadCodec } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import {
   decodeCreationOperationTerminalV1,
   encodeCreationOperationTerminalV1
@@ -75,9 +79,26 @@ for (const backend of ['provider', 'memory'] as const) {
     'recreate',
     'typeMismatch',
     'race',
+    'relocation',
     ...(backend === 'provider' ? (['capacityRace', 'capacityCorrupt'] as const) : [])
   ] as const) {
     test(`ended Active Actor recreation: ${backend} ${scenario}`, async () => {
+      class ReclaimFactory {
+        async create(context: ZLinkActorContext) {
+          return { context };
+        }
+      }
+      const registration = createFrameworkOptions((options) => {
+        options
+          .addRouteMesh('reclaim-source')
+          .listen('tcp://127.0.0.1:0')
+          .objects()
+          .server()
+          .addActorFactory('player', ReclaimFactory, (factory) => factory.disableRelocation());
+      });
+      const policy = (registration.spotNodes as Readonly<Record<string, ZLinkSpotNodeOptions>>)[
+        'reclaim-source'
+      ].actorFactoryRegistrations!['player'].relocation.kind;
       let now = new Date(100);
       const provider = new ZLinkInMemoryProviderLocationStore(() => now);
       const store =
@@ -117,6 +138,21 @@ for (const backend of ['provider', 'memory'] as const) {
       const first = await store.reserve(request);
       assert.equal(first.kind, 'reserved');
       if (first.kind !== 'reserved') throw new Error('reservation missing');
+      const readyPayload =
+        scenario === 'relocation'
+          ? new ServiceRelocationAuthorityPayloadCodec().publish(
+              Buffer.from('old-state-and-membership'),
+              {
+                reference: 'reclaim-relocation',
+                checksumCrc32c: 0,
+                aggregateId: '00000000-0000-0000-0000-000000000001',
+                aggregateGeneration: 1n,
+                inventoryDigest: '00'.repeat(32),
+                targetOwnerId: 'reclaim-target',
+                targetOwnerLeaseGeneration: 1n
+              }
+            )
+          : Buffer.from('old-state-and-membership');
       const completed = await store.completeCreation({
         key: request.key,
         target: request.target,
@@ -124,7 +160,7 @@ for (const backend of ['provider', 'memory'] as const) {
         expectedStoreVersion: first.creating.storeVersion.value,
         completion: {
           kind: 'created',
-          readyPayload: Buffer.from('old-state-and-membership'),
+          readyPayload,
           terminal: {
             operation: {
               sourceNodeRid: 'node-a',
@@ -164,8 +200,7 @@ for (const backend of ['provider', 'memory'] as const) {
           nodeLifecycleGeneration: 1n,
           owner: { ownerId: replacement.ownerId, leaseGeneration: replacement.leaseGeneration }
         },
-        actorRelocationPolicy:
-          scenario === 'recreate' ? ('recreate' as const) : ('disabled' as const),
+        actorRelocationPolicy: scenario === 'recreate' ? ('recreate' as const) : policy,
         intent: {
           ...request.intent,
           stableType: scenario === 'typeMismatch' ? 'different' : 'player'
@@ -178,6 +213,15 @@ for (const backend of ['provider', 'memory'] as const) {
             error instanceof ZLinkFrameworkException &&
             error.kind === ZLinkFrameworkErrorKind.Unavailable
         );
+      } else if (scenario === 'relocation') {
+        assert.equal((await store.reserve(next)).kind, 'alreadyExists');
+        const retained = await store.readAuthority(
+          encodeAuthorityKey('actor', request.key.globalId)
+        );
+        assert.equal(retained.kind, 'snapshot');
+        if (retained.kind !== 'snapshot') throw new Error('authority missing');
+        assert.equal(retained.objectGeneration, first.creating.objectGeneration);
+        assert.deepEqual(retained.payload, readyPayload);
       } else if (scenario === 'capacityCorrupt') {
         const key = storeKey('zlink:v11:capacity:mesh:node-a');
         const read = await provider.read(key);
