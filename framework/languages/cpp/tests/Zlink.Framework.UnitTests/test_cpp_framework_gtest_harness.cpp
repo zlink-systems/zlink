@@ -4,6 +4,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <gtest/gtest-spi.h>
 
 namespace
 {
@@ -25,4 +26,14 @@ TEST (FrameworkGoogleTestHarness, SupportsGoogleMockBoundaries)
     hosted_service_mock_t service;
     EXPECT_CALL (service, stop ()).Times (1);
     service.stop ();
+}
+
+TEST (FrameworkGoogleTestHarness, CapturesGoogleMockExpectationFailures)
+{
+    EXPECT_NONFATAL_FAILURE (
+      {
+          hosted_service_mock_t service;
+          EXPECT_CALL (service, stop ()).Times (1);
+      },
+      "Actual: never called");
 }

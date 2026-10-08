@@ -111,6 +111,8 @@ change, it isn't put into
 positive route cache. Caching it would keep showing "being created" for the cache lifetime
 even after creation finished.
 
+This diagram shows the creation competition of a User Spot `GetOrCreate`. The same-target join of Instance operations and the handling of a `Reserve` loser on a different target follow [Spot address messaging §4.2](06-spot-address-messaging.en.md#42-when-several-nodes-receive-the-first-message-at-once).
+
 ```mermaid
 sequenceDiagram
     participant A as caller A

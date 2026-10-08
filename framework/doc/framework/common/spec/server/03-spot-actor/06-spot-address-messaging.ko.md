@@ -412,6 +412,15 @@ Serving gate를 열지 않는다 — 위 §4.1 11단계가 정의하는 barrier�
 target에 도착해도 Store에서 생성 권한을 얻은 target 하나만 factory를 실행한다. 나머지 target은
 local Spot을 만들지 않는다.
 
+**한 target은 같은 Spot ID의 local activation을 하나만 둔다.** 그 target에서 같은 Spot의 activation이
+진행 중일 때 도착한 Instance-intent operation은 `Reserve`를 다시 시도하지 않고 그 activation에 합류한다.
+합류한 operation은 activation이 `Ready`가 된 뒤 target에 도착한 순서대로 queue에 들어간다. Activation 실패는
+합류한 각 operation의 원래 identity·deadline·reply correlation·reply route를 보존해 기존 완료 계약으로
+처리한다. Request는 이미 확정된 terminal을 유지하고, 아직 유효하면 원래 reply route로 activation 오류를 한 번
+반환한다. Outbound admission이 끝난 one-way send의 완료 결과는 바꾸지 않고 실패를 기존 diagnostics에
+기록한다. 아래 `Reserve` 패자 규칙은 서로 다른 target 사이의
+경쟁에만 적용된다.
+
 `Reserve`에서 진 target은 current owner를 다시 선택하거나 최초 operation을 전달하지 않는다.
 그 target이 원래 operation ID, payload, absolute deadline, reply correlation과 reply route를
 보존해 `Unavailable` terminal을 한 번 만든다. Request가 원래 deadline 안에 있으면 원래 reply route로 오류를 반환하고, deadline이 끝났으면

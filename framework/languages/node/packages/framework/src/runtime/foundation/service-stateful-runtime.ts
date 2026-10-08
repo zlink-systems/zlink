@@ -432,6 +432,7 @@ export class ServiceStatefulRuntime {
     Promise<{
       readonly spot: Pick<ServiceSpotState, 'ref'>;
       readonly route: ServiceInstanceRouteFence;
+      readonly stableType: string;
     }>
   >();
   private closed = false;
@@ -1559,7 +1560,7 @@ export class ServiceStatefulRuntime {
             this.nodeRid,
             sourceSpotId,
             'request',
-            { high: this.nodeGeneration, low: pending.id },
+            { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id },
             deadlineUnixMs,
             pending.id,
             metadataFrame !== undefined
@@ -2520,27 +2521,24 @@ export class ServiceStatefulRuntime {
   ): Promise<void> {
     try {
       this.validateInstanceIngress(ingress, record);
-      const activation = await this.activateMissingInstanceAsync(
-        record,
-        payloadFrame,
-        metadataFrame
-      );
-      if (this.closed) return;
-      const terminal = this.activationTerminalCompletion(record.target, activation.route);
-      const admitted = this.enqueueActivatedInstanceSpot(
-        ingress,
-        record,
-        payloadFrame,
-        activation.spot,
-        localReply,
-        terminal.onTerminalCompletion,
-        metadataFrame,
-        terminal.onHandlerTurnStarted,
-        this.instanceApplicationTarget(record, activation.route.objectGeneration)
-      );
-      if (admitted !== 'application') {
-        throw new Error('Activated Instance message was not admitted to the local queue.');
-      }
+      await this.activateMissingInstanceAsync(record, payloadFrame, metadataFrame, (activation) => {
+        if (this.closed) return;
+        const terminal = this.activationTerminalCompletion(record.target, activation.route);
+        const admitted = this.enqueueActivatedInstanceSpot(
+          ingress,
+          record,
+          payloadFrame,
+          activation.spot,
+          localReply,
+          terminal.onTerminalCompletion,
+          metadataFrame,
+          terminal.onHandlerTurnStarted,
+          this.instanceApplicationTarget(record, activation.route.objectGeneration)
+        );
+        if (admitted !== 'application') {
+          throw new Error('Activated Instance message was not admitted to the local queue.');
+        }
+      });
     } catch (error) {
       this.finishMissingInstanceActivationFailure(ingress, record, error, localReply);
     }
@@ -2949,15 +2947,35 @@ export class ServiceStatefulRuntime {
       { readonly kind: 'instanceSpot'; readonly activation: 'missing' }
     >,
     payloadFrame: Buffer,
-    metadataFrame?: Buffer
-  ): Promise<{
-    readonly spot: Pick<ServiceSpotState, 'ref'>;
-    readonly route: ServiceInstanceRouteFence;
-  }> {
-    const key = instanceActivationKey(record);
+    metadataFrame: Buffer | undefined,
+    admit: (activation: {
+      readonly spot: Pick<ServiceSpotState, 'ref'>;
+      readonly route: ServiceInstanceRouteFence;
+    }) => void
+  ): Promise<unknown> {
+    const key = record.target.targetSpotId;
     const pending = this.pendingInstanceActivations.get(key);
-    if (pending !== undefined) return pending;
-    const activation = this.runMissingInstanceActivation(record, payloadFrame, metadataFrame);
+    const ready =
+      pending ??
+      this.runMissingInstanceActivation(record, payloadFrame, metadataFrame).then((activation) => ({
+        ...activation,
+        stableType: record.target.stableType
+      }));
+    const operation = ready.then((value) => {
+      if (value.stableType !== record.target.stableType) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.TypeMismatch,
+          'Instance Spot type does not match.'
+        );
+      }
+      admit(value);
+      return value;
+    });
+    // The caller owns operation failure. Keep the activation available for later participants.
+    const activation = operation.then(
+      (value) => value,
+      () => ready
+    );
     this.pendingInstanceActivations.set(key, activation);
     const clear = () => {
       if (this.pendingInstanceActivations.get(key) === activation) {
@@ -2965,7 +2983,7 @@ export class ServiceStatefulRuntime {
       }
     };
     void activation.then(clear, clear);
-    return activation;
+    return operation;
   }
 
   private async runMissingInstanceActivation(
@@ -5814,18 +5832,6 @@ function instanceOperationKey(
   return (
     `${record.sourceNodeRid}\0${record.sourceNodeGeneration}\0` +
     `${record.operation.high}\0${record.operation.low}`
-  );
-}
-
-function instanceActivationKey(
-  record: Extract<
-    ServiceStatefulWireRecord,
-    { readonly kind: 'instanceSpot'; readonly activation: 'missing' }
-  >
-): string {
-  return (
-    `${record.target.targetNodeRid}\0${record.target.targetNodeGeneration}\0` +
-    `${record.target.targetSpotId}\0${record.target.stableType}`
   );
 }
 

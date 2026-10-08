@@ -9,6 +9,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
+import java.util.function.Supplier;
 
 /**
  * Framework-owned Instance Spot activation barrier. Only an Instance-marked direct operation calls
@@ -63,6 +64,21 @@ final class ZLinkJavaInstanceSpotRegistry {
                     new IllegalArgumentException(
                             "Instance Spot object generation must be positive"));
         }
+        return activate(
+                spotId,
+                requestedType,
+                deadlineUnixMs,
+                () -> CompletableFuture.completedFuture(objectGeneration),
+                restoreFirst);
+    }
+
+    CompletionStage<Activation> activate(
+            String spotId,
+            String requestedType,
+            long deadlineUnixMs,
+            Supplier<CompletionStage<Long>> generation,
+            java.util.function.Consumer<ZLinkBackendSpot> restoreFirst) {
+        Objects.requireNonNull(spotId, "spotId");
         String selected = selectType(spotId, requestedType);
         String recorded = stableTypes.putIfAbsent(spotId, selected);
         if (recorded != null && !recorded.equals(selected)) {
@@ -70,46 +86,75 @@ final class ZLinkJavaInstanceSpotRegistry {
                     new IllegalStateException(
                             "Instance Spot stable type does not match authority"));
         }
-        CompletableFuture<Activation> current = activations.get(spotId);
-        if (current != null) {
-            return current.thenApply(
-                    value -> {
-                        restoreFirst.accept(value.spot());
-                        return value;
-                    });
-        }
         CompletableFuture<Activation> candidate = new CompletableFuture<>();
-        current = activations.putIfAbsent(spotId, candidate);
+        CompletableFuture<Activation> current = activations.putIfAbsent(spotId, candidate);
         if (current != null) {
-            return current.thenApply(
-                    value -> {
-                        restoreFirst.accept(value.spot());
-                        return value;
+            while (!activations.replace(spotId, current, candidate)) {
+                current = activations.putIfAbsent(spotId, candidate);
+                if (current == null) break;
+            }
+        }
+        if (current != null) {
+            var result = new CompletableFuture<Activation>();
+            current.whenComplete(
+                    (value, failure) -> {
+                        if (failure != null) {
+                            result.completeExceptionally(failure);
+                            candidate.completeExceptionally(failure);
+                            activations.remove(spotId, candidate);
+                            return;
+                        }
+                        try {
+                            restoreFirst.accept(value.spot());
+                            result.complete(value);
+                        } catch (RuntimeException | Error refusal) {
+                            result.completeExceptionally(refusal);
+                        } finally {
+                            // Preserve Ready even when this operation's queue admission fails.
+                            candidate.complete(value);
+                        }
                     });
+            return result;
         }
         try {
-            ZLinkBackendSpot spot = factories.get(selected).apply(spotId, objectGeneration);
-            if (spot == null) {
-                throw new IllegalStateException("Instance Spot factory returned null");
-            }
-            if (spot.lifecycleGeneration() != objectGeneration) {
-                throw new IllegalStateException(
-                        "Instance Spot factory returned a stale generation");
-            }
-            hooks.get(selected)
-                    .activate(
-                            selected, spotId, objectGeneration, spot, deadlineUnixMs, restoreFirst)
+            generation
+                    .get()
+                    .thenCompose(
+                            objectGeneration -> {
+                                ZLinkBackendSpot spot =
+                                        factories.get(selected).apply(spotId, objectGeneration);
+                                if (spot == null) {
+                                    throw new IllegalStateException(
+                                            "Instance Spot factory returned null");
+                                }
+                                if (spot.lifecycleGeneration() != objectGeneration) {
+                                    throw new IllegalStateException(
+                                            "Instance Spot factory returned a stale generation");
+                                }
+                                return hooks.get(selected)
+                                        .activate(
+                                                selected,
+                                                spotId,
+                                                objectGeneration,
+                                                spot,
+                                                deadlineUnixMs,
+                                                restoreFirst)
+                                        .whenComplete(
+                                                (ignored, failure) -> {
+                                                    if (failure != null) spot.close();
+                                                })
+                                        .thenApply(ignored -> new Activation(selected, spot));
+                            })
                     .whenComplete(
-                            (ignored, failure) -> {
+                            (value, failure) -> {
                                 if (failure == null) {
-                                    candidate.complete(new Activation(selected, spot));
+                                    candidate.complete(value);
                                 } else {
-                                    spot.close();
                                     candidate.completeExceptionally(failure);
                                     activations.remove(spotId, candidate);
                                 }
                             });
-        } catch (Throwable failure) {
+        } catch (RuntimeException | Error failure) {
             candidate.completeExceptionally(failure);
             activations.remove(spotId, candidate);
         }
