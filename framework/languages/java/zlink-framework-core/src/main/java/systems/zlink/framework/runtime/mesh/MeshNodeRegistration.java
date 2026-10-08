@@ -228,6 +228,11 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         return Map.copyOf(relocatableActorFactories);
     }
 
+    public RelocationPolicy actorRelocationPolicy(String stableType) {
+        var factory = relocatableActorFactories.get(stableType);
+        return factory == null ? null : factory.relocationPolicy();
+    }
+
     public boolean objectRoleEnabled() {
         return objectRoles.client || objectRoles.server;
     }
