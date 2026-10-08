@@ -13,11 +13,10 @@
 // With main compiled into the test binary, both the registrations and this
 // call resolve through the same import, so there is one registry.
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 int main (int argc, char **argv)
 {
-    testing::InitGoogleMock (&argc, argv);
+    testing::InitGoogleTest (&argc, argv);
     return RUN_ALL_TESTS ();
 }
