@@ -417,37 +417,49 @@ internal static class ZLinkInstanceSpotAuthorityPayloadCodec
     }
 }
 
-internal sealed class ZLinkInstanceSpotOperationGate
+internal sealed class ZLinkInstanceSpotOperationGate<T>
 {
-    private readonly ConcurrentDictionary<
-        string,
-        Lazy<Task<InstanceSpotActivationTerminal>>
-    > pending = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Lazy<Task<T>>> pending = new(
+        StringComparer.Ordinal
+    );
 
-    internal async Task<InstanceSpotActivationTerminal> RunAsync(
+    internal async Task<T> RunAsync(
         string operationKey,
-        Func<Task<InstanceSpotActivationTerminal>> operation
+        Func<Task<T>> operation,
+        Func<T, Task<T>>? join = null
     )
     {
-        var selected = pending.GetOrAdd(
-            operationKey,
-            _ => new Lazy<Task<InstanceSpotActivationTerminal>>(
-                operation,
-                LazyThreadSafetyMode.ExecutionAndPublication
-            )
-        );
+        var candidate = new Lazy<Task<T>>(operation, LazyThreadSafetyMode.ExecutionAndPublication);
+        var selected = pending.GetOrAdd(operationKey, candidate);
+        if (join is not null && !ReferenceEquals(selected, candidate))
+        {
+            while (true)
+            {
+                var previous = selected;
+                var next = new Lazy<Task<T>>(
+                    async () =>
+                        await join(await previous.Value.ConfigureAwait(false))
+                            .ConfigureAwait(false),
+                    LazyThreadSafetyMode.ExecutionAndPublication
+                );
+                // Only a participant appends admission work; the creator owns Reserve.
+                if (pending.TryUpdate(operationKey, next, previous))
+                {
+                    selected = next;
+                    break;
+                }
+                selected = pending.GetOrAdd(operationKey, candidate);
+                if (ReferenceEquals(selected, candidate))
+                    break;
+            }
+        }
         try
         {
             return await selected.Value.ConfigureAwait(false);
         }
         finally
         {
-            pending.TryRemove(
-                new KeyValuePair<string, Lazy<Task<InstanceSpotActivationTerminal>>>(
-                    operationKey,
-                    selected
-                )
-            );
+            pending.TryRemove(new KeyValuePair<string, Lazy<Task<T>>>(operationKey, selected));
         }
     }
 }
@@ -463,7 +475,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
 {
     private const int RecoveryScanPageSize = 128;
     private static readonly TimeSpan RecoveryRetention = TimeSpan.FromHours(24);
-    private readonly ZLinkInstanceSpotOperationGate operationGate = new();
+    private readonly ZLinkInstanceSpotOperationGate<
+        Task<InstanceSpotActivationTerminal>
+    > operationGate = new();
     private readonly ZLinkInstanceSpotMonitoring monitoring = new();
 
     public ValueTask<InstanceSpotActivationTerminal> ActivateAsync(
@@ -482,13 +496,36 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 operation.Target.MeshName,
                 operation.Target.StableType,
                 PendingBytes(metadata, payload),
-                () =>
-                    operationGate.RunAsync(
-                        operationKey,
-                        () => ActivateCoreAsync(operation, metadata, payload, cancellationToken)
-                    )
+                () => DispatchAsync()
             )
         );
+
+        async Task<InstanceSpotActivationTerminal> DispatchAsync()
+        {
+            var terminal = await operationGate
+                .RunAsync(
+                    operation.Target.TargetSpotId,
+                    () => ActivateCoreAsync(operation, metadata, payload, cancellationToken),
+                    _ => JoinAsync()
+                )
+                .ConfigureAwait(false);
+            return await terminal.ConfigureAwait(false);
+        }
+
+        async Task<Task<InstanceSpotActivationTerminal>> JoinAsync()
+        {
+            try
+            {
+                return await ActivateCoreAsync(operation, metadata, payload, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception error)
+                when (error is ZLinkFrameworkException or OperationCanceledException)
+            {
+                // A participant's refusal belongs to that operation, not to the activation.
+                return Task.FromException<InstanceSpotActivationTerminal>(error);
+            }
+        }
     }
 
     internal ZLinkInstanceSpotOperationSnapshot MonitoringSnapshot(string stableType) =>
@@ -505,7 +542,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         return bytes;
     }
 
-    private async Task<InstanceSpotActivationTerminal> ActivateCoreAsync(
+    private async Task<Task<InstanceSpotActivationTerminal>> ActivateCoreAsync(
         InstanceSpotActivationOperation operation,
         ReadOnlyMemory<byte>? metadata,
         IReadOnlyList<ReadOnlyMemory<byte>> payload,
@@ -527,6 +564,45 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 cancellationToken
             )
             .ConfigureAwait(false);
+
+        var read = await authorityStore
+            .ReadAuthorityAsync(key, cancellationToken)
+            .ConfigureAwait(false);
+        if (
+            read is ZLinkAuthorityReadResult.Found found
+            && found.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
+            && ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                found.Snapshot.Payload.Span,
+                out var existing
+            )
+            && existing.NodeRid == node.RoutingId
+            && existing.NodeGeneration == node.MeshStatus().LifecycleGeneration
+        )
+        {
+            if (existing.StableType != operation.Target.StableType)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.TypeMismatch,
+                    "Instance Spot type does not match."
+                );
+            var activation = await catalog
+                .TryGetInstanceActivationAsync(
+                    existing.SpotId,
+                    existing.StableType,
+                    found.Snapshot.ObjectGeneration
+                )
+                .ConfigureAwait(false);
+            if (activation is not null)
+                return await AdmitMessageAsync(
+                        activation,
+                        operation,
+                        requestSource,
+                        found.Snapshot,
+                        metadata,
+                        payload,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+        }
 
         var envelope = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
             operation,
@@ -647,7 +723,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 )
                 .ConfigureAwait(false);
             published = true;
-            return await DispatchFirstMessageAsync(
+            return await AdmitMessageAsync(
                     prepared.Activation,
                     operation,
                     requestSource,
@@ -990,24 +1066,45 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         Func<CancellationToken, ValueTask>? recordTerminal = null
     )
     {
-        return await activation
-            .DispatchDurableActivationAsync(
-                operation.OperationId,
-                operation.SourceNodeRid,
-                operation.SourceSpotId,
-                requestSource,
-                operation.Target.TargetNodeGeneration,
-                authority.AuthorityOwnerGeneration,
-                checked((ulong)authority.OwnerLeaseGeneration),
-                payload,
-                metadata,
-                operation.IsRequest,
-                cancellationToken,
+        var terminal = await AdmitMessageAsync(
+                activation,
                 operation,
+                requestSource,
+                authority,
+                metadata,
+                payload,
+                cancellationToken,
                 recordTerminal
             )
             .ConfigureAwait(false);
+        return await terminal.ConfigureAwait(false);
     }
+
+    private ValueTask<Task<InstanceSpotActivationTerminal>> AdmitMessageAsync(
+        ZLinkSpotActivation activation,
+        InstanceSpotActivationOperation operation,
+        ZLinkServiceWireCodec.RequestSourceFence requestSource,
+        ZLinkAuthoritySnapshot authority,
+        ReadOnlyMemory<byte>? metadata,
+        IReadOnlyList<ReadOnlyMemory<byte>> payload,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, ValueTask>? recordTerminal = null
+    ) =>
+        activation.AdmitDurableActivationAsync(
+            operation.OperationId,
+            operation.SourceNodeRid,
+            operation.SourceSpotId,
+            requestSource,
+            operation.Target.TargetNodeGeneration,
+            authority.AuthorityOwnerGeneration,
+            checked((ulong)authority.OwnerLeaseGeneration),
+            payload,
+            metadata,
+            operation.IsRequest,
+            cancellationToken,
+            operation,
+            recordTerminal
+        );
 
     private async ValueTask<ZLinkServiceWireCodec.RequestSourceFence> ResolveRequestSourceAsync(
         string meshName,

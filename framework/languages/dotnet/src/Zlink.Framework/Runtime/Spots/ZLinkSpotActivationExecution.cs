@@ -605,6 +605,41 @@ internal abstract partial class ZLinkSpotActivation
         Func<CancellationToken, ValueTask>? recordTerminal = null
     )
     {
+        var terminal = await AdmitDurableActivationAsync(
+                operationId,
+                sourceNodeRid,
+                sourceSpotId,
+                requestSource,
+                targetNodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
+                payload,
+                metadata,
+                request,
+                cancellationToken,
+                originalOperation,
+                recordTerminal
+            )
+            .ConfigureAwait(false);
+        return await terminal.ConfigureAwait(false);
+    }
+
+    internal async ValueTask<Task<InstanceSpotActivationTerminal>> AdmitDurableActivationAsync(
+        MeshOperationId operationId,
+        RoutingId sourceNodeRid,
+        string sourceSpotId,
+        ZLinkServiceWireCodec.RequestSourceFence requestSource,
+        ulong targetNodeGeneration,
+        ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration,
+        IReadOnlyList<ReadOnlyMemory<byte>> payload,
+        ReadOnlyMemory<byte>? metadata,
+        bool request,
+        CancellationToken cancellationToken,
+        InstanceSpotActivationOperation originalOperation,
+        Func<CancellationToken, ValueTask>? recordTerminal = null
+    )
+    {
         if (
             operationId == default
             || targetNodeGeneration == 0
@@ -787,14 +822,19 @@ internal abstract partial class ZLinkSpotActivation
         // Once admitted, caller cancellation no longer removes the accepted
         // queue record or prevents terminal publication. A refused admission
         // has already completed the terminal with its failure.
-        try
+        return CompleteAsync();
+
+        async Task<InstanceSpotActivationTerminal> CompleteAsync()
         {
-            return await completion.Task.ConfigureAwait(false);
-        }
-        finally
-        {
-            if (recorded is not null)
-                await recorded.ConfigureAwait(false);
+            try
+            {
+                return await completion.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                if (recorded is not null)
+                    await recorded.ConfigureAwait(false);
+            }
         }
     }
 
