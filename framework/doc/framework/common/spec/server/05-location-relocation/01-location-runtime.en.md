@@ -387,8 +387,9 @@ creation and relocation, current usage, and the Store counter all use the same k
 categorization.
 
 **An authority record has no automatic expiration time.** The record is kept even after
-the owner lease ends. Only a Framework task responsible for recovery replaces the owner
-or deletes the record, conditioned on the first-read `StoreVersion`. If the record
+the owner lease ends. The owner is replaced and the record is deleted only by an explicit
+operation (`NewOwner` or `Delete`) or a conditional release in [§6.1](#61-read-and-cas),
+conditioned on the first-read `StoreVersion`. If the record
 doesn't exist, only the time the Store read is returned. A temporary `StoreVersion` or
 generation isn't created for a nonexistent record.
 
@@ -858,15 +859,19 @@ creating node for that Actor type is `Disabled`, the Location repository release
 release checks, in one batch, the same conditions as the reservation release above (authority
 `StoreVersion`, owner lease state, descriptor state, and capacity record), removes the authority
 together with that incarnation's membership, and returns the active capacity. After the release, a
-new incarnation is created from `Missing` — the previous incarnation's state isn't restored. If the
-owner lease is valid, the existing result (`Existing` or `AlreadyExists`) is returned; if the
-relocation policy isn't `Disabled`, `Unavailable` is returned.
+new incarnation is created from `Missing` — the previous incarnation's state isn't restored. Whether the stable type
+matches is checked before the release decision (a different type keeps the existing `TypeMismatch`).
+If the owner lease is valid, the existing result for the type and operation is returned. If the
+owner lease is invalid and the creating node's policy for that Actor type isn't `Disabled`,
+`Unavailable` is returned. This release is a conditional repository batch, distinct from `Delete`,
+which requires a valid owner lease.
 
 **An operation that receives `Conflict` continues after re-checking its eligibility.** A provider
 `Conflict` changed nothing but doesn't say which condition failed. The Framework re-reads the
 authority record and checks that the first-read state (still `Missing` if it was `Missing`, otherwise
-the first-read `StoreVersion`) and the reservation identity the operation has are unchanged and the
-owner lease is valid. If so, it re-reads the capacity, counter, and descriptor records the request
+the first-read `StoreVersion`) and the reservation identity the operation has are unchanged and
+that the Location repository still judges the operation's §6.1 eligibility to hold (a valid owner
+lease for most operations, an ended owner for a conditional release). If so, it re-reads the capacity, counter, and descriptor records the request
 needs, rebuilds all of its conditions and changes, and requests it again. Otherwise the operation's
 existing result classification applies. Factories and application callbacks aren't run again. This
 repetition happens within the operation's deadline with no separate retry cap, except that
@@ -1558,7 +1563,8 @@ The Framework finds descriptor and owner-lease deletion candidates via a
 same-point-in-time list read. It re-reads each key and only deletes multiple records
 together if the version first read is unchanged.
 
-An Actor/Spot's current location record is only removed by an explicit `Delete`.
+An Actor/Spot's current location record is only removed by an explicit `Delete` or a conditional
+release in [§6.1](#61-read-and-cas).
 `Delete` verifies `StoreVersion`, current owner, and space in use. An object's location
 record isn't deleted merely because the host descriptor disappeared.
 

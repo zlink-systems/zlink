@@ -133,7 +133,9 @@ This route does not select a new owner after owner process failure and is not fa
 
 If the owner process of the current `Ready` Actor or Spot terminates, the Framework doesn't
 automatically restore the same object on a different node. It doesn't arbitrarily change the
-owner recorded in the Location Store or create a new incarnation of the same global ID. This rule
+owner recorded in the Location Store. A new incarnation from an explicit Actor `Create` or
+`GetOrCreate` follows the creation confirmation procedure after the conditional release of
+[Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas). This rule
 applies equally to Instance Spots. After the owner lease expires, merely being an Instance Spot
 doesn't release the [authority](../00-foundation/02-glossary.en.md#authority) — the reference
 information that determines which node an Actor or Spot is on and which node is currently the
