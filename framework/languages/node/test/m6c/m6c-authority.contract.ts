@@ -80,6 +80,7 @@ for (const backend of ['provider', 'memory'] as const) {
     'typeMismatch',
     'race',
     'relocation',
+    'relocationRecreate',
     ...(backend === 'provider' ? (['capacityRace', 'capacityCorrupt'] as const) : [])
   ] as const) {
     test(`ended Active Actor recreation: ${backend} ${scenario}`, async () => {
@@ -139,7 +140,7 @@ for (const backend of ['provider', 'memory'] as const) {
       assert.equal(first.kind, 'reserved');
       if (first.kind !== 'reserved') throw new Error('reservation missing');
       const readyPayload =
-        scenario === 'relocation'
+        scenario === 'relocation' || scenario === 'relocationRecreate'
           ? new ServiceRelocationAuthorityPayloadCodec().publish(
               Buffer.from('old-state-and-membership'),
               {
@@ -200,7 +201,10 @@ for (const backend of ['provider', 'memory'] as const) {
           nodeLifecycleGeneration: 1n,
           owner: { ownerId: replacement.ownerId, leaseGeneration: replacement.leaseGeneration }
         },
-        actorRelocationPolicy: scenario === 'recreate' ? ('recreate' as const) : policy,
+        actorRelocationPolicy:
+          scenario === 'recreate' || scenario === 'relocationRecreate'
+            ? ('recreate' as const)
+            : policy,
         intent: {
           ...request.intent,
           stableType: scenario === 'typeMismatch' ? 'different' : 'player'
@@ -213,7 +217,7 @@ for (const backend of ['provider', 'memory'] as const) {
             error instanceof ZLinkFrameworkException &&
             error.kind === ZLinkFrameworkErrorKind.Unavailable
         );
-      } else if (scenario === 'relocation') {
+      } else if (scenario === 'relocation' || scenario === 'relocationRecreate') {
         assert.equal((await store.reserve(next)).kind, 'alreadyExists');
         const retained = await store.readAuthority(
           encodeAuthorityKey('actor', request.key.globalId)

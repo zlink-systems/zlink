@@ -313,6 +313,7 @@ export class ZLinkInMemoryAuthorityStore {
         )
           return false;
       }
+      if (relocationAuthorityCodec.read(current.snapshot.payload) !== undefined) return false;
       if (
         this.validation.isOwnerLive({
           ownerId: current.snapshot.ownerId,
@@ -320,7 +321,6 @@ export class ZLinkInMemoryAuthorityStore {
         })
       )
         return false;
-      if (relocationAuthorityCodec.read(current.snapshot.payload) !== undefined) return false;
       if (request?.actorRelocationPolicy !== 'disabled')
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
