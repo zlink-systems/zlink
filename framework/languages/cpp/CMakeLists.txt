@@ -901,7 +901,13 @@ function(zlink_framework_cpp_add_test)
   set(test_environment ${ZLINK_TEST_ENVIRONMENT})
   if(WIN32)
     set(test_path
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin;${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/bin;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin;$ENV{PATH}")
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin;${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/bin")
+    # Package-only builds do not define vcpkg toolchain variables. An empty
+    # prefix/triplet would put the network path //bin in the DLL search path.
+    if(VCPKG_INSTALLED_DIR AND VCPKG_TARGET_TRIPLET)
+      list(APPEND test_path "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+    endif()
+    list(APPEND test_path "$ENV{PATH}")
     string(REPLACE ";" "\\;" test_path "${test_path}")
     list(PREPEND test_environment "PATH=${test_path}")
   endif()
@@ -1623,6 +1629,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 120
     PROPERTIES
       RESOURCE_LOCK "zlink-cpp-vcpkg")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_windows_test_path
+    COMMAND ${CMAKE_COMMAND}
+      -DZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
+      -DZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.ContractTests/verify_windows_test_path.cmake
+    LABELS "framework-contract;framework-regression;framework-tooling"
+    TIMEOUT 30)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_label_contract
     COMMAND ${CMAKE_COMMAND}
