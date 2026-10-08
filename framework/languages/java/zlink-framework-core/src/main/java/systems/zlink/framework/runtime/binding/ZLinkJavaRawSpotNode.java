@@ -78,8 +78,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private final Map<String, Long> streamBindingSequences = new ConcurrentHashMap<>();
     private final Map<String, RemoteStreamBinding> remoteStreamBindings = new ConcurrentHashMap<>();
     private final Map<String, Long> remoteStreamSequences = new ConcurrentHashMap<>();
-    private final ZLinkJavaInstanceSpotRegistry instanceSpots =
-            new ZLinkJavaInstanceSpotRegistry(stateLane);
+    private final ZLinkJavaInstanceSpotRegistry instanceSpots;
     private final Map<String, InstanceAuthority> instanceAuthorities = new ConcurrentHashMap<>();
     private volatile ZLinkJavaRawSpot entrySpot;
     private volatile ZLinkMeshApplicationReceiver applicationReceiver;
@@ -94,6 +93,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     ZLinkJavaRawSpotNode(ZLinkJavaRawMeshNode owner) {
         this.owner = owner;
+        this.instanceSpots =
+                new ZLinkJavaInstanceSpotRegistry(stateLane, owner::executeApplication);
     }
 
     private <T> T inStateLane(Supplier<T> work) {

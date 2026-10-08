@@ -1,7 +1,10 @@
 package systems.zlink.framework.runtime.binding;
 
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -9,7 +12,9 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -18,6 +23,7 @@ import java.util.function.Supplier;
  */
 final class ZLinkJavaInstanceSpotRegistry {
     private final ZLinkStateLane ingressLane;
+    private final Executor applicationExecutor;
     private final Map<String, BiFunction<String, Long, ZLinkBackendSpot>> factories =
             new ConcurrentHashMap<>();
     private final Map<String, ActivationHook> hooks = new ConcurrentHashMap<>();
@@ -25,8 +31,10 @@ final class ZLinkJavaInstanceSpotRegistry {
     private final Map<String, CompletableFuture<Activation>> activations =
             new ConcurrentHashMap<>();
 
-    ZLinkJavaInstanceSpotRegistry(ZLinkStateLane ingressLane) {
+    ZLinkJavaInstanceSpotRegistry(ZLinkStateLane ingressLane, Executor applicationExecutor) {
         this.ingressLane = Objects.requireNonNull(ingressLane, "ingressLane");
+        this.applicationExecutor =
+                Objects.requireNonNull(applicationExecutor, "applicationExecutor");
     }
 
     void register(String stableType, BiFunction<String, Long, ZLinkBackendSpot> factory) {
@@ -63,7 +71,7 @@ final class ZLinkJavaInstanceSpotRegistry {
             String requestedType,
             long objectGeneration,
             long deadlineUnixMs,
-            java.util.function.Consumer<ZLinkBackendSpot> restoreFirst) {
+            Consumer<ZLinkBackendSpot> restoreFirst) {
         Objects.requireNonNull(spotId, "spotId");
         if (objectGeneration <= 0) {
             return CompletableFuture.failedFuture(
@@ -83,7 +91,7 @@ final class ZLinkJavaInstanceSpotRegistry {
             String requestedType,
             long deadlineUnixMs,
             Supplier<CompletionStage<Long>> generation,
-            java.util.function.Consumer<ZLinkBackendSpot> restoreFirst) {
+            Consumer<ZLinkBackendSpot> restoreFirst) {
         Objects.requireNonNull(spotId, "spotId");
         String selected = selectType(spotId, requestedType);
         String recorded = stableTypes.putIfAbsent(spotId, selected);
@@ -95,7 +103,7 @@ final class ZLinkJavaInstanceSpotRegistry {
         CompletableFuture<Activation> candidate = new CompletableFuture<>();
         return ingressLane
                 .runAsync(() -> activations.put(spotId, candidate))
-                .thenCompose(
+                .thenComposeAsync(
                         current ->
                                 activateRegistered(
                                         spotId,
@@ -104,7 +112,8 @@ final class ZLinkJavaInstanceSpotRegistry {
                                         generation,
                                         restoreFirst,
                                         candidate,
-                                        current));
+                                        current),
+                        applicationExecutor);
     }
 
     private CompletionStage<Activation> activateRegistered(
@@ -112,12 +121,12 @@ final class ZLinkJavaInstanceSpotRegistry {
             String selected,
             long deadlineUnixMs,
             Supplier<CompletionStage<Long>> generation,
-            java.util.function.Consumer<ZLinkBackendSpot> restoreFirst,
+            Consumer<ZLinkBackendSpot> restoreFirst,
             CompletableFuture<Activation> candidate,
             CompletableFuture<Activation> current) {
         if (current != null) {
             var result = new CompletableFuture<Activation>();
-            current.whenComplete(
+            current.whenCompleteAsync(
                     (value, failure) -> {
                         if (failure != null) {
                             result.completeExceptionally(failure);
@@ -134,7 +143,8 @@ final class ZLinkJavaInstanceSpotRegistry {
                             // Preserve Ready even when this operation's queue admission fails.
                             candidate.complete(value);
                         }
-                    });
+                    },
+                    applicationExecutor);
             return result;
         }
         try {
@@ -142,7 +152,7 @@ final class ZLinkJavaInstanceSpotRegistry {
                     () ->
                             generation
                                     .get()
-                                    .thenCompose(
+                                    .thenComposeAsync(
                                             objectGeneration -> {
                                                 ZLinkBackendSpot spot =
                                                         factories
@@ -175,7 +185,8 @@ final class ZLinkJavaInstanceSpotRegistry {
                                                                 ignored ->
                                                                         new Activation(
                                                                                 selected, spot));
-                                            });
+                                            },
+                                            applicationExecutor);
             hooks.get(selected)
                     .admit(start)
                     .whenComplete(
@@ -196,21 +207,14 @@ final class ZLinkJavaInstanceSpotRegistry {
 
     CompletionStage<Void> admitExisting(
             String stableType,
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .InstanceSpotMessage
-                    message,
-            systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived received) {
+            ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
+            ZLinkBackendReceived received) {
         ActivationHook hook = hooks.get(stableType);
         return hook == null ? null : hook.admitExisting(message, received);
     }
 
-    CompletionStage<
-                    systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .InstanceRouteFence>
-            reserve(
-                    systems.zlink.framework.runtime.internal.service
-                                    .ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope
-                            envelope) {
+    CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
+            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
         ActivationHook hook = hooks.get(envelope.stableType());
         if (hook == null)
             return CompletableFuture.failedFuture(
@@ -219,10 +223,7 @@ final class ZLinkJavaInstanceSpotRegistry {
     }
 
     CompletionStage<Void> completed(
-            String stableType,
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .InstanceSpotMessage
-                    message) {
+            String stableType, ZLinkServiceM6BWireCodec.InstanceSpotMessage message) {
         return hooks.get(stableType).completed(message);
     }
 
@@ -298,7 +299,7 @@ final class ZLinkJavaInstanceSpotRegistry {
 
     @FunctionalInterface
     interface ActivationHook {
-        default <T> CompletionStage<T> admit(java.util.function.Supplier<CompletionStage<T>> work) {
+        default <T> CompletionStage<T> admit(Supplier<CompletionStage<T>> work) {
             return work.get();
         }
 
@@ -311,15 +312,13 @@ final class ZLinkJavaInstanceSpotRegistry {
                 long generation,
                 ZLinkBackendSpot spot,
                 long deadlineUnixMs,
-                java.util.function.Consumer<ZLinkBackendSpot> restoreFirst) {
+                Consumer<ZLinkBackendSpot> restoreFirst) {
             return activate(stableType, spotId, generation, spot, deadlineUnixMs)
                     .thenRun(() -> restoreFirst.accept(spot));
         }
 
         default CompletionStage<Void> completed(
-                systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                                .InstanceSpotMessage
-                        message) {
+                ZLinkServiceM6BWireCodec.InstanceSpotMessage message) {
             return CompletableFuture.completedFuture(null);
         }
 
@@ -332,22 +331,15 @@ final class ZLinkJavaInstanceSpotRegistry {
             return activate(stableType, spotId, generation, spot);
         }
 
-        default CompletionStage<
-                        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                                .InstanceRouteFence>
-                reserve(
-                        systems.zlink.framework.runtime.internal.service
-                                        .ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope
-                                envelope) {
+        default CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
+                ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
             return CompletableFuture.failedFuture(
                     new UnsupportedOperationException("Cold activation is unavailable"));
         }
 
         default CompletionStage<Void> admitExisting(
-                systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                                .InstanceSpotMessage
-                        message,
-                systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived received) {
+                ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
+                ZLinkBackendReceived received) {
             return null;
         }
     }

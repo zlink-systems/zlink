@@ -30,6 +30,57 @@ import java.util.function.Supplier;
 
 final class ZLinkSameTargetActivationTest {
     @Test
+    void coldFactoryAndHookRunOutsideIngressLane() throws Exception {
+        assertActivationRunsOutsideIngressLane(false);
+    }
+
+    @Test
+    void recoveryFactoryAndHookRunOutsideIngressLane() throws Exception {
+        assertActivationRunsOutsideIngressLane(true);
+    }
+
+    private void assertActivationRunsOutsideIngressLane(boolean recovery) throws Exception {
+        var ingressThread = Thread.currentThread();
+        var factoryThread = new CompletableFuture<Thread>();
+        var hookThread = new CompletableFuture<Thread>();
+        var restoreThread = new CompletableFuture<Thread>();
+        var lane = new ZLinkStateLane(Runnable::run);
+        try (var context = Zlink.createContext();
+                var owner = new ZLinkJavaRawMeshNode(context, "activation-thread")) {
+            var registry = new ZLinkJavaInstanceSpotRegistry(lane, owner::executeApplication);
+            registry.register(
+                    "room",
+                    (id, generation) -> {
+                        factoryThread.complete(Thread.currentThread());
+                        return backendSpot(generation);
+                    },
+                    (type, id, generation, spot) -> {
+                        hookThread.complete(Thread.currentThread());
+                        return CompletableFuture.completedFuture(null);
+                    });
+            CompletionStage<ZLinkJavaInstanceSpotRegistry.Activation> activation =
+                    recovery
+                            ? registry.activate(
+                                    "spot",
+                                    "room",
+                                    1,
+                                    Long.MAX_VALUE,
+                                    spot -> restoreThread.complete(Thread.currentThread()))
+                            : registry.activate(
+                                    "spot",
+                                    "room",
+                                    Long.MAX_VALUE,
+                                    () -> CompletableFuture.completedFuture(1L),
+                                    spot -> restoreThread.complete(Thread.currentThread()));
+            activation.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertNotSame(ingressThread, factoryThread.join(), "factory ran on the ingress thread");
+            assertNotSame(ingressThread, hookThread.join(), "hook ran on the ingress thread");
+            assertNotSame(ingressThread, restoreThread.join(), "restore ran on the ingress thread");
+            registry.closeAll();
+        }
+    }
+
+    @Test
     void ingressArrivalOrderSurvivesOutOfOrderActivationAdmission() throws Exception {
         var ready = new CompletableFuture<Void>();
         var scheduled = new ConcurrentLinkedDeque<Runnable>();
@@ -142,22 +193,13 @@ final class ZLinkSameTargetActivationTest {
         var ready = new CompletableFuture<Void>();
         var created = new AtomicInteger();
         var admitted = new ArrayList<Integer>();
-        var registry = new ZLinkJavaInstanceSpotRegistry(new ZLinkStateLane(Runnable::run));
+        var registry =
+                new ZLinkJavaInstanceSpotRegistry(new ZLinkStateLane(Runnable::run), Runnable::run);
         registry.register(
                 "room",
                 (id, generation) -> {
                     created.incrementAndGet();
-                    return (ZLinkBackendSpot)
-                            Proxy.newProxyInstance(
-                                    ZLinkBackendSpot.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkBackendSpot.class},
-                                    (proxy, method, arguments) ->
-                                            switch (method.getName()) {
-                                                case "lifecycleGeneration" -> generation;
-                                                case "close" -> null;
-                                                default ->
-                                                        throw new AssertionError(method.getName());
-                                            });
+                    return backendSpot(generation);
                 },
                 (type, id, generation, spot) -> ready);
         var event = registry.activate("spot", "room", 1, Long.MAX_VALUE, spot -> admitted.add(1));
@@ -174,5 +216,18 @@ final class ZLinkSameTargetActivationTest {
         assertEquals(1, created.get());
         assertEquals(List.of(1, 2, 3), admitted);
         registry.closeAll();
+    }
+
+    private static ZLinkBackendSpot backendSpot(long generation) {
+        return (ZLinkBackendSpot)
+                Proxy.newProxyInstance(
+                        ZLinkBackendSpot.class.getClassLoader(),
+                        new Class<?>[] {ZLinkBackendSpot.class},
+                        (proxy, method, arguments) ->
+                                switch (method.getName()) {
+                                    case "lifecycleGeneration" -> generation;
+                                    case "close" -> null;
+                                    default -> throw new AssertionError(method.getName());
+                                });
     }
 }
