@@ -276,6 +276,10 @@ try {
     Write-Host "topology=ready"
     $clientProcess = Start-Role -Project "Client" -ScriptName "Client" -LogName "client.log" -ConfigPath $clientConfig
     $clientLog = Join-Path $LogDir "client.log"
+    Wait-LogLine $clientLog "gamequest-close-requested player=player-alice"
+    Wait-ExactLogLineTotal 1 "gamequest-mission closing player=player-alice generation=" @($missionALog, $missionBLog)
+    [System.IO.File]::WriteAllText((Join-Path $controlDir "close-replay.release"), "released")
+    Wait-LogLine $clientLog "gamequest-close-replay=completed"
     Wait-LogLine $clientLog "gamequest-owner-termination-ready player=player-alice"
     $ownerRole = Wait-ReplayedOwner $missionALog $missionBLog
     $ownerProcess = if ($ownerRole -eq "mission-a") { $missionAProcess } else { $missionBProcess }
