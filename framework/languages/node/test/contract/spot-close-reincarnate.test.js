@@ -29,7 +29,7 @@ function deferred() {
 
 async function authorityFixture(productionStore) {
   let live = true;
-  const store = productionStore ?? new ZLinkInMemoryAuthorityStore({ isTargetLive: () => live });
+  const store = productionStore ?? new ZLinkInMemoryAuthorityStore({ isOwnerLive: () => live, isTargetLive: () => live });
   const key = encodeAuthorityKey('instance_spot', 'close-room');
   const target = { meshName: 'mesh', nodeRid: 'node', nodeLifecycleGeneration: 1n,
     owner: { ownerId: 'owner', leaseGeneration: 1n } };

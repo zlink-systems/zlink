@@ -293,19 +293,26 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
         var factory = new ZLinkActorFactoryBuilder<TActor>();
         configure(factory);
         factory.CompleteConfiguration();
+        var relocation = new ZLinkObjectRelocationRegistration(
+            typeof(TActor),
+            new ZLinkObjectPlacementOptions(),
+            factory.Relocation.PolicyKind,
+            factory.Relocation.AdapterType,
+            factory.Relocation.AdapterInvoker
+        );
         ZLinkRegistrationBuilderGuard.AddUnique(
             registration.ActorFactories,
             actorType,
-            typeof(TFactory),
+            new ZLinkActorFactoryRegistration(typeof(TFactory), relocation),
             "Actor factory name must not be empty.",
             $"Duplicate actor factory '{actorType}'."
         );
-        AddRelocation(
+        ZLinkRegistrationBuilderGuard.AddUnique(
             registration.ActorRelocations,
             actorType,
-            typeof(TActor),
-            null,
-            factory.Relocation
+            relocation,
+            "Actor factory name must not be empty.",
+            $"Duplicate relocation registration '{actorType}'."
         );
     }
 

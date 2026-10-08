@@ -99,11 +99,14 @@ export class ZLinkInMemoryLocationStore
   private readonly authority: ZLinkInMemoryAuthorityStore;
 
   constructor(private readonly now: () => Date = () => new Date()) {
+    const isOwnerLive = (owner: ZLinkLocationOwnerToken): boolean =>
+      this.liveOwnerLease(owner.ownerId, this.now())?.token.leaseGeneration ===
+      owner.leaseGeneration;
     this.authority = new ZLinkInMemoryAuthorityStore(
       {
+        isOwnerLive,
         isTargetLive: (key, lifecycleGeneration, owner) => {
           const descriptor = this.meshNodes.rows.get(meshNodeKey(key.meshName, key.rid));
-          const lease = this.leases.get(owner.ownerId);
           return (
             descriptor !== undefined &&
             descriptor.lifecycleGeneration === lifecycleGeneration &&
@@ -111,9 +114,7 @@ export class ZLinkInMemoryLocationStore
             descriptor.leaseGeneration === owner.leaseGeneration &&
             descriptor.objectRole === ZLinkObjectRole.Server &&
             descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
-            lease !== undefined &&
-            lease.token.leaseGeneration === owner.leaseGeneration &&
-            lease.leaseExpiresAt.getTime() > this.now().getTime()
+            isOwnerLive(owner)
           );
         },
         placementCapacityAvailable: (key, requested, reserved, active) => {
@@ -566,7 +567,8 @@ export class ZLinkInMemoryLocationStore
     const storeNow = this.now();
     return pageRows(
       this.fanoutPublishers,
-      (row) => row.channelName === channelName && this.isOwnerLive(row.ownerId, storeNow),
+      (row) =>
+        row.channelName === channelName && this.liveOwnerLease(row.ownerId, storeNow) !== undefined,
       page
     );
   }
@@ -628,7 +630,7 @@ export class ZLinkInMemoryLocationStore
     if (
       intent === ZLinkLocationWriteIntent.NewClaim &&
       current !== undefined &&
-      this.isOwnerLive(current.ownerId, updatedAt)
+      this.liveOwnerLease(current.ownerId, updatedAt) !== undefined
     ) {
       return rejectedConflict();
     }
@@ -706,7 +708,7 @@ export class ZLinkInMemoryLocationStore
     if (
       intent === ZLinkLocationWriteIntent.NewClaim &&
       current !== undefined &&
-      this.isOwnerLive(current.ownerId, updatedAt)
+      this.liveOwnerLease(current.ownerId, updatedAt) !== undefined
     ) {
       return rejectedConflict();
     }
@@ -1155,7 +1157,7 @@ export class ZLinkInMemoryLocationStore
     if (
       intent === ZLinkLocationWriteIntent.NewClaim &&
       current !== undefined &&
-      this.isOwnerLive(ownerOf(current), updatedAt)
+      this.liveOwnerLease(ownerOf(current), updatedAt) !== undefined
     ) {
       return rejectedConflict();
     }
@@ -1252,9 +1254,11 @@ export class ZLinkInMemoryLocationStore
     return removed;
   }
 
-  private isOwnerLive(ownerId: string, now: Date): boolean {
+  private liveOwnerLease(ownerId: string, now: Date): InMemoryOwnerLease | undefined {
     const lease = this.leases.get(ownerId);
-    return lease !== undefined && lease.leaseExpiresAt.getTime() > now.getTime();
+    return lease !== undefined && lease.leaseExpiresAt.getTime() > now.getTime()
+      ? lease
+      : undefined;
   }
 
   private bump(kind: ZLinkLocationKind, meshName: string | undefined): void {

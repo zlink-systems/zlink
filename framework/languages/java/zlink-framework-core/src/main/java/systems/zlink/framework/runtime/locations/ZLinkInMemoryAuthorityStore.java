@@ -1,7 +1,10 @@
 package systems.zlink.framework.runtime.locations;
 
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
@@ -215,7 +218,13 @@ final class ZLinkInMemoryAuthorityStore {
     }
 
     private boolean releaseEndedReservationOnLane(String key, Row current) {
-        if (current.allocation.state() != ZLinkPlacementAllocationState.PENDING
+        return releaseEndedReservationOnLane(key, current, null);
+    }
+
+    private boolean releaseEndedReservationOnLane(
+            String key, Row current, ZLinkObjectReservationRequest request) {
+        boolean active = current.allocation.state() == ZLinkPlacementAllocationState.ACTIVE;
+        if ((active && (request == null || request.objectKind() != ZLinkPlacementObjectKind.ACTOR))
                 || participantIsPrepared(key)
                 || !Arrays.equals(
                         current.payload,
@@ -226,13 +235,21 @@ final class ZLinkInMemoryAuthorityStore {
                         current.allocation.descriptor(),
                         current.allocation.descriptorLifecycleGeneration(),
                         current.owner);
-        if (ownerLeaseIsLive.test(current.owner)
+        boolean ownerLive = ownerLeaseIsLive.test(current.owner);
+        if (active) {
+            if (ownerLive) return false;
+            if (!(request.actorRelocationPolicy()
+                    instanceof ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled))
+                throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE, "Actor owner lease is unavailable");
+        } else if (ownerLive
                 && descriptor != null
                 && descriptor.lifecycleGeneration()
                         == current.allocation.descriptorLifecycleGeneration()) return false;
-        adjustPending(current.allocation, current.allocation.capacityBundle(), -1);
+        if (active) adjustActive(current.allocation, current.allocation.capacityBundle(), -1);
+        else adjustPending(current.allocation, current.allocation.capacityBundle(), -1);
         var reservation = reservations.remove(key);
-        if (reservation != null) reservation.state = State.ABORTED;
+        if (reservation != null && !active) reservation.state = State.ABORTED;
         rows.remove(key);
         return true;
     }
@@ -250,9 +267,16 @@ final class ZLinkInMemoryAuthorityStore {
                     Instant now = clock.instant();
                     Row current = rows.get(request.authorityKey());
                     if (current != null
-                            && releaseEndedReservationOnLane(request.authorityKey(), current))
-                        current = null;
+                            && (current.allocation.objectKind() != request.objectKind()
+                                    || !current.allocation
+                                            .stableType()
+                                            .equals(request.stableType())))
+                        return completed(new ZLinkObjectTypeMismatch(snapshot(current, now)));
                     if (current != null
+                            && releaseEndedReservationOnLane(
+                                    request.authorityKey(), current, request)) current = null;
+                    if (current != null
+                            && request.objectKind() != ZLinkPlacementObjectKind.ACTOR
                             && current.allocation.state() == ZLinkPlacementAllocationState.ACTIVE
                             && !ownerLeaseIsLive.test(current.owner)
                             && !participantIsPrepared(request.authorityKey())
@@ -265,9 +289,6 @@ final class ZLinkInMemoryAuthorityStore {
                         current = null;
                     }
                     if (current != null) {
-                        if (!current.allocation.stableType().equals(request.stableType())) {
-                            return completed(new ZLinkObjectTypeMismatch(snapshot(current, now)));
-                        }
                         if (current.allocation.state() == ZLinkPlacementAllocationState.PENDING) {
                             return completed(new ZLinkObjectConflict(snapshot(current, now)));
                         }

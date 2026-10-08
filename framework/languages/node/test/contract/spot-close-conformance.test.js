@@ -93,6 +93,8 @@ async function createOwner(given) {
   const live = new Set([OWNER_LIVENESS]);
   const base = new ZLinkInMemoryAuthorityStore(
     {
+      isOwnerLive: (token) =>
+        [...live].some((value) => value.endsWith(`:${token.ownerId}:${token.leaseGeneration}`)),
       isTargetLive(descriptor, lifecycle, token) {
         return live.has(
           `${descriptor.meshName}:${descriptor.rid}:${lifecycle}:${token.ownerId}:${token.leaseGeneration}`

@@ -1913,11 +1913,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_executable(test_cpp_framework_opaque_store_providers
     tests/Zlink.Framework.UnitTests/test_cpp_framework_opaque_store_providers.cpp)
   target_compile_features(test_cpp_framework_opaque_store_providers PRIVATE cxx_std_20)
+  target_compile_definitions(test_cpp_framework_opaque_store_providers PRIVATE
+    ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/authority-relocation-state-v1.json")
   target_link_zlink_test_harness(test_cpp_framework_opaque_store_providers)
   target_use_zlink_gtest_main(test_cpp_framework_opaque_store_providers)
   target_link_libraries(test_cpp_framework_opaque_store_providers PRIVATE
     zlink::framework)
   target_include_directories(test_cpp_framework_opaque_store_providers PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   # The bounded-batch aggregate stress case commits 2050 participants through

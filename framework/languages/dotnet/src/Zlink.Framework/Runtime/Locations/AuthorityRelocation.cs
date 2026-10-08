@@ -170,7 +170,8 @@ internal sealed record ZLinkObjectReservationRequest(
     ulong TargetNodeLifecycleGeneration,
     ZLinkLocationOwnerToken TargetOwner,
     ReadOnlyMemory<byte> CreatingPayload,
-    ZLinkCapacityVector Capacity
+    ZLinkCapacityVector Capacity,
+    byte? ActorRelocationPolicy = null
 );
 
 internal sealed record ZLinkObjectReservation(

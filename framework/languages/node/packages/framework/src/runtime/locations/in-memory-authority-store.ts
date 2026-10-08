@@ -7,6 +7,7 @@ import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
 import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import { randomUUID } from 'node:crypto';
+import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
 import { SHA256_DIGEST_BYTES } from '../foundation/actor-join-recovery-codec';
 import type {
   ZLinkAggregateAbortResult,
@@ -41,13 +42,16 @@ import type {
 } from './internal-location-contracts';
 import { encodeAuthorityKey } from './authority-key-codec';
 import { creationTerminalPreimage } from './opaque-record-key';
+import { ServiceRelocationAuthorityPayloadCodec } from '../foundation/service-relocation-runtime';
 
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 const MAX_U64 = UINT64_MAX;
+const relocationAuthorityCodec = new ServiceRelocationAuthorityPayloadCodec();
 
 export interface ZLinkInMemoryAuthorityValidation {
+  isOwnerLive(owner: ZLinkLocationOwnerToken): boolean;
   isTargetLive(
     descriptor: ZLinkMeshNodeDescriptorKey,
     lifecycleGeneration: bigint,
@@ -287,14 +291,42 @@ export class ZLinkInMemoryAuthorityStore {
 
   private tryReleaseEndedReservation(
     key: ZLinkAuthorityKey,
-    expectedStoreVersion: string
+    expectedStoreVersion: string,
+    request?: ZLinkObjectReserveRequest
   ): boolean {
     const current = this.rows.get(key.value);
     if (
       current === undefined ||
       current.snapshot.storeVersion.value !== expectedStoreVersion ||
-      current.snapshot.allocation.state !== 'reserved' ||
-      current.creation === undefined ||
+      (current.snapshot.allocation.state === 'active'
+        ? request?.key.kind !== 'actor'
+        : current.creation === undefined)
+    )
+      return false;
+    if (current.snapshot.allocation.state === 'active') {
+      for (const aggregate of this.aggregates.values()) {
+        if (
+          aggregate.state === 'prepared' &&
+          aggregate.request.participants.some(
+            (participant) => participant.authorityKey.value === key.value
+          )
+        )
+          return false;
+      }
+      if (relocationAuthorityCodec.read(current.snapshot.payload) !== undefined) return false;
+      if (
+        this.validation.isOwnerLive({
+          ownerId: current.snapshot.ownerId,
+          leaseGeneration: current.snapshot.ownerLeaseGeneration
+        })
+      )
+        return false;
+      if (request?.actorRelocationPolicy !== 'disabled')
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.Unavailable,
+          'Actor owner lease is unavailable.'
+        );
+    } else if (
       this.validation.isTargetLive(
         current.snapshot.allocation.descriptor,
         current.snapshot.allocation.descriptorLifecycleGeneration,
@@ -305,9 +337,14 @@ export class ZLinkInMemoryAuthorityStore {
       )
     )
       return false;
-    this.adjustCapacity(this.pendingCapacity, current.snapshot.allocation, -1);
+    this.adjustCapacity(
+      current.snapshot.allocation.state === 'active' ? this.activeCapacity : this.pendingCapacity,
+      current.snapshot.allocation,
+      -1
+    );
     this.rows.delete(key.value);
-    this.creationTerminals.set(current.creation.reservationId, 'aborted');
+    if (current.snapshot.allocation.state === 'reserved' && current.creation !== undefined)
+      this.creationTerminals.set(current.creation.reservationId, 'aborted');
     this.scanRevision++;
     return true;
   }
@@ -330,16 +367,16 @@ export class ZLinkInMemoryAuthorityStore {
       ) {
         return { kind: 'typeMismatch', current: this.snapshot(current.snapshot) };
       }
-      if (current.snapshot.allocation.state === 'active') {
-        return { kind: 'alreadyExists', current: this.snapshot(current.snapshot) };
-      }
       if (
         !this.tryReleaseEndedReservation(
           encodeAuthorityKey(request.key.kind, request.key.globalId),
-          current.snapshot.storeVersion.value
+          current.snapshot.storeVersion.value,
+          request
         )
       )
-        return { kind: 'conflict', current: this.read(key) };
+        return current.snapshot.allocation.state === 'active'
+          ? { kind: 'alreadyExists', current: this.snapshot(current.snapshot) }
+          : { kind: 'conflict', current: this.read(key) };
     }
     const target = creationTarget(request);
     if (

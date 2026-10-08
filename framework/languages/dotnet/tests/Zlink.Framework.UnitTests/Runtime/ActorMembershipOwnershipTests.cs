@@ -20,7 +20,19 @@ public sealed partial class EntrySpotActorDispatchTests
         registration.SpotNodes["membership-node"] = new ZLinkSpotNodeRegistration
         {
             SpotNodeName = "membership-node",
-            ActorFactories = { ["probe"] = typeof(ProbeActorFactory) },
+            ActorFactories =
+            {
+                ["probe"] = new ZLinkActorFactoryRegistration(
+                    typeof(ProbeActorFactory),
+                    new ZLinkObjectRelocationRegistration(
+                        typeof(ProbeActor),
+                        new ZLinkObjectPlacementOptions(),
+                        ZLinkObjectRelocationRegistration.DisabledPolicy,
+                        null,
+                        null
+                    )
+                ),
+            },
         };
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
         var runtime = new ZLinkFrameworkRuntime(

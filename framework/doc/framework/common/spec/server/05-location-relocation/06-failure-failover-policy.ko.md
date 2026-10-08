@@ -121,8 +121,9 @@ operation 자체는 새 owner에게 자동으로 제출하지 않는다.
 이 경로는 owner process 장애 뒤 새 owner를 선택하는 failover가 아니다.
 
 현재 `Ready` Actor 또는 Spot의 owner process가 종료되면 Framework는 다른 node에 같은 object를
-자동 복원하지 않는다. Location Store에 기록된 owner를 임의로 바꾸거나 같은 global ID의 새
-incarnation을 만들지 않는다. 이 규칙은 Instance Spot에도 동일하게 적용한다. Instance
+자동 복원하지 않는다. Location Store에 기록된 owner를 임의로 바꾸지 않는다. 명시적 Actor `Create`·`GetOrCreate`에 따른 새
+incarnation 생성은 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 조건부 해제가 끝난 뒤
+생성 확정 절차를 따른다. 이 규칙은 Instance Spot에도 동일하게 적용한다. Instance
 Spot이라는 종류만으로 owner lease 만료 뒤, Actor나 Spot이 현재 어느 node에 있고 어느 node가
 owner인지 판단하는 기준 정보인 [authority](../00-foundation/02-glossary.ko.md#authority)를 release하거나
 다음 message를 cold activation으로 전환하지 않는다.

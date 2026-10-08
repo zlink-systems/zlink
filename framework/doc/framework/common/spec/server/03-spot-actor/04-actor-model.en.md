@@ -490,6 +490,8 @@ Running exclusive `Create` when a Ready Actor of the same type already exists
 ends with `AlreadyExists`. If an Actor of a different type exists, it ends
 with `TypeMismatch`.
 
+An Actor record whose owner has ended (for example, by a forced termination) follows the release rule of [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas).
+
 `GetOrCreate` returns the current incarnation as `Existing`, with no new
 reservation or callback execution, if a Ready Actor of the same type exists.
 If an Actor of the same type is Creating, it re-checks authority with bounded

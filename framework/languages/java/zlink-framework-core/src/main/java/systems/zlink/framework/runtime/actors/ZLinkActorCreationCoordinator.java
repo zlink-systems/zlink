@@ -10,12 +10,15 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
@@ -32,6 +35,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -43,6 +47,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /** Owns the durable Actor creation reservation and terminal publication path. */
@@ -59,6 +64,7 @@ public final class ZLinkActorCreationCoordinator
     private final ZLinkActorRuntime actors;
     private final ZLinkMessageSerializer serializer;
     private final ZLinkActivationAdmission activationAdmission;
+    private final Function<String, RelocationPolicy> actorRelocationPolicy;
     private final ZLinkActorAuthorityPayloadCodec authorities =
             new ZLinkActorAuthorityPayloadCodec();
     private final ZLinkServiceM6AWireCodec payloads = new ZLinkServiceM6AWireCodec();
@@ -73,6 +79,17 @@ public final class ZLinkActorCreationCoordinator
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
             ZLinkActivationAdmission activationAdmission) {
+        this(meshName, node, locations, actors, serializer, activationAdmission, ignored -> null);
+    }
+
+    public ZLinkActorCreationCoordinator(
+            String meshName,
+            ZLinkInternalMeshNode node,
+            ZLinkLocationRepository locations,
+            ZLinkActorRuntime actors,
+            ZLinkMessageSerializer serializer,
+            ZLinkActivationAdmission activationAdmission,
+            Function<String, RelocationPolicy> actorRelocationPolicy) {
         this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.node = Objects.requireNonNull(node, "node");
         this.locations = Objects.requireNonNull(locations, "locations");
@@ -80,6 +97,8 @@ public final class ZLinkActorCreationCoordinator
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.activationAdmission =
                 Objects.requireNonNull(activationAdmission, "activationAdmission");
+        this.actorRelocationPolicy =
+                Objects.requireNonNull(actorRelocationPolicy, "actorRelocationPolicy");
     }
 
     @Override
@@ -178,18 +197,24 @@ public final class ZLinkActorCreationCoordinator
                         target.lifecycleGeneration(),
                         new ZLinkLocationOwnerToken(target.ownerId(), target.leaseGeneration()),
                         creating,
-                        ZLinkPlacementCapacityBundle.actor(1));
+                        ZLinkPlacementCapacityBundle.actor(1),
+                        actorRelocationPolicy.apply(actorType));
         return locations
                 .reserve(request, () -> System.currentTimeMillis() >= deadline)
                 .thenCompose(
                         result -> {
                             if (result instanceof ZLinkObjectAlreadyExists exists) {
+                                if (!getOrCreate)
+                                    return CompletableFuture.failedFuture(
+                                            frameworkFailure(
+                                                    ZLinkFrameworkErrorKind.ALREADY_EXISTS,
+                                                    "Actor already exists"));
                                 return existing(exists.current(), actorId, actorType);
                             }
                             if (result instanceof ZLinkObjectTypeMismatch) {
                                 return CompletableFuture.failedFuture(
                                         frameworkFailure(
-                                                ZLinkFrameworkErrorKind.REJECTED,
+                                                ZLinkFrameworkErrorKind.TYPE_MISMATCH,
                                                 "Actor type does not match"));
                             }
                             if (result instanceof ZLinkObjectConflict conflict) {
@@ -665,15 +690,14 @@ public final class ZLinkActorCreationCoordinator
                         ZLinkBackendRequestResult.fromWireTerminal(terminal.terminalResult())
                                 .toFrameworkErrorKind(terminal.failureCode());
                 return CompletableFuture.failedFuture(
-                        systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping
-                                .receivedFailure(
-                                        kind,
-                                        "Actor create failed with terminal result "
-                                                + terminal.terminalResult()
-                                                + " and failure code "
-                                                + terminal.failureCode(),
-                                        terminal.failureCode(),
-                                        java.util.Map.of()));
+                        ZLinkRequestFailureMapping.receivedFailure(
+                                kind,
+                                "Actor create failed with terminal result "
+                                        + terminal.terminalResult()
+                                        + " and failure code "
+                                        + terminal.failureCode(),
+                                terminal.failureCode(),
+                                Map.of()));
             }
             ZLinkMessage reply = decodeReply(terminal.applicationPayloadFrame());
             return CompletableFuture.completedFuture(
@@ -724,10 +748,7 @@ public final class ZLinkActorCreationCoordinator
                                             .filter(
                                                     candidate ->
                                                             candidate.state()
-                                                                            == systems.zlink
-                                                                                    .framework
-                                                                                    .runtime.host
-                                                                                    .ZLinkFrameworkRuntimeState
+                                                                            == ZLinkFrameworkRuntimeState
                                                                                     .SERVING
                                                                     && candidate.objectRole()
                                                                             == ZLinkMeshNodeObjectRole
@@ -749,10 +770,7 @@ public final class ZLinkActorCreationCoordinator
                                                                                                     && capability
                                                                                                             .stableType()
                                                                                                             .equals(
-                                                                                                                    actorType)
-                                                                                                    && hasCapacity(
-                                                                                                            candidate,
-                                                                                                            capability))
+                                                                                                                    actorType))
                                                                     && isExactReadyTarget(
                                                                             candidate,
                                                                             localStatus,
@@ -764,11 +782,7 @@ public final class ZLinkActorCreationCoordinator
                                                 .filter(
                                                         candidate ->
                                                                 candidate.state()
-                                                                                == systems.zlink
-                                                                                        .framework
-                                                                                        .runtime
-                                                                                        .host
-                                                                                        .ZLinkFrameworkRuntimeState
+                                                                                == ZLinkFrameworkRuntimeState
                                                                                         .SERVING
                                                                         && candidate.objectRole()
                                                                                 == ZLinkMeshNodeObjectRole
@@ -887,12 +901,6 @@ public final class ZLinkActorCreationCoordinator
                                                         failed(
                                                                 "Target descriptor has no Entry"
                                                                         + " Spot identity")));
-    }
-
-    static boolean hasCapacity(
-            ZLinkMeshNodeDescriptor candidate, ZLinkObjectCapability capability) {
-        return capability.objectKind() == ZLinkPlacementObjectKind.ACTOR
-                && candidate.capacity().actors().hasRoomFor(1);
     }
 
     private static ZLinkMeshNodeDescriptorKey descriptorKey(ZLinkMeshNodeDescriptor descriptor) {

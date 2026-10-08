@@ -568,7 +568,19 @@ public sealed partial class EntrySpotActorDispatchTests
                 BindEndpoint = "inproc://entry-actor",
             },
             EntrySpotType = typeof(ProbeEntrySpot),
-            ActorFactories = { ["probe"] = typeof(CreationProbeActorFactory) },
+            ActorFactories =
+            {
+                ["probe"] = new ZLinkActorFactoryRegistration(
+                    typeof(CreationProbeActorFactory),
+                    new ZLinkObjectRelocationRegistration(
+                        typeof(CreationProbeActor),
+                        new ZLinkObjectPlacementOptions(),
+                        ZLinkObjectRelocationRegistration.DisabledPolicy,
+                        null,
+                        null
+                    )
+                ),
+            },
         };
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
         var runtime = new ZLinkFrameworkRuntime(
@@ -626,7 +638,19 @@ public sealed partial class EntrySpotActorDispatchTests
         registration.SpotNodes["actor-node"] = new ZLinkSpotNodeRegistration
         {
             SpotNodeName = "actor-node",
-            ActorFactories = { ["controlled"] = typeof(ControlledCreationProbeActorFactory) },
+            ActorFactories =
+            {
+                ["controlled"] = new ZLinkActorFactoryRegistration(
+                    typeof(ControlledCreationProbeActorFactory),
+                    new ZLinkObjectRelocationRegistration(
+                        typeof(CreationProbeActor),
+                        new ZLinkObjectPlacementOptions(),
+                        ZLinkObjectRelocationRegistration.DisabledPolicy,
+                        null,
+                        null
+                    )
+                ),
+            },
         };
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
         var runtime = new ZLinkFrameworkRuntime(
@@ -682,7 +706,19 @@ public sealed partial class EntrySpotActorDispatchTests
         registration.SpotNodes["actor-node"] = new ZLinkSpotNodeRegistration
         {
             SpotNodeName = "actor-node",
-            ActorFactories = { ["controlled"] = typeof(ControlledCreationProbeActorFactory) },
+            ActorFactories =
+            {
+                ["controlled"] = new ZLinkActorFactoryRegistration(
+                    typeof(ControlledCreationProbeActorFactory),
+                    new ZLinkObjectRelocationRegistration(
+                        typeof(CreationProbeActor),
+                        new ZLinkObjectPlacementOptions(),
+                        ZLinkObjectRelocationRegistration.DisabledPolicy,
+                        null,
+                        null
+                    )
+                ),
+            },
         };
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
         var runtime = new ZLinkFrameworkRuntime(
@@ -737,7 +773,19 @@ public sealed partial class EntrySpotActorDispatchTests
         registration.SpotNodes["actor-node"] = new ZLinkSpotNodeRegistration
         {
             SpotNodeName = "actor-node",
-            ActorFactories = { ["probe"] = typeof(CreationProbeActorFactory) },
+            ActorFactories =
+            {
+                ["probe"] = new ZLinkActorFactoryRegistration(
+                    typeof(CreationProbeActorFactory),
+                    new ZLinkObjectRelocationRegistration(
+                        typeof(CreationProbeActor),
+                        new ZLinkObjectPlacementOptions(),
+                        ZLinkObjectRelocationRegistration.DisabledPolicy,
+                        null,
+                        null
+                    )
+                ),
+            },
         };
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
         var runtime = new ZLinkFrameworkRuntime(
@@ -10487,14 +10535,14 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         if (includeActorFactory)
         {
-            registration.SpotNodes["entry"].ActorFactories["probe"] = typeof(ProbeActorFactory);
-            registration.SpotNodes["entry"].ActorRelocations["probe"] =
-                new ZLinkObjectRelocationRegistration(
-                    typeof(ProbeActor),
-                    new ZLinkObjectPlacementOptions(),
-                    PolicyKind: 0,
-                    AdapterType: null,
-                    AdapterInvoker: null
+            new Zlink.Framework.Runtime.Configuration.Builders.ZLinkMeshNodeBuilder(
+                registration.SpotNodes["entry"]
+            )
+                .Objects()
+                .Server()
+                .AddActorFactory<ProbeActor, ProbeActorFactory>(
+                    "probe",
+                    factory => factory.DisableRelocation()
                 );
         }
         if (includeJoinTarget)
@@ -11069,15 +11117,15 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    private sealed class ProbeActorFactory : IZLinkActorFactory
+    private sealed class ProbeActorFactory : IZLinkActorFactory<ProbeActor>
     {
-        public ValueTask<IZLinkActor> CreateAsync(
+        public ValueTask<ProbeActor> CreateAsync(
             IZLinkActorContext context,
             CancellationToken cancellationToken = default
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return ValueTask.FromResult<IZLinkActor>(new ProbeActor(context.ActorId, context));
+            return ValueTask.FromResult(new ProbeActor(context.ActorId, context));
         }
     }
 

@@ -1,5 +1,6 @@
 using System.Text;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Configuration;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -317,15 +318,20 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 return new ZLinkObjectReserveResult.Conflict(
                     new ZLinkAuthorityReadResult.Missing(now)
                 );
-            if (
-                _authorities.TryGetValue(request.Key.Value, out var existing)
-                && !TryReleaseEndedReservation(request.Key, existing, now)
-            )
-                return existing.Allocation.State == ZLinkPlacementAllocationState.Active
-                    ? new ZLinkObjectReserveResult.AlreadyExists(existing)
-                    : new ZLinkObjectReserveResult.Conflict(
-                        new ZLinkAuthorityReadResult.Found(existing)
-                    );
+            if (_authorities.TryGetValue(request.Key.Value, out var existing))
+            {
+                if (
+                    existing.Allocation.ObjectKind != request.ObjectKind
+                    || existing.Allocation.StableType != request.StableType
+                )
+                    return new ZLinkObjectReserveResult.TypeMismatch(existing);
+                if (!TryReleaseEndedReservation(request.Key, existing, now, request))
+                    return existing.Allocation.State == ZLinkPlacementAllocationState.Active
+                        ? new ZLinkObjectReserveResult.AlreadyExists(existing)
+                        : new ZLinkObjectReserveResult.Conflict(
+                            new ZLinkAuthorityReadResult.Found(existing)
+                        );
+            }
             if (
                 !MatchesLiveTarget(
                     request.TargetDescriptor,
@@ -610,29 +616,51 @@ internal sealed partial class ZLinkInMemoryLocationStore
     private bool TryReleaseEndedReservation(
         ZLinkAuthorityKey key,
         ZLinkAuthoritySnapshot current,
-        DateTimeOffset now
+        DateTimeOffset now,
+        ZLinkObjectReservationRequest? request = null
     )
     {
         if (
-            current.Allocation.State != ZLinkPlacementAllocationState.Reserved
-            || current.ReservedCreation is null
-            || IsAuthorityInPreparedAggregate(key)
+            (
+                current.Allocation.State == ZLinkPlacementAllocationState.Active
+                    ? request?.ObjectKind != ZLinkPlacementObjectKind.Actor
+                    : current.ReservedCreation is null
+            ) || IsAuthorityInPreparedAggregate(key)
         )
             return false;
+        var active = current.Allocation.State == ZLinkPlacementAllocationState.Active;
+        if (active && ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Payload.Span, out _))
+            return false;
         var descriptorKey = ZLinkLocationKeyCodec.EncodeMeshNodeKey(current.Allocation.Descriptor);
-        if (
-            MatchesLiveOwnerLease(
-                new ZLinkLocationOwnerToken(current.OwnerId, current.OwnerLeaseGeneration),
-                now
-            )
+        var ownerLive = MatchesLiveOwnerLease(
+            new ZLinkLocationOwnerToken(current.OwnerId, current.OwnerLeaseGeneration),
+            now
+        );
+        if (active)
+        {
+            if (ownerLive)
+                return false;
+            if (request?.ActorRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "Actor owner lease is unavailable."
+                );
+        }
+        else if (
+            ownerLive
             && _meshNodes.Rows.TryGetValue(descriptorKey, out var descriptor)
             && descriptor.LifecycleGeneration == current.Allocation.DescriptorLifecycleGeneration
         )
             return false;
-        AdjustAllocationCapacity(_pendingPlacementCapacity, current.Allocation, -1);
+        AdjustAllocationCapacity(
+            active ? _activePlacementCapacity : _pendingPlacementCapacity,
+            current.Allocation,
+            -1
+        );
         _authorities.Remove(key.Value);
         if (
-            _authorityReservations.TryGetValue(
+            !active
+            && _authorityReservations.TryGetValue(
                 current.ReservedCreation.ReservationId,
                 out var state
             )

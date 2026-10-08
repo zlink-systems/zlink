@@ -10,6 +10,7 @@
 #include <runtime/locations/location_repository_values.hpp>
 #include <zlink/framework/contracts/placement.hpp>
 #include <zlink/framework/contracts/spots/spot_identity.hpp>
+#include <zlink/framework/contracts/spots/spot.hpp>
 
 #include <array>
 #include <chrono>
@@ -217,6 +218,7 @@ struct object_reserve_request_t
     std::vector<std::byte> creating_payload;
     placement_capacity_bundle_t capacity_bundle;
     std::chrono::system_clock::time_point operation_deadline{};
+    std::optional<detail::factory_relocation_kind_t> actor_relocation_policy;
 };
 struct object_reservation_fence_t
 {

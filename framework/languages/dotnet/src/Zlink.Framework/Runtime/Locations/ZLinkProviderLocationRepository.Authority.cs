@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Zlink.Framework.Runtime.Configuration;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -388,6 +389,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         cancellationToken.ThrowIfCancellationRequested();
         ValidateReservation(request);
         var reservationId = Guid.NewGuid().ToString("N");
+        string? reclaimVersion = null;
         for (; ; )
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -395,12 +397,29 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .ConfigureAwait(false);
             if (current is not null)
             {
-                var reclaim = await TryReclaimStaleAuthorityAsync(current, cancellationToken)
+                if (
+                    current.Snapshot.Allocation.ObjectKind != request.ObjectKind
+                    || current.Snapshot.Allocation.StableType != request.StableType
+                )
+                    return new ZLinkObjectReserveResult.TypeMismatch(current.Snapshot);
+                if (reclaimVersion is not null && current.Snapshot.StoreVersion != reclaimVersion)
+                    return new ZLinkObjectReserveResult.Conflict(
+                        new ZLinkAuthorityReadResult.Found(current.Snapshot)
+                    );
+                var reclaim = await TryReclaimStaleAuthorityAsync(
+                        current,
+                        cancellationToken,
+                        request
+                    )
                     .ConfigureAwait(false);
                 if (reclaim == StaleAuthorityReclaimResult.Reclaimed)
+                {
+                    reclaimVersion = null;
                     continue;
+                }
                 if (reclaim == StaleAuthorityReclaimResult.Conflict)
                 {
+                    reclaimVersion = current.Snapshot.StoreVersion;
                     continue;
                 }
                 return current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
@@ -409,6 +428,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                         new ZLinkAuthorityReadResult.Found(current.Snapshot)
                     );
             }
+            if (reclaimVersion is not null)
+                return new ZLinkObjectReserveResult.Conflict(
+                    new ZLinkAuthorityReadResult.Missing(
+                        await ReadStoreNowAsync(cancellationToken).ConfigureAwait(false)
+                    )
+                );
             var target = await ReadEligibleTargetAsync(
                     request.TargetDescriptor,
                     request.TargetNodeLifecycleGeneration,
@@ -520,12 +545,19 @@ internal sealed partial class ZLinkProviderLocationRepository
 
     private async ValueTask<StaleAuthorityReclaimResult> TryReclaimStaleAuthorityAsync(
         StoredAuthority current,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkObjectReservationRequest? request = null
     )
     {
-        if (current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active)
+        var active = current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active;
+        if (active && request?.ObjectKind != ZLinkPlacementObjectKind.Actor)
             return StaleAuthorityReclaimResult.NotReclaimable;
 
+        // Relocation authority retains its own recovery protocol.
+        if (current.Meta.AggregateFence is not null)
+            return StaleAuthorityReclaimResult.RecoveryRequired;
+        if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _))
+            return StaleAuthorityReclaimResult.RecoveryRequired;
         var ownerKey = OwnerKey(current.Snapshot.OwnerId);
         var descriptorKey = MeshKey(
             current.Snapshot.Allocation.Descriptor.MeshName,
@@ -551,6 +583,16 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
         else
             ownerCondition = new ZLinkStoreCondition.Missing(ownerKey);
+        if (active)
+        {
+            if (ownerLive)
+                return StaleAuthorityReclaimResult.OwnerLive;
+            if (request?.ActorRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "Actor owner lease is unavailable."
+                );
+        }
         ZLinkStoreCondition descriptorCondition;
         if (descriptorRead is ZLinkStoreReadResult.Found descriptorFound)
         {
@@ -571,17 +613,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         else
             descriptorCondition = new ZLinkStoreCondition.Missing(descriptorKey);
 
-        // Relocation authority retains its own recovery protocol.
-        if (current.Meta.AggregateFence is not null)
-            return StaleAuthorityReclaimResult.RecoveryRequired;
-        if (
-            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                current.Snapshot.Payload.Span,
-                out _
-            )
-            && ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _)
-        )
-            return StaleAuthorityReclaimResult.RecoveryRequired;
         var conditions = new List<ZLinkStoreCondition>
         {
             new ZLinkStoreCondition.Version(AuthorityMetaKey(current.Key), current.Version),
@@ -599,11 +630,27 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ConfigureAwait(false);
         var nextCapacity = capacity.Record.Clone();
         conditions.Add(capacity.Condition);
-        if (current.Meta.ReservedCreation is null)
+        if (!active && current.Meta.ReservedCreation is null)
             return StaleAuthorityReclaimResult.RecoveryRequired;
         if (capacity.Condition is not ZLinkStoreCondition.Missing)
         {
-            ApplyCapacity(nextCapacity, current.Snapshot.Allocation, pendingDelta: -1);
+            try
+            {
+                ApplyCapacity(
+                    nextCapacity,
+                    current.Snapshot.Allocation,
+                    pendingDelta: active ? 0 : -1,
+                    activeDelta: active ? -1 : 0
+                );
+            }
+            catch (InvalidDataException)
+            {
+                var observed = await ReadAuthorityRecordAsync(current.Key, cancellationToken)
+                    .ConfigureAwait(false);
+                if (observed is null || observed.Version != current.Version)
+                    return StaleAuthorityReclaimResult.Conflict;
+                throw;
+            }
             mutations.Add(new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null));
         }
 

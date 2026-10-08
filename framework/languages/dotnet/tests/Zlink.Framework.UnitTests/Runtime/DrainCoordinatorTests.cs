@@ -1863,7 +1863,19 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             SpotNodeName = "actors",
             SpotMeshChannelName = "actor-mesh",
         };
-        actors.ActorFactories.Add("player", typeof(object));
+        actors.ActorFactories.Add(
+            "player",
+            new ZLinkActorFactoryRegistration(
+                typeof(object),
+                new ZLinkObjectRelocationRegistration(
+                    typeof(object),
+                    new ZLinkObjectPlacementOptions(),
+                    ZLinkObjectRelocationRegistration.DisabledPolicy,
+                    null,
+                    null
+                )
+            )
+        );
         registration.SpotNodes.Add("actors", actors);
 
         Assert.Equal(

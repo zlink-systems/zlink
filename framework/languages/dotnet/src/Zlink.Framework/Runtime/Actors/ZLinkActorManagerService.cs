@@ -289,7 +289,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         var descriptors = await ListLiveMeshNodesAsync(selectedMesh, deadline.Token)
             .ConfigureAwait(false);
         var placementEligible = descriptors
-            .Where(candidate => IsEligibleCandidate(candidate, actorType))
+            .Where(candidate => IsCompatibleCandidate(candidate, actorType))
             .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
             .ToList();
         var eligible = FilterRouteReadyCandidates(source, placementEligible);
@@ -332,7 +332,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 descriptors = await ListLiveMeshNodesAsync(selectedMesh, deadline.Token)
                     .ConfigureAwait(false);
                 placementEligible = descriptors
-                    .Where(candidate => IsEligibleCandidate(candidate, actorType))
+                    .Where(candidate => IsCompatibleCandidate(candidate, actorType))
                     .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
                     .ToList();
                 eligible = FilterRouteReadyCandidates(source, placementEligible);
@@ -367,7 +367,13 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         target.LifecycleGeneration,
                         owner,
                         creating,
-                        new ZLinkCapacityVector(1, 0, null)
+                        new ZLinkCapacityVector(1, 0, null),
+                        source.Registration.ActorFactories.TryGetValue(
+                            actorType,
+                            out var relocation
+                        )
+                            ? relocation.Relocation.PolicyKind
+                            : null
                     ),
                     deadline.Token
                 )
@@ -433,7 +439,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 descriptors = await ListLiveMeshNodesAsync(selectedMesh, deadline.Token)
                     .ConfigureAwait(false);
                 placementEligible = descriptors
-                    .Where(candidate => IsEligibleCandidate(candidate, actorType))
+                    .Where(candidate => IsCompatibleCandidate(candidate, actorType))
                     .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
                     .ToList();
                 eligible = FilterRouteReadyCandidates(source, placementEligible);
