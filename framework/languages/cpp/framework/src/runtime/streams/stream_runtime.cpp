@@ -400,6 +400,23 @@ class stream_session_dispatcher_t
     stream_state_t &_stream;
 };
 
+// The STREAM session message-flow event of one inbound packet (spec 26 §2.1). Callers build it only
+// inside a tracer gate, so a trace-off dispatch allocates nothing here.
+message_flow_event_t stream_packet_flow_event (message_flow_outcome_t outcome,
+                                               const stream_header_t &header)
+{
+    return message_flow_event_t{.outcome = outcome,
+                                .surface = dispatch_error_surface_t::stream_session,
+                                .message_kind = header.kind () == stream_message_kind_t::request
+                                                  ? dispatch_message_kind_t::request
+                                                  : dispatch_message_kind_t::send,
+                                .packet_name = std::string (header.packet_name ()),
+                                .correlation_id =
+                                  header.correlation_id ()
+                                    ? std::make_optional (std::string (*header.correlation_id ()))
+                                    : std::nullopt};
+}
+
 task_t<void> dispatch_packet_session_callback (packet_stream_session_t *session,
                                                stream_t stream,
                                                std::shared_ptr<stream_header_t> header,
@@ -428,16 +445,10 @@ task_t<void> dispatch_packet_session (packet_stream_session_t *session,
         if (!actor) {
             if (header->kind () == stream_message_kind_t::send) {
                 flow_tracer.trace (message_flow_outcome_t::dropped, [&] {
-                    return message_flow_event_t{
-                      .outcome = message_flow_outcome_t::dropped,
-                      .surface = dispatch_error_surface_t::stream_session,
-                      .message_kind = dispatch_message_kind_t::send,
-                      .packet_name = std::string (header->packet_name ()),
-                      .correlation_id =
-                        header->correlation_id ()
-                          ? std::make_optional (std::string (*header->correlation_id ()))
-                          : std::nullopt,
-                      .reason = message_flow_reason_t::stale_target};
+                    auto event =
+                      stream_packet_flow_event (message_flow_outcome_t::dropped, *header);
+                    event.reason = message_flow_reason_t::stale_target;
+                    return event;
                 });
                 return task_t<void> (result_t<void>::success ());
             }
@@ -448,6 +459,9 @@ task_t<void> dispatch_packet_session (packet_stream_session_t *session,
         }
         context->actor = std::make_shared<session_actor_t> (std::move (*actor));
     }
+    flow_tracer.trace (message_flow_outcome_t::dispatched, [&] {
+        return stream_packet_flow_event (message_flow_outcome_t::dispatched, *header);
+    });
     return dispatch_packet_session_callback (session, std::move (stream), std::move (header),
                                              std::move (context), std::move (payload));
 }
@@ -1786,23 +1800,7 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
         ? std::nullopt
         : std::optional<std::string> (stream.routing_id ()->to_hex ()));
     flow_tracer.trace (message_flow_outcome_t::received, [&] {
-        std::optional<std::string> correlation;
-        if (auto id = header.correlation_id ()) {
-            correlation = std::string (*id);
-        }
-        return message_flow_event_t{message_flow_outcome_t::received,
-                                    dispatch_error_surface_t::stream_session,
-                                    header.kind () == stream_message_kind_t::request
-                                      ? dispatch_message_kind_t::request
-                                      : dispatch_message_kind_t::send,
-                                    std::string (header.packet_name ()),
-                                    std::nullopt,
-                                    std::nullopt,
-                                    correlation,
-                                    std::nullopt,
-                                    std::nullopt,
-                                    std::nullopt,
-                                    std::nullopt};
+        return stream_packet_flow_event (message_flow_outcome_t::received, header);
     });
     auto current_flow = runtime::flow_context_t::current ();
     auto dispatch_stream = stream;
@@ -1873,23 +1871,7 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
         ? std::nullopt
         : std::optional<std::string> (stream.routing_id ()->to_hex ()));
     flow_tracer.trace (message_flow_outcome_t::received, [&] {
-        std::optional<std::string> correlation;
-        if (auto id = header.correlation_id ()) {
-            correlation = std::string (*id);
-        }
-        return message_flow_event_t{message_flow_outcome_t::received,
-                                    dispatch_error_surface_t::stream_session,
-                                    header.kind () == stream_message_kind_t::request
-                                      ? dispatch_message_kind_t::request
-                                      : dispatch_message_kind_t::send,
-                                    std::string (header.packet_name ()),
-                                    std::nullopt,
-                                    std::nullopt,
-                                    correlation,
-                                    std::nullopt,
-                                    std::nullopt,
-                                    std::nullopt,
-                                    std::nullopt};
+        return stream_packet_flow_event (message_flow_outcome_t::received, header);
     });
     auto current_flow = runtime::flow_context_t::current ();
     auto dispatch_stream = stream;

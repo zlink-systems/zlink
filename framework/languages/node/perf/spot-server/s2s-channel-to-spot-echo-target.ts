@@ -1,7 +1,12 @@
 import { Inject, Injectable, Scope } from '@nestjs/common';
 import { zlinkSpotPacketHandler } from '@zlink-systems/nestjs';
 import { ZLINK_ROUTE_MESH_RUNTIME, ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
-import type { ZLinkMessageContext, ZLinkRouteMeshRuntime, ZLinkSpotManager, ZLinkSpotPacketHandler } from '@zlink-systems/framework';
+import type {
+  ZLinkMessageContext,
+  ZLinkRouteMeshRuntime,
+  ZLinkSpotManager,
+  ZLinkSpotPacketHandler
+} from '@zlink-systems/framework';
 import { PerfClock } from '../shared/clock';
 import { PerfEchoRequest, RoleConfig } from '../shared/contracts';
 import { Measurement } from '../shared/measurement';
@@ -19,19 +24,32 @@ export async function runS2sChannelToSpotEchoTarget(config: RoleConfig): Promise
   const measurement = new Measurement(config, config.source);
   const metrics = new ScenarioMetrics(measurement).spotInternalsUnsupported();
   const readiness = new ObjectsReadiness(false, 'This cell has not created its User Spots yet.');
-  await runRole({
-    config,
-    objects: readiness,
-    providers: [{ provide: ScenarioMetrics, useValue: metrics }, { provide: ObjectsReadiness, useValue: readiness },
-      ...(request ? [PerfEchoSpot, PerfEchoRequestHandler] : [S2sSendEchoSpot, S2sSendEchoHandler])],
-    // callsChannel: the echo of §10.4 goes to the caller's return ChannelName.
-    configureFramework: (builder) => configureSpotRole(builder, config, !request, request ? PerfEchoSpot : S2sSendEchoSpot),
-    prepare: async (app) => {
-      const objects = await createSpots(config, app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER, { strict: false }),
-        app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }), measurement);
-      if (objects) publishSpots(readiness, objects);
-    }
-  }, measurement);
+  await runRole(
+    {
+      config,
+      objects: readiness,
+      providers: [
+        { provide: ScenarioMetrics, useValue: metrics },
+        { provide: ObjectsReadiness, useValue: readiness },
+        ...(request
+          ? [PerfEchoSpot, PerfEchoRequestHandler]
+          : [S2sSendEchoSpot, S2sSendEchoHandler])
+      ],
+      // callsChannel: the echo of §10.4 goes to the caller's return ChannelName.
+      configureFramework: (builder) =>
+        configureSpotRole(builder, config, !request, request ? PerfEchoSpot : S2sSendEchoSpot),
+      prepare: async (app) => {
+        const objects = await createSpots(
+          config,
+          app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER, { strict: false }),
+          app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }),
+          measurement
+        );
+        if (objects) publishSpots(readiness, objects);
+      }
+    },
+    measurement
+  );
 }
 
 @Injectable({ scope: Scope.TRANSIENT })
@@ -40,12 +58,20 @@ export class S2sSendEchoSpot extends ActorlessSpot {}
 // §10.4: the echo goes back as a second one-way send to the caller's own return ChannelName (in the DTO).
 @zlinkSpotPacketHandler({ spot: () => S2sSendEchoSpot, packetName: 'PerfEchoRequest' })
 @Injectable()
-export class S2sSendEchoHandler implements ZLinkSpotPacketHandler<S2sSendEchoSpot, PerfEchoRequest> {
+export class S2sSendEchoHandler implements ZLinkSpotPacketHandler<
+  S2sSendEchoSpot,
+  PerfEchoRequest
+> {
   constructor(
-    @Inject(Measurement) private readonly measurement: Measurement, @Inject(ROLE_CONFIG) private readonly config: RoleConfig
+    @Inject(Measurement) private readonly measurement: Measurement,
+    @Inject(ROLE_CONFIG) private readonly config: RoleConfig
   ) {}
 
-  async handle(spot: S2sSendEchoSpot, message: PerfEchoRequest, _context: ZLinkMessageContext): Promise<void> {
+  async handle(
+    spot: S2sSendEchoSpot,
+    message: PerfEchoRequest,
+    _context: ZLinkMessageContext
+  ): Promise<void> {
     const received = PerfClock.now();
     const measurement = this.measurement;
     measurement.handlerEnter();
@@ -55,7 +81,14 @@ export class S2sSendEchoHandler implements ZLinkSpotPacketHandler<S2sSendEchoSpo
       const reply = PayloadPattern.reply(message, received);
       measurement.recordApplicationCall(message, 'send');
       await spot.context.outbound.sendToChannel(message.returnChannel, reply).submit();
-      if (measurement.phase === 'setup' && !this.config.source) measurement.setupEvidence = [{ kind: 'typedProbeReply', source: 'ZLinkSpotPacketHandler<PerfEchoRequest> -> sendToChannel', observedValue: message.correlationId }];
+      if (measurement.phase === 'setup' && !this.config.source)
+        measurement.setupEvidence = [
+          {
+            kind: 'typedProbeReply',
+            source: 'ZLinkSpotPacketHandler<PerfEchoRequest> -> sendToChannel',
+            observedValue: message.correlationId
+          }
+        ];
     } catch (error) {
       measurement.recordDiagnostic(error);
       throw error;

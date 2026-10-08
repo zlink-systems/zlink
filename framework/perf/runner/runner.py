@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+from urllib.parse import urlsplit
 import urllib.request
 import uuid
 
@@ -163,7 +164,7 @@ def preflight(args: argparse.Namespace, environment: dict) -> None:
     if environment["memoryLimit"] not in (None, "max") and environment.get("memoryCurrent") is not None:
         available = min(available, int(environment["memoryLimit"]) - int(environment["memoryCurrent"]))
     # A necessary lower bound from the harness's sequence and task-reference arrays, not an estimate of Core queues.
-    if any(available <= 8 * (v.get("connections") or v["logical_streams"]) * (1 + v["inflight"]) for v in consumed):
+    if any(available <= 16 * (v.get("connections") or v["logical_streams"]) for v in consumed):
         raise ValueError("Available memory cannot hold even the required harness sequence/task-reference arrays")
 
 
@@ -377,8 +378,36 @@ def wait_ready(owned: OwnedProcesses, roles: list[dict], full: bool | str, cell:
     return list(observed.values())
 
 
+def publish_listener_endpoints(role: dict, ready: dict) -> None:
+    """Replace wildcard listener addresses with the role's public bound endpoints."""
+    configured = role["transportEndpoints"]
+    event = next(
+        (
+            item
+            for item in ready.get("evidence", [])
+            if item.get("kind") == "boundTransportEndpoints"
+        ),
+        None,
+    )
+    actual = event.get("observedValue") if event is not None else {}
+    identity = f"{role['role']}-{role['roleInstance']}"
+    if not isinstance(actual, dict) or set(actual) != set(configured):
+        raise RuntimeError(f"Role {identity} reported an incomplete transport endpoint map.")
+    for key, endpoint in actual.items():
+        if not isinstance(endpoint, str):
+            raise RuntimeError(f"Role {identity} reported a non-text {key} endpoint.")
+        try:
+            port = urlsplit(endpoint).port
+        except ValueError as error:
+            raise RuntimeError(f"Role {identity} reported an invalid {key} endpoint.") from error
+        if port is None or port == 0:
+            raise RuntimeError(f"Role {identity} did not report the bound {key} endpoint.")
+    role["transportEndpoints"] = actual
+    role["streamEndpoint"] = actual.get("stream")
+
+
 def wait_roles_complete(owned: OwnedProcesses, roles: list[dict], workload: dict, deadline: float, stage: str) -> None:
-    """Poll each role until its phase is complete, sharing the phase's setup-timeout deadline."""
+    """Poll each role until its phase is complete, sharing the phase drain deadline (§4.1)."""
     pending = list(roles)
     admin_timeout = workload["adminTimeoutMs"] / 1000
     observed = {}
@@ -395,7 +424,7 @@ def wait_roles_complete(owned: OwnedProcesses, roles: list[dict], workload: dict
                 pending.remove(role)
         if pending and time.monotonic() >= deadline:
             write_json(owned.cell / "tmp" / (stage + "-completion-failed.json"), observed)
-            raise TimeoutError(f"Role phase did not complete inside setupTimeoutMs={workload['setupTimeoutMs']}")
+            raise TimeoutError(f"Role {stage} did not complete before its deadline; see tmp/{stage}-completion-failed.json")
         if pending:
             time.sleep(0.02)
 
@@ -405,11 +434,11 @@ def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, s
     scenario, v = cell.scenario, values(cell.scenario, args)
     cs = scenario.driver == "clients"
     workload = {"payloadSize": cell.payload, "durationSeconds": args.duration_seconds, "warmupSeconds": args.warmup_seconds,
-                "inflight": v["inflight"], "connections": v.get("connections"),
+                "connections": v.get("connections"),
                 "logicalStreams": v.get("logical_streams"), "clientCount": v["client_count"],
                 "connectConcurrency": v.get("connect_concurrency"),
-                "requestTimeoutMs": 1000, "correlationExpiryMs": 1000, "driverTimeoutMs": 2000,
-                "setupTimeoutMs": 30000, "adminTimeoutMs": 5000, "socketSendTimeoutMs": 1000}
+                "drainTimeoutMs": 30000, "setupTimeoutMs": 30000, "adminTimeoutMs": 5000,
+                "socketSendTimeoutMs": math.ceil((args.warmup_seconds + args.duration_seconds) * 1000) + 30000}
     pool = v.get("worker_pool_size")
     comparable = {"language": args.language, "scenario": scenario.name, "mode": cell.mode, "terminal": cell.terminal,
                   "topology": cell.topology, "discovery": scenario.discovery, "objectRole": scenario.object_roles,
@@ -420,13 +449,19 @@ def comparison(args: argparse.Namespace, cell: Cell, env: dict) -> tuple[dict, s
                   "packageSource": args.package_source,
                   "subscriberCount": cell.subscriber_count,
                   "worker": {"algorithm": "xorshift32-v1", "taskMillis": v["worker_task_millis"], "minThreads": pool, "maxThreads": pool,
-                             "idleTimeoutMs": 60000, "workerTimeoutMs": workload["requestTimeoutMs"]} if scenario.worker else None,
+                             "idleTimeoutMs": 60000} if scenario.worker else None,
                   "splitRule": "q=N/P,r=N%P,count=q+(i<r),first=i*q+min(i,r)" if cs else "one source; stream IDs 0..N-1",
                   "workload": workload, "serializer": env["serializer"],
                   "cpu": {key: env[key] for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity")},
                   "memoryLimit": env["memoryLimit"], "runtimeOptions": env["runtimeOptions"],
                   "runtimeSettings": env.get("runtimeSettings", {}), "installedRuntimes": env.get("installedRuntimes"),
                   "workloadHash": None, "repetition": None}
+    if scenario.name == "pubsub-fanout-echo":
+        # #1586: Node uses the Framework default; other drivers apply the workload timeout.
+        comparable["publisherChannel"] = {
+            "noDrop": True,
+            "sendTimeoutMs": None if args.language == "node" else workload["socketSendTimeoutMs"],
+        }
     comparable["diagnostics"] = "Normal" if args.operation == "diagnostic" else "Off"
     exact = json.dumps(comparable, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
     return comparable, exact
@@ -460,20 +495,68 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
                   if args.operation == "diagnostic" else None,
                   "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
                                  "loadedArtifactsFile": "loaded-artifacts.json", "commit": env["commit"], "serializer": env["serializer"],
-                                 "listenerReservation": "OS bind(127.0.0.1,0), held until this exact process starts"}}
+                                 "listenerReservation": "control HTTP ports are OS-reserved; Framework listeners bind wildcard ports"}}
         planned = plan_roles(cell_spec, values(scenario, args), common, language.stream_scheme, owned.reserve)
+        manifests = {}
         for role in planned:
-            write_json(cell / role.config_file, role.config)
             server_files.append(role.name + ".json")
-            roles.append({**role.manifest, "configFile": role.config_file})
-            owned.start(role.name, [*language.command(args.perf_dir, role.executable), "--config", str(cell / role.config_file)], role.ports)
+            manifest = {**role.manifest, "configFile": role.config_file}
+            manifests[role.name] = manifest
+            roles.append(manifest)
+
+        def start_role(role):
+            write_json(cell / role.config_file, role.config)
+            owned.start(
+                role.name,
+                [
+                    *language.command(args.perf_dir, role.executable),
+                    "--config",
+                    str(cell / role.config_file),
+                ],
+                role.ports,
+            )
+
+        peer_targets = {role.peer_target for role in planned if role.peer_target is not None}
+        for target in planned:
+            if target.name not in peer_targets:
+                continue
+            start_role(target)
+            target_manifest = manifests[target.name]
+            target_ready = wait_ready(
+                owned,
+                [target_manifest],
+                False,
+                cell,
+                "peer-" + target.name,
+                language,
+                config["workload"],
+            )[0]
+            publish_listener_endpoints(target_manifest, target_ready)
+            for dependent in planned:
+                if dependent.peer_target != target.name:
+                    continue
+                endpoint = target_manifest["transportEndpoints"].get(dependent.peer_endpoint_key)
+                if endpoint is None:
+                    raise RuntimeError(
+                        f"Role {target.name} did not publish peer listener "
+                        f"{dependent.peer_endpoint_key}."
+                    )
+                dependent.config["peerEndpoint"] = endpoint
+
+        for role in planned:
+            if role.name not in peer_targets:
+                start_role(role)
         manifest = {"runId": args.run_id, "cellId": cell_id, "configHash": config_hash, "language": args.language,
                     "workload": config["workload"],
                     "roles": roles, "provenance": {"environmentFile": str(args.output / "env.json"), "buildMode": "Release",
                                                   "loadedArtifactsFile": "loaded-artifacts.json",
                                                   "commit": env["commit"], "serializer": env["serializer"]}}
+        readiness = wait_ready(owned, roles, False, cell, "infrastructure", language, config["workload"])
+        readiness_by_role = {(item["role"], item["roleInstance"]): item for item in readiness}
+        for role in roles:
+            identity = (role["role"], role["roleInstance"])
+            publish_listener_endpoints(role, readiness_by_role[identity])
         write_json(cell / "endpoints.json", manifest)
-        wait_ready(owned, roles, False, cell, "infrastructure", language, config["workload"])
         for index in range(config["workload"]["clientCount"]):
             name = f"client-{index}"
             process = owned.start(name, [*language.command(args.perf_dir, CLIENT), "--endpoint-config", str(cell / "endpoints.json"),
@@ -533,11 +616,12 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
             duration = config["workload"]["warmupSeconds" if phase == "warmup" else "durationSeconds"]
             for client in clients:
                 client.send("wait")
-            completion_deadline = time.monotonic() + duration + config["workload"]["setupTimeoutMs"] / 1000
+            # §4.1, §5.2: a phase completes when its work has drained; the drain limit is drainTimeoutMs.
+            completion_deadline = time.monotonic() + duration + config["workload"]["drainTimeoutMs"] / 1000
             for client in clients:
                 remaining = completion_deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError(f"Client phase did not complete inside setupTimeoutMs={config['workload']['setupTimeoutMs']}")
+                    raise TimeoutError(f"Client phase did not complete inside drainTimeoutMs={config['workload']['drainTimeoutMs']}")
                 acknowledgement = client.receive(remaining, "response")["response"]
                 if not acknowledgement.get("ok") or acknowledgement.get("phase") != "complete":
                     raise RuntimeError("Client phase did not complete successfully; collect its firstErrors evidence")

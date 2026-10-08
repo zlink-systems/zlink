@@ -1,13 +1,23 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { ZLinkActorClient, ZLinkActorManager, ZLinkMessageContext, ZLinkRouteMeshRuntime, ZLinkSendHandler } from '@zlink-systems/framework';
-import { ZLINK_ACTOR_CLIENT, ZLINK_ACTOR_MANAGER, ZLINK_ROUTE_MESH_RUNTIME } from '@zlink-systems/nestjs';
+import type {
+  ZLinkActorClient,
+  ZLinkActorManager,
+  ZLinkMessageContext,
+  ZLinkRouteMeshRuntime,
+  ZLinkSendHandler
+} from '@zlink-systems/framework';
+import {
+  ZLINK_ACTOR_CLIENT,
+  ZLINK_ACTOR_MANAGER,
+  ZLINK_ROUTE_MESH_RUNTIME
+} from '@zlink-systems/nestjs';
 import { PerfClock } from '../shared/clock';
 import { DecimalText, PerfEchoReply, RoleConfig } from '../shared/contracts';
 import { Measurement } from '../shared/measurement';
 import { ScenarioMetrics } from '../server-support/scenario-metrics';
 import { SendSendCorrelation } from '../server-support/send-send-correlation';
 import { ObjectsReadiness, runRole } from '../server-support/server-application';
-import { runLoops } from '../server-support/wait';
+import { runAdmissionStreams } from '../server-support/wait';
 import { ActorCallerSetup } from './actor-caller-setup';
 
 // §10.10 actor-no-bind-send-send-echo. Question: what do the source admission of a global-ActorId send and the
@@ -21,8 +31,12 @@ export class ActorNoBindSendSendEchoScenario {
   private sequences: number[] = [];
 
   constructor(
-    private readonly actorClient: ZLinkActorClient, private readonly measurement: Measurement, private readonly config: RoleConfig,
-    private readonly setup: ActorCallerSetup, private readonly readiness: ObjectsReadiness, private readonly correlations: SendSendCorrelation,
+    private readonly actorClient: ZLinkActorClient,
+    private readonly measurement: Measurement,
+    private readonly config: RoleConfig,
+    private readonly setup: ActorCallerSetup,
+    private readonly readiness: ObjectsReadiness,
+    private readonly correlations: SendSendCorrelation,
     private readonly metrics: ScenarioMetrics
   ) {}
 
@@ -38,16 +52,28 @@ export class ActorNoBindSendSendEchoScenario {
         for (;;) {
           const stream = next++;
           if (stream >= this.sequences.length) return;
-          const request = measurement.request(stream, ++this.sequences[stream], true).with({ returnChannel: config.channelName });
+          const request = measurement
+            .request(stream, ++this.sequences[stream], true)
+            .with({ returnChannel: config.channelName });
           const entry = this.correlations.register(request, PerfClock.now());
-          await this.actorClient.sendToActor(config.actorIds[stream], request).submit(signal);
+          await this.actorClient.sendToActor(config.actorIds[stream], request).submit();
           const { error } = await this.correlations.completeAsync(entry);
           if (error) throw error;
         }
       };
-      await Promise.all(Array.from({ length: Math.min(config.workload.connectConcurrency as number, this.sequences.length) }, worker));
-      measurement.setupEvidence = [{ kind: 'typedProbeEcho', source: 'ZLinkActorClient.sendToActor -> return Channel send handler',
-        observedValue: { probes: this.sequences.length, streams: this.sequences.length } }];
+      await Promise.all(
+        Array.from(
+          { length: Math.min(config.workload.connectConcurrency as number, this.sequences.length) },
+          worker
+        )
+      );
+      measurement.setupEvidence = [
+        {
+          kind: 'typedProbeEcho',
+          source: 'ZLinkActorClient.sendToActor -> return Channel send handler',
+          observedValue: { probes: this.sequences.length, streams: this.sequences.length }
+        }
+      ];
       // §16.1: objectsReady means the create and the probe echo of every Actor are done, so warmup starts on quiet roles.
       this.readiness.set(true, '', [created, ...measurement.setupEvidence]);
     } catch (error) {
@@ -55,28 +81,36 @@ export class ActorNoBindSendSendEchoScenario {
     }
   }
 
-  run = (): Promise<void> => runLoops(this.config.workload.logicalStreams as number, this.config.workload.inflight, (stream) => this.loop(stream));
+  run = (): Promise<void> =>
+    runAdmissionStreams(
+      this.config.workload.logicalStreams as number,
+      () => this.measurement.canIssue,
+      (stream) => this.loop(stream)
+    );
 
-  private async loop(stream: number): Promise<void> {
+  private async loop(stream: number): Promise<boolean> {
     const { config, measurement } = this;
     const actorId = config.actorIds[stream];
-    while (measurement.canIssue) {
-      let request = measurement.request(stream, ++this.sequences[stream]).with({ returnChannel: config.channelName });
-      const started = measurement.beginOperation('send');
-      if (started === undefined) break;
-      request = request.with({ sentTicks: DecimalText.of(started) });
-      const entry = this.correlations.register(request, started); // §13: registered right before the first public send
-      try {
-        await this.actorClient.sendToActor(actorId, request).submit();
-        const admitted = PerfClock.now();
-        this.metrics.record('sourceAdmissionMs', started, admitted);
-        this.correlations.firstSendEnded(entry, undefined);
-      } catch (error) {
-        this.correlations.firstSendEnded(entry, error);
-      }
-      const { error, completedTicks } = await this.correlations.completeAsync(entry); // the return Channel handler decides
-      measurement.completeOperation(started, error, completedTicks);
+    if (!measurement.canIssue) return false;
+    let request = measurement
+      .request(stream, ++this.sequences[stream])
+      .with({ returnChannel: config.channelName });
+    const started = measurement.beginOperation('send');
+    if (started === undefined) return false;
+    request = request.with({ sentTicks: DecimalText.of(started) });
+    const entry = this.correlations.register(request, started); // §13: registered right before the first public send
+    try {
+      await this.actorClient.sendToActor(actorId, request).submit();
+      const admitted = PerfClock.now();
+      this.metrics.record('sourceAdmissionMs', started, admitted);
+      this.correlations.firstSendEnded(entry, undefined);
+    } catch (error) {
+      this.correlations.firstSendEnded(entry, error);
     }
+    void this.correlations.completeAsync(entry).then(({ error, completedTicks }) => {
+      measurement.completeOperation(started, error, completedTicks);
+    });
+    return true;
   }
 }
 
@@ -92,24 +126,52 @@ export class ActorReturnHandler implements ZLinkSendHandler<PerfEchoReply> {
 
 export async function runActorNoBindSendSendEcho(config: RoleConfig): Promise<void> {
   const measurement = new Measurement(config, config.source);
-  const metrics = new ScenarioMetrics(measurement).latency('sourceAdmissionMs', 'actor.sourceAdmission.latency');
+  const metrics = new ScenarioMetrics(measurement).latency(
+    'sourceAdmissionMs',
+    'actor.sourceAdmission.latency'
+  );
   const correlations = new SendSendCorrelation(measurement, metrics);
-  const readiness = new ObjectsReadiness(false, 'Actors are not yet created and probed through the public API.');
+  const readiness = new ObjectsReadiness(
+    false,
+    'Actors are not yet created and probed through the public API.'
+  );
   let scenario: ActorNoBindSendSendEchoScenario | undefined;
-  await runRole({
-    config,
-    objects: readiness,
-    providers: [{ provide: SendSendCorrelation, useValue: correlations }, ActorReturnHandler],
-    configureFramework: (builder) => {
-      const mesh = builder.addRouteMesh(config.meshName!).setRoutingIdPrefix('perf-actor-caller').listen(config.transportEndpoints.mesh).setAdvertiseHost('127.0.0.1');
-      mesh.objects().client();
-      mesh.channel(config.channelName!).server().addSendHandler('PerfEchoReply', ActorReturnHandler);
+  await runRole(
+    {
+      config,
+      objects: readiness,
+      providers: [{ provide: SendSendCorrelation, useValue: correlations }, ActorReturnHandler],
+      configureFramework: (builder) => {
+        const mesh = builder
+          .addRouteMesh(config.meshName!)
+          .setRoutingIdPrefix('perf-actor-caller')
+          .listen(config.transportEndpoints.mesh)
+          .setAdvertiseHost('127.0.0.1');
+        mesh.objects().client();
+        mesh
+          .channel(config.channelName!)
+          .server()
+          .addSendHandler('PerfEchoReply', ActorReturnHandler);
+      },
+      workload: () => scenario?.run,
+      prepare: async (app) => {
+        const setup = new ActorCallerSetup(
+          config,
+          app.get<ZLinkActorManager>(ZLINK_ACTOR_MANAGER, { strict: false }),
+          app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false })
+        );
+        scenario = new ActorNoBindSendSendEchoScenario(
+          app.get<ZLinkActorClient>(ZLINK_ACTOR_CLIENT, { strict: false }),
+          measurement,
+          config,
+          setup,
+          readiness,
+          correlations,
+          metrics
+        );
+        await scenario.prepare();
+      }
     },
-    workload: () => scenario?.run,
-    prepare: async (app) => {
-      const setup = new ActorCallerSetup(config, app.get<ZLinkActorManager>(ZLINK_ACTOR_MANAGER, { strict: false }), app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }));
-      scenario = new ActorNoBindSendSendEchoScenario(app.get<ZLinkActorClient>(ZLINK_ACTOR_CLIENT, { strict: false }), measurement, config, setup, readiness, correlations, metrics);
-      await scenario.prepare();
-    }
-  }, measurement);
+    measurement
+  );
 }

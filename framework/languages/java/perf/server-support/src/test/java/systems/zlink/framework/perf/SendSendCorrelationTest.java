@@ -8,22 +8,48 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.lang.reflect.Field;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 // §13: the harness correlation of a send/send operation and the family metrics that hang off it.
 class SendSendCorrelationTest {
     private static RoleConfig config(int expiryMs) {
-        return new RoleConfig("test", "s2s-channel-to-spot-send-send-echo/4096/test", "b".repeat(64), "java", "channel", 0,
-                "s2s-channel-to-spot-send-send-echo", "send-send", "ordinary", "routemesh", "ch", "mesh", Map.of(), null, "", "",
-                true, "ObjectClient", true, null, List.of(), List.of(), null, null, null, "SpotWide",
-                new RoleConfig.Workload(1024, .05, .05, 1, null, 1, 1, null, 1000, expiryMs, 5000, 30000, 5000, 1000), null,
+        return new RoleConfig(
+                "test",
+                "s2s-channel-to-spot-send-send-echo/4096/test",
+                "b".repeat(64),
+                "java",
+                "channel",
+                0,
+                "s2s-channel-to-spot-send-send-echo",
+                "send-send",
+                "ordinary",
+                "routemesh",
+                "ch",
+                "mesh",
+                Map.of(),
+                null,
+                "",
+                "",
+                true,
+                "ObjectClient",
+                true,
+                null,
+                List.of(),
+                List.of(),
+                null,
+                null,
+                null,
+                "SpotWide",
+                new RoleConfig.Workload(
+                        1024, .05, .05, null, 1, 1, null, expiryMs, expiryMs, 5000, 1000),
+                null,
                 Map.of());
     }
 
@@ -55,16 +81,28 @@ class SendSendCorrelationTest {
         }
 
         void measuredWindow() throws Exception {
-            measurement.start(new PerfTriggerRequest("test", measurement.config().cellId(), "0", "warmup"), null);
+            measurement.start(
+                    new PerfTriggerRequest("test", measurement.config().cellId(), "0", "warmup"),
+                    null);
             measurement.phaseTask().get(5, TimeUnit.SECONDS);
-            assertTrue(measurement.reset(new ResetRequest("test", measurement.config().cellId(), "1"), null).ok());
-            assertTrue(measurement.start(new PerfTriggerRequest("test", measurement.config().cellId(), "1", "measured"),
-                    () -> CompletableFuture.completedFuture(null)).accepted());
+            assertTrue(
+                    measurement
+                            .reset(
+                                    new ResetRequest("test", measurement.config().cellId(), "1"),
+                                    null)
+                            .ok());
+            assertTrue(
+                    measurement
+                            .start(
+                                    new PerfTriggerRequest(
+                                            "test", measurement.config().cellId(), "1", "measured"),
+                                    () -> CompletableFuture.completedFuture(null))
+                            .accepted());
         }
-
     }
 
-    private static PerfEchoRequest retainedRequest(SendSendCorrelation.Entry entry) throws ReflectiveOperationException {
+    private static PerfEchoRequest retainedRequest(SendSendCorrelation.Entry entry)
+            throws ReflectiveOperationException {
         Field request = SendSendCorrelation.Entry.class.getDeclaredField("request");
         request.setAccessible(true);
         return (PerfEchoRequest) request.get(entry);
@@ -85,7 +123,10 @@ class SendSendCorrelationTest {
         assertEquals("0", f.count("messages.completed"));
         assertEquals("1", f.count("messages.inflightAtEnd"));
         assertEquals("1", f.count("messages.admitted"));
-        assertEquals("0", ((Map<?, ?>) f.measurement.snapshot(null).histograms.get("latencyMs")).get("count"));
+        assertEquals(
+                "0",
+                ((Map<?, ?>) f.measurement.snapshot(null).histograms.get("latencyMs"))
+                        .get("count"));
     }
 
     @Test
@@ -94,9 +135,11 @@ class SendSendCorrelationTest {
         f.measuredWindow();
         long started = f.measurement.beginOperation("send");
         assertTrue(started >= 0);
-        SendSendCorrelation.Entry entry = f.correlations.register(f.request(1).withSentTicks(started), started);
+        SendSendCorrelation.Entry entry =
+                f.correlations.register(f.request(1).withSentTicks(started), started);
         f.measurement.phaseTask().get(5, TimeUnit.SECONDS);
-        assertEquals("CorrelationExpired", ((PerfValidationException) f.complete(entry).error()).kind());
+        assertEquals(
+                "CorrelationExpired", ((PerfValidationException) f.complete(entry).error()).kind());
         assertEquals("1", f.count("messages.inflightAtEnd"));
         assertEquals("0", f.count("messages.timeout"));
         assertEquals("1", f.count("messages.expired"));
@@ -132,7 +175,8 @@ class SendSendCorrelationTest {
         f.correlations.firstSendEnded(entry, null);
         SendSendCorrelation.Result result = f.complete(entry);
         assertEquals("0", f.count("messages.completed"));
-        assertTrue(f.measurement.completeOperation(started, result.error(), result.completedTicks()));
+        assertTrue(
+                f.measurement.completeOperation(started, result.error(), result.completedTicks()));
         f.measurement.phaseTask().get(5, TimeUnit.SECONDS);
         assertEquals("1", f.count("messages.completed"));
         assertEquals("0", f.count("messages.inflightAtEnd"));
@@ -180,14 +224,16 @@ class SendSendCorrelationTest {
         PerfEchoReply reply = f.reply(request);
         IllegalStateException sendFailure = new IllegalStateException("send failed");
         CompletableFuture<Throwable> replyError = new CompletableFuture<>();
-        Thread replyThread = new Thread(() -> {
-            try {
-                f.correlations.reply(reply);
-                replyError.complete(null);
-            } catch (Throwable error) {
-                replyError.complete(error);
-            }
-        });
+        Thread replyThread =
+                new Thread(
+                        () -> {
+                            try {
+                                f.correlations.reply(reply);
+                                replyError.complete(null);
+                            } catch (Throwable error) {
+                                replyError.complete(error);
+                            }
+                        });
 
         boolean blockedAfterValidation;
         synchronized (entry) {
@@ -203,8 +249,12 @@ class SendSendCorrelationTest {
         }
 
         replyThread.join(TimeUnit.SECONDS.toMillis(5));
-        assertTrue(blockedAfterValidation, "The reply did not reach state classification while the entry was locked.");
-        assertFalse(replyThread.isAlive(), "The reply remained blocked after the entry lock was released.");
+        assertTrue(
+                blockedAfterValidation,
+                "The reply did not reach state classification while the entry was locked.");
+        assertFalse(
+                replyThread.isAlive(),
+                "The reply remained blocked after the entry lock was released.");
         assertNull(replyError.get(5, TimeUnit.SECONDS));
         assertSame(sendFailure, f.complete(entry).error());
         assertNull(retainedRequest(entry));
@@ -221,7 +271,9 @@ class SendSendCorrelationTest {
         f.correlations.firstSendEnded(entry, null);
         SendSendCorrelation.Result result = f.complete(entry);
         assertNull(result.error());
-        assertTrue(PerfClock.now() - result.completedTicks() >= 25_000_000L, "The echo time was replaced by the later send terminal.");
+        assertTrue(
+                PerfClock.now() - result.completedTicks() >= 25_000_000L,
+                "The echo time was replaced by the later send terminal.");
     }
 
     @Test
@@ -237,13 +289,16 @@ class SendSendCorrelationTest {
         assertEquals("1", f.count("messages.expired"));
         assertEquals("1", f.count("messages.lateReply"));
         assertEquals("0", f.count("messages.duplicateReply"));
-        // The measurement classifies the expiry as a timeout, not a failure (expired is a subset of timeout).
-        f.measurement.start(new PerfTriggerRequest("test", f.measurement.config().cellId(), "0", "warmup"), () -> {
-            long started = f.measurement.beginOperation("send");
-            assertTrue(started >= 0);
-            f.measurement.completeOperation(started, error);
-            return java.util.concurrent.CompletableFuture.completedFuture(null);
-        });
+        // The measurement classifies the expiry as a timeout, not a failure (expired is a subset of
+        // timeout).
+        f.measurement.start(
+                new PerfTriggerRequest("test", f.measurement.config().cellId(), "0", "warmup"),
+                () -> {
+                    long started = f.measurement.beginOperation("send");
+                    assertTrue(started >= 0);
+                    f.measurement.completeOperation(started, error);
+                    return java.util.concurrent.CompletableFuture.completedFuture(null);
+                });
         f.measurement.phaseTask().get(5, TimeUnit.SECONDS);
         PerfSnapshot snapshot = f.measurement.snapshot(null);
         assertEquals("1", snapshot.metrics.get("messages.timeout"));
@@ -252,7 +307,8 @@ class SendSendCorrelationTest {
     }
 
     @Test
-    void aReplyAfterTheFixedDeadlineCannotWinBeforeTheDriverAwaitsTheCorrelation() throws Exception {
+    void aReplyAfterTheFixedDeadlineCannotWinBeforeTheDriverAwaitsTheCorrelation()
+            throws Exception {
         Fixture f = new Fixture(20);
         PerfEchoRequest request = f.request(1);
         SendSendCorrelation.Entry entry = f.correlations.register(request, PerfClock.now());
@@ -295,17 +351,38 @@ class SendSendCorrelationTest {
         byte[] bytes = Base64.getDecoder().decode(request.payload());
         bytes[bytes.length - 1] ^= 1;
         PerfEchoReply good = f.reply(request);
-        f.correlations.reply(new PerfEchoReply(good.runId(), good.cellId(), good.resetSeq(), good.phase(), good.clientId(),
-                good.sequence(), good.correlationId(), good.receivedTicks(), good.clockDomainId(),
-                Base64.getEncoder().encodeToString(bytes)));
-        assertEquals("PayloadMismatch", ((PerfValidationException) f.complete(entry).error()).kind());
+        f.correlations.reply(
+                new PerfEchoReply(
+                        good.runId(),
+                        good.cellId(),
+                        good.resetSeq(),
+                        good.phase(),
+                        good.clientId(),
+                        good.sequence(),
+                        good.correlationId(),
+                        good.receivedTicks(),
+                        good.clockDomainId(),
+                        Base64.getEncoder().encodeToString(bytes)));
+        assertEquals(
+                "PayloadMismatch", ((PerfValidationException) f.complete(entry).error()).kind());
 
         PerfEchoRequest other = f.request(2);
         SendSendCorrelation.Entry second = f.correlations.register(other, PerfClock.now());
         PerfEchoReply wrong = f.reply(other);
-        f.correlations.reply(new PerfEchoReply(wrong.runId(), wrong.cellId(), wrong.resetSeq(), wrong.phase(),
-                wrong.clientId(), "99", wrong.correlationId(), wrong.receivedTicks(), wrong.clockDomainId(), wrong.payload()));
-        assertEquals("IdentityMismatch", ((PerfValidationException) f.complete(second).error()).kind());
+        f.correlations.reply(
+                new PerfEchoReply(
+                        wrong.runId(),
+                        wrong.cellId(),
+                        wrong.resetSeq(),
+                        wrong.phase(),
+                        wrong.clientId(),
+                        "99",
+                        wrong.correlationId(),
+                        wrong.receivedTicks(),
+                        wrong.clockDomainId(),
+                        wrong.payload()));
+        assertEquals(
+                "IdentityMismatch", ((PerfValidationException) f.complete(second).error()).kind());
     }
 
     @Test
@@ -316,36 +393,52 @@ class SendSendCorrelationTest {
         f.correlations.reply(f.reply(f.request(2)));
         assertEquals("1", f.count("messages.unknownCorrelation"));
         // The stray reply closed nothing: the issued operation still runs into its own expiry.
-        assertEquals("CorrelationExpired", ((PerfValidationException) f.complete(entry).error()).kind());
-        assertThrows(PerfValidationException.class, () -> f.correlations.register(known, PerfClock.now()));
+        assertEquals(
+                "CorrelationExpired", ((PerfValidationException) f.complete(entry).error()).kind());
+        assertThrows(
+                PerfValidationException.class,
+                () -> f.correlations.register(known, PerfClock.now()));
     }
 
     @Test
     void admittedCountsOnlyANormalFirstSendInsideAnActiveCellNotTheSetupProbe() {
         Fixture f = new Fixture(60);
         SendSendCorrelation.Entry probe = f.correlations.register(f.request(1), PerfClock.now());
-        f.correlations.firstSendEnded(probe, null); // Phase is "setup": a probe is not an admitted measured send
+        f.correlations.firstSendEnded(
+                probe, null); // Phase is "setup": a probe is not an admitted measured send
         assertEquals("0", f.count("messages.admitted"));
     }
 
     @Test
     void scenarioMetricsClearAtResetAndKeepUnsupportedKeysNullWithTheirReason() throws Exception {
         Fixture f = new Fixture(60);
-        f.metrics.latency("driverLatencyMs", "driver.latency").spotInternalsUnsupported()
+        f.metrics
+                .latency("driverLatencyMs", "driver.latency")
+                .spotInternalsUnsupported()
                 .aliasLatency("latency", "spot.remoteCallLatency");
         f.metrics.count("driver.issued", 3);
         PerfSnapshot before = f.measurement.snapshot(null);
         assertEquals("3", before.metrics.get("driver.issued"));
         assertNull(before.metrics.get("spot.mailboxDepth.max"));
-        assertEquals("PUBLIC_OBSERVATION_UNSUPPORTED", before.nullReasons.get("/metrics/spot.mailboxDepth.max").code());
+        assertEquals(
+                "PUBLIC_OBSERVATION_UNSUPPORTED",
+                before.nullReasons.get("/metrics/spot.mailboxDepth.max").code());
         assertNull(before.metrics.get("spot.remoteCallLatency.p50Ms"));
-        assertEquals("NO_SAMPLES", before.nullReasons.get("/metrics/spot.remoteCallLatency.p50Ms").code());
+        assertEquals(
+                "NO_SAMPLES",
+                before.nullReasons.get("/metrics/spot.remoteCallLatency.p50Ms").code());
         assertNotNull(before.histograms.get("driverLatencyMs"));
         // A key the scenario never named keeps the reason Measurement gave it.
-        assertEquals("NOT_APPLICABLE", before.nullReasons.get("/metrics/fanout.subscriberCount").code());
-        f.measurement.start(new PerfTriggerRequest("test", f.measurement.config().cellId(), "0", "warmup"), null);
+        assertEquals(
+                "NOT_APPLICABLE", before.nullReasons.get("/metrics/fanout.subscriberCount").code());
+        f.measurement.start(
+                new PerfTriggerRequest("test", f.measurement.config().cellId(), "0", "warmup"),
+                null);
         f.measurement.phaseTask().get(5, TimeUnit.SECONDS);
-        assertTrue(f.measurement.reset(new ResetRequest("test", f.measurement.config().cellId(), "1"), null).ok());
+        assertTrue(
+                f.measurement
+                        .reset(new ResetRequest("test", f.measurement.config().cellId(), "1"), null)
+                        .ok());
         assertEquals("0", f.measurement.snapshot(null).metrics.get("driver.issued"));
     }
 }

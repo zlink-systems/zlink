@@ -33,18 +33,28 @@ export class PublicMetricCollector {
     for (const scope of resourceMetrics.scopeMetrics) {
       for (const metric of scope.metrics) {
         const name = metric.descriptor.name;
-        if (!name.startsWith('zlink.host.core_hwm.') && !name.startsWith('zlink.host.application_job_queue.')) continue;
+        if (
+          !name.startsWith('zlink.host.core_hwm.') &&
+          !name.startsWith('zlink.host.application_job_queue.')
+        )
+          continue;
         for (const point of metric.dataPoints) {
           const value = point.value as number;
-          if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('Provider returned a non-numeric or non-finite public metric.');
+          if (typeof value !== 'number' || !Number.isFinite(value))
+            throw new Error('Provider returned a non-numeric or non-finite public metric.');
           observations.push({
-            name, kind: metric.dataPointType === DataPointType.SUM ? 'counter' : 'observable', unit: metric.descriptor.unit,
-            labels: { ...point.attributes }, value: Number.isInteger(value) ? String(value) : value, meter: scope.scope.name
+            name,
+            kind: metric.dataPointType === DataPointType.SUM ? 'counter' : 'observable',
+            unit: metric.descriptor.unit,
+            labels: { ...point.attributes },
+            value: Number.isInteger(value) ? String(value) : value,
+            meter: scope.scope.name
           });
         }
       }
     }
-    if (observations.length === 0) throw new Error('No public host capacity metrics were collected.');
+    if (observations.length === 0)
+      throw new Error('No public host capacity metrics were collected.');
     return observations;
   }
 }

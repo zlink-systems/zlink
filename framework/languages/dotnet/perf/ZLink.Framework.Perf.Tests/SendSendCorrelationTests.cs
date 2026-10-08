@@ -5,26 +5,58 @@ namespace ZLink.Framework.Perf.Tests;
 // §13: the harness correlation of a send/send operation and the family metrics that hang off it.
 public sealed class SendSendCorrelationTests
 {
-    private const int TestCorrelationExpiryMs = 60;
-    private static RoleConfig Config(int testCorrelationExpiryMs = TestCorrelationExpiryMs) => new("test", "s2s-channel-to-spot-send-send-echo/4096/test", new string('b', 64),
-        "channel", 0, "s2s-channel-to-spot-send-send-echo", "routemesh", "ch", "mesh", [], null, "", "", true, "ObjectClient", null, [], [],
-        "SpotWide", TestWorkload.Create(correlationExpiryMs: testCorrelationExpiryMs), [], mode: "send-send");
+    private const int TestSetupTimeoutMs = 60;
+
+    private static RoleConfig Config(int testSetupTimeoutMs = TestSetupTimeoutMs) =>
+        new(
+            "test",
+            "s2s-channel-to-spot-send-send-echo/4096/test",
+            new string('b', 64),
+            "channel",
+            0,
+            "s2s-channel-to-spot-send-send-echo",
+            "routemesh",
+            "ch",
+            "mesh",
+            [],
+            null,
+            "",
+            "",
+            true,
+            "ObjectClient",
+            null,
+            [],
+            [],
+            "SpotWide",
+            TestWorkload.Create(setupTimeoutMs: testSetupTimeoutMs),
+            [],
+            mode: "send-send"
+        );
 
     private sealed class Fixture : IDisposable
     {
         public readonly Measurement Measurement;
         public readonly ScenarioMetrics Metrics;
         public readonly SendSendCorrelation Correlations;
-        public Fixture(int testCorrelationExpiryMs = TestCorrelationExpiryMs)
+
+        public Fixture(int testSetupTimeoutMs = TestSetupTimeoutMs)
         {
-            Measurement = new Measurement(Config(testCorrelationExpiryMs), true);
+            Measurement = new Measurement(Config(testSetupTimeoutMs), true);
             Metrics = new ScenarioMetrics(Measurement);
             Correlations = new SendSendCorrelation(Measurement, Metrics);
         }
+
         public PerfEchoRequest Request(ulong sequence) =>
-            Measurement.Request(0, sequence, probe: true) with { returnChannel = "ch" };
-        public PerfEchoReply Reply(PerfEchoRequest request) => PayloadPattern.Reply(request, PerfClock.Now);
+            Measurement.Request(0, sequence, probe: true) with
+            {
+                returnChannel = "ch",
+            };
+
+        public PerfEchoReply Reply(PerfEchoRequest request) =>
+            PayloadPattern.Reply(request, PerfClock.Now);
+
         public string Count(string key) => (string)Measurement.Snapshot(null).metrics[key]!;
+
         public void Dispose() => Measurement.Dispose();
     }
 
@@ -67,7 +99,10 @@ public sealed class SendSendCorrelationTests
         f.Correlations.FirstSendEnded(entry, null);
         var (error, completed) = await f.Correlations.CompleteAsync(entry);
         Assert.Null(error);
-        Assert.True(PerfClock.Now - completed >= 25_000_000, "The echo time was replaced by the later send terminal.");
+        Assert.True(
+            PerfClock.Now - completed >= 25_000_000,
+            "The echo time was replaced by the later send terminal."
+        );
     }
 
     [Fact]
@@ -86,12 +121,21 @@ public sealed class SendSendCorrelationTests
         Assert.Equal("1", f.Count("messages.lateReply"));
         Assert.Equal("0", f.Count("messages.duplicateReply"));
         // The measurement classifies the expiry as a timeout, not a failure (expired is a subset of timeout).
-        f.Measurement.Start(new PerfTriggerRequest { runId = "test", cellId = f.Measurement.Config.cellId, phase = "warmup", resetSeq = "0" }, () =>
-        {
-            Assert.True(f.Measurement.BeginOperation(out var started, "send"));
-            f.Measurement.CompleteOperation(started, error);
-            return Task.CompletedTask;
-        });
+        f.Measurement.Start(
+            new PerfTriggerRequest
+            {
+                runId = "test",
+                cellId = f.Measurement.Config.cellId,
+                phase = "warmup",
+                resetSeq = "0",
+            },
+            () =>
+            {
+                Assert.True(f.Measurement.BeginOperation(out var started, "send"));
+                f.Measurement.CompleteOperation(started, error);
+                return Task.CompletedTask;
+            }
+        );
         await f.Measurement.PhaseTask;
         var snapshot = f.Measurement.Snapshot(null);
         Assert.Equal("1", snapshot.metrics["messages.timeout"]);
@@ -106,7 +150,8 @@ public sealed class SendSendCorrelationTests
         using var f = new Fixture(TestReplyCorrelationExpiryMs);
         var request = f.Request(1);
         var entry = f.Correlations.Register(request, PerfClock.Now);
-        while (PerfClock.Now < entry.ExpiresAtTicks) await Task.Delay(1);
+        while (PerfClock.Now < entry.ExpiresAtTicks)
+            await Task.Delay(1);
         f.Correlations.Reply(f.Reply(request));
         var (error, completed) = await f.Correlations.CompleteAsync(entry);
         Assert.Equal("CorrelationExpired", Assert.IsType<PerfValidationException>(error).Kind);
@@ -121,10 +166,15 @@ public sealed class SendSendCorrelationTests
         using var f = new Fixture(20);
         var request = f.Request(1);
         var entry = f.Correlations.Register(request, PerfClock.Now);
-        while (PerfClock.Now < entry.ExpiresAtTicks) await Task.Delay(1);
+        while (PerfClock.Now < entry.ExpiresAtTicks)
+            await Task.Delay(1);
         f.Correlations.FirstSendEnded(entry, new InvalidOperationException("late send failure"));
-        Assert.Equal("CorrelationExpired", Assert.IsType<PerfValidationException>(
-            (await f.Correlations.CompleteAsync(entry)).Error).Kind);
+        Assert.Equal(
+            "CorrelationExpired",
+            Assert
+                .IsType<PerfValidationException>((await f.Correlations.CompleteAsync(entry)).Error)
+                .Kind
+        );
         Assert.Equal("1", f.Count("messages.expired"));
     }
 
@@ -134,11 +184,16 @@ public sealed class SendSendCorrelationTests
         using var f = new Fixture(20);
         var request = f.Request(1);
         var entry = f.Correlations.Register(request, PerfClock.Now);
-        while (PerfClock.Now < entry.ExpiresAtTicks) await Task.Delay(1);
+        while (PerfClock.Now < entry.ExpiresAtTicks)
+            await Task.Delay(1);
         f.Correlations.FirstSendEnded(entry, null);
         Assert.Equal("1", f.Count("messages.expired"));
-        Assert.Equal("CorrelationExpired", Assert.IsType<PerfValidationException>(
-            (await f.Correlations.CompleteAsync(entry)).Error).Kind);
+        Assert.Equal(
+            "CorrelationExpired",
+            Assert
+                .IsType<PerfValidationException>((await f.Correlations.CompleteAsync(entry)).Error)
+                .Kind
+        );
     }
 
     [Fact]
@@ -146,18 +201,28 @@ public sealed class SendSendCorrelationTests
     {
         using var f = new Fixture();
         f.Metrics.Counters("driver.failed");
-        Assert.True(f.Measurement.Start(new PerfTriggerRequest { runId = "test", cellId = f.Measurement.Config.cellId,
-            phase = "warmup", resetSeq = "0" }, async () =>
-        {
-            var request = f.Measurement.Request(0, 1, probe: true);
-            Assert.True(f.Measurement.BeginOperation(out var started, "send"));
-            var entry = f.Correlations.Register(request, started);
-            f.Correlations.FirstSendEnded(entry, null);
-            f.Metrics.Count("driver.failed");
-            f.Correlations.Reply(f.Reply(request));
-            var (error, completed) = await f.Correlations.CompleteAsync(entry);
-            f.Measurement.CompleteOperation(started, error, completedTicks: completed);
-        }).accepted);
+        Assert.True(
+            f.Measurement.Start(
+                new PerfTriggerRequest
+                {
+                    runId = "test",
+                    cellId = f.Measurement.Config.cellId,
+                    phase = "warmup",
+                    resetSeq = "0",
+                },
+                async () =>
+                {
+                    var request = f.Measurement.Request(0, 1, probe: true);
+                    Assert.True(f.Measurement.BeginOperation(out var started, "send"));
+                    var entry = f.Correlations.Register(request, started);
+                    f.Correlations.FirstSendEnded(entry, null);
+                    f.Metrics.Count("driver.failed");
+                    f.Correlations.Reply(f.Reply(request));
+                    var (error, completed) = await f.Correlations.CompleteAsync(entry);
+                    f.Measurement.CompleteOperation(started, error, completedTicks: completed);
+                }
+            ).accepted
+        );
         await f.Measurement.PhaseTask;
 
         var snapshot = f.Measurement.Snapshot(null);
@@ -207,7 +272,12 @@ public sealed class SendSendCorrelationTests
         var other = f.Request(2);
         var second = f.Correlations.Register(other, PerfClock.Now);
         f.Correlations.Reply(f.Reply(other) with { sequence = "99" });
-        Assert.Equal("IdentityMismatch", Assert.IsType<PerfValidationException>((await f.Correlations.CompleteAsync(second)).Error).Kind);
+        Assert.Equal(
+            "IdentityMismatch",
+            Assert
+                .IsType<PerfValidationException>((await f.Correlations.CompleteAsync(second)).Error)
+                .Kind
+        );
     }
 
     [Fact]
@@ -219,7 +289,12 @@ public sealed class SendSendCorrelationTests
         f.Correlations.Reply(f.Reply(f.Request(2)));
         Assert.Equal("1", f.Count("messages.unknownCorrelation"));
         // The stray reply closed nothing: the issued operation still runs into its own expiry.
-        Assert.Equal("CorrelationExpired", Assert.IsType<PerfValidationException>((await f.Correlations.CompleteAsync(entry)).Error).Kind);
+        Assert.Equal(
+            "CorrelationExpired",
+            Assert
+                .IsType<PerfValidationException>((await f.Correlations.CompleteAsync(entry)).Error)
+                .Kind
+        );
         Assert.Throws<PerfValidationException>(() => f.Correlations.Register(known, PerfClock.Now));
     }
 
@@ -228,7 +303,7 @@ public sealed class SendSendCorrelationTests
     {
         using var f = new Fixture();
         var probe = f.Correlations.Register(f.Request(1), PerfClock.Now);
-        f.Correlations.FirstSendEnded(probe, null);   // Phase is "setup": a probe is not an admitted measured send
+        f.Correlations.FirstSendEnded(probe, null); // Phase is "setup": a probe is not an admitted measured send
         Assert.Equal("0", f.Count("messages.admitted"));
     }
 
@@ -236,20 +311,47 @@ public sealed class SendSendCorrelationTests
     public async Task ScenarioMetricsClearAtResetAndKeepUnsupportedKeysNullWithTheirReason()
     {
         using var f = new Fixture();
-        f.Metrics.Latency("driverLatencyMs", "driver.latency").SpotInternalsUnsupported().AliasLatency("latency", "spot.remoteCallLatency");
+        f.Metrics.Latency("driverLatencyMs", "driver.latency")
+            .SpotInternalsUnsupported()
+            .AliasLatency("latency", "spot.remoteCallLatency");
         f.Metrics.Count("driver.issued", 3);
         var before = f.Measurement.Snapshot(null);
         Assert.Equal("3", before.metrics["driver.issued"]);
         Assert.Null(before.metrics["spot.mailboxDepth.max"]);
-        Assert.Equal("PUBLIC_OBSERVATION_UNSUPPORTED", before.nullReasons["/metrics/spot.mailboxDepth.max"].code);
+        Assert.Equal(
+            "PUBLIC_OBSERVATION_UNSUPPORTED",
+            before.nullReasons["/metrics/spot.mailboxDepth.max"].code
+        );
         Assert.Null(before.metrics["spot.remoteCallLatency.p50Ms"]);
-        Assert.Equal("NO_SAMPLES", before.nullReasons["/metrics/spot.remoteCallLatency.p50Ms"].code);
+        Assert.Equal(
+            "NO_SAMPLES",
+            before.nullReasons["/metrics/spot.remoteCallLatency.p50Ms"].code
+        );
         Assert.Contains("driverLatencyMs", before.histograms.Keys);
         // A key the scenario never named keeps the reason Measurement gave it.
         Assert.Equal("NOT_APPLICABLE", before.nullReasons["/metrics/fanout.subscriberCount"].code);
-        f.Measurement.Start(new PerfTriggerRequest { runId = "test", cellId = f.Measurement.Config.cellId, phase = "warmup", resetSeq = "0" }, null);
+        f.Measurement.Start(
+            new PerfTriggerRequest
+            {
+                runId = "test",
+                cellId = f.Measurement.Config.cellId,
+                phase = "warmup",
+                resetSeq = "0",
+            },
+            null
+        );
         await f.Measurement.PhaseTask;
-        Assert.True(f.Measurement.Reset(new ResetRequest { runId = "test", cellId = f.Measurement.Config.cellId, resetSeq = "1" }, null).ok);
+        Assert.True(
+            f.Measurement.Reset(
+                new ResetRequest
+                {
+                    runId = "test",
+                    cellId = f.Measurement.Config.cellId,
+                    resetSeq = "1",
+                },
+                null
+            ).ok
+        );
         Assert.Equal("0", f.Measurement.Snapshot(null).metrics["driver.issued"]);
     }
 }

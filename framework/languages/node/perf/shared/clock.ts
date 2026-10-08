@@ -29,6 +29,9 @@ export const PerfClock = {
     maxErrorNs: null,
     validFromTicks: null,
     validThroughTicks: null,
-    evidence: ['process.hrtime.bigint is monotonic (Node documentation).', 'RTT uses only this process clock; remote receivedTicks is diagnostic.']
+    evidence: [
+      'process.hrtime.bigint is monotonic (Node documentation).',
+      'RTT uses only this process clock; remote receivedTicks is diagnostic.'
+    ]
   })
 };

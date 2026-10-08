@@ -7,7 +7,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-// The Actor role's objectsReady (§16.1): the Actors this process hosts, read from the public RouteMesh placement
+// The Actor role's objectsReady (§16.1): the Actors this process hosts, read from the public
+// RouteMesh placement
 // status by a background poll during setup, never from inside a handler turn.
 public final class ActorPlacementWatcher {
     private final RoleConfig config;
@@ -15,7 +16,10 @@ public final class ActorPlacementWatcher {
     private final ObjectsReadiness readiness;
     private final ZLinkRouteMeshRuntime mesh;
 
-    public ActorPlacementWatcher(RoleConfig config, Measurement measurement, ObjectsReadiness readiness,
+    public ActorPlacementWatcher(
+            RoleConfig config,
+            Measurement measurement,
+            ObjectsReadiness readiness,
             ZLinkRouteMeshRuntime mesh) {
         this.config = config;
         this.measurement = measurement;
@@ -35,10 +39,22 @@ public final class ActorPlacementWatcher {
             Map<String, Object> observed = new LinkedHashMap<>();
             observed.put("isAvailable", placement.isAvailable());
             observed.put("activeActorCount", placement.activeActorCount());
-            observed.put("expectedActors", config.actorIds().size());
-            readiness.set(placement.isAvailable() && placement.activeActorCount() > 0,
-                    "No Actor is active on this Object Server.",
-                    List.of(Evidence.of("actorPlacement", "ZLinkRouteMeshRuntime.snapshot.placement", observed)));
+            int expected = config.actorIds().size();
+            observed.put("expectedActors", expected);
+            boolean ready = placement.isAvailable() && placement.activeActorCount() == expected;
+            readiness.set(
+                    ready,
+                    ready
+                            ? ""
+                            : placement.activeActorCount()
+                                    + " of "
+                                    + expected
+                                    + " expected Actors are active on this Object Server.",
+                    List.of(
+                            Evidence.of(
+                                    "actorPlacement",
+                                    "ZLinkRouteMeshRuntime.snapshot.placement",
+                                    observed)));
             try {
                 Thread.sleep(100);
             } catch (InterruptedException interrupted) {

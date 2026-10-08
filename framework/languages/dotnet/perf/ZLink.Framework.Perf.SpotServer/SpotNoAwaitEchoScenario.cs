@@ -14,18 +14,27 @@ namespace ZLink.Framework.Perf;
 // at once. Payload 1024 bytes. Setup: only this Object Server can place the Spots. Store: run Docker Redis (Spot
 // addresses). Null: remote call, worker, Actor, fanout; mailbox depth and real turns have no public observation;
 // the driver histogram is not kept because this interval is already the primary latency.
-public sealed class SpotNoAwaitEchoScenario(IZLinkSpotClient spots, IZLinkSpotManager manager, Measurement measurement,
-    IZLinkRouteMeshRuntime meshRuntime, ObjectsReadiness readiness)
+public sealed class SpotNoAwaitEchoScenario(
+    IZLinkSpotClient spots,
+    IZLinkSpotManager manager,
+    Measurement measurement,
+    IZLinkRouteMeshRuntime meshRuntime,
+    ObjectsReadiness readiness
+)
 {
     private readonly RoleConfig config = measurement.Config;
     private long[] sequences = [];
 
     public static async Task RunAsync(RoleConfig config)
     {
-        if (config.role != "spot" || !config.source) throw new ArgumentException("The Spot role is the source of this scenario.");
+        if (config.role != "spot" || !config.source)
+            throw new ArgumentException("The Spot role is the source of this scenario.");
         var builder = SpotRole.Builder<PerfEchoSpot>(config, callsChannel: false);
-        builder.Services.AddSingleton(sp => new ScenarioMetrics(sp.GetRequiredService<Measurement>())
-            .Counters("spot.applicationHandlerEntries").SpotInternalsUnsupported());
+        builder.Services.AddSingleton(sp =>
+            new ScenarioMetrics(sp.GetRequiredService<Measurement>())
+                .Counters("spot.applicationHandlerEntries")
+                .SpotInternalsUnsupported()
+        );
         builder.Services.AddSingleton<SpotNoAwaitEchoScenario>();
         var app = builder.Build();
         _ = app.Services.GetRequiredService<ScenarioMetrics>();
@@ -38,47 +47,90 @@ public sealed class SpotNoAwaitEchoScenario(IZLinkSpotClient spots, IZLinkSpotMa
 
     public async Task PrepareAsync(CancellationToken stopping)
     {
-        var objects = await SpotRole.CreateSpotsAsync(config, manager, meshRuntime, measurement, stopping);
-        if (objects is null) return;
+        var objects = await SpotRole.CreateSpotsAsync(
+            config,
+            manager,
+            meshRuntime,
+            measurement,
+            stopping
+        );
+        if (objects is null)
+            return;
         try
         {
             sequences = new long[config.workload.logicalStreams!.Value];
             List<object> probes = [];
             for (var target = 0; target < config.spotIds.Length; target++)
             {
-                var request = measurement.Request(target, (ulong)Interlocked.Increment(ref sequences[target % sequences.Length]), probe: true);
-                var reply = await spots.RequestToSpot(config.spotIds[target], request)
-                    .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs)).Async<PerfEchoReply>();
+                var request = measurement.Request(
+                    target,
+                    (ulong)Interlocked.Increment(ref sequences[target % sequences.Length]),
+                    probe: true
+                );
+                var reply = await spots
+                    .RequestToSpot(config.spotIds[target], request)
+                    .Timeout(measurement.CallTimeout())
+                    .Async<PerfEchoReply>();
                 PayloadPattern.ValidateIdentity(request, reply);
                 measurement.Pattern.Validate(reply.payload);
-                probes.Add(new { request.correlationId, reply.receivedTicks, reply.clockDomainId });
+                probes.Add(
+                    new
+                    {
+                        request.correlationId,
+                        reply.receivedTicks,
+                        reply.clockDomainId,
+                    }
+                );
             }
-            SpotRole.Publish(readiness, objects);   // objectsReady only after every probe, so warmup never overlaps one
-            measurement.SetupEvidence = [new { kind = "typedProbeEcho", source = "IZLinkSpotClient.RequestToSpot.Async<PerfEchoReply>", observedValue = probes }];
+            SpotRole.Publish(readiness, objects); // objectsReady only after every probe, so warmup never overlaps one
+            measurement.SetupEvidence =
+            [
+                new
+                {
+                    kind = "typedProbeEcho",
+                    source = "IZLinkSpotClient.RequestToSpot.Async<PerfEchoReply>",
+                    observedValue = probes,
+                },
+            ];
         }
-        catch (Exception error) { measurement.RecordDiagnostic(error); }
+        catch (Exception error)
+        {
+            measurement.RecordDiagnostic(error);
+        }
     }
 
-    public Task RunAsync() => Task.WhenAll(Enumerable.Range(0, config.workload.logicalStreams!.Value)
-        .SelectMany(stream => Enumerable.Range(0, config.workload.inflight).Select(_ => LoopAsync(stream))));
+    public Task RunAsync() =>
+        ServerDrivenStreams.RunRequestsAsync(
+            measurement,
+            config.workload.logicalStreams!.Value,
+            LoopAsync
+        );
 
     private async Task LoopAsync(int stream)
     {
         var spotId = config.spotIds[stream % config.spotIds.Length];
-        while (measurement.CanIssue)
+        if (!measurement.BeginOperation(out var started))
+            return;
+        var request = measurement.Request(
+            stream,
+            checked((ulong)Interlocked.Increment(ref sequences[stream]))
+        ) with
         {
-            var request = measurement.Request(stream, checked((ulong)Interlocked.Increment(ref sequences[stream])));
-            if (!measurement.BeginOperation(out var started)) break;
-            request = request with { sentTicks = DecimalText.Of(started) };
-            try
-            {
-                var reply = await spots.RequestToSpot(spotId, request)
-                    .Timeout(TimeSpan.FromMilliseconds(config.workload.requestTimeoutMs)).Async<PerfEchoReply>();
-                PayloadPattern.ValidateIdentity(request, reply);
-                measurement.Pattern.Validate(reply.payload);
-                measurement.CompleteOperation(started);
-            }
-            catch (Exception error) { measurement.CompleteOperation(started, error); }
+            sentTicks = DecimalText.Of(started),
+        };
+        try
+        {
+            var reply = await spots
+                .RequestToSpot(spotId, request)
+                .Timeout(measurement.CallTimeout())
+                .Async<PerfEchoReply>();
+            PayloadPattern.ValidateIdentity(request, reply);
+            measurement.Pattern.Validate(reply.payload);
+            measurement.CompleteOperation(started);
+        }
+        catch (Exception error)
+        {
+            measurement.CompleteOperation(started, error);
         }
     }
 }

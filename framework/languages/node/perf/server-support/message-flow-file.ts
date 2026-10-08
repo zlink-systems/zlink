@@ -1,7 +1,12 @@
 import * as fs from 'node:fs';
 import { logs } from '@opentelemetry/api-logs';
 import { ExportResult, ExportResultCode } from '@opentelemetry/core';
-import { LoggerProvider, LogRecordExporter, ReadableLogRecord, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs';
+import {
+  LoggerProvider,
+  LogRecordExporter,
+  ReadableLogRecord,
+  SimpleLogRecordProcessor
+} from '@opentelemetry/sdk-logs';
 import { PerfClock } from '../shared/clock';
 import { DiagnosticsConfig } from '../shared/contracts';
 
@@ -15,18 +20,33 @@ class FlowFileExporter implements LogRecordExporter {
 
   export(records: ReadableLogRecord[], done: (result: ExportResult) => void): void {
     for (const record of records) {
-      fs.writeSync(this.fd, JSON.stringify({ eventId: typeof record.body === 'string' ? record.body : String(record.body), observedTicks: PerfClock.now().toString(),
-        clockDomainId: PerfClock.domain, severity: record.severityText, tags: record.attributes }) + '\n');
+      fs.writeSync(
+        this.fd,
+        JSON.stringify({
+          eventId: typeof record.body === 'string' ? record.body : String(record.body),
+          observedTicks: PerfClock.now().toString(),
+          clockDomainId: PerfClock.domain,
+          severity: record.severityText,
+          tags: record.attributes
+        }) + '\n'
+      );
     }
     done({ code: ExportResultCode.SUCCESS });
   }
 
   async forceFlush(): Promise<void> {}
-  async shutdown(): Promise<void> { fs.closeSync(this.fd); }
+  async shutdown(): Promise<void> {
+    fs.closeSync(this.fd);
+  }
 }
 
 export function enableFlowFileLogging(diagnostics: DiagnosticsConfig): void {
-  if (diagnostics.level !== 'Normal') throw new Error('Diagnostic runs use Normal message-flow tracing.');
-  const provider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor({ exporter: new FlowFileExporter(diagnostics.flowFile) })] });
+  if (diagnostics.level !== 'Normal')
+    throw new Error('Diagnostic runs use Normal message-flow tracing.');
+  const provider = new LoggerProvider({
+    processors: [
+      new SimpleLogRecordProcessor({ exporter: new FlowFileExporter(diagnostics.flowFile) })
+    ]
+  });
   logs.setGlobalLoggerProvider(provider);
 }

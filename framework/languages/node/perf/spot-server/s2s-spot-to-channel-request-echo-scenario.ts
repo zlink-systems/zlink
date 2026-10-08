@@ -1,13 +1,30 @@
 import { Inject, Injectable, Scope } from '@nestjs/common';
-import { ZLINK_ROUTE_MESH_RUNTIME, ZLINK_SPOT_MANAGER, ZLINK_SPOT_OUTBOUND, zlinkSpotPacketHandler } from '@zlink-systems/nestjs';
-import type { ZLinkMessageContext, ZLinkRouteMeshRuntime, ZLinkSpotManager, ZLinkSpotOutbound, ZLinkSpotRequestHandler } from '@zlink-systems/framework';
+import {
+  ZLINK_ROUTE_MESH_RUNTIME,
+  ZLINK_SPOT_MANAGER,
+  ZLINK_SPOT_OUTBOUND,
+  zlinkSpotPacketHandler
+} from '@zlink-systems/nestjs';
+import type {
+  ZLinkMessageContext,
+  ZLinkRouteMeshRuntime,
+  ZLinkSpotManager,
+  ZLinkSpotOutbound,
+  ZLinkSpotRequestHandler
+} from '@zlink-systems/framework';
 import { PerfClock } from '../shared/clock';
-import { PerfDriveReply, PerfDriveRequest, PerfEchoReply, PerfEchoRequest, RoleConfig } from '../shared/contracts';
+import {
+  PerfDriveReply,
+  PerfDriveRequest,
+  PerfEchoReply,
+  PerfEchoRequest,
+  RoleConfig
+} from '../shared/contracts';
 import { Measurement } from '../shared/measurement';
 import { PayloadPattern } from '../shared/payload';
 import { ScenarioMetrics } from '../server-support/scenario-metrics';
 import { ObjectsReadiness, ROLE_CONFIG, runRole } from '../server-support/server-application';
-import { runLoops, until } from '../server-support/wait';
+import { runRequestStreams, until } from '../server-support/wait';
 import { ActorlessSpot, configureSpotRole, createSpots, publishSpots } from './spot-role';
 
 // §10.5 s2s-spot-to-channel-request-echo. Question: how the terminal (ordinary or Yield) and the number of Spots
@@ -24,8 +41,12 @@ export class S2sSpotToChannelRequestEchoScenario {
   private sequences: number[] = [];
 
   constructor(
-    private readonly spots: ZLinkSpotOutbound, private readonly manager: ZLinkSpotManager, private readonly measurement: Measurement,
-    private readonly config: RoleConfig, private readonly meshRuntime: ZLinkRouteMeshRuntime, private readonly readiness: ObjectsReadiness,
+    private readonly spots: ZLinkSpotOutbound,
+    private readonly manager: ZLinkSpotManager,
+    private readonly measurement: Measurement,
+    private readonly config: RoleConfig,
+    private readonly meshRuntime: ZLinkRouteMeshRuntime,
+    private readonly readiness: ObjectsReadiness,
     private readonly metrics: ScenarioMetrics
   ) {}
 
@@ -34,46 +55,86 @@ export class S2sSpotToChannelRequestEchoScenario {
     const objects = await createSpots(config, this.manager, this.meshRuntime, measurement);
     if (!objects) return;
     try {
-      await until(() => this.meshRuntime.snapshot(config.meshName!).channels.some((channel) => channel.channelName === config.channelName && channel.isReady && channel.readyTargetCount > 0),
-        config.workload.setupTimeoutMs, 'the echo Channel target to be ready');
+      await until(
+        () =>
+          this.meshRuntime
+            .snapshot(config.meshName!)
+            .channels.some(
+              (channel) =>
+                channel.channelName === config.channelName &&
+                channel.isReady &&
+                channel.readyTargetCount > 0
+            ),
+        config.workload.setupTimeoutMs,
+        'the echo Channel target to be ready'
+      );
       this.sequences = new Array<number>(config.workload.logicalStreams as number).fill(0);
       const probes: unknown[] = [];
       for (let target = 0; target < config.spotIds.length; target++) {
-        const echo = measurement.request(target, ++this.sequences[target % this.sequences.length], true);
-        const driven = await this.spots.requestToSpot(config.spotIds[target], new PerfDriveRequest(echo)).timeout(config.workload.driverTimeoutMs).submit<PerfDriveReply>();
-        if (!driven.started || driven.echo === null) throw new Error('The setup probe did not reach the Channel.');
+        const echo = measurement.request(
+          target,
+          ++this.sequences[target % this.sequences.length],
+          true
+        );
+        const driven = await this.spots
+          .requestToSpot(config.spotIds[target], new PerfDriveRequest(echo))
+          .timeout(measurement.callTimeout())
+          .submit<PerfDriveReply>();
+        if (!driven.started || driven.echo === null)
+          throw new Error('The setup probe did not reach the Channel.');
         PayloadPattern.validateIdentity(echo, driven.echo);
         measurement.pattern.validate(driven.echo.payload);
-        probes.push({ correlationId: echo.correlationId, receivedTicks: driven.echo.receivedTicks, clockDomainId: driven.echo.clockDomainId });
+        probes.push({
+          correlationId: echo.correlationId,
+          receivedTicks: driven.echo.receivedTicks,
+          clockDomainId: driven.echo.clockDomainId
+        });
       }
       publishSpots(this.readiness, objects); // objectsReady only after every probe, so warmup never overlaps one
-      measurement.setupEvidence = [{ kind: 'typedProbeEcho', source: 'ZLinkSpotOutbound.requestToSpot -> Spot requestToChannel', observedValue: probes }];
+      measurement.setupEvidence = [
+        {
+          kind: 'typedProbeEcho',
+          source: 'ZLinkSpotOutbound.requestToSpot -> Spot requestToChannel',
+          observedValue: probes
+        }
+      ];
     } catch (error) {
       measurement.recordDiagnostic(error);
     }
   }
 
-  run = (): Promise<void> => runLoops(this.config.workload.logicalStreams as number, this.config.workload.inflight, (stream) => this.loop(stream));
+  run = (): Promise<void> =>
+    runRequestStreams(
+      this.config.workload.logicalStreams as number,
+      () => this.measurement.canIssue,
+      (stream) => this.loop(stream),
+      (error) => this.measurement.recordDiagnostic(error)
+    );
 
   // The local driver: one PerfDriveRequest per operation; the in-flight slot is the driver's until the handler returns.
   private async loop(stream: number): Promise<void> {
     const { config, measurement, metrics } = this;
     const spotId = config.spotIds[stream % config.spotIds.length];
-    while (measurement.canIssue) {
-      const echo = measurement.request(stream, ++this.sequences[stream]);
-      const started = PerfClock.now();
-      metrics.count('driver.issued');
-      let driven: PerfDriveReply;
-      try {
-        driven = await this.spots.requestToSpot(spotId, new PerfDriveRequest(echo)).timeout(config.workload.driverTimeoutMs).submit<PerfDriveReply>();
-      } catch (error) {
-        metrics.count('driver.failed');
-        measurement.recordDiagnostic(error);
-        continue;
-      }
-      if (!driven.started) { metrics.count('driver.notStarted'); continue; }
-      if (driven.echo !== null) metrics.record('driverLatencyMs', started, PerfClock.now());
+    if (!measurement.canIssue) return;
+    const echo = measurement.request(stream, ++this.sequences[stream]);
+    const started = PerfClock.now();
+    metrics.count('driver.issued');
+    let driven: PerfDriveReply;
+    try {
+      driven = await this.spots
+        .requestToSpot(spotId, new PerfDriveRequest(echo))
+        .timeout(measurement.callTimeout(true))
+        .submit<PerfDriveReply>();
+    } catch (error) {
+      metrics.count('driver.failed');
+      measurement.recordDiagnostic(error);
+      return;
     }
+    if (!driven.started) {
+      metrics.count('driver.notStarted');
+      return;
+    }
+    if (driven.echo !== null) metrics.record('driverLatencyMs', started, PerfClock.now());
   }
 }
 
@@ -84,13 +145,22 @@ export class S2sRemoteRequestSpot extends ActorlessSpot {}
 // the turn back while the reply is pending (execution gate contract). This is the measured operation.
 @zlinkSpotPacketHandler({ spot: () => S2sRemoteRequestSpot, packetName: 'PerfDriveRequest' })
 @Injectable()
-export class S2sRemoteRequestDriveHandler implements ZLinkSpotRequestHandler<S2sRemoteRequestSpot, PerfDriveRequest, PerfDriveReply> {
+export class S2sRemoteRequestDriveHandler implements ZLinkSpotRequestHandler<
+  S2sRemoteRequestSpot,
+  PerfDriveRequest,
+  PerfDriveReply
+> {
   constructor(
-    @Inject(Measurement) private readonly measurement: Measurement, @Inject(ScenarioMetrics) private readonly metrics: ScenarioMetrics,
+    @Inject(Measurement) private readonly measurement: Measurement,
+    @Inject(ScenarioMetrics) private readonly metrics: ScenarioMetrics,
     @Inject(ROLE_CONFIG) private readonly config: RoleConfig
   ) {}
 
-  async handle(spot: S2sRemoteRequestSpot, drive: PerfDriveRequest, _context: ZLinkMessageContext): Promise<PerfDriveReply> {
+  async handle(
+    spot: S2sRemoteRequestSpot,
+    drive: PerfDriveRequest,
+    _context: ZLinkMessageContext
+  ): Promise<PerfDriveReply> {
     const { measurement, metrics, config } = this;
     measurement.handlerEnter();
     try {
@@ -106,7 +176,9 @@ export class S2sRemoteRequestDriveHandler implements ZLinkSpotRequestHandler<S2s
       }
       request = new PerfEchoRequest({ ...request, sentTicks: started.toString() }); // decoded requests are plain objects
       try {
-        const call = spot.context.outbound.requestToChannel(config.channelName!, request).timeout(config.workload.requestTimeoutMs);
+        const call = spot.context.outbound
+          .requestToChannel(config.channelName!, request)
+          .timeout(measurement.callTimeout());
         let reply: PerfEchoReply;
         if (config.terminal === 'yield') {
           metrics.count('spot.applicationYieldCalls');
@@ -128,24 +200,47 @@ export class S2sRemoteRequestDriveHandler implements ZLinkSpotRequestHandler<S2s
 }
 
 export async function runS2sSpotToChannelRequestEcho(config: RoleConfig): Promise<void> {
-  if (config.role !== 'spot' || !config.source) throw new Error('The Spot role is the source of this scenario.');
+  if (config.role !== 'spot' || !config.source)
+    throw new Error('The Spot role is the source of this scenario.');
   const measurement = new Measurement(config, config.source);
   const metrics = new ScenarioMetrics(measurement)
-    .counters('driver.issued', 'driver.notStarted', 'driver.failed', 'spot.applicationHandlerEntries', 'spot.applicationYieldCalls')
-    .latency('driverLatencyMs', 'driver.latency').aliasLatency('latency', 'spot.remoteCallLatency').spotInternalsUnsupported();
+    .counters(
+      'driver.issued',
+      'driver.notStarted',
+      'driver.failed',
+      'spot.applicationHandlerEntries',
+      'spot.applicationYieldCalls'
+    )
+    .latency('driverLatencyMs', 'driver.latency')
+    .aliasLatency('latency', 'spot.remoteCallLatency')
+    .spotInternalsUnsupported();
   const readiness = new ObjectsReadiness(false, 'This cell has not created its User Spots yet.');
   let scenario: S2sSpotToChannelRequestEchoScenario | undefined;
-  await runRole({
-    config,
-    objects: readiness,
-    providers: [{ provide: ScenarioMetrics, useValue: metrics }, S2sRemoteRequestSpot, S2sRemoteRequestDriveHandler],
-    configureFramework: (builder) => configureSpotRole(builder, config, true, S2sRemoteRequestSpot),
-    workload: () => scenario?.run,
-    prepare: async (app) => {
-      scenario = new S2sSpotToChannelRequestEchoScenario(app.get<ZLinkSpotOutbound>(ZLINK_SPOT_OUTBOUND, { strict: false }),
-        app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER, { strict: false }), measurement, config,
-        app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }), readiness, metrics);
-      await scenario.prepare();
-    }
-  }, measurement);
+  await runRole(
+    {
+      config,
+      objects: readiness,
+      providers: [
+        { provide: ScenarioMetrics, useValue: metrics },
+        S2sRemoteRequestSpot,
+        S2sRemoteRequestDriveHandler
+      ],
+      configureFramework: (builder) =>
+        configureSpotRole(builder, config, true, S2sRemoteRequestSpot),
+      workload: () => scenario?.run,
+      prepare: async (app) => {
+        scenario = new S2sSpotToChannelRequestEchoScenario(
+          app.get<ZLinkSpotOutbound>(ZLINK_SPOT_OUTBOUND, { strict: false }),
+          app.get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER, { strict: false }),
+          measurement,
+          config,
+          app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }),
+          readiness,
+          metrics
+        );
+        await scenario.prepare();
+      }
+    },
+    measurement
+  );
 }

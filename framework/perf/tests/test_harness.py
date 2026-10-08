@@ -17,7 +17,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runner"))
 from launchers import declared_framework_version, launcher
 from results import BOUNDS, MAX_U64, _validate_null_reasons, aggregate, export_latency, histogram_merge, u64, write_json
 from roles import plan_roles
-from runner import agreed_core_version, agreed_framework_version, build, comparison, options, role_executables, run_exit_code
+from runner import (
+    agreed_core_version,
+    agreed_framework_version,
+    build,
+    comparison,
+    options,
+    publish_listener_endpoints,
+    role_executables,
+    run_exit_code,
+)
 from scenarios import BY_NAME, ROLE_KINDS, SCENARIOS, expand
 from store import RunStore
 
@@ -39,6 +48,19 @@ def histogram(samples, overflow=0):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_phase_deadline_configuration(self):
+        args = options(["single", "--scenario", "spot-worker-offload-echo", "--warmup-seconds", "2",
+                        "--duration-seconds", "3", *COMMON])
+        env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
+        env["serializer"] = {"name": "typed JSON"}
+        comparable, _ = comparison(args, expand(args, False)[0], env)
+        workload = comparable["workload"]
+        self.assertEqual(workload["drainTimeoutMs"], 30000)
+        self.assertEqual(workload["socketSendTimeoutMs"], 35000)
+        for removed in ("requestTimeoutMs", "correlationExpiryMs", "driverTimeoutMs"):
+            self.assertNotIn(removed, workload)
+        self.assertNotIn("workerTimeoutMs", comparable["worker"])
+
     def test_store_waits_for_published_endpoint_and_internal_ping(self):
         def docker_result(*command, **_kwargs):
             if command[0] == "run":
@@ -94,7 +116,7 @@ class HarnessTests(unittest.TestCase):
             ["single", "--scenario", "session-echo-only", "--mode", "send-send"],
             ["single", "--scenario", "session-echo-only", "--codec", "protobuf"],
             ["single", "--scenario", "session-echo-only", "--duration-seconds", "nan"],
-            ["single", "--scenario", "session-echo-only", "--inflight", "2147483648"],
+            ["single", "--scenario", "session-echo-only", "--inflight", "1"],
             ["single", "--scenario", "session-echo-only", "--client-index", "0"],
             ["matrix", "--payload-size", "1024"],
             ["matrix", "--payload-sizes", "1024,1024"],
@@ -114,7 +136,7 @@ class HarnessTests(unittest.TestCase):
             ("s2s-channel-to-spot-send-send-echo", ["--mode", "send-send", "--channel-topology", "routemesh"]),
             ("s2s-spot-to-channel-request-echo", ["--terminal", "yield", "--spot-count", "1"]),
             ("spot-worker-offload-echo", ["--worker-task-millis", "3", "--worker-pool-size", "2", "--terminal", "ordinary", "--mode", "worker-offload"]),
-            ("pubsub-fanout-echo", ["--subscriber-count", "3", "--mode", "publish", "--inflight", "4"]),
+            ("pubsub-fanout-echo", ["--subscriber-count", "3", "--mode", "publish"]),
             ("actor-no-bind-request-echo", ["--logical-streams", "8", "--connect-concurrency", "4"]),
         ]
         for scenario, extra in accepted:
@@ -252,6 +274,54 @@ class HarnessTests(unittest.TestCase):
         self.assertIn(".jar", launcher("kotlin").loaded_artifact_markers)
         self.assertIn("libzlink_framework.so", launcher("cpp").loaded_artifact_markers)
 
+    def test_framework_listener_uses_os_assigned_port_without_runner_rebind(self):
+        args = options(["single", "--scenario", "session-echo-only", *COMMON])
+        cell = expand(args, False)[0]
+        common = {
+            "runId": "r",
+            "cellId": "c",
+            "configHash": "a" * 64,
+            "language": "dotnet",
+            "workload": {},
+            "worker": None,
+            "store": None,
+            "diagnostics": lambda name: None,
+            "provenance": {},
+        }
+        ports = iter(range(20000, 30000))
+        role = plan_roles(
+            cell,
+            {"spot_count": cell.spot_count, "connections": 4, "logical_streams": 4},
+            common,
+            "tcp",
+            lambda: next(ports),
+        )[0]
+
+        self.assertEqual(role.config["transportEndpoints"]["stream"], "tcp://127.0.0.1:*")
+        self.assertEqual(role.ports, [20000, 20001])
+
+    def test_role_manifest_uses_publicly_reported_bound_endpoint(self):
+        role = {
+            "role": "session",
+            "roleInstance": 0,
+            "transportEndpoints": {"stream": "tcp://127.0.0.1:*"},
+            "streamEndpoint": "tcp://127.0.0.1:*",
+        }
+        ready = {
+            "evidence": [
+                {
+                    "kind": "boundTransportEndpoints",
+                    "source": "public Framework listener status",
+                    "observedValue": {"stream": "tcp://127.0.0.1:41005"},
+                }
+            ]
+        }
+
+        publish_listener_endpoints(role, ready)
+
+        self.assertEqual(role["transportEndpoints"], {"stream": "tcp://127.0.0.1:41005"})
+        self.assertEqual(role["streamEndpoint"], "tcp://127.0.0.1:41005")
+
     def test_planned_stream_endpoint_uses_the_launcher_scheme(self):
         args = options(["single", "--scenario", "session-echo-only", *COMMON])
         cell = expand(args, False)[0]
@@ -279,8 +349,36 @@ class HarnessTests(unittest.TestCase):
         cell_a, cell_b = expand(a, False)[0], expand(b, False)[0]
         self.assertEqual(comparison(a, cell_a, env)[1], comparison(b, cell_b, env)[1])
         self.assertEqual(comparison(a, cell_a, env)[0]["packageSource"], "published")
-        b.inflight = 2
+        b.connections = 9
         self.assertNotEqual(comparison(a, cell_a, env)[1], comparison(b, cell_b, env)[1])
+
+    def test_fanout_comparison_records_language_timeout_configuration(self):
+        env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
+        env["serializer"] = {"name": "typed JSON"}
+        for language in ("node", "dotnet", "java", "cpp"):
+            with self.subTest(language=language):
+                args = options(["single", "--scenario", "pubsub-fanout-echo", "--language", language, "--perf-dir", "/tmp/perf"])
+                comparable, exact = comparison(args, expand(args, False)[0], env)
+                expected = None if language == "node" else comparable["workload"]["socketSendTimeoutMs"]
+                self.assertEqual(comparable["publisherChannel"].get("sendTimeoutMs", "missing"), expected)
+                self.assertEqual(json.loads(exact)["publisherChannel"]["sendTimeoutMs"], expected)
+
+    def test_load_config_has_no_window_and_publisher_records_no_drop(self):
+        env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
+        env["serializer"] = {"name": "typed JSON"}
+        args = options(["single", "--scenario", "pubsub-fanout-echo", *COMMON])
+        cell = expand(args, False)[0]
+        comparable = comparison(args, cell, env)[0]
+        workload = comparable["workload"]
+        self.assertNotIn("inflight", workload)
+        self.assertEqual(comparable["publisherChannel"], {"noDrop": True, "sendTimeoutMs": workload["socketSendTimeoutMs"]})
+        common = {"runId": "r", "cellId": "c", "configHash": "a" * 64, "language": "cpp",
+                  "workload": workload, "worker": None, "store": None, "diagnostics": lambda name: None, "provenance": {}}
+        ports = iter(range(20000, 30000))
+        roles = plan_roles(cell, {"subscriber_count": cell.subscriber_count, "logical_streams": 4},
+                           common, "tcp", lambda: next(ports))
+        publisher = next(role.config for role in roles if role.config["role"] == "publisher")
+        self.assertIs(publisher["provenance"]["fanout"]["noDrop"], True)
 
     def test_workload_owns_timeouts_and_worker_has_no_queue_limit(self):
         env = {key: None for key in ("cpuModel", "effectiveProcessorCount", "cpuQuota", "cpuset", "cpuAffinity", "memoryLimit", "runtimeOptions")}
@@ -290,7 +388,6 @@ class HarnessTests(unittest.TestCase):
         local_args = options(["single", "--scenario", "session-echo-only", "--package-source", "local", *COMMON])
         self.assertEqual(local_args.package_source, "local")
         workload = comparison(args, expand(args, False)[0], env)[0]["workload"]
-        self.assertEqual(workload["driverTimeoutMs"], 2000)
         self.assertEqual(workload["setupTimeoutMs"], 30000)
         self.assertEqual(workload["adminTimeoutMs"], 5000)
         self.assertNotIn("settleTimeoutMs", workload)

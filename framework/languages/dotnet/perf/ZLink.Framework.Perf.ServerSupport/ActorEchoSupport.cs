@@ -171,9 +171,11 @@ public sealed class ActorPlacementWatcher(
         while (!stoppingToken.IsCancellationRequested && measurement.Phase == "setup")
         {
             var placement = mesh.GetStatus(config.meshName!).Placement;
+            var expectedActors = config.actorIds.Length;
+            var ready = placement.IsAvailable && placement.ActiveActorCount == expectedActors;
             readiness.Set(
-                placement.IsAvailable && placement.ActiveActorCount > 0,
-                "No Actor is active on this Object Server.",
+                ready,
+                $"{placement.ActiveActorCount} of {expectedActors} expected Actors are active on this Object Server.",
                 [
                     new
                     {
@@ -183,7 +185,7 @@ public sealed class ActorPlacementWatcher(
                         {
                             placement.IsAvailable,
                             placement.ActiveActorCount,
-                            expectedActors = config.actorIds.Length,
+                            expectedActors,
                         },
                     },
                 ]
@@ -285,8 +287,8 @@ public sealed class SessionActorSetup(
         lock (gate)
         {
             readiness.Set(
-                true,
-                "",
+                bound == config.actorIds.Length,
+                $"{bound} of {config.actorIds.Length} expected Actors are bound to a Session.",
                 [
                     new
                     {

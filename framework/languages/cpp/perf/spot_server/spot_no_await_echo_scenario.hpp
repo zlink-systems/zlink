@@ -31,23 +31,30 @@ class spot_no_await_echo_scenario_t
         auto &route = _role.service<fw::route_client_t> ();
         json probes = json::array ();
         for (std::size_t target = 0; target < config.spot_ids.size (); ++target) {
-            const auto request = measurement.request (static_cast<int> (target), _sequences.next (static_cast<int> (target)), true);
+            const auto request = measurement.request (
+              static_cast<int> (target), _sequences.next (static_cast<int> (target)), true);
             const auto reply = route.request_to_spot (config.spot_ids[target], request)
-                                 .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
+                                 .timeout (measurement.call_timeout ())
                                  .async<echo_reply_t> ()
                                  .result ()
                                  .value ();
             payload_pattern_t::validate_identity (request, reply);
             measurement.pattern ().validate (reply.payload);
-            probes.push_back ({{"correlationId", request.correlation_id}, {"receivedTicks", reply.received_ticks}, {"clockDomainId", reply.clock_domain_id}});
+            probes.push_back ({{"correlationId", request.correlation_id},
+                               {"receivedTicks", reply.received_ticks},
+                               {"clockDomainId", reply.clock_domain_id}});
         }
-        publish_spots (_role, objects); // objectsReady only after every probe, so warmup never overlaps one
-        measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeEcho"}, {"source", "route_client_t.request_to_spot.async<PerfEchoReply>"}, {"observedValue", probes}}}));
+        publish_spots (
+          _role, objects); // objectsReady only after every probe, so warmup never overlaps one
+        measurement.set_setup_evidence (
+          json::array ({{{"kind", "typedProbeEcho"},
+                         {"source", "route_client_t.request_to_spot.async<PerfEchoReply>"},
+                         {"observedValue", probes}}}));
     }
 
     void run (const loops_t &loops)
     {
-        spawn_stream_loops (loops, _role, [this] (int stream) { return loop (stream); });
+        spawn_request_streams (loops, _role, [this] (int stream) { return loop (stream); });
     }
 
   private:
@@ -56,26 +63,25 @@ class spot_no_await_echo_scenario_t
         auto &measurement = _role.measurement;
         auto &route = _role.service<fw::route_client_t> ();
         const auto &config = _role.config;
-        const auto &spot_id = config.spot_ids[static_cast<std::size_t> (stream) % config.spot_ids.size ()];
-        while (measurement.can_issue ()) {
-            auto request = measurement.request (stream, _sequences.next (stream));
-            std::int64_t started = 0;
-            if (!measurement.begin_operation (started))
-                break;
-            request.sent_ticks = dec (started);
-            std::exception_ptr error;
-            try {
-                const auto reply = co_await route.request_to_spot (spot_id, request)
-                                     .timeout (std::chrono::milliseconds (config.workload.request_timeout_ms))
-                                     .async<echo_reply_t> ();
-                payload_pattern_t::validate_identity (request, reply);
-                measurement.pattern ().validate (reply.payload);
-            }
-            catch (...) {
-                error = std::current_exception ();
-            }
-            measurement.complete_operation (started, error);
+        const auto &spot_id =
+          config.spot_ids[static_cast<std::size_t> (stream) % config.spot_ids.size ()];
+        auto request = measurement.request (stream, _sequences.next (stream));
+        std::int64_t started = 0;
+        if (!measurement.begin_operation (started))
+            co_return;
+        request.sent_ticks = dec (started);
+        std::exception_ptr error;
+        try {
+            const auto reply = co_await route.request_to_spot (spot_id, request)
+                                 .timeout (measurement.call_timeout ())
+                                 .async<echo_reply_t> ();
+            payload_pattern_t::validate_identity (request, reply);
+            measurement.pattern ().validate (reply.payload);
         }
+        catch (...) {
+            error = std::current_exception ();
+        }
+        measurement.complete_operation (started, error);
     }
 
     role_t &_role;

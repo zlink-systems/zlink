@@ -3,14 +3,14 @@ package systems.zlink.framework.perf;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import org.springframework.boot.Banner;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.support.GenericApplicationContext;
-
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.configuration.ZLinkFrameworkOptions;
@@ -20,6 +20,7 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.monitoring.ZLinkClientServerStatus;
 import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
@@ -41,7 +42,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-// What every role process shares (§6.1): the role config, the Framework host (Spring starter), the application
+// What every role process shares (§6.1): the role config, the Framework host (Spring starter), the
+// application
 // counters and the admin/trigger HTTP endpoints of §16. No call a scenario measures lives here.
 public final class ServerApplication {
     private final RoleConfig config;
@@ -63,12 +65,18 @@ public final class ServerApplication {
         }
         RoleConfig config;
         try {
-            config = PerfJson.read(Files.readString(Path.of(args[1]), StandardCharsets.UTF_8), RoleConfig.class);
+            config =
+                    PerfJson.read(
+                            Files.readString(Path.of(args[1]), StandardCharsets.UTF_8),
+                            RoleConfig.class);
         } catch (IOException error) {
-            throw new IllegalArgumentException("Role config is unreadable: " + error.getMessage(), error);
+            throw new IllegalArgumentException(
+                    "Role config is unreadable: " + error.getMessage(), error);
         }
-        if (URI.create(config.metricsUrl()).getPort() == URI.create(config.applicationTriggerUrl()).getPort()) {
-            throw new IllegalArgumentException("Admin and application trigger require separate listeners.");
+        if (URI.create(config.metricsUrl()).getPort()
+                == URI.create(config.applicationTriggerUrl()).getPort()) {
+            throw new IllegalArgumentException(
+                    "Admin and application trigger require separate listeners.");
         }
         return config;
     }
@@ -80,13 +88,17 @@ public final class ServerApplication {
 
     public static ServerApplication create(RoleConfig config) {
         ServerApplication application = new ServerApplication(config);
-        application.registrations.add(ctx -> {
-            ctx.registerBean(RoleConfig.class, () -> config);
-            ctx.registerBean(Measurement.class, () -> application.measurement);
-            ctx.registerBean(MeterRegistry.class, SimpleMeterRegistry::new);
-            ctx.registerBean(PublicMetricCollector.class);
-            ctx.registerBean("perfCommonConfigurer", ZLinkFrameworkConfigurer.class, () -> application::commonOptions);
-        });
+        application.registrations.add(
+                ctx -> {
+                    ctx.registerBean(RoleConfig.class, () -> config);
+                    ctx.registerBean(Measurement.class, () -> application.measurement);
+                    ctx.registerBean(MeterRegistry.class, SimpleMeterRegistry::new);
+                    ctx.registerBean(PublicMetricCollector.class);
+                    ctx.registerBean(
+                            "perfCommonConfigurer",
+                            ZLinkFrameworkConfigurer.class,
+                            () -> application::commonOptions);
+                });
         return application;
     }
 
@@ -102,7 +114,9 @@ public final class ServerApplication {
         return context;
     }
 
-    /** The role's topology, handlers and objects (§6.3): its own ZLinkFrameworkOptions registration. */
+    /**
+     * The role's topology, handlers and objects (§6.3): its own ZLinkFrameworkOptions registration.
+     */
     public ServerApplication configure(Consumer<ZLinkFrameworkOptions> action) {
         configurers.add(action::accept);
         return this;
@@ -119,58 +133,92 @@ public final class ServerApplication {
     }
 
     /** The workload the application trigger starts: one call of the named scenario bean (§4.2). */
-    public <T> ServerApplication workload(Class<T> scenarioType, Function<T, CompletionStage<Void>> run) {
+    public <T> ServerApplication workload(
+            Class<T> scenarioType, Function<T, CompletionStage<Void>> run) {
         workload = () -> run.apply(context.getBean(scenarioType));
         return this;
     }
 
-    // Options every role registers: timeouts, loopback listeners, the run's Store and the diagnostics level (§5.2, §20).
+    // Options every role registers: timeouts, loopback listeners, the run's Store and the
+    // diagnostics level (§5.2, §20).
     private void commonOptions(ZLinkFrameworkOptions options) {
-        options.setDefaultRequestTimeout(Duration.ofMillis(config.workload().requestTimeoutMs()));
+        options.setDefaultRequestTimeout(Duration.ofMillis(config.workload().setupTimeoutMs()));
         options.configureNetwork().setBindHost("127.0.0.1");
         options.configureNetwork().setAdvertiseHost("127.0.0.1");
-        options.configureDispatch().messageFlow(
-                config.diagnostics() == null ? ZLinkMessageFlowLogMode.OFF : ZLinkMessageFlowLogMode.NORMAL);
+        options.configureDispatch()
+                .messageFlow(
+                        config.diagnostics() == null
+                                ? ZLinkMessageFlowLogMode.OFF
+                                : ZLinkMessageFlowLogMode.NORMAL);
         if (config.store() != null) {
-            // Perf spec §20: the run-owned Docker Redis, one namespace per cell; only Store scenarios carry it.
-            options.addLocationStore(new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
-                    .setConnectionString(config.store().endpoint())
-                    .setKeyPrefix(config.store().namespace() + ":")));
+            // Perf spec §20: the run-owned Docker Redis, one namespace per cell; only Store
+            // scenarios carry it.
+            options.addLocationStore(
+                    new ZLinkRedisLocationStore(
+                            new ZLinkRedisLocationOptions()
+                                    .setConnectionString(config.store().endpoint())
+                                    .setKeyPrefix(config.store().namespace() + ":")));
         }
     }
 
-    /** An automatic RouteMesh node on this role's mesh listener. One-way sends have no send timeout (#1461). */
-    public static ZLinkMeshNodeBuilder routeMesh(ZLinkFrameworkOptions options, RoleConfig config, String routingIdPrefix) {
-        ZLinkMeshNodeBuilder mesh = options.addRouteMesh(config.meshName())
-                .setRoutingIdPrefix(routingIdPrefix)
-                .listen(config.transportEndpoints().get("mesh"));
+    /**
+     * An automatic RouteMesh node on this role's mesh listener. One-way sends have no send timeout
+     * (#1461).
+     */
+    public static ZLinkMeshNodeBuilder routeMesh(
+            ZLinkFrameworkOptions options, RoleConfig config, String routingIdPrefix) {
+        ZLinkMeshNodeBuilder mesh =
+                options.addRouteMesh(config.meshName())
+                        .setRoutingIdPrefix(routingIdPrefix)
+                        .listen(config.transportEndpoints().get("mesh"));
         return mesh;
     }
 
-    /** Starts the admin and trigger listeners, then the Framework host, and returns once the host has started. */
+    /**
+     * Starts the admin and trigger listeners, then the Framework host, and returns once the host
+     * has started.
+     */
     public ConfigurableApplicationContext start() {
-        servers.add(listen(config.metricsUrl(), Map.of(
-                "/perf/ready", this::ready,
-                "/perf/stats", this::stats,
-                "/perf/reset", this::reset)));
-        servers.add(listen(config.applicationTriggerUrl(), Map.of("/app/perf/start", this::trigger)));
-        SpringApplicationBuilder builder = new SpringApplicationBuilder(PerfRoleApplication.class)
-                .web(WebApplicationType.NONE)
-                .bannerMode(Banner.Mode.OFF)
-                .properties("logging.level.root=WARN", "spring.main.keep-alive=true", "spring.jmx.enabled=false")
-                .initializers(applicationContext -> {
-                    GenericApplicationContext generic = (GenericApplicationContext) applicationContext;
-                    for (Consumer<GenericApplicationContext> registration : registrations) {
-                        registration.accept(generic);
-                    }
-                    for (int index = 0; index < configurers.size(); index++) {
-                        ZLinkFrameworkConfigurer configurer = configurers.get(index);
-                        generic.registerBean("perfRoleConfigurer" + index, ZLinkFrameworkConfigurer.class, () -> configurer);
-                    }
-                });
+        servers.add(
+                listen(
+                        config.metricsUrl(),
+                        Map.of(
+                                "/perf/ready", this::ready,
+                                "/perf/stats", this::stats,
+                                "/perf/reset", this::reset)));
+        servers.add(
+                listen(config.applicationTriggerUrl(), Map.of("/app/perf/start", this::trigger)));
+        SpringApplicationBuilder builder =
+                new SpringApplicationBuilder(PerfRoleApplication.class)
+                        .web(WebApplicationType.NONE)
+                        .bannerMode(Banner.Mode.OFF)
+                        .properties(
+                                "logging.level.root=WARN",
+                                "spring.main.keep-alive=true",
+                                "spring.jmx.enabled=false")
+                        .initializers(
+                                applicationContext -> {
+                                    GenericApplicationContext generic =
+                                            (GenericApplicationContext) applicationContext;
+                                    for (Consumer<GenericApplicationContext> registration :
+                                            registrations) {
+                                        registration.accept(generic);
+                                    }
+                                    for (int index = 0; index < configurers.size(); index++) {
+                                        ZLinkFrameworkConfigurer configurer =
+                                                configurers.get(index);
+                                        generic.registerBean(
+                                                "perfRoleConfigurer" + index,
+                                                ZLinkFrameworkConfigurer.class,
+                                                () -> configurer);
+                                    }
+                                });
         if (config.diagnostics() != null) {
-            // Message-flow records go to the Framework's standard logger; a diagnostic run keeps them in its own file.
-            builder.properties("logging.file.name=" + config.diagnostics().flowFile(), "logging.level.systems.zlink=INFO");
+            // Message-flow records go to the Framework's standard logger; a diagnostic run keeps
+            // them in its own file.
+            builder.properties(
+                    "logging.file.name=" + config.diagnostics().flowFile(),
+                    "logging.level.systems.zlink=INFO");
         }
         context = builder.run();
         measurement.samplePublicState(this::publicStatus);
@@ -184,26 +232,42 @@ public final class ServerApplication {
     private HttpServer listen(String url, Map<String, Endpoint> endpoints) {
         URI uri = URI.create(url);
         try {
-            HttpServer server = HttpServer.create(new InetSocketAddress(uri.getHost(), uri.getPort()), 0);
-            endpoints.forEach((path, endpoint) -> server.createContext(path, exchange -> {
-                try {
-                    endpoint.handle(exchange);
-                } catch (RuntimeException | IOException error) {
-                    measurement.recordDiagnostic(error);
-                    respond(exchange, 500, Map.of("reason", String.valueOf(error.getMessage()), "type", error.getClass().getName()));
-                } finally {
-                    exchange.close();
-                }
-            }));
-            server.setExecutor(Executors.newFixedThreadPool(4, runnable -> {
-                Thread thread = new Thread(runnable, "perf-admin");
-                thread.setDaemon(true);
-                return thread;
-            }));
+            HttpServer server =
+                    HttpServer.create(new InetSocketAddress(uri.getHost(), uri.getPort()), 0);
+            endpoints.forEach(
+                    (path, endpoint) ->
+                            server.createContext(
+                                    path,
+                                    exchange -> {
+                                        try {
+                                            endpoint.handle(exchange);
+                                        } catch (RuntimeException | IOException error) {
+                                            measurement.recordDiagnostic(error);
+                                            respond(
+                                                    exchange,
+                                                    500,
+                                                    Map.of(
+                                                            "reason",
+                                                            String.valueOf(error.getMessage()),
+                                                            "type",
+                                                            error.getClass().getName()));
+                                        } finally {
+                                            exchange.close();
+                                        }
+                                    }));
+            server.setExecutor(
+                    Executors.newFixedThreadPool(
+                            4,
+                            runnable -> {
+                                Thread thread = new Thread(runnable, "perf-admin");
+                                thread.setDaemon(true);
+                                return thread;
+                            }));
             server.start();
             return server;
         } catch (IOException error) {
-            throw new IllegalStateException("Cannot listen on " + url + ": " + error.getMessage(), error);
+            throw new IllegalStateException(
+                    "Cannot listen on " + url + ": " + error.getMessage(), error);
         }
     }
 
@@ -231,9 +295,14 @@ public final class ServerApplication {
     }
 
     private void stats(HttpExchange exchange) {
-        // The runner's final read of a phase seals its originals after the measured window has ended.
+        // The runner's final read of a phase seals its originals after the measured window has
+        // ended.
         String query = exchange.getRequestURI().getRawQuery();
-        measurement.finalSnapshot(query != null && (query.equals("final") || query.startsWith("final=") || query.contains("&final")));
+        measurement.finalSnapshot(
+                query != null
+                        && (query.equals("final")
+                                || query.startsWith("final=")
+                                || query.contains("&final")));
         PerfSnapshot snapshot = measurement.snapshot(publicStatus());
         snapshot.publicMetrics = context.getBean(PublicMetricCollector.class).snapshot();
         int[] version = Zlink.version();
@@ -250,7 +319,8 @@ public final class ServerApplication {
         try {
             request = PerfJson.read(body(exchange), ResetRequest.class);
             if (request.runId() == null || request.cellId() == null || request.resetSeq() == null) {
-                throw new PerfJson.PerfJsonException("Identity text fields must be non-null JSON strings.", null);
+                throw new PerfJson.PerfJsonException(
+                        "Identity text fields must be non-null JSON strings.", null);
             }
         } catch (PerfJson.PerfJsonException error) {
             respond(exchange, 400, Map.of("reason", String.valueOf(error.getMessage())));
@@ -258,11 +328,14 @@ public final class ServerApplication {
         }
         ResetReply reply;
         try {
-            reply = measurement.reset(request, () -> {
-                ZLinkFrameworkRuntime runtime = runtime();
-                runtime.resetCapacityMetrics();
-                return runtime.status().capacity().measurementEpoch();
-            });
+            reply =
+                    measurement.reset(
+                            request,
+                            () -> {
+                                ZLinkFrameworkRuntime runtime = runtime();
+                                runtime.resetCapacityMetrics();
+                                return runtime.status().capacity().measurementEpoch();
+                            });
         } catch (PerfJson.PerfJsonException error) {
             respond(exchange, 400, Map.of("reason", String.valueOf(error.getMessage())));
             return;
@@ -278,8 +351,12 @@ public final class ServerApplication {
         PerfTriggerRequest request;
         try {
             request = PerfJson.read(body(exchange), PerfTriggerRequest.class);
-            if (request.runId() == null || request.cellId() == null || request.phase() == null || request.resetSeq() == null) {
-                throw new PerfJson.PerfJsonException("Identity text fields must be non-null JSON strings.", null);
+            if (request.runId() == null
+                    || request.cellId() == null
+                    || request.phase() == null
+                    || request.resetSeq() == null) {
+                throw new PerfJson.PerfJsonException(
+                        "Identity text fields must be non-null JSON strings.", null);
             }
             DecimalText.u64(request.resetSeq());
         } catch (PerfJson.PerfJsonException | PerfValidationException error) {
@@ -287,10 +364,17 @@ public final class ServerApplication {
             return;
         }
         PerfReady ready = readiness();
-        // §16.1: warmup starts after infrastructure and objects; only the measured barrier needs consumersReady (PS marker).
-        boolean allowed = "warmup".equals(request.phase()) ? ready.infrastructureReady() && ready.objectsReady() : ready.ready();
+        // §16.1: warmup starts after infrastructure and objects; only the measured barrier needs
+        // consumersReady (PS marker).
+        boolean allowed =
+                "warmup".equals(request.phase())
+                        ? ready.infrastructureReady() && ready.objectsReady()
+                        : ready.ready();
         if (!allowed) {
-            respond(exchange, 409, Map.of("reason", "Readiness evidence is incomplete.", "ready", ready));
+            respond(
+                    exchange,
+                    409,
+                    Map.of("reason", "Readiness evidence is incomplete.", "ready", ready));
             return;
         }
         PerfTriggerReply reply = measurement.start(request, workload);
@@ -309,7 +393,8 @@ public final class ServerApplication {
         if ("routemesh".equals(topology)) {
             status.put("routeMesh", runtime.routeMeshRuntime().snapshot(config.meshName()));
         } else if ("clientserver".equals(topology)) {
-            status.put("clientServer", runtime.clientServerRuntime().snapshot(config.channelName()));
+            status.put(
+                    "clientServer", runtime.clientServerRuntime().snapshot(config.channelName()));
         }
         return status;
     }
@@ -319,8 +404,18 @@ public final class ServerApplication {
         ConfigurableApplicationContext running = context;
         if (running == null || !running.isRunning()) {
             reasons.add("The Framework host is starting.");
-            return new PerfReady(config.runId(), config.cellId(), config.role(), config.roleInstance(), false, false, false, false,
-                    PerfClock.unixMs(), List.of(), reasons);
+            return new PerfReady(
+                    config.runId(),
+                    config.cellId(),
+                    config.role(),
+                    config.roleInstance(),
+                    false,
+                    false,
+                    false,
+                    false,
+                    PerfClock.unixMs(),
+                    List.of(),
+                    reasons);
         }
         ZLinkFrameworkRuntime runtime = runtime();
         ZLinkFrameworkRuntimeStatus host = runtime.status();
@@ -328,22 +423,41 @@ public final class ServerApplication {
         String topology = observedTopology();
         if ("routemesh".equals(topology)) {
             ZLinkMeshNodeSnapshot mesh = runtime.routeMeshRuntime().snapshot(config.meshName());
-            // Channel messaging §3: RouteMesh excludes the sending node itself from candidates. Only the source needs a
-            // selectable remote target; the receiver proves dispatch by echo. A source that is itself the only Server of
-            // its return ChannelName (send/send, §10.4) has no remote target by design; the coordinator states that in
+            // Channel messaging §3: RouteMesh excludes the sending node itself from candidates.
+            // Only the source needs a
+            // selectable remote target; the receiver proves dispatch by echo. A source that is
+            // itself the only Server of
+            // its return ChannelName (send/send, §10.4) has no remote target by design; the
+            // coordinator states that in
             // the role config (awaitRemoteTargets=false).
-            infrastructure &= mesh.isReady() && (!config.source() || !config.awaitRemoteTargets()
-                    || mesh.channels().stream().anyMatch(channel -> channel.channelName().equals(config.channelName())
-                            && channel.isReady() && channel.readyTargetCount() > 0));
+            infrastructure &=
+                    mesh.isReady()
+                            && (!config.source()
+                                    || !config.awaitRemoteTargets()
+                                    || mesh.channels().stream()
+                                            .anyMatch(
+                                                    channel ->
+                                                            channel.channelName()
+                                                                            .equals(
+                                                                                    config
+                                                                                            .channelName())
+                                                                    && channel.isReady()
+                                                                    && channel.readyTargetCount()
+                                                                            > 0));
         } else if ("clientserver".equals(topology)) {
-            ZLinkClientServerStatus channel = runtime.clientServerRuntime().snapshot(config.channelName());
+            ZLinkClientServerStatus channel =
+                    runtime.clientServerRuntime().snapshot(config.channelName());
             infrastructure &= channel.isReady() && channel.readyTargetCount() > 0;
         }
         if ("ObjectClient".equals(config.objectRole()) && config.meshName() != null) {
-            infrastructure &= runtime.routeMeshRuntime().snapshot(config.meshName()).readyPeerCount() > 0;
+            infrastructure &=
+                    runtime.routeMeshRuntime().snapshot(config.meshName()).readyPeerCount() > 0;
         }
+        Map<String, String> transportEndpoints =
+                infrastructure ? boundTransportEndpoints(runtime) : Map.of();
         boolean probe = !measurement.setupEvidence().isEmpty();
-        // A role without this cell's public create/bind result registers ObjectsReadiness; baselines have none.
+        // A role without this cell's public create/bind result registers ObjectsReadiness;
+        // baselines have none.
         ObjectsReadiness objects = running.getBeanProvider(ObjectsReadiness.class).getIfAvailable();
         boolean objectsReady = objects == null || objects.ready();
         List<Object> evidence = new ArrayList<>();
@@ -352,11 +466,11 @@ public final class ServerApplication {
         statusEvidence.put("source", "public Framework runtime status");
         statusEvidence.put("observedValue", publicStatus());
         evidence.add(statusEvidence);
-        if (!config.transportEndpoints().isEmpty()) {
+        if (!transportEndpoints.isEmpty()) {
             Map<String, Object> listeners = new LinkedHashMap<>();
-            listeners.put("kind", "verifiedListenerReservation");
-            listeners.put("source", "role config; coordinator OS bind reservation and public host startup");
-            listeners.put("observedValue", config.transportEndpoints());
+            listeners.put("kind", "boundTransportEndpoints");
+            listeners.put("source", "public Framework listener status");
+            listeners.put("observedValue", transportEndpoints);
             evidence.add(listeners);
         }
         if (objects != null) {
@@ -376,8 +490,47 @@ public final class ServerApplication {
         if (measurement.hasErrors()) {
             reasons.add("Application preparation or phase failed.");
         }
-        return new PerfReady(config.runId(), config.cellId(), config.role(), config.roleInstance(), infrastructure,
-                objectsReady, probe, infrastructure && objectsReady && probe && !measurement.hasErrors(), PerfClock.unixMs(),
-                evidence, reasons);
+        return new PerfReady(
+                config.runId(),
+                config.cellId(),
+                config.role(),
+                config.roleInstance(),
+                infrastructure,
+                objectsReady,
+                probe,
+                infrastructure && objectsReady && probe && !measurement.hasErrors(),
+                PerfClock.unixMs(),
+                evidence,
+                reasons);
+    }
+
+    private Map<String, String> boundTransportEndpoints(ZLinkFrameworkRuntime runtime) {
+        Map<String, String> endpoints = new LinkedHashMap<>();
+        for (String key : config.transportEndpoints().keySet()) {
+            ZLinkListenerKind kind;
+            String name;
+            switch (key) {
+                case "stream" -> {
+                    kind = ZLinkListenerKind.STREAM;
+                    name = "perf-session";
+                }
+                case "mesh" -> {
+                    kind = ZLinkListenerKind.ROUTE_MESH;
+                    name = config.meshName();
+                }
+                case "clientserver" -> {
+                    kind = ZLinkListenerKind.CLIENT_SERVER;
+                    name = config.channelName();
+                }
+                case "fanout" -> {
+                    kind = ZLinkListenerKind.FANOUT;
+                    name = config.channelName();
+                }
+                default ->
+                        throw new IllegalStateException("Unknown perf listener key '" + key + "'.");
+            }
+            endpoints.put(key, runtime.listenerStatus(kind, name).endpoint());
+        }
+        return endpoints;
     }
 }

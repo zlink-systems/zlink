@@ -20,7 +20,9 @@ namespace sc = zlink::stream_connector;
 class session_echo_only_scenario_t
 {
   public:
-    session_echo_only_scenario_t (const endpoint_manifest_t &manifest, measurement_t &measurement, int index) :
+    session_echo_only_scenario_t (const endpoint_manifest_t &manifest,
+                                  measurement_t &measurement,
+                                  int index) :
         _manifest (manifest), _measurement (measurement), _index (index)
     {
         const auto &workload = manifest.workload;
@@ -59,37 +61,55 @@ class session_echo_only_scenario_t
                         sc::connector_options_t options;
                         options.endpoint = _endpoint;
                         options.dispatch_mode = sc::dispatch_mode_t::immediate;
-                        options.connect_timeout = std::chrono::milliseconds (workload.setup_timeout_ms);
-                        options.request_timeout = std::chrono::milliseconds (workload.request_timeout_ms);
-                        auto connector = std::make_shared<sc::connector_t> (sc::connector_factory_t::create (options));
+                        options.connect_timeout =
+                          std::chrono::milliseconds (workload.setup_timeout_ms);
+                        options.request_timeout =
+                          std::chrono::milliseconds (workload.setup_timeout_ms);
+                        auto connector = std::make_shared<sc::connector_t> (
+                          sc::connector_factory_t::create (options));
                         if (const auto connected = connector->connect (); !connected)
-                            throw connector_error_t (std::to_string (static_cast<int> (connected.error ()->code)), false, connected.error ()->message);
-                        const auto request = _measurement.request (id, _sequences[static_cast<std::size_t> (local)].fetch_add (1) + 1, true);
+                            throw connector_error_t (
+                              std::to_string (static_cast<int> (connected.error ()->code)), false,
+                              connected.error ()->message);
+                        const auto request = _measurement.request (
+                          id, _sequences[static_cast<std::size_t> (local)].fetch_add (1) + 1, true);
                         // Setup probe: bounded by the setup deadline.
-                        const auto reply = connector->request (request)
-                                             .timeout (std::chrono::milliseconds (workload.setup_timeout_ms))
-                                             .submit<echo_reply_t> ();
+                        const auto reply =
+                          connector->request (request)
+                            .timeout (std::chrono::milliseconds (workload.setup_timeout_ms))
+                            .submit<echo_reply_t> ();
                         if (!reply)
-                            throw connector_error_t (std::to_string (static_cast<int> (reply.error ()->code)),
-                                                     reply.error ()->code == sc::error_code_t::request_timeout, reply.error ()->message);
+                            throw connector_error_t (
+                              std::to_string (static_cast<int> (reply.error ()->code)),
+                              reply.error ()->code == sc::error_code_t::request_timeout,
+                              reply.error ()->message);
                         payload_pattern_t::validate_identity (request, reply.value ());
                         _measurement.pattern ().validate (reply.value ().payload);
                         if (!connector->is_connected ())
-                            throw std::runtime_error ("Connector lost its connection during setup.");
+                            throw std::runtime_error (
+                              "Connector lost its connection during setup.");
                         std::lock_guard lock (gate);
                         _connectors.push_back ({id, local, connector});
                         ++_connected;
                         evidence[static_cast<std::size_t> (local)] = {
-                          {"kind", "connectorSetupAndTypedProbe"}, {"source", "connect + is_connected + request.submit<PerfEchoReply>"},
-                          {"observedValue", {{"clientId", id}, {"isConnected", true}, {"setupLatencyNs", dec (now_ticks () - started)},
-                                             {"correlationId", request.correlation_id}}}};
+                          {"kind", "connectorSetupAndTypedProbe"},
+                          {"source", "connect + is_connected + request.submit<PerfEchoReply>"},
+                          {"observedValue",
+                           {{"clientId", id},
+                            {"isConnected", true},
+                            {"setupLatencyNs", dec (now_ticks () - started)},
+                            {"correlationId", request.correlation_id}}}};
                     }
                     catch (const std::exception &error) {
                         std::lock_guard lock (gate);
                         ++_failures;
                         evidence[static_cast<std::size_t> (local)] = {
-                          {"kind", "connectorSetupFailure"}, {"source", type_name (typeid (error))},
-                          {"observedValue", {{"clientId", id}, {"message", error.what ()}, {"setupLatencyNs", dec (now_ticks () - started)}}}};
+                          {"kind", "connectorSetupFailure"},
+                          {"source", type_name (typeid (error))},
+                          {"observedValue",
+                           {{"clientId", id},
+                            {"message", error.what ()},
+                            {"setupLatencyNs", dec (now_ticks () - started)}}}};
                     }
                 }
             });
@@ -99,14 +119,13 @@ class session_echo_only_scenario_t
         _measurement.set_setup_evidence (std::move (evidence));
     }
 
-    // Every connector runs `inflight` independent request chains until the window ends (§13 closed loop).
+    // A STREAM connector has one unresolved echo at a time (§4.3).
     void run (const loops_t &loops)
     {
-        for (const auto &slot : _connectors)
-            for (int i = 0; i < _manifest.workload.inflight; ++i) {
-                loops->enter ();
-                issue (loops, slot, std::make_shared<request_chain_t> ());
-            }
+        for (const auto &slot : _connectors) {
+            loops->enter ();
+            issue (loops, slot, std::make_shared<request_chain_t> ());
+        }
     }
 
   private:
@@ -122,7 +141,9 @@ class session_echo_only_scenario_t
     };
 
     // The chain work counter sends inline callback completions back through this loop instead of recursive submissions.
-    void issue (const loops_t &loops, const connector_slot_t &slot, const std::shared_ptr<request_chain_t> &chain)
+    void issue (const loops_t &loops,
+                const connector_slot_t &slot,
+                const std::shared_ptr<request_chain_t> &chain)
     {
         if (chain->work.fetch_add (1, std::memory_order_acq_rel) != 0)
             return;
@@ -132,7 +153,8 @@ class session_echo_only_scenario_t
                 loops->leave ();
                 return;
             }
-            auto request = _measurement.request (slot.id, _sequences[static_cast<std::size_t> (slot.local)].fetch_add (1) + 1);
+            auto request = _measurement.request (
+              slot.id, _sequences[static_cast<std::size_t> (slot.local)].fetch_add (1) + 1);
             std::int64_t started = 0;
             if (!_measurement.begin_operation (started)) {
                 chain->work.fetch_sub (1, std::memory_order_acq_rel);
@@ -149,13 +171,16 @@ class session_echo_only_scenario_t
             expected.sequence = request.sequence;
             expected.correlation_id = request.correlation_id;
             slot.connector->request (request)
-              .timeout (std::chrono::milliseconds (_manifest.workload.request_timeout_ms))
-              .submit<echo_reply_t> ([this, loops, slot, expected = std::move (expected), started, chain] (sc::result_t<echo_reply_t> reply) {
+              .timeout (_measurement.call_timeout ())
+              .submit<echo_reply_t> ([this, loops, slot, expected = std::move (expected), started,
+                                      chain] (sc::result_t<echo_reply_t> reply) {
                   std::exception_ptr error;
                   try {
                       if (!reply)
-                          throw connector_error_t (std::to_string (static_cast<int> (reply.error ()->code)),
-                                                   reply.error ()->code == sc::error_code_t::request_timeout, reply.error ()->message);
+                          throw connector_error_t (
+                            std::to_string (static_cast<int> (reply.error ()->code)),
+                            reply.error ()->code == sc::error_code_t::request_timeout,
+                            reply.error ()->message);
                       payload_pattern_t::validate_identity (expected, reply.value ());
                       _measurement.pattern ().validate (reply.value ().payload);
                   }

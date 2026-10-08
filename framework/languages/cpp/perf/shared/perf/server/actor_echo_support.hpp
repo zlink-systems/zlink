@@ -21,7 +21,8 @@ class perf_actor_t final : public fw::actor_t
 
 struct perf_actor_factory_t final : fw::actor_factory_t<perf_actor_t>
 {
-    fw::task_t<std::shared_ptr<perf_actor_t>> create (fw::actor_context_t context, std::stop_token) override
+    fw::task_t<std::shared_ptr<perf_actor_t>> create (fw::actor_context_t context,
+                                                      std::stop_token) override
     {
         co_return std::make_shared<perf_actor_t> (std::move (context));
     }
@@ -43,15 +44,18 @@ class perf_entry_spot_t final : public fw::entry_spot_t<perf_actor_t>
     void configure () override
     {
         if (_role.config.mode == "send-send")
-            _context.handlers ().add_actor_send<&perf_entry_spot_t::echo_send> (echo_request_t::packet_name);
+            _context.handlers ().add_actor_send<&perf_entry_spot_t::echo_send> (
+              echo_request_t::packet_name);
         else
-            _context.handlers ().add_actor_request<&perf_entry_spot_t::echo_request> (echo_request_t::packet_name);
+            _context.handlers ().add_actor_request<&perf_entry_spot_t::echo_request> (
+              echo_request_t::packet_name);
     }
     fw::task_t<void> on_actor_joined (perf_actor_t &) override { co_return; }
     fw::task_t<void> on_leave_actor (perf_actor_t &) override { co_return; }
 
     // §10.1, §10.2, §10.9: the handler return value is the reply.
-    echo_reply_t echo_request (perf_actor_t &, fw::message_context_t &, const echo_request_t &request)
+    echo_reply_t
+    echo_request (perf_actor_t &, fw::message_context_t &, const echo_request_t &request)
     {
         const auto received = now_ticks ();
         auto &measurement = _role.measurement;
@@ -61,9 +65,11 @@ class perf_entry_spot_t final : public fw::entry_spot_t<perf_actor_t>
             const auto reply = payload_pattern_t::reply (request, received);
             measurement.record_reply (request);
             if (measurement.phase () == "setup")
-                measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeReply"},
-                                                               {"source", "perf_entry_spot_t actor request handler (echo_request_t -> echo_reply_t)"},
-                                                               {"observedValue", request.correlation_id}}}));
+                measurement.set_setup_evidence (json::array (
+                  {{{"kind", "typedProbeReply"},
+                    {"source",
+                     "perf_entry_spot_t actor request handler (echo_request_t -> echo_reply_t)"},
+                    {"observedValue", request.correlation_id}}}));
             return reply;
         }
         catch (...) {
@@ -73,7 +79,8 @@ class perf_entry_spot_t final : public fw::entry_spot_t<perf_actor_t>
     }
 
     // §10.10: the Actor answers through the public Channel client; the caller is the return channel Server.
-    fw::task_t<void> echo_send (perf_actor_t &, fw::message_context_t &, const echo_request_t &request)
+    fw::task_t<void>
+    echo_send (perf_actor_t &, fw::message_context_t &, const echo_request_t &request)
     {
         const auto received = now_ticks ();
         auto &measurement = _role.measurement;
@@ -84,9 +91,10 @@ class perf_entry_spot_t final : public fw::entry_spot_t<perf_actor_t>
             measurement.record_application_call (request, "send");
             co_await _route.send_to_channel (*request.return_channel, reply).async ();
             if (measurement.phase () == "setup")
-                measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeReply"},
-                                                               {"source", "route_client_t.send_to_channel(returnChannel).async"},
-                                                               {"observedValue", request.correlation_id}}}));
+                measurement.set_setup_evidence (
+                  json::array ({{{"kind", "typedProbeReply"},
+                                 {"source", "route_client_t.send_to_channel(returnChannel).async"},
+                                 {"observedValue", request.correlation_id}}}));
         }
         catch (...) {
             measurement.record_diagnostic (std::current_exception ());
@@ -110,8 +118,8 @@ inline void add_perf_actors (fw::mesh_node_builder_t &mesh)
       .disable_relocation ();
 }
 
-// The Actor role's objectsReady (§16.1): the Actors this process hosts, read from the public RouteMesh placement
-// status by a background poll during setup, never from inside a handler turn.
+// The Actor role's objectsReady (§16.1): every expected Actor of the cell is active on this process, read from the public
+// RouteMesh placement status by a background poll during setup, never from inside a handler turn.
 class actor_placement_watcher_t final : public fw::hosted_service_t
 {
   public:
@@ -123,11 +131,18 @@ class actor_placement_watcher_t final : public fw::hosted_service_t
             while (!_stop.load () && _role.measurement.phase () == "setup") {
                 {
                     const auto placement = mesh->snapshot (*_role.config.mesh_name).placement;
-                    _role.objects->set (placement.is_available && placement.active_actor_count > 0, "No Actor is active on this Object Server.",
-                                        json::array ({{{"kind", "actorPlacement"}, {"source", "route_mesh_runtime_t.snapshot.placement"},
-                                                       {"observedValue", {{"isAvailable", placement.is_available},
-                                                                          {"activeActorCount", placement.active_actor_count},
-                                                                          {"expectedActors", _role.config.actor_ids.size ()}}}}}));
+                    const auto expected = _role.config.actor_ids.size ();
+                    _role.objects->set (
+                      placement.is_available && placement.active_actor_count == expected,
+                      std::to_string (placement.active_actor_count) + " of "
+                        + std::to_string (expected)
+                        + " expected Actors are active on this Object Server.",
+                      json::array ({{{"kind", "actorPlacement"},
+                                     {"source", "route_mesh_runtime_t.snapshot.placement"},
+                                     {"observedValue",
+                                      {{"isAvailable", placement.is_available},
+                                       {"activeActorCount", placement.active_actor_count},
+                                       {"expectedActors", expected}}}}}));
                 }
                 std::this_thread::sleep_for (std::chrono::milliseconds (100));
             }
@@ -163,22 +178,27 @@ class session_actor_setup_t
             throw std::logic_error ("Actors are created and bound during setup only.");
         try {
             const auto request = probe.parse_json<echo_request_t> ();
-            if (request.client_id < 0 || static_cast<std::size_t> (request.client_id) >= _role.config.actor_ids.size ())
-                throw validation_error_t ("IdentityMismatch", "clientId has no Actor ID in this cell.");
+            if (request.client_id < 0
+                || static_cast<std::size_t> (request.client_id) >= _role.config.actor_ids.size ())
+                throw validation_error_t ("IdentityMismatch",
+                                          "clientId has no Actor ID in this cell.");
             const auto timeout = std::chrono::milliseconds (_role.config.workload.setup_timeout_ms);
             const auto create_started = now_ticks ();
-            const auto result = co_await _role.service<fw::actor_manager_t> ()
-                                  .get_or_create (fw::actor_id_t (_role.config.actor_ids[static_cast<std::size_t> (request.client_id)]), perf_actor_type)
-                                  .in_mesh (*_role.config.mesh_name)
-                                  .timeout (timeout)
-                                  .async ();
+            const auto result =
+              co_await _role.service<fw::actor_manager_t> ()
+                .get_or_create (
+                  fw::actor_id_t (
+                    _role.config.actor_ids[static_cast<std::size_t> (request.client_id)]),
+                  perf_actor_type)
+                .in_mesh (*_role.config.mesh_name)
+                .timeout (timeout)
+                .async ();
             std::optional<fw::actor_ref_t> ref;
             bool was_created = false;
             if (const auto *created = std::get_if<fw::actor_create_created_t> (&result)) {
                 ref = created->actor;
                 was_created = true;
-            }
-            else if (const auto *existing = std::get_if<fw::actor_create_existing_t> (&result))
+            } else if (const auto *existing = std::get_if<fw::actor_create_existing_t> (&result))
                 ref = existing->actor;
             else
                 throw std::runtime_error ("Actor creation was rejected.");
@@ -217,18 +237,33 @@ class session_actor_setup_t
     void publish ()
     {
         std::lock_guard lock (_gate);
-        json evidence = json::array ({{{"kind", "actorCreateAndBind"},
-                                       {"source", "actor_manager_t.get_or_create + session_actor_manager_t.bind_or_get"},
-                                       {"observedValue", {{"created", _created}, {"existing", _existing}, {"bound", _bound}, {"failed", _failed},
-                                                          {"expectedActors", _role.config.actor_ids.size ()},
-                                                          {"createMeanMs", _bound == 0 ? 0.0 : static_cast<double> (_create_ns) / 1e6 / static_cast<double> (_bound)},
-                                                          {"createMaxMs", static_cast<double> (_create_max_ns) / 1e6},
-                                                          {"bindMeanMs", _bound == 0 ? 0.0 : static_cast<double> (_bind_ns) / 1e6 / static_cast<double> (_bound)},
-                                                          {"bindMaxMs", static_cast<double> (_bind_max_ns) / 1e6}}}}});
-        _role.objects->set (true, "", std::move (evidence));
+        json evidence = json::array (
+          {{{"kind", "actorCreateAndBind"},
+            {"source", "actor_manager_t.get_or_create + session_actor_manager_t.bind_or_get"},
+            {"observedValue",
+             {{"created", _created},
+              {"existing", _existing},
+              {"bound", _bound},
+              {"failed", _failed},
+              {"expectedActors", _role.config.actor_ids.size ()},
+              {"createMeanMs",
+               _bound == 0 ? 0.0
+                           : static_cast<double> (_create_ns) / 1e6 / static_cast<double> (_bound)},
+              {"createMaxMs", static_cast<double> (_create_max_ns) / 1e6},
+              {"bindMeanMs",
+               _bound == 0 ? 0.0
+                           : static_cast<double> (_bind_ns) / 1e6 / static_cast<double> (_bound)},
+              {"bindMaxMs", static_cast<double> (_bind_max_ns) / 1e6}}}}});
+        const auto expected = _role.config.actor_ids.size ();
+        _role.objects->set (_bound == expected,
+                            std::to_string (_bound) + " of " + std::to_string (expected)
+                              + " expected Actors are bound to a session.",
+                            std::move (evidence));
         if (_relay_probes > 0)
-            _role.measurement.set_setup_evidence (json::array ({{{"kind", "typedProbeRelay"}, {"source", "session_actor_t.relay_request.async -> stream.reply_packet.async"},
-                                                               {"observedValue", {{"completed", _relay_probes}}}}}));
+            _role.measurement.set_setup_evidence (json::array (
+              {{{"kind", "typedProbeRelay"},
+                {"source", "session_actor_t.relay_request.async -> stream.reply_packet.async"},
+                {"observedValue", {{"completed", _relay_probes}}}}}));
     }
 
     void record_relay_probe ()
@@ -251,17 +286,23 @@ class session_actor_setup_t
 class perf_actor_relay_session_t final : public fw::packet_stream_session_t
 {
   public:
-    perf_actor_relay_session_t (role_t &role, session_actor_setup_t &setup) : _role (role), _setup (setup) {}
+    perf_actor_relay_session_t (role_t &role, session_actor_setup_t &setup) :
+        _role (role), _setup (setup)
+    {
+    }
 
     fw::task_t<void> on_connected (fw::stream_t &) override { co_return; }
     fw::task_t<void> on_disconnected (fw::stream_t &) override { co_return; }
     fw::task_t<void> on_error (fw::stream_t &, const fw::stream_error_t &error) override
     {
-        _role.measurement.record_diagnostic (std::make_exception_ptr (std::runtime_error (std::string ("STREAM ") + std::string (error.message ()))));
+        _role.measurement.record_diagnostic (std::make_exception_ptr (
+          std::runtime_error (std::string ("STREAM ") + std::string (error.message ()))));
         co_return;
     }
 
-    fw::task_t<void> on_packet (fw::stream_t &stream, const fw::session_message_context_t &dispatch, const zlink::message_t &payload) override
+    fw::task_t<void> on_packet (fw::stream_t &stream,
+                                const fw::session_message_context_t &dispatch,
+                                const zlink::message_t &payload) override
     {
         auto &measurement = _role.measurement;
         try {
@@ -271,11 +312,14 @@ class perf_actor_relay_session_t final : public fw::packet_stream_session_t
                 if (dispatch.actor)
                     _binding = *dispatch.actor;
                 // Called before any suspension: this overload takes the dispatch state of the packet being handled.
-                reply = co_await _binding->relay_request (payload).async ();
-            }
-            else {
+                reply = co_await _binding->relay_request (payload)
+                          .timeout (measurement.call_timeout ())
+                          .async ();
+            } else {
                 _binding = co_await _setup.prepare (stream, payload);
-                reply = co_await _binding->relay_request (dispatch.packet_name, payload).async ();
+                reply = co_await _binding->relay_request (dispatch.packet_name, payload)
+                          .timeout (measurement.call_timeout ())
+                          .async ();
             }
             co_await stream.reply_packet (reply).async ();
             if (setup_probe)
