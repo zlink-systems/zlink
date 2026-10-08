@@ -10,11 +10,6 @@ This example uses one codec to receive `Ping` and `Pong` pushes through `on(Type
 Receiving 255 message kinds does not require 255 codecs. Pass each generated class to its handler registration.
 [Protobuf Codecs and Types](41-protobuf-codecs.en.md) explains how types and names are selected.
 
-!!! note "Fix Availability"
-
-    This chapter describes the codec fix in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
-    Released version 0.28.0 ignores handler types. `submit(Pong)` and `submitCallback` are new APIs in this change. Before release, verification uses the patched local package.
-
 ## 1. Generating Message Code
 
 A `.proto` file defines message field numbers and types. This example defines `Ping`, which carries a

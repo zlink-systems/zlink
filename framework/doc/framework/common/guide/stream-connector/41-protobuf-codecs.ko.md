@@ -27,12 +27,6 @@ application의 decoder가 정한다. 메시지 종류를 자동 등록하는 기
 | `createZlinkStreamProtobufEnvelopeCodec(options)` | handler 등록과 application decoder  | `options.decode(payload, messageType)`에 위임   |
 | `fromProto(payload, ReplyType)`                   | 호출할 때                           | 지정한 `ReplyType`으로 encoded payload를 읽는다 |
 
-!!! note "수정 버전"
-
-    위 타입 전달은 [#1503](https://github.com/zlink-systems/zlink/issues/1503)의 수정 동작이다.
-    배포된 0.28.0의 두 factory는 handler 타입을 사용하지 않는다.
-    `submit(Pong)`과 `submitCallback`도 이 수정의 추가 API다.
-
 ## 2. 서버 packet 이름과 생성 클래스
 
 packet 이름은 Protobuf schema의 field가 아니라 connector가 보내는 별도의 이름이다.

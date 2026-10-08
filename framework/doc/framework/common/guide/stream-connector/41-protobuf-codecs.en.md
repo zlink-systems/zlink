@@ -27,11 +27,6 @@ controls how the inner message is read. The factory does not automatically regis
 | `createZlinkStreamProtobufEnvelopeCodec(options)` | Handler registration and application decoder | Delegates to `options.decode(payload, messageType)`     |
 | `fromProto(payload, ReplyType)`                   | At the call                                  | Reads an encoded payload using the supplied `ReplyType` |
 
-!!! note "Fix Availability"
-
-    Type forwarding above describes the fix in [#1503](https://github.com/zlink-systems/zlink/issues/1503).
-    Both factories in released version 0.28.0 ignore handler types. `submit(Pong)` and `submitCallback` are new APIs in this change.
-
 ## 2. Server Packet Names and Generated Classes
 
 A packet name is a separate name sent by the connector, not a field in the Protobuf schema.
