@@ -851,6 +851,17 @@ alone makes this decision — `Reserve` uses the same decision when it reads an 
 and so does the startup scan when it passes a previous lifecycle's `Creating`. If the target owner
 lease is valid and the descriptor is the same lifecycle, the reservation isn't released.
 
+**An `Active` Actor record whose owner has ended is also released on re-creation.** When an Actor
+`Create` or `GetOrCreate` reads an `Active` record for the same ActorId whose owner lease is missing,
+has a different `LeaseGeneration`, or has expired, and the relocation policy registered on the
+creating node for that Actor type is `Disabled`, the Location repository releases that record. The
+release checks, in one batch, the same conditions as the reservation release above (authority
+`StoreVersion`, owner lease state, descriptor state, and capacity record), removes the authority
+together with that incarnation's membership, and returns the active capacity. After the release, a
+new incarnation is created from `Missing` — the previous incarnation's state isn't restored. If the
+owner lease is valid, the existing result (`Existing` or `AlreadyExists`) is returned; if the
+relocation policy isn't `Disabled`, `Unavailable` is returned.
+
 **An operation that receives `Conflict` continues after re-checking its eligibility.** A provider
 `Conflict` changed nothing but doesn't say which condition failed. The Framework re-reads the
 authority record and checks that the first-read state (still `Missing` if it was `Missing`, otherwise

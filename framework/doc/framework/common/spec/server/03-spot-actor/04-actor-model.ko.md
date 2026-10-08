@@ -434,6 +434,8 @@ Exclusive `Create`를 실행할 때 같은 type의 Ready Actor가 이미 있으�
 `AlreadyExists`로 끝난다. 다른 type의 Actor가 있으면 `TypeMismatch`로
 끝난다.
 
+Owner가 끝난(강제 종료 등) Actor record는 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제 규칙을 따른다.
+
 `GetOrCreate`는 같은 type의 Ready Actor가 있으면 새 reservation과 callback 실행 없이
 현재 incarnation을 `Existing`으로 반환한다. 같은 type의 Actor가 Creating이면 그
 상태가 끝날 때까지 bounded backoff로 authority를 다시 확인한다. 동일한 ActorId에

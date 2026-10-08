@@ -764,6 +764,15 @@ lifecycle이 바뀌어도 이어진다 — 해제하지 않은 모든 allocation
 `Reserved`를 읽었을 때와 startup scan이 이전 lifecycle의 `Creating`을 넘겼을 때 같은 판정을 쓴다.
 Target owner lease가 유효하고 descriptor가 같은 lifecycle이면 해제하지 않는다.
 
+**Owner가 끝난 Actor의 `Active` record도 다시 만들 때 해제한다.** Actor `Create`·`GetOrCreate`가 같은
+ActorId의 `Active` record를 읽었고, 그 record의 owner lease가 없거나 다른 `LeaseGeneration`이거나
+만료됐으며, 생성하는 node에 등록된 그 Actor type의 relocation 정책이 `Disabled`이면 Location
+repository가 그 record를 해제한다. 해제는 위 reservation 해제와 같은 조건(authority `StoreVersion`,
+owner lease 상태, descriptor 상태, 수용 공간 record)을 한 batch로 검사하고, authority와 그 incarnation의
+membership을 함께 지우며 active 수용 공간을 반납한다. 해제한 뒤에는 `Missing`에서 새 incarnation을
+만든다 — 이전 incarnation의 상태는 복원하지 않는다. Owner lease가 유효하면 기존 결과(`Existing`·
+`AlreadyExists`)를, relocation 정책이 `Disabled`가 아니면 `Unavailable`을 반환한다.
+
 **`Conflict`를 받은 작업은 작업 자격을 다시 확인해 이어 간다.** Provider `Conflict`는 아무것도 변경하지
 않았지만 어느 조건이 맞지 않았는지는 알려 주지 않는다. Framework는 authority record를 다시 읽어, 처음
 읽은 상태(처음에 `Missing`이었으면 여전히 `Missing`, 아니면 처음 읽은 `StoreVersion`)와 그 작업에 있는
