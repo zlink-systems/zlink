@@ -11,7 +11,8 @@ import type {
   ZLinkAuthoritySnapshot,
   ZLinkCreationOperationIdentity,
   ZLinkLocationOwnerToken,
-  ZLinkObjectReserveResult
+  ZLinkObjectReserveResult,
+  ZLinkObjectReserveRequest
 } from '../locations/internal-location-contracts';
 import type {
   ZLinkAuthorityStore,
@@ -57,6 +58,10 @@ export interface ZLinkActorPlacementTarget {
 }
 
 export interface ZLinkActorPlacementCoordinatorOptions {
+  readonly actorRelocationPolicy?: (
+    meshName: string,
+    stableType: string
+  ) => ZLinkObjectReserveRequest['actorRelocationPolicy'];
   readonly store: ZLinkObjectCreationStore & ZLinkAuthorityStore;
   readonly target: (
     meshName: string | undefined,
@@ -130,7 +135,8 @@ export class ZLinkActorPlacementCoordinator {
             },
             target: reservationTarget(target),
             creatingPayload,
-            capacity: { actors: 1, spots: 0 }
+            capacity: { actors: 1, spots: 0 },
+            actorRelocationPolicy: this.options.actorRelocationPolicy?.(target.meshName, stableType)
           },
           deadline.signal,
           BigInt(deadlineUnixMs)

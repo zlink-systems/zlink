@@ -583,6 +583,7 @@ test('batch-3 reply-relay hand/generated codecs are byte-equal and reject the sa
 
 test('startup authority scan submits published Actor roots before admission', async () => {
   const authority = new ZLinkInMemoryAuthorityStore({
+    isOwnerLive: () => true,
     isTargetLive: () => true
   });
   const actor = await createActorAuthority(authority, 'actor-restart');

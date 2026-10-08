@@ -1130,19 +1130,31 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     expectedStoreVersion: string,
     signal?: AbortSignal
   ): Promise<boolean> {
+    return (
+      (await this.tryReleaseEndedReservation(key, expectedStoreVersion, signal)) === 'reclaimed'
+    );
+  }
+
+  private async tryReleaseEndedReservation(
+    key: ZLinkAuthorityKey,
+    expectedStoreVersion: string,
+    signal?: AbortSignal,
+    request?: ZLinkObjectReserveRequest
+  ): Promise<'notReclaimable' | 'conflict' | 'reclaimed'> {
     const rowKey = authorityKey(key.value);
     const current = await this.provider.read(rowKey, signal);
     if (current.kind === 'missing' || current.value.version.value !== expectedStoreVersion)
-      return false;
+      return 'conflict';
     const record = decodeAuthorityRecord(current.value.bytes);
     const snapshot = record.snapshot;
     if (
-      snapshot.allocation.state !== 'reserved' ||
-      snapshot.pendingCreation === undefined ||
+      (snapshot.allocation.state === 'active'
+        ? request?.key.kind !== 'actor'
+        : snapshot.pendingCreation === undefined) ||
       record.aggregate !== undefined ||
       hasRelocationAuthority(snapshot.payload)
     )
-      return false;
+      return 'notReclaimable';
     const leaseKey = ownerKey(snapshot.ownerId);
     const descriptorKey = meshKey(
       snapshot.allocation.descriptor.meshName,
@@ -1159,27 +1171,56 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     ]);
     if (lease.kind === 'found' && lease.value.expiresAt === undefined)
       throw new Error('Location Store owner lease record is invalid.');
-    if (
-      sameLiveOwner(lease, snapshot) &&
+    const ownerLive = sameLiveOwner(lease, snapshot);
+    if (snapshot.allocation.state === 'active') {
+      if (ownerLive) return 'notReclaimable';
+      if (request?.actorRelocationPolicy !== 'disabled')
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.Unavailable,
+          'Actor owner lease is unavailable.'
+        );
+    } else if (
+      ownerLive &&
       descriptor.kind === 'found' &&
       reviveMeshDescriptor(
         decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(descriptor.value.bytes).descriptor
       ).lifecycleGeneration === snapshot.allocation.descriptorLifecycleGeneration
     )
-      return false;
+      return 'notReclaimable';
     const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
       { kind: 'delete', key: rowKey }
     ];
     if (capacity.kind === 'found') {
       const stored = decodeJson<CapacityRecord>(capacity.value.bytes);
-      mutations.push({
-        kind: 'put',
-        key: capacityRowKey,
-        bytes: encodeJson({
-          active: stored.active,
-          pending: subtractCapacity(stored.pending, snapshot.allocation.capacity)
-        } satisfies CapacityRecord)
-      });
+      try {
+        mutations.push({
+          kind: 'put',
+          key: capacityRowKey,
+          bytes: encodeJson({
+            active:
+              snapshot.allocation.state === 'active'
+                ? subtractCapacity(stored.active, snapshot.allocation.capacity)
+                : stored.active,
+            pending:
+              snapshot.allocation.state === 'reserved'
+                ? subtractCapacity(stored.pending, snapshot.allocation.capacity)
+                : stored.pending
+          } satisfies CapacityRecord)
+        });
+      } catch (error) {
+        if (
+          !(error instanceof ZLinkFrameworkException) ||
+          error.kind !== ZLinkFrameworkErrorKind.DataLost
+        )
+          throw error;
+        const observed = await this.provider.read(rowKey, signal);
+        if (
+          observed.kind === 'missing' ||
+          observed.value.version.value !== current.value.version.value
+        )
+          return 'conflict';
+        throw error;
+      }
     }
     const result = await this.provider.write(
       {
@@ -1193,7 +1234,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       },
       signal
     );
-    return result.kind === 'applied';
+    return result.kind === 'applied' ? 'reclaimed' : 'conflict';
   }
 
   override async reserve(
@@ -1203,6 +1244,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<ZLinkObjectReserveResult> {
     const encodedAuthorityKey = encodeAuthorityKey(request.key.kind, request.key.globalId);
     const reservationId = randomUUID();
+    let reclaimVersion: string | undefined;
     for (;;) {
       throwIfOperationExpired(signal, deadlineUnixMs);
       const rowKey = authorityKey(encodedAuthorityKey.value);
@@ -1223,19 +1265,23 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         ) {
           return { kind: 'typeMismatch', current: snapshot };
         }
-        if (snapshot.allocation.state === 'active') {
-          return { kind: 'alreadyExists', current: snapshot };
-        }
-        if (
-          !(await this.releaseEndedReservation(
-            encodedAuthorityKey,
-            current.value.version.value,
-            signal
-          ))
-        )
+        if (reclaimVersion !== undefined && snapshot.storeVersion.value !== reclaimVersion)
           return { kind: 'conflict', current: snapshot };
+        const reclaim = await this.tryReleaseEndedReservation(
+          encodedAuthorityKey,
+          current.value.version.value,
+          signal,
+          request
+        );
+        if (reclaim === 'notReclaimable')
+          return snapshot.allocation.state === 'active'
+            ? { kind: 'alreadyExists', current: snapshot }
+            : { kind: 'conflict', current: snapshot };
+        reclaimVersion = reclaim === 'conflict' ? snapshot.storeVersion.value : undefined;
         continue;
       }
+      if (reclaimVersion !== undefined)
+        return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
       const [descriptorRead, leaseRead] = await Promise.all([
         this.provider.read(descriptorKey, signal),
         this.provider.read(leaseKey, signal)
@@ -4040,13 +4086,21 @@ function adjustCapacity(
   if (delta.spotType !== undefined) {
     const key = capacityTypeKey(delta.spotType);
     const next = (spotTypes[key] ?? 0) + direction * delta.spotType.count;
-    if (next < 0) throw new Error('Provider capacity counter underflow.');
+    if (next < 0)
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.DataLost,
+        'Provider capacity counter underflow.'
+      );
     if (next === 0) delete spotTypes[key];
     else spotTypes[key] = next;
   }
   const actors = usage.actors + direction * delta.actors;
   const spots = usage.spots + direction * delta.spots;
-  if (actors < 0 || spots < 0) throw new Error('Provider capacity counter underflow.');
+  if (actors < 0 || spots < 0)
+    throw new ZLinkFrameworkException(
+      ZLinkFrameworkErrorKind.DataLost,
+      'Provider capacity counter underflow.'
+    );
   return { actors, spots, spotTypes };
 }
 

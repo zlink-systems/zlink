@@ -2139,6 +2139,9 @@ export class ZLinkFrameworkRuntimeHost
     }
     this.actorPlacement ??= new ZLinkActorPlacementCoordinator({
       store: locationStore,
+      actorRelocationPolicy: (meshName, stableType) =>
+        this.options.registration.spotNodes.get(meshName)?.actorFactoryRegistrations?.[stableType]
+          ?.relocation.kind,
       remoteCreate: (meshName, targetNodeRid, request, timeoutMs) => {
         const node = this.spotNodeRuntime?.meshNode(meshName);
         if (node === undefined) {
@@ -2194,14 +2197,12 @@ export class ZLinkFrameworkRuntimeHost
             const capability = descriptor.objectCapabilities.find(
               (candidate) => candidate.objectKind === 'actor' && candidate.stableType === stableType
             );
-            const actors = descriptor.populationCapacity.actors;
             return (
               descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
               descriptor.objectRole === 'server' &&
               descriptor.placementWeight > 0 &&
               descriptor.entrySpotId !== undefined &&
               excludedNodeRids?.has(String(descriptor.rid)) !== true &&
-              (actors.limit === 0 || actors.active + actors.reserved < actors.limit) &&
               capability !== undefined
             );
           }
