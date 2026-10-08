@@ -7,6 +7,10 @@
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "../support/owner_lease_time_store.hpp"
+#include "../support/actor_authority_fixture.hpp"
+#include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/spots/spot_runtime.hpp"
+#include <fstream>
 
 #include <gtest/gtest.h>
 #include <zlink/framework/contracts/detail/handler_invocation.hpp>
@@ -570,6 +574,15 @@ class ActiveActorReclaimTest : public ::testing::TestWithParam<std::tuple<bool, 
 {
 };
 
+class reclaim_registration_factory_t : public actor_factory_t<actor_t>
+{
+  public:
+    task_t<std::shared_ptr<actor_t>> create (actor_context_t, std::stop_token) override
+    {
+        co_return std::shared_ptr<actor_t>{};
+    }
+};
+
 TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
 {
     in_memory_location_store_t opaque;
@@ -618,13 +631,36 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
     request.target = {"reclaim-mesh", node_rid_t::from_string ("reclaim-source"), 1, old_owner};
     request.creating_payload = bytes ("creating");
     request.capacity_bundle.actor_slots = 1;
-    request.actor_relocation_policy = detail::factory_relocation_kind_t::disabled;
+    detail::mesh_node_builder_state_t registration ("reclaim-source");
+    registration.spot_builder.add_actor_factory<actor_t, reclaim_registration_factory_t> (
+      "player", std::make_shared<reclaim_registration_factory_t> (),
+      [] (auto &factory) { factory.disable_relocation (); });
+    request.actor_relocation_policy =
+      registration.spot_state->actor_factories.at ("player").relocation.kind;
     const auto first =
       std::get<object_reserved_t> (repository.reserve (request).result ().value ());
+    auto ready_payload = bytes ("old-state-and-membership");
+    if (scenario == "relocation") {
+        auto canonical = encode_actor_authority_payload (actor_authority_payload_t{
+          .stable_type = "player",
+          .actor_id = "reclaim-actor",
+          .current_spot_id = "reclaim-entry",
+          .current_spot_generation = 1,
+          .owner_id = old_owner.owner_id,
+          .owner_lease_generation = static_cast<std::uint64_t> (old_owner.lease_generation),
+          .mesh_name = "reclaim-mesh",
+          .node_rid = request.target.node_rid,
+          .node_generation = 1});
+        std::ifstream fixture (ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH);
+        const auto golden = nlohmann::json::parse (fixture);
+        const auto slot =
+          tests::from_hex (golden.at ("valid").at (0).at ("hex").get<std::string> ());
+        ready_payload = tests::with_relocation_slot (canonical, {slot.begin () + 5, slot.end ()});
+        const auto decoded = decode_direct_actor_authority_payload (ready_payload);
+        ASSERT_TRUE (decoded && decoded->has_relocation_state);
+    }
     ASSERT_TRUE (std::holds_alternative<object_committed_t> (
-      repository.commit ({request.key, first.fence, bytes ("old-state-and-membership")})
-        .result ()
-        .value ()));
+      repository.commit ({request.key, first.fence, ready_payload}).result ().value ()));
     if (scenario == "liveDescriptorGone")
         repository.remove_mesh_node ({old_descriptor.mesh_name, old_descriptor.rid}, old_owner)
           .result ()
@@ -665,9 +701,24 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
         }
         return;
     }
+    const auto retained_before =
+      repository.read_authority (actor_authority_key (request.key.global_id)).result ().value ();
     const auto next = repository.reserve (request).result ();
     ASSERT_TRUE (next);
-    if (scenario == "live" || scenario == "liveDescriptorGone")
+    if (scenario == "relocation") {
+        EXPECT_FALSE (std::holds_alternative<object_reserved_t> (next.value ()));
+        const auto retained_after =
+          repository.read_authority (actor_authority_key (request.key.global_id))
+            .result ()
+            .value ();
+        const auto *before = std::get_if<authority_snapshot_t> (&retained_before);
+        const auto *after = std::get_if<authority_snapshot_t> (&retained_after);
+        ASSERT_NE (before, nullptr);
+        ASSERT_NE (after, nullptr);
+        EXPECT_EQ (after->store_version, before->store_version);
+        EXPECT_EQ (after->object_generation, before->object_generation);
+        EXPECT_EQ (after->payload, ready_payload);
+    } else if (scenario == "live" || scenario == "liveDescriptorGone")
         EXPECT_TRUE (std::holds_alternative<object_already_exists_t> (next.value ()));
     else if (scenario == "typeMismatch")
         EXPECT_TRUE (std::holds_alternative<object_type_mismatch_t> (next.value ()));
@@ -687,7 +738,8 @@ INSTANTIATE_TEST_SUITE_P (RepositoryImplementations,
                                                                  "liveDescriptorGone",
                                                                  "recreate",
                                                                  "typeMismatch",
-                                                                 "race")));
+                                                                 "race",
+                                                                 "relocation")));
 
 class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
 {

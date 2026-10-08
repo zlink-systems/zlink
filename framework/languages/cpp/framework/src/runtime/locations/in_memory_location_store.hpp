@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
+#include "runtime/locations/actor_authority_payload.hpp"
 
 #include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
 
@@ -1305,6 +1306,9 @@ class in_memory_location_repository_t : public location_repository_t
         const bool owner_live = owner_token_is_live (snapshot.owner, now);
         if (active) {
             if (owner_live)
+                return false;
+            const auto actor = decode_direct_actor_authority_payload (snapshot.payload);
+            if (actor && actor->has_relocation_state)
                 return false;
             if (request->actor_relocation_policy != detail::factory_relocation_kind_t::disabled)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
