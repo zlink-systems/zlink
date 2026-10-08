@@ -7,6 +7,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 
@@ -14,6 +15,151 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
+    [Theory]
+    [InlineData("expired", false)]
+    [InlineData("expired", true)]
+    [InlineData("live", false)]
+    [InlineData("live", true)]
+    [InlineData("liveDescriptorGone", false)]
+    [InlineData("liveDescriptorGone", true)]
+    [InlineData("recreate", false)]
+    [InlineData("recreate", true)]
+    [InlineData("typeMismatch", false)]
+    [InlineData("typeMismatch", true)]
+    [InlineData("race", false)]
+    [InlineData("race", true)]
+    [InlineData("differentLeaseGeneration", false)]
+    [InlineData("differentLeaseGeneration", true)]
+    [InlineData("capacityRace", false)]
+    [InlineData("relocation", false)]
+    [InlineData("relocation", true)]
+    [InlineData("relocationRecreate", false)]
+    [InlineData("relocationRecreate", true)]
+    public async Task EndedActiveActorRecreation(string scenario, bool inMemory)
+    {
+        var time = new ManualTimeProvider();
+        var provider = new InspectAuthorityBatchLocationStore(
+            new ZLinkInMemoryProviderLocationStore(time)
+        );
+        IZLinkLocationRepository repository = inMemory
+            ? new ZLinkInMemoryLocationStore(time)
+            : new ZLinkProviderLocationRepository(provider);
+        var oldOwner = await ClaimAsync(repository, "reclaim-old");
+        var oldDescriptor = Descriptor("source", oldOwner, 1);
+        _ = await repository.UpdateMeshNodeAsync(oldDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("reclaim-actor", oldDescriptor, oldOwner) with
+        {
+            ActorRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
+        };
+        var first = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request)
+        );
+        var readyPayload = scenario is "relocation" or "relocationRecreate"
+            ? ZLinkRelocationAuthorityPayloadCodec.Encode(
+                new ZLinkRelocationAuthorityPayload(
+                    "reclaim-relocation",
+                    0,
+                    Guid.NewGuid(),
+                    1,
+                    new byte[32],
+                    "reclaim-target",
+                    1,
+                    new byte[] { 9 }
+                )
+            )
+            : new byte[] { 9 };
+        _ = Assert.IsType<ZLinkObjectCreationCompleteResult.Created>(
+            await repository.CompleteCreationAsync(
+                first.Reservation,
+                new ZLinkObjectCreationCompletion.Created(
+                    readyPayload,
+                    new ZLinkCreationTerminalPublication(
+                        new ZLinkCreationOperationId(RoutingId.From("source"), 1, 1, 1),
+                        new byte[] { 1 },
+                        DateTimeOffset.UtcNow.AddMinutes(5)
+                    )
+                )
+            )
+        );
+        if (scenario == "liveDescriptorGone")
+            _ = await repository.RemoveMeshNodeAsync(request.TargetDescriptor, oldOwner);
+        if (scenario == "expired")
+            time.Advance(TimeSpan.FromMinutes(3));
+        else if (scenario is not "live" and not "liveDescriptorGone")
+            await repository.ReleaseOwnerLeaseAsync(oldOwner);
+        if (scenario == "differentLeaseGeneration")
+            _ = await ClaimAsync(repository, oldOwner.OwnerId);
+        var newOwner = await ClaimAsync(repository, "reclaim-new");
+        var newDescriptor = Descriptor("target", newOwner, 1);
+        _ = await repository.UpdateMeshNodeAsync(newDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        var next = Reservation("reclaim-actor", newDescriptor, newOwner) with
+        {
+            ActorRelocationPolicy = scenario is "recreate" or "relocationRecreate"
+                ? ZLinkObjectRelocationRegistration.RecreatePolicy
+                : ZLinkObjectRelocationRegistration.DisabledPolicy,
+            StableType = scenario == "typeMismatch" ? "different" : "player",
+        };
+        if (scenario == "recreate")
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await repository.ReserveAsync(next)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+        }
+        else if (scenario is "relocation" or "relocationRecreate")
+        {
+            Assert.IsType<ZLinkObjectReserveResult.AlreadyExists>(
+                await repository.ReserveAsync(next)
+            );
+            var retained = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                await repository.ReadAuthorityAsync(request.Key)
+            );
+            Assert.Equal(first.Reservation.ObjectGeneration, retained.Snapshot.ObjectGeneration);
+            Assert.Equal(readyPayload, retained.Snapshot.Payload.ToArray());
+        }
+        else if (scenario == "capacityRace")
+        {
+            ZLinkObjectReserveResult? winner = null;
+            provider.BeforeRead = async key =>
+            {
+                if (!key.Value.Contains("capacity:"))
+                    return;
+                provider.BeforeRead = null;
+                winner = await repository.ReserveAsync(next);
+            };
+            var loser = await repository.ReserveAsync(next);
+            Assert.IsType<ZLinkObjectReserveResult.Reserved>(winner);
+            Assert.IsType<ZLinkObjectReserveResult.Conflict>(loser);
+        }
+        else if (scenario == "race")
+        {
+            var results = await Task.WhenAll(
+                repository.ReserveAsync(next).AsTask(),
+                repository.ReserveAsync(next).AsTask()
+            );
+            Assert.Single(results.OfType<ZLinkObjectReserveResult.Reserved>());
+        }
+        else
+        {
+            var result = await repository.ReserveAsync(next);
+            if (scenario is "live" or "liveDescriptorGone")
+                Assert.IsType<ZLinkObjectReserveResult.AlreadyExists>(result);
+            else if (scenario == "typeMismatch")
+                Assert.IsType<ZLinkObjectReserveResult.TypeMismatch>(result);
+            else
+            {
+                var created = Assert.IsType<ZLinkObjectReserveResult.Reserved>(result);
+                Assert.True(
+                    created.Reservation.ObjectGeneration > first.Reservation.ObjectGeneration
+                );
+                var current = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(next.Key)
+                );
+                Assert.Equal(next.CreatingPayload.ToArray(), current.Snapshot.Payload.ToArray());
+            }
+        }
+    }
+
     [Fact]
     public async Task ReplacedDescriptorLifecycleReleasesReservedCapacity()
     {
@@ -1602,21 +1748,31 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             await repository.ReleaseOwnerLeaseAsync(sourceOwner)
         );
 
-        var existing = Assert
-            .IsType<ZLinkObjectReserveResult.AlreadyExists>(
-                await repository.ReserveAsync(
-                    Reservation(key, targetDescriptor, targetOwner, objectKind)
+        var replacementRequest = Reservation(key, targetDescriptor, targetOwner, objectKind);
+        if (userSpot)
+        {
+            var existing = Assert
+                .IsType<ZLinkObjectReserveResult.AlreadyExists>(
+                    await repository.ReserveAsync(replacementRequest)
                 )
-            )
-            .Current;
+                .Current;
+            Assert.Equal(committed.StoreVersion, existing.StoreVersion);
+            Assert.Equal(committed.ObjectGeneration, existing.ObjectGeneration);
+        }
+        else
+        {
+            // Location runtime §6.1: an ended Actor needs the creator's Disabled policy.
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await repository.ReserveAsync(replacementRequest)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+        }
         var observed = Assert
             .IsType<ZLinkAuthorityReadResult.Found>(
                 await repository.ReadAuthorityAsync(firstRequest.Key)
             )
             .Snapshot;
 
-        Assert.Equal(committed.StoreVersion, existing.StoreVersion);
-        Assert.Equal(committed.ObjectGeneration, existing.ObjectGeneration);
         Assert.Equal(committed.StoreVersion, observed.StoreVersion);
         Assert.Equal(committed.ObjectGeneration, observed.ObjectGeneration);
         Assert.Equal(sourceOwner.OwnerId, observed.OwnerId);
@@ -1723,21 +1879,17 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         );
         var replacementRequest = Reservation(key, targetDescriptor, targetOwner);
 
-        var results = await Task.WhenAll(
-            firstRepository.ReserveAsync(replacementRequest).AsTask(),
-            secondRepository.ReserveAsync(replacementRequest).AsTask()
+        var failures = await Task.WhenAll(
+            Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await firstRepository.ReserveAsync(replacementRequest)
+            ),
+            Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await secondRepository.ReserveAsync(replacementRequest)
+            )
         );
-
         Assert.All(
-            results,
-            result =>
-            {
-                var existing = Assert
-                    .IsType<ZLinkObjectReserveResult.AlreadyExists>(result)
-                    .Current;
-                Assert.Equal(committed.StoreVersion, existing.StoreVersion);
-                Assert.Equal(committed.ObjectGeneration, existing.ObjectGeneration);
-            }
+            failures,
+            failure => Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind)
         );
         var observed = Assert
             .IsType<ZLinkAuthorityReadResult.Found>(
@@ -4833,11 +4985,17 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         : IZLinkLocationStore
     {
         public Func<ZLinkStoreWriteRequest, Task>? Inspect { get; set; }
+        public Func<ZLinkStoreKey, Task>? BeforeRead { get; set; }
 
-        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+        public async ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
             CancellationToken cancellationToken = default
-        ) => inner.ReadAsync(key, cancellationToken);
+        )
+        {
+            if (BeforeRead is { } beforeRead)
+                await beforeRead(key);
+            return await inner.ReadAsync(key, cancellationToken);
+        }
 
         public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
             ZLinkStoreWriteRequest request,

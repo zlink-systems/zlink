@@ -59,6 +59,288 @@ import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 
 final class ZLinkProviderAuthorityRepositoryTest {
+    private record ReclaimActor(systems.zlink.framework.actors.ZLinkActorContext context)
+            implements systems.zlink.framework.actors.ZLinkActor {}
+
+    private static final class ReclaimFactory
+            implements systems.zlink.framework.actors.ZLinkActorFactory {
+        public CompletionStage<systems.zlink.framework.actors.ZLinkActor> create(
+                systems.zlink.framework.actors.ZLinkActorContext context) {
+            return CompletableFuture.completedFuture(new ReclaimActor(context));
+        }
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "expired,false",
+        "expired,true",
+        "live,false",
+        "live,true",
+        "liveDescriptorGone,false",
+        "liveDescriptorGone,true",
+        "recreate,false",
+        "recreate,true",
+        "typeMismatch,false",
+        "typeMismatch,true",
+        "race,false",
+        "race,true",
+        "capacityRace,false",
+        "relocation,false",
+        "relocation,true",
+        "relocationRecreate,false",
+        "relocationRecreate,true"
+    })
+    void endedActiveActorRecreation(String scenario, boolean inMemory) throws Exception {
+        var provider = new TemporaryCommitConflictStore(new ZLinkInMemoryProviderLocationStore());
+        ZLinkLocationRepository repository =
+                inMemory
+                        ? new systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore()
+                        : new ZLinkProviderLocationRepository(provider);
+        var owner =
+                ((ZLinkOwnerLeaseClaimed)
+                                repository
+                                        .claimOwnerLease("reclaim-old", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+
+        var descriptor = actorReclaimDescriptor(owner, 1);
+        repository
+                .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .get();
+
+        var key = ZLinkAuthorityKeyCodec.actor("reclaim-actor");
+        var registration =
+                new systems.zlink.framework.runtime.mesh.MeshNodeRegistration("reclaim-source");
+        registration
+                .objects()
+                .server()
+                .addActorFactory(
+                        "player",
+                        ReclaimActor.class,
+                        ReclaimFactory.class,
+                        factory -> factory.disableRelocation());
+        var policy = registration.actorRelocationPolicy("player");
+        var request =
+                new ZLinkObjectReservationRequest(
+                        ZLinkPlacementObjectKind.ACTOR,
+                        key,
+                        "player",
+                        "inline:test",
+                        new byte[32],
+                        1,
+                        new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid()),
+                        descriptor.lifecycleGeneration(),
+                        owner,
+                        new byte[] {1},
+                        ZLinkPlacementCapacityBundle.actor(1),
+                        policy);
+        var first =
+                ((ZLinkObjectReserved)
+                                repository
+                                        .reserve(request, () -> false)
+                                        .toCompletableFuture()
+                                        .get())
+                        .reservation();
+        var terminal =
+                new ZLinkCreationOperationTerminal(
+                        new ZLinkCreationOperationIdentity(
+                                RoutingId.from("reclaim-source"), 1, 1, 1),
+                        first,
+                        ZLinkCreationTerminalState.CREATED,
+                        new byte[] {1},
+                        Instant.now().plusSeconds(300));
+        byte[] readyPayload = new byte[] {9};
+        if (scenario.equals("relocation") || scenario.equals("relocationRecreate")) {
+            byte[] canonical =
+                    new ZLinkActorAuthorityPayloadCodec()
+                            .encode(
+                                    ZLinkActorAuthorityPayloadCodec.State.READY,
+                                    "player",
+                                    "reclaim-actor",
+                                    "reclaim-entry",
+                                    1,
+                                    1,
+                                    owner.ownerId(),
+                                    owner.leaseGeneration(),
+                                    descriptor.meshName(),
+                                    descriptor.rid(),
+                                    1);
+            var relocation =
+                    new ZLinkAggregateRelocationCoordinator.Request(
+                            new UUID(0, 9),
+                            1,
+                            2,
+                            List.of(
+                                    new ZLinkAggregateRelocationCoordinator.Participant(
+                                            key,
+                                            ZLinkPlacementObjectKind.ACTOR,
+                                            1,
+                                            1,
+                                            "1",
+                                            ZLinkAuthorityGenerationTransition.PRESERVE,
+                                            canonical,
+                                            new byte[0])),
+                            goldenRoot(),
+                            request.targetDescriptor(),
+                            1,
+                            ZLinkPlacementCapacityBundle.actor(1),
+                            owner,
+                            "1");
+            readyPayload =
+                    ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                            canonical, relocation, ZLinkAuthorityGenerationTransition.PRESERVE);
+            assertTrue(ZLinkCanonicalRelocationAuthorityStateCodec.decode(readyPayload) != null);
+        }
+        assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                repository
+                        .commit(first, readyPayload, terminal, () -> false)
+                        .toCompletableFuture()
+                        .get());
+        if (scenario.equals("liveDescriptorGone"))
+            repository
+                    .removeMeshNode(request.targetDescriptor(), owner)
+                    .toCompletableFuture()
+                    .get();
+        if (!scenario.equals("live") && !scenario.equals("liveDescriptorGone"))
+            repository.releaseOwnerLease(owner).toCompletableFuture().get();
+        var newOwner =
+                ((ZLinkOwnerLeaseClaimed)
+                                repository
+                                        .claimOwnerLease("reclaim-new", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var nextDescriptor = actorReclaimDescriptor(newOwner, 2);
+        repository
+                .updateMeshNode(nextDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .get();
+        var next =
+                new ZLinkObjectReservationRequest(
+                        ZLinkPlacementObjectKind.ACTOR,
+                        key,
+                        scenario.equals("typeMismatch") ? "different" : "player",
+                        "inline:new",
+                        new byte[32],
+                        1,
+                        new ZLinkMeshNodeDescriptorKey(
+                                nextDescriptor.meshName(), nextDescriptor.rid()),
+                        nextDescriptor.lifecycleGeneration(),
+                        newOwner,
+                        new byte[] {2},
+                        ZLinkPlacementCapacityBundle.actor(1),
+                        (scenario.equals("recreate") || scenario.equals("relocationRecreate"))
+                                ? new systems.zlink.framework.runtime.internal.configuration
+                                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Recreate()
+                                : policy);
+        var retainedBefore = repository.read(key, () -> false).toCompletableFuture().get();
+        if (scenario.equals("recreate")) {
+            var failure =
+                    inMemory
+                            ? assertThrows(
+                                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                    () -> repository.reserve(next, () -> false))
+                            : assertInstanceOf(
+                                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                    assertThrows(
+                                                    java.util.concurrent.ExecutionException.class,
+                                                    () ->
+                                                            repository
+                                                                    .reserve(next, () -> false)
+                                                                    .toCompletableFuture()
+                                                                    .get())
+                                            .getCause());
+            assertEquals(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    failure.kind());
+        } else if (scenario.equals("relocation") || scenario.equals("relocationRecreate")) {
+            assertInstanceOf(
+                    ZLinkObjectAlreadyExists.class,
+                    repository.reserve(next, () -> false).toCompletableFuture().get());
+            var before = assertInstanceOf(ZLinkAuthoritySnapshot.class, retainedBefore);
+            var after =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            repository.read(key, () -> false).toCompletableFuture().get());
+            assertEquals(before.storeVersion(), after.storeVersion());
+            assertEquals(before.objectGeneration(), after.objectGeneration());
+            assertArrayEquals(readyPayload, after.payload());
+        } else if (scenario.equals("capacityRace")) {
+            var winner =
+                    new java.util.concurrent.atomic.AtomicReference<ZLinkObjectReserveResult>();
+            provider.beforeRead =
+                    storeKey -> {
+                        if (!storeKey.value().contains("capacity:"))
+                            return CompletableFuture.completedFuture(null);
+                        provider.beforeRead = null;
+                        return repository.reserve(next, () -> false).thenAccept(winner::set);
+                    };
+            var loser = repository.reserve(next, () -> false).toCompletableFuture().get();
+            assertInstanceOf(ZLinkObjectReserved.class, winner.get());
+            assertInstanceOf(ZLinkObjectConflict.class, loser);
+        } else if (scenario.equals("race")) {
+            var a = repository.reserve(next, () -> false).toCompletableFuture();
+            var b = repository.reserve(next, () -> false).toCompletableFuture();
+            assertEquals(
+                    1,
+                    java.util.stream.Stream.of(a.get(), b.get())
+                            .filter(ZLinkObjectReserved.class::isInstance)
+                            .count());
+        } else {
+            var result = repository.reserve(next, () -> false).toCompletableFuture().get();
+            if (scenario.equals("live") || scenario.equals("liveDescriptorGone"))
+                assertInstanceOf(ZLinkObjectAlreadyExists.class, result);
+            else if (scenario.equals("typeMismatch"))
+                assertInstanceOf(ZLinkObjectTypeMismatch.class, result);
+            else {
+                var reserved = assertInstanceOf(ZLinkObjectReserved.class, result).reservation();
+                assertTrue(reserved.objectGeneration() > first.objectGeneration());
+                assertArrayEquals(
+                        next.creatingPayload(),
+                        ((ZLinkAuthoritySnapshot)
+                                        repository
+                                                .read(key, () -> false)
+                                                .toCompletableFuture()
+                                                .get())
+                                .payload());
+            }
+        }
+    }
+
+    private static ZLinkMeshNodeDescriptor actorReclaimDescriptor(
+            ZLinkLocationOwnerToken owner, long generation) {
+        var d = capacityDescriptor(owner);
+        return new ZLinkMeshNodeDescriptor(
+                d.meshName(),
+                RoutingId.from("reclaim-node-" + generation),
+                generation,
+                d.descriptorRevision(),
+                d.endpoint(),
+                d.channelWeights(),
+                d.applicationVersion(),
+                List.of(
+                        new ZLinkObjectCapability(
+                                ZLinkPlacementObjectKind.ACTOR,
+                                "player",
+                                ZLinkObjectMaintenancePolicyKind.DISABLED,
+                                false,
+                                0)),
+                d.objectRole(),
+                Optional.of("reclaim-entry-" + generation),
+                d.placementWeight(),
+                d.capacity(),
+                d.activationConcurrency(),
+                d.maintenanceWave(),
+                d.state(),
+                d.securityIdentity(),
+                d.ownerId(),
+                d.leaseGeneration(),
+                d.updatedAt());
+    }
+
     private static final String OBJECT_COUNTER_KEY = "zlink:v11:object-counter";
     private static final String AUTHORITY_OWNER_COUNTER_KEY = "zlink:v11:authority-owner-counter";
 
@@ -948,11 +1230,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
             var nodeMarker =
                     mapper.readTree(
                             """
-                    {"aggregateId":"%s",
-                     "aggregateGeneration":"1","index":0,"expectedStoreVersion":"%s",
-                     "ownerTransition":"%s","targetAuthorityOwnerGeneration":"%s",
-                     "authorityPayloadSha256":"%s","membershipMutationSha256":"%s"}
-                    """
+                            {"aggregateId":"%s",
+                             "aggregateGeneration":"1","index":0,"expectedStoreVersion":"%s",
+                             "ownerTransition":"%s","targetAuthorityOwnerGeneration":"%s",
+                             "authorityPayloadSha256":"%s","membershipMutationSha256":"%s"}
+                            """
                                     .formatted(
                                             request.aggregateId(),
                                             current.storeVersion(),
@@ -2607,6 +2889,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         private int remainingConflicts;
         private int conflictsReturned;
         private Duration providerLatency = Duration.ZERO;
+        private java.util.function.Function<ZLinkStoreKey, CompletionStage<?>> beforeRead;
 
         private TemporaryCommitConflictStore(ZLinkLocationStore delegate) {
             this.delegate = delegate;
@@ -2615,7 +2898,10 @@ final class ZLinkProviderAuthorityRepositoryTest {
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
                 ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
-            return delegate.read(key, cancellation);
+            var callback = beforeRead;
+            return callback == null
+                    ? delegate.read(key, cancellation)
+                    : callback.apply(key).thenCompose(ignored -> delegate.read(key, cancellation));
         }
 
         @Override

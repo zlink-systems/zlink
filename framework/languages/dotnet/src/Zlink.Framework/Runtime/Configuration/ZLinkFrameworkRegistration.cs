@@ -112,7 +112,7 @@ internal sealed class ZLinkFrameworkRegistration
                 assemblies.Add(instanceSpot.SpotType.Assembly);
 
             foreach (var actorFactoryType in spotNode.ActorFactories.Values)
-                assemblies.Add(actorFactoryType.Assembly);
+                assemblies.Add(actorFactoryType.FactoryType.Assembly);
 
             foreach (var handler in spotNode.RouteSendHandlers)
                 assemblies.Add(handler.HandlerType.Assembly);
@@ -423,7 +423,8 @@ internal sealed class ZLinkSpotNodeRegistration
     public Dictionary<string, ZLinkInstanceSpotFactoryRegistration> InstanceSpotFactories { get; } =
         new(StringComparer.Ordinal);
 
-    public Dictionary<string, Type> ActorFactories { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, ZLinkActorFactoryRegistration> ActorFactories { get; } =
+        new(StringComparer.Ordinal);
 
     public Dictionary<string, ZLinkObjectRelocationRegistration> SpotRelocations { get; } =
         new(StringComparer.Ordinal);
@@ -463,6 +464,11 @@ internal sealed class ZLinkSpotNodeRegistration
 
     public TimeSpan InstanceSpotIdleTimeout { get; set; }
 }
+
+internal sealed record ZLinkActorFactoryRegistration(
+    Type FactoryType,
+    ZLinkObjectRelocationRegistration Relocation
+);
 
 internal sealed record ZLinkInstanceSpotFactoryRegistration(
     Type SpotType,
@@ -507,7 +513,7 @@ internal sealed class ZLinkActorCatalog
         foreach (var spotNode in spotNodes)
         {
             foreach (var (actorType, factoryType) in spotNode.ActorFactories)
-                factories.TryAdd(actorType, factoryType);
+                factories.TryAdd(actorType, factoryType.FactoryType);
         }
 
         _factories = factories.ToFrozenDictionary(StringComparer.Ordinal);

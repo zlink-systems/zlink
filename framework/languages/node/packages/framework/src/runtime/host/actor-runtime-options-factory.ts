@@ -34,6 +34,10 @@ import type { ZLinkRemoteActorPacketTarget } from '../actors';
 import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
 
 export interface ZLinkActorRuntimeOptionsFactoryOptions {
+  readonly terminateActorActivation: (
+    actor: ZLinkActor,
+    terminal: () => Promise<void>
+  ) => Promise<void>;
   readonly registration: ZLinkFrameworkRegistration;
   /** Message flow tracer, so a failed deferred Join records its cause on the flow. */
   readonly messageFlow?: () =>
@@ -101,6 +105,7 @@ export class ZLinkActorRuntimeOptionsFactory {
     | 'actorRefResolver'
     | 'actorCreatedNotifier'
     | 'actorDestroyedCleanup'
+    | 'terminateActorActivation'
     | 'publishActorAuthority'
     | 'locationLifecycle'
     | 'boundSessionFactory'
@@ -111,6 +116,7 @@ export class ZLinkActorRuntimeOptionsFactory {
   > {
     const actorTransferRegistry = this.options.actorTransferRegistry;
     return {
+      terminateActorActivation: this.options.terminateActorActivation,
       actorMeshNameProvider: this.options.actorMeshName,
       actorLeaveSpot: (meshName, spotId, actor, signal) => {
         const spotManager = this.options.spotManager();

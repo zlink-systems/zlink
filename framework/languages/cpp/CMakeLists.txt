@@ -901,7 +901,13 @@ function(zlink_framework_cpp_add_test)
   set(test_environment ${ZLINK_TEST_ENVIRONMENT})
   if(WIN32)
     set(test_path
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin;${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/bin;${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin;$ENV{PATH}")
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin;${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/bin")
+    # Package-only builds do not define vcpkg toolchain variables. An empty
+    # prefix/triplet would put the network path //bin in the DLL search path.
+    if(VCPKG_INSTALLED_DIR AND VCPKG_TARGET_TRIPLET)
+      list(APPEND test_path "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+    endif()
+    list(APPEND test_path "$ENV{PATH}")
     string(REPLACE ";" "\\;" test_path "${test_path}")
     list(PREPEND test_environment "PATH=${test_path}")
   endif()
@@ -1402,12 +1408,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   if(TARGET gmock AND NOT TARGET GTest::gmock)
     add_library(GTest::gmock ALIAS gmock)
   endif()
-  if(TARGET gtest_main AND NOT TARGET GTest::gtest_main)
-    add_library(GTest::gtest_main ALIAS gtest_main)
-  endif()
-
   function(target_link_zlink_test_harness target_name)
-    target_link_libraries(${target_name} PRIVATE GTest::gtest GTest::gmock)
+    # gmock.dll embeds GoogleTest on Windows; resolve registrations, mock failures
+    # and the runner through that same library before the standalone gtest import.
+    target_link_libraries(${target_name} PRIVATE GTest::gmock GTest::gtest)
     zlink_enable_coverage(${target_name})
   endfunction()
 
@@ -1417,6 +1421,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   function(target_use_zlink_gtest_main target_name)
     target_sources(${target_name} PRIVATE
       ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/zlink_test_main.cpp)
+    target_link_zlink_test_harness(${target_name})
   endfunction()
 
   function(add_zlink_framework_test target_name source_file labels)
@@ -1492,6 +1497,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
 
   add_executable(test_cpp_framework_contract_headers
     tests/Zlink.Framework.ContractTests/test_cpp_framework_contract_headers.cpp)
+  target_link_zlink_test_harness(test_cpp_framework_contract_headers)
   target_link_libraries(test_cpp_framework_contract_headers PRIVATE
     zlink::framework
     zlink::framework_codec_protobuf
@@ -1499,9 +1505,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::stream_connector
     zlink::stream_connector_codecs
     zlink::stream_e2e_client
-    zlink::stream_connector_throwing
-    GTest::gtest
-    GTest::gmock)
+    zlink::stream_connector_throwing)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_contract_headers
     COMMAND test_cpp_framework_contract_headers
@@ -1536,13 +1540,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
 
   add_executable(test_cpp_framework_sample_parity
     tests/Zlink.Framework.ContractTests/test_cpp_framework_sample_parity.cpp)
+  target_link_zlink_test_harness(test_cpp_framework_sample_parity)
   target_link_libraries(test_cpp_framework_sample_parity PRIVATE
     zlink::framework
     zlink::framework_codec_protobuf
     zlink::stream_connector
-    zlink_framework_bingo_proto
-    GTest::gtest
-    GTest::gmock)
+    zlink_framework_bingo_proto)
   target_include_directories(test_cpp_framework_sample_parity PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   zlink_framework_cpp_add_test(
@@ -1624,6 +1627,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     PROPERTIES
       RESOURCE_LOCK "zlink-cpp-vcpkg")
   zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_windows_test_path
+    COMMAND ${CMAKE_COMMAND}
+      -DZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
+      -DZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.ContractTests/verify_windows_test_path.cmake
+    LABELS "framework-contract;framework-regression;framework-tooling"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_label_contract
     COMMAND ${CMAKE_COMMAND}
       -D
@@ -1653,13 +1664,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-contract;framework-host;framework-http;framework-regression"
     unit)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_http_startup)
-  target_link_libraries(test_cpp_framework_http_startup PRIVATE GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_http_startup)
   add_zlink_framework_test(
     test_cpp_framework_listener_identity
     tests/Zlink.Framework.UnitTests/test_cpp_framework_listener_identity.cpp
     "framework-unit;framework-contract;framework-regression;framework-zlink-channel"
     unit)
-  target_link_libraries(test_cpp_framework_listener_identity PRIVATE GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_listener_identity)
   target_include_directories(test_cpp_framework_listener_identity PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
@@ -1820,10 +1831,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/runtime-observation-v1.json")
   add_executable(test_cpp_framework_state_lane
     tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_state_lane)
   target_link_libraries(test_cpp_framework_state_lane PRIVATE
-    zlink::framework
-    GTest::gtest
-    GTest::gtest_main)
+    zlink::framework)
   target_include_directories(test_cpp_framework_state_lane PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   zlink_enable_coverage(test_cpp_framework_state_lane)
@@ -1834,10 +1844,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30)
   add_executable(test_cpp_framework_lane_roundtrip
     tests/Zlink.Framework.UnitTests/test_cpp_framework_lane_roundtrip.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_lane_roundtrip)
   target_link_libraries(test_cpp_framework_lane_roundtrip PRIVATE
-    zlink::framework
-    GTest::gtest
-    GTest::gtest_main)
+    zlink::framework)
   target_include_directories(test_cpp_framework_lane_roundtrip PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   zlink_enable_coverage(test_cpp_framework_lane_roundtrip)
@@ -1850,19 +1859,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_sync_submit
     tests/Zlink.Framework.UnitTests/test_cpp_framework_sync_submit.cpp
     "framework-unit;framework-regression;execution;messaging")
-  target_link_libraries(test_cpp_framework_sync_submit PRIVATE GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_sync_submit)
   add_zlink_framework_test(
     test_cpp_framework_host_context_hooks
     tests/Zlink.Framework.UnitTests/test_cpp_framework_host_context_hooks.cpp
     "framework-unit;framework-regression;execution")
-  target_link_libraries(test_cpp_framework_host_context_hooks PRIVATE GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_host_context_hooks)
   target_include_directories(test_cpp_framework_sync_submit PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_shared_serial_turn
     tests/Zlink.Framework.UnitTests/test_cpp_framework_shared_serial_turn.cpp
     "framework-unit;framework-regression;execution;actor-join")
-  target_link_libraries(test_cpp_framework_shared_serial_turn PRIVATE GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_shared_serial_turn)
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
@@ -1876,8 +1885,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_zlink_test_harness(test_cpp_framework_location_key_codec)
   target_use_zlink_gtest_main(test_cpp_framework_location_key_codec)
   target_link_libraries(test_cpp_framework_location_key_codec PRIVATE
-    zlink::framework
-    GTest::gtest_main)
+    zlink::framework)
   target_include_directories(test_cpp_framework_location_key_codec PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
@@ -1892,8 +1900,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_zlink_test_harness(test_cpp_framework_in_memory_location_store)
   target_use_zlink_gtest_main(test_cpp_framework_in_memory_location_store)
   target_link_libraries(test_cpp_framework_in_memory_location_store PRIVATE
-    zlink::framework
-    GTest::gtest_main)
+    zlink::framework)
   target_include_directories(test_cpp_framework_in_memory_location_store PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
@@ -1906,12 +1913,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_executable(test_cpp_framework_opaque_store_providers
     tests/Zlink.Framework.UnitTests/test_cpp_framework_opaque_store_providers.cpp)
   target_compile_features(test_cpp_framework_opaque_store_providers PRIVATE cxx_std_20)
+  target_compile_definitions(test_cpp_framework_opaque_store_providers PRIVATE
+    ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/authority-relocation-state-v1.json")
   target_link_zlink_test_harness(test_cpp_framework_opaque_store_providers)
   target_use_zlink_gtest_main(test_cpp_framework_opaque_store_providers)
   target_link_libraries(test_cpp_framework_opaque_store_providers PRIVATE
-    zlink::framework
-    GTest::gtest_main)
+    zlink::framework)
   target_include_directories(test_cpp_framework_opaque_store_providers PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   # The bounded-batch aggregate stress case commits 2050 participants through
@@ -1935,8 +1944,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_location_runtime)
   target_link_libraries(test_cpp_framework_location_runtime PRIVATE
     zlink::framework
-    opentelemetry-cpp::metrics
-    GTest::gtest_main)
+    opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_location_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
@@ -1951,8 +1959,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_zlink_test_harness(test_cpp_framework_location_lifecycle)
   target_use_zlink_gtest_main(test_cpp_framework_location_lifecycle)
   target_link_libraries(test_cpp_framework_location_lifecycle PRIVATE
-    zlink::framework
-    GTest::gtest_main)
+    zlink::framework)
   target_include_directories(test_cpp_framework_location_lifecycle PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
@@ -1967,8 +1974,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_zlink_test_harness(test_cpp_framework_store_location_resolvers)
   target_use_zlink_gtest_main(test_cpp_framework_store_location_resolvers)
   target_link_libraries(test_cpp_framework_store_location_resolvers PRIVATE
-    zlink::framework
-    GTest::gtest_main)
+    zlink::framework)
   target_include_directories(test_cpp_framework_store_location_resolvers PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
@@ -1990,7 +1996,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_spot_close_conformance)
   target_link_libraries(test_cpp_framework_spot_close_conformance PRIVATE
     zlink::framework
-    GTest::gtest_main
     nlohmann_json::nlohmann_json)
   target_include_directories(test_cpp_framework_spot_close_conformance PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
@@ -2041,14 +2046,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_fanout_admission
     tests/Zlink.Framework.UnitTests/test_cpp_framework_fanout_admission.cpp
     "framework-unit;framework-regression;channel;admission")
-  target_link_libraries(test_cpp_framework_fanout_admission PRIVATE
-    GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_fanout_admission)
   add_zlink_framework_test(
     test_cpp_framework_fanout_no_drop
     tests/Zlink.Framework.UnitTests/test_cpp_framework_fanout_no_drop.cpp
     "framework-unit;framework-regression;channel;backpressure")
-  target_link_libraries(test_cpp_framework_fanout_no_drop PRIVATE
-    GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_fanout_no_drop)
   add_zlink_framework_test(
     test_cpp_framework_channel_reply_admission
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_reply_admission.cpp
@@ -2057,8 +2060,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
   target_include_directories(test_cpp_framework_channel_reply_admission PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  target_link_libraries(test_cpp_framework_channel_reply_admission PRIVATE
-    GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_channel_reply_admission)
   add_zlink_framework_test(
     test_cpp_framework_channel_core_admission
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_core_admission.cpp
@@ -2067,8 +2069,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_channel_core_admission PRIVATE
     ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
-  target_link_libraries(test_cpp_framework_channel_core_admission PRIVATE
-    GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_channel_core_admission)
   add_zlink_framework_test(
     test_cpp_framework_route_mesh_weight_update
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_weight_update.cpp
@@ -2087,8 +2088,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_application_job_queue
     tests/Zlink.Framework.UnitTests/test_cpp_framework_application_job_queue.cpp
     "framework-unit;framework-regression;execution;admission")
-  target_link_libraries(test_cpp_framework_application_job_queue PRIVATE
-    GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_application_job_queue)
   target_include_directories(test_cpp_framework_application_job_queue PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
@@ -2097,8 +2097,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;spot;instance-activation")
   target_include_directories(test_cpp_framework_instance_spot_activation PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  target_link_libraries(test_cpp_framework_instance_spot_activation PRIVATE
-    GTest::gtest_main)
+  target_use_zlink_gtest_main(test_cpp_framework_instance_spot_activation)
   # The channel messaging test reaches the service wire codec headers, which include the
   # schema-generated constants header (see test_cpp_framework_service_wire_codec above).
   target_include_directories(test_cpp_framework_channel_messaging PRIVATE
@@ -2164,10 +2163,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ZLINK_ERROR_MAPPING_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/framework-error-mapping-v1.json")
   add_executable(test_cpp_framework_gtest_harness
     tests/Zlink.Framework.UnitTests/test_cpp_framework_gtest_harness.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_gtest_harness)
   target_link_libraries(test_cpp_framework_gtest_harness PRIVATE
-    zlink::framework
-    GTest::gtest_main
-    GTest::gmock)
+    zlink::framework)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_gtest_harness
     COMMAND test_cpp_framework_gtest_harness
@@ -2183,9 +2181,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_redis_blob_bound BEFORE PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/fake_redis
     ${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-redis/include)
+  target_use_zlink_gtest_main(test_cpp_framework_redis_blob_bound)
   target_link_libraries(test_cpp_framework_redis_blob_bound PRIVATE
-    zlink::framework
-    GTest::gtest_main)
+    zlink::framework)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_redis_blob_bound
     COMMAND test_cpp_framework_redis_blob_bound
@@ -2197,9 +2195,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink_enable_coverage(test_cpp_framework_locations_redis)
     target_compile_definitions(test_cpp_framework_locations_redis PRIVATE
       ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
+    target_use_zlink_gtest_main(test_cpp_framework_locations_redis)
     target_link_libraries(test_cpp_framework_locations_redis PRIVATE
-      zlink::framework_locations_redis
-      GTest::gtest_main)
+      zlink::framework_locations_redis)
     if(TARGET redis++::redis++)
       target_link_libraries(test_cpp_framework_locations_redis PRIVATE redis++::redis++)
     else()
@@ -2399,10 +2397,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
 
   add_executable(test_unreal_stream_connector
     tests/Zlink.Unreal.Stream.Connector.Tests/test_unreal_stream_connector.cpp)
+  target_link_zlink_test_harness(test_unreal_stream_connector)
   target_link_libraries(test_unreal_stream_connector PRIVATE
-    zlink_unreal_stream_connector
-    GTest::gtest
-    GTest::gmock)
+    zlink_unreal_stream_connector)
   zlink_framework_cpp_add_test(
     NAME test_unreal_stream_connector
     COMMAND test_unreal_stream_connector

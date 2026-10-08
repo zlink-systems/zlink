@@ -384,7 +384,7 @@ public sealed class InstanceSpotActivationJournalTests
     [Fact]
     public async Task ConcurrentLoserJoinsRunningOperationInsteadOfSubmittingAgain()
     {
-        var gate = new ZLinkInstanceSpotOperationGate();
+        var gate = new ZLinkInstanceSpotOperationGate<InstanceSpotActivationTerminal>();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var submissions = 0;

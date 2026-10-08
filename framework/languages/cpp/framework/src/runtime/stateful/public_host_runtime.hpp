@@ -839,10 +839,19 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::optional<stateful::object_ref_t> resolve_spot (const std::string &spot_id) const;
 
   private:
+    using instance_activation_admission_t =
+      std::variant<authority_snapshot_t, instance_spot_activation_result_t>;
     task_t<void> dispatch_instance_spot_activation (
       protocol::instance_activation_recovery_t command,
       std::shared_ptr<const mesh::service_mailbox_record_t> reply_record,
       std::function<void (instance_spot_activation_result_t)> done = {});
+    task_t<void> dispatch_instance_spot_activation_core (
+      protocol::instance_activation_recovery_t command,
+      std::shared_ptr<const mesh::service_mailbox_record_t> reply_record,
+      std::function<void (instance_spot_activation_result_t)> done,
+      std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> admission,
+      std::shared_ptr<task_completion_source_t<instance_activation_admission_t>>
+        previous_admission);
     friend class spot_handle_t;
     friend class actor_handle_t;
     friend class actor_transfer_token_t;
@@ -939,6 +948,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     actor_join_authority_spot_resolver_t _actor_join_authority_spot_resolver;
     actor_join_committed_authority_adopter_t _actor_join_committed_authority_adopter;
     instance_spot_activation_materializer_t _instance_spot_materializer;
+    std::map<std::string,
+             std::shared_ptr<task_completion_source_t<instance_activation_admission_t>>>
+      _instance_spot_activation_admissions;
     std::shared_ptr<stateful::relocation_store_port_t> _instance_spot_relocations;
     std::function<std::optional<location_owner_token_t> ()> _instance_spot_owner;
     std::function<std::optional<location_owner_token_t> ()> _session_route_owner_resolver;

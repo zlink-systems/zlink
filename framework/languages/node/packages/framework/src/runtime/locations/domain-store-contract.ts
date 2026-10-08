@@ -37,9 +37,9 @@ import type {
   ZLinkObjectCommitResult,
   ZLinkObjectCreationCompleteRequest,
   ZLinkObjectCreationCompleteResult,
-  ZLinkObjectReserveRequest,
   ZLinkObjectReserveResult
 } from '../../contracts/Locations/Authority';
+import type { ZLinkObjectReserveRequest } from './internal-location-contracts';
 
 /**
  * Framework-private domain repository. Provider implementations never

@@ -99,6 +99,8 @@ owner로 기록하고 만든다. 나머지의 생성 결과는 operation 종류�
 positive route cache에 넣지 않는다. 넣으면 만들기가 끝난 뒤에도 캐시 수명만큼 "만드는
 중"으로 보인다.
 
+이 그림은 User Spot `GetOrCreate`의 생성 경쟁을 나타낸다. Instance operation의 같은 target 합류와 다른 target `Reserve` 패자 처리는 [Spot 주소 메시징 §4.2](06-spot-address-messaging.ko.md#42-여러-node가-동시에-첫-message를-받는-경우)를 따른다.
+
 ```mermaid
 sequenceDiagram
     participant A as caller A

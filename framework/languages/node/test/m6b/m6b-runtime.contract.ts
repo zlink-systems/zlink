@@ -5615,7 +5615,7 @@ test('authority reconciliation resumes an exact Pending Instance reservation', a
 test('production Instance authority adapter writes schema ColdActivating then Ready payloads', async () => {
   const storeNow = new Date('2026-10-07T00:00:00.000Z');
   const store = new ZLinkInMemoryAuthorityStore(
-    { isTargetLive: () => true },
+    { isOwnerLive: () => true, isTargetLive: () => true },
     () => new Date(storeNow)
   );
   const compareExchangeAuthority = store.compareExchangeAuthority.bind(store);
@@ -5825,7 +5825,10 @@ test('production Instance authority adapter writes schema ColdActivating then Re
 });
 
 test('production Instance Ready commit Store rejection is exposed as RequestFailed with the original cause', async () => {
-  const store = new ZLinkInMemoryAuthorityStore({ isTargetLive: () => true });
+  const store = new ZLinkInMemoryAuthorityStore({
+    isOwnerLive: () => true,
+    isTargetLive: () => true
+  });
   const requestPayloads = new Map<string, Uint8Array>();
   const relocationStore: ZLinkRelocationStore = {
     put: async (reference, payload) => {
@@ -5902,7 +5905,10 @@ test('production Instance Ready commit Store rejection is exposed as RequestFail
 });
 
 test('concurrent Instance activation CAS loser returns Unavailable without waiting or routing to the winner', async () => {
-  const store = new ZLinkInMemoryAuthorityStore({ isTargetLive: () => true });
+  const store = new ZLinkInMemoryAuthorityStore({
+    isOwnerLive: () => true,
+    isTargetLive: () => true
+  });
   const roots = new Map<string, Buffer>();
   const relocationStore: ZLinkRelocationStore = {
     put: async (reference, payload) => {

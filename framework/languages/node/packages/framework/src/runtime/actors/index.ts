@@ -29,6 +29,7 @@ import {
   wireReplyFailureException
 } from '../framework-errors-internal';
 import { disposeLifecycleHandlers } from '../handlers/handler-instance-scope';
+import { currentZLinkActorExecution } from './actor-execution-context';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
 import { ZLinkActorCreationCoordinator, type ZLinkActorCreateRequest } from './actor-creation';
 import type { ZLinkActorManagerOptions } from './actor-runtime-contracts';
@@ -217,34 +218,43 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     const completions = this.options.nativeActorCompletionTableProvider?.();
     const entryNodeRid = state.entryNodeRid ?? current.nodeRid;
     if (node === undefined || completions === undefined) return false;
-    const destroyTask = state.getOrStartDestroy(entryNodeRid, async (nativeRef) => {
-      if (nativeRef !== undefined) {
-        const completion = await completions.submit(() => node.destroyActor(nativeRef, 0), signal);
-        try {
-          if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
-            //  Classify the (terminal, fine) pair via the shared translator
-            //  (spec 32-framework-error-model:83-118, 99-108) instead of
-            //  collapsing every destroy failure to NotFound; genuine
-            //  route-not-found fine codes still yield NotFound through the
-            //  shared table.
-            throw wireReplyFailureException(
-              completion.terminalResult,
-              completion.failureErrno,
-              `Actor '${actor.actorId}' destroy failed with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`
-            );
+    const destroyTask = state.getOrStartDestroy(entryNodeRid, (nativeRef) =>
+      this.terminateActor(state, async () => {
+        if (nativeRef !== undefined) {
+          const completion = await completions.submit(
+            () => node.destroyActor(nativeRef, 0),
+            signal
+          );
+          try {
+            if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
+              //  Classify the (terminal, fine) pair via the shared translator
+              //  (spec 32-framework-error-model:83-118, 99-108) instead of
+              //  collapsing every destroy failure to NotFound; genuine
+              //  route-not-found fine codes still yield NotFound through the
+              //  shared table.
+              throw wireReplyFailureException(
+                completion.terminalResult,
+                completion.failureErrno,
+                `Actor '${actor.actorId}' destroy failed with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`
+              );
+            }
+          } finally {
+            closeMeshCompletion(completion);
           }
-        } finally {
-          closeMeshCompletion(completion);
+          state.markNativeActorDestroyed(nativeRef);
         }
-        state.markNativeActorDestroyed(nativeRef);
-      }
-      if (state.actorType !== undefined && state.ownsLocation) {
-        await this.options.locationLifecycle?.releaseActor(state.actorType, actor.actorId, current);
-      }
-      await this.finalizeDestroyedActor(actor.actorId, state);
-    });
+        if (state.actorType !== undefined && state.ownsLocation) {
+          await this.options.locationLifecycle?.releaseActor(
+            state.actorType,
+            actor.actorId,
+            current
+          );
+        }
+        await this.finalizeDestroyedActor(actor.actorId, state);
+      })
+    );
     try {
-      await destroyTask;
+      await this.awaitActorDestroy(state, destroyTask);
     } catch (error) {
       state.clearFailedDestroy(destroyTask);
       throw error;
@@ -548,6 +558,29 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       this.options.metrics?.change(METRIC_NAMES.ActorCount, -1);
     }
   }
+
+  private terminateActor(
+    state: ZLinkActorRuntimeState,
+    terminal: () => Promise<void>
+  ): Promise<void> {
+    const actor = state.actor;
+    const completion =
+      actor === undefined || this.options.terminateActorActivation === undefined
+        ? terminal()
+        : this.options.terminateActorActivation(actor, terminal);
+    return completion;
+  }
+
+  private awaitActorDestroy(
+    state: ZLinkActorRuntimeState,
+    completion: Promise<void>
+  ): Promise<void> {
+    if (currentZLinkActorExecution()?.actorId === state.actorId) {
+      this.detachedTaskRunner.runDetached('Actor terminal cleanup', () => completion);
+      return Promise.resolve();
+    }
+    return completion;
+  }
   async getOrCreateActor(
     actorId: string,
     actorType: string,
@@ -648,25 +681,27 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         `Actor '${actor.context.actorId}' must leave its current SPOT before destroy.`
       );
     }
-    const destroyTask = state.getOrStartDestroy(entryNodeRid, async (actorRef) => {
-      const destroyedActorRef =
-        actorRef === undefined ? undefined : toFrameworkActorRef(actorRef, state.meshName ?? '');
-      if (actorRef !== undefined) {
-        await node.destroyActor(actorRef, 0, destroySignal);
-        state.markNativeActorDestroyed(actorRef);
-      }
-      if (state.actorType !== undefined && state.ownsLocation) {
-        await this.options.locationLifecycle?.releaseActor(
-          state.actorType,
-          actor.context.actorId,
-          destroyedActorRef
-        );
-      }
-      await this.finalizeDestroyedActor(actor.context.actorId, state);
-    });
+    const destroyTask = state.getOrStartDestroy(entryNodeRid, (actorRef) =>
+      this.terminateActor(state, async () => {
+        const destroyedActorRef =
+          actorRef === undefined ? undefined : toFrameworkActorRef(actorRef, state.meshName ?? '');
+        if (actorRef !== undefined) {
+          await node.destroyActor(actorRef, 0, destroySignal);
+          state.markNativeActorDestroyed(actorRef);
+        }
+        if (state.actorType !== undefined && state.ownsLocation) {
+          await this.options.locationLifecycle?.releaseActor(
+            state.actorType,
+            actor.context.actorId,
+            destroyedActorRef
+          );
+        }
+        await this.finalizeDestroyedActor(actor.context.actorId, state);
+      })
+    );
 
     try {
-      await destroyTask;
+      await this.awaitActorDestroy(state, destroyTask);
     } catch (error) {
       state.clearFailedDestroy(destroyTask);
       throw error;

@@ -526,7 +526,9 @@ final class ZLinkActorDispatchSerials {
         try {
             setup.activation().relocationLane().sealClosingAdmission();
             setup.activation()
-                    .executeLifecycle(cleanup)
+                    .relocationLane()
+                    .awaitQuiescence(ZLinkSerialExecutionQueue.Quiescence.APPLICATION)
+                    .thenCompose(ignored -> setup.activation().executeLifecycle(cleanup))
                     .whenComplete((ignored, error) -> completeTeardown(actorId, setup, error));
         } catch (RuntimeException failure) {
             completeTeardown(actorId, setup, failure);

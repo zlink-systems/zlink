@@ -1,4 +1,10 @@
 export * from '../../contracts/Locations';
+import type { ZLinkObjectReserveRequest as ReserveRequest } from '../../contracts/Locations/Authority';
+import type { ZLinkRelocationConfiguration } from '../../contracts/Configuration/RegistrationTypes';
+
+export interface ZLinkObjectReserveRequest extends ReserveRequest {
+  readonly actorRelocationPolicy?: ZLinkRelocationConfiguration<unknown>['kind'];
+}
 export type * from '../../contracts/Locations/Authority';
 export type {
   ZLinkActorLocation,

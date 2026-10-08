@@ -356,8 +356,8 @@ Key와 배치 정보는 Framework 내부 데이터에 다시 넣지 않는다. P
 수용 공간, 현재 사용량과 Store counter는 같은 종류 구분을 사용한다.
 
 **Authority record에는 자동 만료 시간을 두지 않는다.** Owner lease가 끝난 뒤에도 record를
-유지한다. 복구를 담당하는 Framework 작업만 처음 읽은 `StoreVersion`을 조건으로 owner를
-교체하거나 record를 삭제한다. Record가 없으면 Store가 읽은 시각만 반환한다. 없는 record를
+유지한다. Owner 교체와 record 삭제는 [§6.1](#61-read와-cas)의 명시적 작업(`NewOwner`·`Delete`)이나
+조건부 해제로만 하며, 처음 읽은 `StoreVersion`을 조건으로 삼는다. Record가 없으면 Store가 읽은 시각만 반환한다. 없는 record를
 위해 임시 `StoreVersion`이나 generation을 만들지 않는다.
 
 ### 3.4 여러 언어가 같은 Redis record를 읽고 쓰는 방법
@@ -764,10 +764,22 @@ lifecycle이 바뀌어도 이어진다 — 해제하지 않은 모든 allocation
 `Reserved`를 읽었을 때와 startup scan이 이전 lifecycle의 `Creating`을 넘겼을 때 같은 판정을 쓴다.
 Target owner lease가 유효하고 descriptor가 같은 lifecycle이면 해제하지 않는다.
 
+**Owner가 끝난 Actor의 `Active` record도 다시 만들 때 해제한다.** Actor `Create`·`GetOrCreate`가 같은
+ActorId의 `Active` record를 읽었고, 그 record의 owner lease가 없거나 다른 `LeaseGeneration`이거나
+만료됐으며, 생성하는 node에 등록된 그 Actor type의 relocation 정책이 `Disabled`이면 Location
+repository가 그 record를 해제한다. Relocation 진행 정보나 aggregate에 속한 record는 이 해제 대상이
+아니며 그 relocation의 복구 절차를 따른다. 해제는 위 reservation 해제와 같은 조건(authority `StoreVersion`,
+owner lease 상태, descriptor 상태, 수용 공간 record)을 한 batch로 검사하고, authority와 그 incarnation의
+membership을 함께 지우며 active 수용 공간을 반납한다. 해제한 뒤에는 `Missing`에서 새 incarnation을
+만든다 — 이전 incarnation의 상태는 복원하지 않는다. 해제 판정 전에 stable type이 같은지 확인한다(다르면 기존
+`TypeMismatch`). Owner lease가 유효하면 type과 operation에 따른 기존 결과를 반환한다. Owner lease가
+무효이고 생성 node의 해당 Actor type 정책이 `Disabled`가 아니면 `Unavailable`을 반환한다. 이 해제는
+유효한 owner lease를 요구하는 `Delete`와 다른, repository의 조건부 batch다.
+
 **`Conflict`를 받은 작업은 작업 자격을 다시 확인해 이어 간다.** Provider `Conflict`는 아무것도 변경하지
 않았지만 어느 조건이 맞지 않았는지는 알려 주지 않는다. Framework는 authority record를 다시 읽어, 처음
 읽은 상태(처음에 `Missing`이었으면 여전히 `Missing`, 아니면 처음 읽은 `StoreVersion`)와 그 작업에 있는
-reservation identity가 그대로이고 owner lease가 유효한지 확인한다. 그대로면 요청 계산에 필요한 수용 공간·
+reservation identity가 그대로이고 그 작업의 §6.1 자격이 유지되는지 Location repository가 다시 판정한다. 그대로면 요청 계산에 필요한 수용 공간·
 counter·descriptor record를 다시 읽어 조건과 변경 전체를 다시 구성해 요청한다. 그렇지 않으면 그 작업의
 기존 결과 분류를 따른다. Factory와 application callback은 다시 실행하지 않는다. 이 반복은 그 operation의
 deadline 안에서 하며 별도 횟수 상한을 두지 않는다. 다만 relocation target의 `NewOwner`와 `SpotWide`
@@ -1395,7 +1407,7 @@ Host 명령의 상태와 최종 결과는 [Host relocation와 shutdown](05-host-
 Framework는 같은 시점의 목록 읽기로 descriptor와 owner lease 삭제 후보를 찾는다. 각 key를
 다시 읽고 처음 읽은 version이 그대로일 때만 여러 record를 함께 삭제한다.
 
-Actor·Spot의 현재 위치 record는 명시적인 `Delete`로만 제거한다. `Delete`는 `StoreVersion`,
+Actor·Spot의 현재 위치 record는 [§6.1](#61-read와-cas)의 명시적 `Delete`나 조건부 해제로만 제거한다. `Delete`는 `StoreVersion`,
 현재 owner와 사용 중인 수용 공간을 확인한다. Host descriptor가 사라졌다는 이유만으로
 object의 위치 record를 삭제하지 않는다.
 

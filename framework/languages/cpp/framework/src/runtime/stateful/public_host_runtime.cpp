@@ -17,7 +17,6 @@
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
-#include "runtime/utils/poll_interval_wait.hpp"
 
 #include <service_wire_constants.hpp>
 #include <service_wire_pilot_codec.hpp>
@@ -1042,6 +1041,14 @@ void public_host_runtime_t::close () noexcept
           .get ();
         if (!closing_started)
             return;
+    }
+    const auto instance_admissions =
+      _lifecycle_configuration_lane
+        .run ([&] { return std::exchange (_instance_spot_activation_admissions, {}); })
+        .get ();
+    for (const auto &[spot_id, admission] : instance_admissions) {
+        admission->complete (result_t<instance_activation_admission_t>::failure (
+          framework_error_kind_t::shutting_down, "Instance Spot activation target stopped"));
     }
     if (maintenance_closing) {
         try {
@@ -4242,6 +4249,51 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
   std::function<void (instance_spot_activation_result_t)> done)
 {
     auto lifetime = shared_from_this ();
+    const auto spot_id = command.activation.target.spot_id;
+    std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> admission;
+    const auto previous_admission =
+      _lifecycle_configuration_lane
+        .run ([&] {
+            if (_closing || !_started)
+                throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                             "Instance Spot activation target stopped");
+            if (command.activation.target.authority_owner_generation != 0
+                && !_instance_spot_activation_admissions.contains (spot_id))
+                return std::shared_ptr<task_completion_source_t<instance_activation_admission_t>>{};
+            admission =
+              std::make_shared<task_completion_source_t<instance_activation_admission_t>> ();
+            return std::exchange (_instance_spot_activation_admissions[spot_id], admission);
+        })
+        .get ();
+    auto running = std::make_shared<task_t<void>> (
+      dispatch_instance_spot_activation_core (std::move (command), std::move (mailbox_record),
+                                              std::move (done), admission, previous_admission));
+    detail::observe_task_terminal (*running, [lifetime, running, admission,
+                                              spot_id] (const result_t<void> &result) {
+        if (result || !admission)
+            return;
+        lifetime->_lifecycle_configuration_lane
+          .run ([&] {
+              const auto found = lifetime->_instance_spot_activation_admissions.find (spot_id);
+              if (found != lifetime->_instance_spot_activation_admissions.end ()
+                  && found->second == admission)
+                  lifetime->_instance_spot_activation_admissions.erase (found);
+          })
+          .get ();
+        admission->complete (
+          detail::result_access_t::failure<instance_activation_admission_t> (result.exception ()));
+    });
+    co_await *running;
+}
+
+task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
+  protocol::instance_activation_recovery_t command,
+  std::shared_ptr<const mesh::service_mailbox_record_t> mailbox_record,
+  std::function<void (instance_spot_activation_result_t)> done,
+  std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> admission,
+  std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> previous_admission)
+{
+    auto lifetime = shared_from_this ();
     auto owned_command =
       std::make_shared<protocol::instance_activation_recovery_t> (std::move (command));
     auto &request = owned_command->activation;
@@ -4257,8 +4309,26 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
           instance_owner_resolver = _instance_spot_owner;
       })
       .get ();
+    const auto finish_admission = [lifetime, admission, spot_id = request.target.spot_id] (
+                                    instance_activation_admission_t result) {
+        if (!admission)
+            return;
+        lifetime->_lifecycle_configuration_lane
+          .run ([&] {
+              const auto found = lifetime->_instance_spot_activation_admissions.find (spot_id);
+              if (found != lifetime->_instance_spot_activation_admissions.end ()
+                  && found->second == admission)
+                  lifetime->_instance_spot_activation_admissions.erase (found);
+          })
+          .get ();
+        admission->complete (
+          result_t<instance_activation_admission_t>::success (std::move (result)));
+    };
     const auto reply_terminal = [lifetime, owned_command, transport = _transport, mailbox_record,
-                                 done] (instance_spot_activation_result_t result) {
+                                 done,
+                                 finish_admission] (instance_spot_activation_result_t result) {
+        if (result.terminal_result != 0)
+            finish_admission (result);
         if (!done && result.terminal_result != 0) {
             detail::dispatch_error_reporter_t (lifetime->_options.mesh.dispatch).report_lazy ([&] {
                 const auto error = messaging::request_failure_mapper_t{}.reply_header_exception (
@@ -4394,141 +4464,144 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         return output;
     };
     const auto join_existing = [&] (authority_read_result_t current) -> task_t<bool> {
-        for (;;) {
-            const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
-            if (request.target.authority_owner_generation != 0) {
-                // Ready Instance direct의 object generation은 target 판정에 쓰지 않는다.
-                // authority가 없으면 owner fence가 다른 것이다(Spot address messaging §9).
-                if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
-                    || snapshot->authority_owner_generation
-                         != request.target.authority_owner_generation
-                    || snapshot->owner.owner_id != request.target.owner_id
-                    || static_cast<std::uint64_t> (snapshot->owner.lease_generation)
-                         != request.target.owner_lease_generation
-                    || snapshot->allocation.target.node_lifecycle_generation
-                         != request.target.target_node_generation
-                    || snapshot->allocation.target.node_rid.value ()
-                         != zlink::routing_id_t::from (request.target.target_node_routing_id)
-                              .to_string ()) {
-                    // Refused before admission: spotMoving tells the caller that no
-                    // message was accepted (Spot address messaging §9, failover §4.4).
-                    const auto failure =
-                      messaging::request_failure_mapper_t{}.target_failure_reply (
-                        framework_error_kind_t::unavailable,
-                        static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
-                    reply_terminal (
-                      {failure->terminal_result, failure->failure_code, std::nullopt});
-                    co_return true;
-                }
-                request.target.stable_type = snapshot->allocation.stable_type;
-                request.target.mesh_name = snapshot->allocation.target.mesh_name;
-            }
-            if (!snapshot)
-                co_return false;
-            if (snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
-                || snapshot->allocation.stable_type != request.target.stable_type) {
-                reply_terminal (
-                  {107,
-                   static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch),
-                   std::nullopt});
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
+        if (request.target.authority_owner_generation != 0) {
+            // Ready Instance direct의 object generation은 target 판정에 쓰지 않는다.
+            // authority가 없으면 owner fence가 다른 것이다(Spot address messaging §9).
+            if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
+                || snapshot->authority_owner_generation != request.target.authority_owner_generation
+                || snapshot->owner.owner_id != request.target.owner_id
+                || static_cast<std::uint64_t> (snapshot->owner.lease_generation)
+                     != request.target.owner_lease_generation
+                || snapshot->allocation.target.node_lifecycle_generation
+                     != request.target.target_node_generation
+                || snapshot->allocation.target.node_rid.value ()
+                     != zlink::routing_id_t::from (request.target.target_node_routing_id)
+                          .to_string ()) {
+                // Refused before admission: spotMoving tells the caller that no
+                // message was accepted (Spot address messaging §9, failover §4.4).
+                const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+                  framework_error_kind_t::unavailable,
+                  static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
+                reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
                 co_return true;
             }
-            if (snapshot->allocation.state == placement_allocation_state_t::active) {
-                auto ready_state = decode_instance_spot_authority_payload (snapshot->payload);
-                if (!ready_state) {
-                    if (const auto closing = decode_instance_closing_state (snapshot->payload);
-                        closing && closing->stable_type == request.target.stable_type
-                        && closing->spot_id == request.target.spot_id
-                        && closing->object_generation == snapshot->object_generation
-                        && closing->authority_owner_generation
-                             == snapshot->authority_owner_generation) {
-                        ready_state = instance_spot_authority_payload_t{
-                          .state = instance_spot_authority_state_t::closing,
-                          .stable_type = closing->stable_type,
-                          .spot_id = closing->spot_id,
-                          .owner_id = snapshot->owner.owner_id,
-                          .owner_lease_generation =
-                            static_cast<std::uint64_t> (snapshot->owner.lease_generation),
-                          .mesh_name = snapshot->allocation.target.mesh_name,
-                          .node_rid = snapshot->allocation.target.node_rid,
-                          .node_generation = snapshot->allocation.target.node_lifecycle_generation};
-                    }
-                    if (!ready_state) {
-                        reply_terminal ({105,
-                                         static_cast<std::uint32_t> (
-                                           protocol::framework_error_code::requestFailed),
-                                         std::nullopt});
-                        co_return true;
-                    }
+            request.target.stable_type = snapshot->allocation.stable_type;
+            request.target.mesh_name = snapshot->allocation.target.mesh_name;
+        }
+        if (!snapshot)
+            co_return false;
+        if (snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
+            || snapshot->allocation.stable_type != request.target.stable_type) {
+            reply_terminal (
+              {107, static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch),
+               std::nullopt});
+            co_return true;
+        }
+        if (snapshot->allocation.state == placement_allocation_state_t::active) {
+            auto ready_state = decode_instance_spot_authority_payload (snapshot->payload);
+            if (!ready_state) {
+                if (const auto closing = decode_instance_closing_state (snapshot->payload);
+                    closing && closing->stable_type == request.target.stable_type
+                    && closing->spot_id == request.target.spot_id
+                    && closing->object_generation == snapshot->object_generation
+                    && closing->authority_owner_generation
+                         == snapshot->authority_owner_generation) {
+                    ready_state = instance_spot_authority_payload_t{
+                      .state = instance_spot_authority_state_t::closing,
+                      .stable_type = closing->stable_type,
+                      .spot_id = closing->spot_id,
+                      .owner_id = snapshot->owner.owner_id,
+                      .owner_lease_generation =
+                        static_cast<std::uint64_t> (snapshot->owner.lease_generation),
+                      .mesh_name = snapshot->allocation.target.mesh_name,
+                      .node_rid = snapshot->allocation.target.node_rid,
+                      .node_generation = snapshot->allocation.target.node_lifecycle_generation};
                 }
-                if ((ready_state->state != instance_spot_authority_state_t::ready
-                     && ready_state->state != instance_spot_authority_state_t::closing)
-                    || ready_state->stable_type != snapshot->allocation.stable_type
-                    || ready_state->spot_id != request.target.spot_id) {
+                if (!ready_state) {
                     reply_terminal (
                       {105,
                        static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
                        std::nullopt});
                     co_return true;
                 }
-                if (ready_state->state == instance_spot_authority_state_t::closing
-                    && request.target.authority_owner_generation != 0
-                    && !request.target.instance_intent) {
-                    const auto failure =
-                      messaging::request_failure_mapper_t{}.target_failure_reply (
-                        framework_error_kind_t::not_found);
-                    reply_terminal (
-                      {failure->terminal_result, failure->failure_code, std::nullopt});
-                    co_return true;
-                }
-                if (!ready_state->activation_recovery) {
-                    const auto local = status ();
-                    const auto current_rid = zlink::routing_id_t::from (
-                      std::string (snapshot->allocation.target.node_rid.value ()));
-                    if (current_rid.to_bytes () != local.routing_id ().to_bytes ()) {
-                        reject_activation ();
-                        co_return true;
-                    }
-                    bool prepared = false;
-                    try {
-                        prepared = ready_state->state == instance_spot_authority_state_t::closing
-                                   || instance_materializer.prepare (request, *snapshot);
-                    }
-                    catch (...) {
-                        prepared = false;
-                    }
-                    if (!prepared) {
-                        reply_terminal ({105,
-                                         static_cast<std::uint32_t> (
-                                           protocol::framework_error_code::spotCreateFailed),
-                                         std::nullopt});
-                        co_return true;
-                    }
-                    auto running = std::make_shared<task_t<instance_spot_activation_result_t>> (
-                      instance_materializer.dispatch (owned_command, resume_missing, nullptr));
-                    detail::observe_task_terminal (
-                      *running, [running, reply_terminal] (
-                                  const result_t<instance_spot_activation_result_t> &result) {
-                          if (result)
-                              reply_terminal (result.value ());
-                          else
-                              reply_terminal ({105,
-                                               static_cast<std::uint32_t> (
-                                                 protocol::framework_error_code::requestFailed),
-                                               std::nullopt});
-                      });
-                    co_return true;
-                }
             }
-            if (request.target.authority_owner_generation == 0
-                && request.target.deadline_unix_ms <= unix_milliseconds_now ()) {
-                reply_terminal ({101, 0, std::nullopt});
+            if ((ready_state->state != instance_spot_authority_state_t::ready
+                 && ready_state->state != instance_spot_authority_state_t::closing)
+                || ready_state->stable_type != snapshot->allocation.stable_type
+                || ready_state->spot_id != request.target.spot_id) {
+                reply_terminal (
+                  {105, static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
+                   std::nullopt});
                 co_return true;
             }
-            zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
-            current = co_await store->read_authority (authority_key);
+            if (ready_state->state == instance_spot_authority_state_t::closing
+                && request.target.authority_owner_generation != 0
+                && !request.target.instance_intent) {
+                const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+                  framework_error_kind_t::not_found);
+                reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
+                co_return true;
+            }
+            const auto local = status ();
+            const auto current_rid = zlink::routing_id_t::from (
+              std::string (snapshot->allocation.target.node_rid.value ()));
+            if (current_rid.to_bytes () != local.routing_id ().to_bytes ()) {
+                reject_activation ();
+                co_return true;
+            }
+            bool prepared = false;
+            try {
+                prepared = ready_state->state == instance_spot_authority_state_t::closing
+                           || instance_materializer.prepare (request, *snapshot);
+            }
+            catch (...) {
+                prepared = false;
+            }
+            if (!prepared) {
+                reply_terminal (
+                  {105,
+                   static_cast<std::uint32_t> (protocol::framework_error_code::spotCreateFailed),
+                   std::nullopt});
+                co_return true;
+            }
+            auto running = std::make_shared<task_t<instance_spot_activation_result_t>> (
+              instance_materializer.dispatch (owned_command, resume_missing, nullptr));
+            finish_admission (*snapshot);
+            detail::observe_task_terminal (
+              *running, [running, reply_terminal] (
+                          const result_t<instance_spot_activation_result_t> &result) {
+                  if (result)
+                      reply_terminal (result.value ());
+                  else
+                      reply_terminal (
+                        {105,
+                         static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
+                         std::nullopt});
+              });
+            co_return true;
         }
+        if (request.target.authority_owner_generation == 0
+            && request.target.deadline_unix_ms <= unix_milliseconds_now ()) {
+            reply_terminal ({101, 0, std::nullopt});
+            co_return true;
+        }
+        // Local Creating work is joined through its target admission owner.
+        // An authority without that owner cannot authorize a second local Reserve.
+        reject_activation ();
+        co_return true;
     };
+    if (previous_admission) {
+        const auto admitted = co_await previous_admission->task ();
+        if (const auto *failure = std::get_if<instance_spot_activation_result_t> (&admitted)) {
+            reject_activation (*failure);
+            co_return;
+        }
+        if (!(co_await join_existing (
+              authority_read_result_t{std::get<authority_snapshot_t> (admitted)})))
+            reject_activation ();
+        co_return;
+    }
     const auto current = co_await run_blocking_step<authority_read_result_t> (
       [store, authority_key] { return store->read_authority (authority_key); });
     if (co_await join_existing (current)) {
@@ -4669,8 +4742,10 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     }
     const auto &ready_snapshot = created->ready;
     auto activation_terminal = std::make_shared<activation_terminal_t> ();
-    auto result = co_await instance_materializer.dispatch (owned_command, resume_missing,
-                                                           &activation_terminal->gate);
+    auto dispatched =
+      instance_materializer.dispatch (owned_command, resume_missing, &activation_terminal->gate);
+    finish_admission (ready_snapshot);
+    auto result = co_await dispatched;
     activation_terminal->accepted = std::move (result.accepted_turn_terminal);
     result.accepted_turn_terminal = [activation_terminal] { activation_terminal->finish (); };
     try {

@@ -7,6 +7,10 @@
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "../support/owner_lease_time_store.hpp"
+#include "../support/actor_authority_fixture.hpp"
+#include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/spots/spot_runtime.hpp"
+#include <fstream>
 
 #include <gtest/gtest.h>
 #include <zlink/framework/contracts/detail/handler_invocation.hpp>
@@ -349,7 +353,7 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, DescriptorCommitAcceptsConcurrentLease
     EXPECT_FALSE (store.renew_on_descriptor_write);
 }
 
-TEST (ZLinkFrameworkOpaqueStoreProviders, StaleReservationReclaimFencesNewLeaseRenewal)
+TEST (ZLinkFrameworkOpaqueStoreProviders, StaleReservationReclaimRechecksNewLeaseRenewal)
 {
     renew_before_conditional_commit_store_t store;
     store.owner_id = "reclaim-source";
@@ -404,14 +408,23 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, StaleReservationReclaimFencesNewLeaseR
                       target->token};
     store.renew_on_reclaim_write = true;
     const auto reserved = repository.reserve (request).result ().value ();
-    // Location runtime §6.1 requires the observed lease version in the release batch.
-    ASSERT_TRUE (std::holds_alternative<object_reserve_conflict_t> (reserved));
+    // Location runtime §6.1 fences the first batch with the observed lease version.
+    // Renewing the successor lease keeps the original generation ended, so the
+    // unchanged authority remains eligible for the second conditional batch.
+    const auto *replacement = std::get_if<object_reserved_t> (&reserved);
+    ASSERT_NE (replacement, nullptr);
+    EXPECT_GT (replacement->creating.object_generation,
+               std::get<object_reserved_t> (original).creating.object_generation);
     EXPECT_EQ (
       std::get<authority_snapshot_t> (
         repository.read_authority (actor_authority_key (request.key.global_id)).result ().value ())
         .store_version,
-      std::get<object_reserved_t> (original).creating.store_version);
-    EXPECT_EQ (store.reclaim_writes, 1u);
+      replacement->creating.store_version);
+    const auto lease = repository.read_owner_lease (store.owner_id).result ().value ();
+    const auto *live_successor = std::get_if<owner_lease_found_t> (&lease);
+    ASSERT_NE (live_successor, nullptr);
+    EXPECT_EQ (live_successor->token.lease_generation, new_owner->token.lease_generation);
+    EXPECT_EQ (store.reclaim_writes, 2u);
     EXPECT_FALSE (store.renew_on_reclaim_write);
 }
 
@@ -556,6 +569,172 @@ class creation_terminal_failure_store_t final : public location_store_t
     std::optional<std::chrono::system_clock::time_point> terminal_read_store_now;
     std::optional<std::chrono::system_clock::time_point> terminal_write_store_now;
 };
+
+class ActiveActorReclaimTest : public ::testing::TestWithParam<std::tuple<bool, std::string>>
+{
+};
+
+class reclaim_registration_factory_t : public actor_factory_t<actor_t>
+{
+  public:
+    task_t<std::shared_ptr<actor_t>> create (actor_context_t, std::stop_token) override
+    {
+        co_return std::shared_ptr<actor_t>{};
+    }
+};
+
+TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
+{
+    in_memory_location_store_t opaque;
+    provider_location_repository_t provider (opaque);
+    in_memory_location_repository_t memory;
+    location_repository_t &repository = std::get<0> (GetParam ())
+                                          ? static_cast<location_repository_t &> (provider)
+                                          : static_cast<location_repository_t &> (memory);
+    const auto scenario = std::get<1> (GetParam ());
+    const auto old_owner = std::get<owner_lease_claimed_t> (
+                             repository.claim_owner_lease ("reclaim-old", 60s).result ().value ())
+                             .token;
+    const auto new_owner = std::get<owner_lease_claimed_t> (
+                             repository.claim_owner_lease ("reclaim-new", 60s).result ().value ())
+                             .token;
+    const auto publish = [&] (std::string rid, location_owner_token_t owner) {
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "reclaim-mesh";
+        descriptor.rid = zlink::routing_id_t::from (rid);
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.owner_id = owner.owner_id;
+        descriptor.lease_generation = owner.lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.application_version = 1;
+        descriptor.security_identity = rid;
+        descriptor.entry_spot_id = "reclaim-entry-" + rid;
+        descriptor.activation_concurrency.limit = 1;
+        descriptor.object_capabilities.push_back ({placement_object_kind_t::actor, "player",
+                                                   maintenance_policy_kind_t::disabled, false, 0});
+        descriptor.capacity.actors.limit = 1;
+        EXPECT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status,
+                   location_write_status_t::stored);
+        return descriptor;
+    };
+    const auto old_descriptor = publish ("reclaim-source", old_owner);
+    publish ("reclaim-target", new_owner);
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::actor, "reclaim-actor"};
+    request.intent.stable_type = "player";
+    request.target = {"reclaim-mesh", node_rid_t::from_string ("reclaim-source"), 1, old_owner};
+    request.creating_payload = bytes ("creating");
+    request.capacity_bundle.actor_slots = 1;
+    detail::mesh_node_builder_state_t registration ("reclaim-source");
+    registration.spot_builder.add_actor_factory<actor_t, reclaim_registration_factory_t> (
+      "player", std::make_shared<reclaim_registration_factory_t> (),
+      [] (auto &factory) { factory.disable_relocation (); });
+    request.actor_relocation_policy =
+      registration.spot_state->actor_factories.at ("player").relocation.kind;
+    const auto first =
+      std::get<object_reserved_t> (repository.reserve (request).result ().value ());
+    auto ready_payload = bytes ("old-state-and-membership");
+    if ((scenario == "relocation" || scenario == "relocationRecreate")) {
+        auto canonical = encode_actor_authority_payload (actor_authority_payload_t{
+          .stable_type = "player",
+          .actor_id = "reclaim-actor",
+          .current_spot_id = "reclaim-entry",
+          .current_spot_generation = 1,
+          .owner_id = old_owner.owner_id,
+          .owner_lease_generation = static_cast<std::uint64_t> (old_owner.lease_generation),
+          .mesh_name = "reclaim-mesh",
+          .node_rid = request.target.node_rid,
+          .node_generation = 1});
+        std::ifstream fixture (ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH);
+        const auto golden = nlohmann::json::parse (fixture);
+        const auto slot =
+          tests::from_hex (golden.at ("valid").at (0).at ("hex").get<std::string> ());
+        ready_payload = tests::with_relocation_slot (canonical, {slot.begin () + 5, slot.end ()});
+        const auto decoded = decode_direct_actor_authority_payload (ready_payload);
+        ASSERT_TRUE (decoded && decoded->has_relocation_state);
+    }
+    ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+      repository.commit ({request.key, first.fence, ready_payload}).result ().value ()));
+    if (scenario == "liveDescriptorGone")
+        repository.remove_mesh_node ({old_descriptor.mesh_name, old_descriptor.rid}, old_owner)
+          .result ()
+          .value ();
+    if (scenario != "live" && scenario != "liveDescriptorGone")
+        repository.release_owner_lease (old_owner).result ().value ();
+    request.target = {"reclaim-mesh", node_rid_t::from_string ("reclaim-target"), 1, new_owner};
+    if (scenario == "recreate" || scenario == "relocationRecreate")
+        request.actor_relocation_policy = detail::factory_relocation_kind_t::recreate;
+    if (scenario == "typeMismatch")
+        request.intent.stable_type = "different";
+    if (scenario == "race") {
+        auto first_attempt =
+          std::async (std::launch::async, [&] { return repository.reserve (request).result (); });
+        auto second_attempt =
+          std::async (std::launch::async, [&] { return repository.reserve (request).result (); });
+        const auto first_result = first_attempt.get ();
+        const auto second_result = second_attempt.get ();
+        ASSERT_TRUE (first_result)
+          << (first_result.error () ? first_result.error ()->what () : "untyped failure");
+        ASSERT_TRUE (second_result)
+          << (second_result.error () ? second_result.error ()->what () : "untyped failure");
+        EXPECT_EQ (
+          static_cast<int> (std::holds_alternative<object_reserved_t> (first_result.value ()))
+            + static_cast<int> (std::holds_alternative<object_reserved_t> (second_result.value ())),
+          1);
+        return;
+    }
+    if (scenario == "recreate") {
+        const auto next = repository.reserve (request).result ();
+        ASSERT_FALSE (next);
+        EXPECT_EQ (next.error_kind (), framework_error_kind_t::unavailable);
+        return;
+    }
+    const auto retained_before =
+      repository.read_authority (actor_authority_key (request.key.global_id)).result ().value ();
+    const auto next = repository.reserve (request).result ();
+    ASSERT_TRUE (next);
+    if ((scenario == "relocation" || scenario == "relocationRecreate")) {
+        EXPECT_TRUE (std::holds_alternative<object_already_exists_t> (next.value ()));
+        const auto retained_after =
+          repository.read_authority (actor_authority_key (request.key.global_id))
+            .result ()
+            .value ();
+        const auto *before = std::get_if<authority_snapshot_t> (&retained_before);
+        const auto *after = std::get_if<authority_snapshot_t> (&retained_after);
+        ASSERT_NE (before, nullptr);
+        ASSERT_NE (after, nullptr);
+        EXPECT_EQ (after->store_version, before->store_version);
+        EXPECT_EQ (after->object_generation, before->object_generation);
+        EXPECT_EQ (after->payload, ready_payload);
+    } else if (scenario == "live" || scenario == "liveDescriptorGone")
+        EXPECT_TRUE (std::holds_alternative<object_already_exists_t> (next.value ()));
+    else if (scenario == "typeMismatch")
+        EXPECT_TRUE (std::holds_alternative<object_type_mismatch_t> (next.value ()));
+    else {
+        const auto *created = std::get_if<object_reserved_t> (&next.value ());
+        ASSERT_NE (created, nullptr);
+        EXPECT_GT (created->creating.object_generation, first.creating.object_generation);
+        EXPECT_EQ (created->creating.payload, request.creating_payload);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P (RepositoryImplementations,
+                          ActiveActorReclaimTest,
+                          ::testing::Combine (::testing::Bool (),
+                                              ::testing::Values ("expired",
+                                                                 "live",
+                                                                 "liveDescriptorGone",
+                                                                 "recreate",
+                                                                 "typeMismatch",
+                                                                 "race",
+                                                                 "relocation",
+                                                                 "relocationRecreate")));
 
 class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
 {
