@@ -7234,7 +7234,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             .Select(static part => (ReadOnlyMemory<byte>)part.ToArray())
             .ToArray();
         DisposeParts(decodedPayload);
-        RunInboundOperation(() =>
+        RunRoutedOperation(() =>
             CompleteInstanceSpotActivationAsync(operation, target, metadata, payload, nativeReply)
         );
     }
