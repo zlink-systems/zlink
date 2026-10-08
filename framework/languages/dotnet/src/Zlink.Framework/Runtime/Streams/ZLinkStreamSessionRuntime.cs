@@ -683,17 +683,14 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 await ZLinkApplicationJobQueueInvocation
                     .ReleaseForHandlerStartAsync()
                     .ConfigureAwait(false);
-                await _handler.OnDispatchAsync(dispatch, decodedPayload, cancellationToken);
-
-                if (
-                    !decoded.RequestSeq.HasValue
-                    && _flow.Enabled(ZLinkMessageFlowOutcome.Dispatched)
-                )
+                if (_flow.Enabled(ZLinkMessageFlowOutcome.Dispatched))
                     _flow.Trace(
                         new ZLinkMessageFlowEvent(
                             ZLinkMessageFlowOutcome.Dispatched,
                             ZLinkDispatchErrorSurface.StreamSession,
-                            ZLinkDispatchMessageKind.Send,
+                            decoded.RequestSeq.HasValue
+                                ? ZLinkDispatchMessageKind.Request
+                                : ZLinkDispatchMessageKind.Send,
                             decoded.Name,
                             CorrelationId: decoded.CorrelationId
                         )
@@ -701,6 +698,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                             StreamSessionId = Stream.SessionId,
                         }
                     );
+                await _handler.OnDispatchAsync(dispatch, decodedPayload, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
             catch (Exception ex)

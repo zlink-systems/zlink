@@ -519,12 +519,6 @@ class DefaultFanoutChannelBuilder implements ZLinkFanoutChannelBuilder {
     return this;
   }
 
-  setSendTimeout(timeoutMs: number): this {
-    this.channel.publisher ??= {};
-    this.channel.publisher.sendTimeoutMs = timeoutMs;
-    return this;
-  }
-
   enableSubscriber(endpoint?: string): this {
     this.selectSubscriberMode(endpoint === undefined ? 'automatic' : 'manual');
     this.channel.subscriber ??= { manualConnections: [] };

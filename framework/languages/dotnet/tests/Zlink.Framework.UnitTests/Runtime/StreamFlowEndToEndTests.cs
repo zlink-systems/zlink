@@ -17,7 +17,9 @@ public sealed class StreamFlowEndToEndTests
     {
         var builder = Host.CreateApplicationBuilder();
         var flowLogs = new FlowLoggerProvider();
+        var handlerGate = new FlowHandlerGate();
         builder.Logging.AddProvider(flowLogs);
+        builder.Services.AddSingleton(handlerGate);
         builder.Services.AddZLinkFramework(options =>
         {
             options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
@@ -60,6 +62,19 @@ public sealed class StreamFlowEndToEndTests
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Submit<FlowReply>(result => completed.TrySetResult(result));
 
+            Assert.Equal(
+                "request",
+                await handlerGate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            var dispatched = Assert.Single(
+                flowLogs.Messages.Where(line =>
+                    line.Contains($"packet={nameof(FlowRequest)}", StringComparison.Ordinal)
+                    && line.Contains("phase=dispatched", StringComparison.Ordinal)
+                )
+            );
+            Assert.Contains("kind=request", dispatched, StringComparison.Ordinal);
+            handlerGate.Release.TrySetResult();
+
             var callback = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(callback.IsSuccess);
             Assert.Equal("reply", callback.Value?.Value);
@@ -81,7 +96,10 @@ public sealed class StreamFlowEndToEndTests
             var lines = flowLogs
                 .Messages.Where(line => line.Contains($"flow={flowId}", StringComparison.Ordinal))
                 .ToArray();
-            Assert.Equal(2, lines.Length);
+            Assert.Equal(3, lines.Length);
+            Assert.Single(
+                lines.Where(line => line.Contains("phase=dispatched", StringComparison.Ordinal))
+            );
             var replied = Assert.Single(
                 lines.Where(line => line.Contains("phase=replied", StringComparison.Ordinal))
             );
@@ -96,7 +114,71 @@ public sealed class StreamFlowEndToEndTests
             Assert.Equal(sessionId, ReadToken(received, "session"));
             Assert.Equal(sessionId, ReadToken(replied, "session"));
         }
-        finally { }
+        finally
+        {
+            handlerGate.Release.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task Connector_Send_RecordsDispatchedBeforeHandlerCompletes()
+    {
+        var builder = Host.CreateApplicationBuilder();
+        var flowLogs = new FlowLoggerProvider();
+        var handlerGate = new FlowHandlerGate();
+        builder.Logging.AddProvider(flowLogs);
+        builder.Services.AddSingleton(handlerGate);
+        builder.Services.AddZLinkFramework(options =>
+        {
+            options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options
+                .AddStreamNode("flow.stream")
+                .Bind("tcp://127.0.0.1:0")
+                .AddSession<FlowSession>();
+        });
+        using var host = builder.Build();
+
+        try
+        {
+            await host.StartAsync();
+            var endpoint = Assert.IsType<string>(
+                (
+                    await host
+                        .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                        .GetStartedStateForRoutingAsync(CancellationToken.None)
+                )
+                    .StreamNodes.Values.Single()
+                    .BoundEndpoint
+            );
+            await using var connector = ZlinkStreamConnectorFactory.Create(
+                new ZlinkStreamConnectorOptions
+                {
+                    Endpoint = new Uri(endpoint),
+                    DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                    Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                    Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                }
+            );
+            await connector.Connect.Async();
+
+            await connector.Send(new FlowRequest("send")).PacketName(nameof(FlowRequest)).Async();
+            Assert.Equal("send", await handlerGate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            var dispatched = Assert.Single(
+                flowLogs.Messages.Where(line =>
+                    line.Contains($"packet={nameof(FlowRequest)}", StringComparison.Ordinal)
+                    && line.Contains("phase=dispatched", StringComparison.Ordinal)
+                )
+            );
+            Assert.Contains("kind=send", dispatched, StringComparison.Ordinal);
+            handlerGate.Release.TrySetResult();
+            await connector.Close.Async();
+            await host.StopAsync();
+        }
+        finally
+        {
+            handlerGate.Release.TrySetResult();
+            await host.StopAsync();
+        }
     }
 
     [Fact]
@@ -182,7 +264,16 @@ public sealed class StreamFlowEndToEndTests
         }
     }
 
-    private sealed class FlowSession(IZLinkSessionContext context) : IZLinkSession
+    private sealed class FlowHandlerGate
+    {
+        public TaskCompletionSource<string> Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class FlowSession(IZLinkSessionContext context, FlowHandlerGate gate)
+        : IZLinkSession
     {
         public IZLinkSessionContext Context { get; } = context;
 
@@ -203,7 +294,11 @@ public sealed class StreamFlowEndToEndTests
             CancellationToken cancellationToken
         )
         {
-            await Context.Client.Reply(new FlowReply("reply", Context.SessionId)).Async();
+            var request = payload.Decode<FlowRequest>();
+            gate.Entered.TrySetResult(request.Value);
+            await gate.Release.Task.WaitAsync(cancellationToken);
+            if (request.Value == "request")
+                await Context.Client.Reply(new FlowReply("reply", Context.SessionId)).Async();
         }
     }
 }

@@ -103,25 +103,6 @@ test('fanout builder NoDrop value is applied to the binding publisher socket opt
   }
 });
 
-test('fanout builder send timeout is applied to the binding publisher socket option', async () => {
-  const harness = await createHarness({ sendTimeoutMs: 37, subscriberCount: 0 });
-
-  try {
-    assert.equal(harness.publisher.options.sendTimeout, 37);
-  } finally {
-    await harness.dispose();
-  }
-});
-
-test('fanout builder validates its send timeout through registration validation', () => {
-  assert.throws(
-    () => framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {
-      builder.addFanoutChannel('events').setSendTimeout(0);
-    })),
-    /publisher sendTimeoutMs must be an integer between 1 and 2147483647 milliseconds/
-  );
-});
-
 test('NoDrop beacon admission failure is reported and retried on the next interval', async () => {
   const registration = framework.createFrameworkRegistration(
     framework.createFrameworkOptions((builder) => {
@@ -166,13 +147,12 @@ test('NoDrop beacon admission failure is reported and retried on the next interv
   }
 });
 
-async function createHarness({ noDrop, sendTimeoutMs, subscriberCount }) {
+async function createHarness({ noDrop, subscriberCount }) {
   const endpoint = `inproc://framework-fanout-nodrop-${process.pid}-${Date.now()}-${Math.random()}`;
   const options = framework.createFrameworkOptions((builder) => {
     const channel = builder.addFanoutChannel('events')
       .enablePublisher(endpoint);
     if (noDrop !== undefined) channel.setNoDrop(noDrop);
-    if (sendTimeoutMs !== undefined) channel.setSendTimeout(sendTimeoutMs);
   });
   const registration = framework.createFrameworkRegistration(options);
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
