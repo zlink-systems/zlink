@@ -31,6 +31,8 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     [InlineData("differentLeaseGeneration", false)]
     [InlineData("differentLeaseGeneration", true)]
     [InlineData("capacityRace", false)]
+    [InlineData("relocation", false)]
+    [InlineData("relocation", true)]
     public async Task EndedActiveActorRecreation(string scenario, bool inMemory)
     {
         var time = new ManualTimeProvider();
@@ -50,11 +52,26 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         var first = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await repository.ReserveAsync(request)
         );
+        var readyPayload =
+            scenario == "relocation"
+                ? ZLinkRelocationAuthorityPayloadCodec.Encode(
+                    new ZLinkRelocationAuthorityPayload(
+                        "reclaim-relocation",
+                        0,
+                        Guid.NewGuid(),
+                        1,
+                        new byte[32],
+                        "reclaim-target",
+                        1,
+                        new byte[] { 9 }
+                    )
+                )
+                : new byte[] { 9 };
         _ = Assert.IsType<ZLinkObjectCreationCompleteResult.Created>(
             await repository.CompleteCreationAsync(
                 first.Reservation,
                 new ZLinkObjectCreationCompletion.Created(
-                    new byte[] { 9 },
+                    readyPayload,
                     new ZLinkCreationTerminalPublication(
                         new ZLinkCreationOperationId(RoutingId.From("source"), 1, 1, 1),
                         new byte[] { 1 },
@@ -88,6 +105,17 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 await repository.ReserveAsync(next)
             );
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+        }
+        else if (scenario == "relocation")
+        {
+            Assert.IsType<ZLinkObjectReserveResult.AlreadyExists>(
+                await repository.ReserveAsync(next)
+            );
+            var retained = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                await repository.ReadAuthorityAsync(request.Key)
+            );
+            Assert.Equal(first.Reservation.ObjectGeneration, retained.Snapshot.ObjectGeneration);
+            Assert.Equal(readyPayload, retained.Snapshot.Payload.ToArray());
         }
         else if (scenario == "capacityRace")
         {

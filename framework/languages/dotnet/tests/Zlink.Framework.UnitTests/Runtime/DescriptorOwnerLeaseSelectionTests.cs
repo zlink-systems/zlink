@@ -413,8 +413,12 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task ReadyActor_ExpiredOwnerWithDisabledPolicyCreatesNewIncarnation()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadyActor_ExpiredOwnerWithDisabledPolicyCreatesNewIncarnation(
+        bool factoryRegistrationOnly
+    )
     {
         var fixture = await CreateReadyAuthorityFixtureAsync(
             "expired-ready-actor-owner",
@@ -424,6 +428,8 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         try
         {
+            if (factoryRegistrationOnly)
+                fixture.Runtime.Registration.SpotNodes["entry"].ActorRelocations.Clear();
             var previous = await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey);
             fixture.Time.Advance(TimeSpan.FromSeconds(2));
             var manager = new ZLinkActorManagerService(fixture.Runtime);

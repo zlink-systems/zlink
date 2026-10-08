@@ -368,11 +368,11 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         owner,
                         creating,
                         new ZLinkCapacityVector(1, 0, null),
-                        source.Registration.ActorRelocations.TryGetValue(
+                        source.Registration.ActorFactories.TryGetValue(
                             actorType,
                             out var relocation
                         )
-                            ? relocation.PolicyKind
+                            ? relocation.Relocation.PolicyKind
                             : null
                     ),
                     deadline.Token

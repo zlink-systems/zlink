@@ -638,6 +638,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
         {
             if (ownerLive)
                 return false;
+            if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Payload.Span, out _))
+                return false;
             if (request?.ActorRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,

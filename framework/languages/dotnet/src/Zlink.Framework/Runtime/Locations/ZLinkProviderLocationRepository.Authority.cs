@@ -611,13 +611,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         // Relocation authority retains its own recovery protocol.
         if (current.Meta.AggregateFence is not null)
             return StaleAuthorityReclaimResult.RecoveryRequired;
-        if (
-            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                current.Snapshot.Payload.Span,
-                out _
-            )
-            && ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _)
-        )
+        if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _))
             return StaleAuthorityReclaimResult.RecoveryRequired;
         var conditions = new List<ZLinkStoreCondition>
         {
