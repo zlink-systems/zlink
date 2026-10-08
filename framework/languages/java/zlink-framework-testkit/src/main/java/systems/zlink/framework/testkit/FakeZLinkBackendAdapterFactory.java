@@ -691,13 +691,20 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
     private abstract static class FakeSocket extends FakeBackendObject
             implements ZLinkBackendSocket {
+        private String boundEndpoint;
+
         FakeSocket(List<String> calls, String name) {
             super(calls, name);
         }
 
         @Override
         public void bind(String endpoint) {
+            boundEndpoint = endpoint;
             record("bind." + endpoint);
+        }
+
+        public String lastEndpoint() {
+            return boundEndpoint;
         }
     }
 

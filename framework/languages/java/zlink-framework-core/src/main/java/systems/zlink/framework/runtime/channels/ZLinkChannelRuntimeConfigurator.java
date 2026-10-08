@@ -8,6 +8,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSoc
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
+import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
 
 import java.util.UUID;
 import java.util.function.BiConsumer;
@@ -80,10 +81,8 @@ final class ZLinkChannelRuntimeConfigurator {
         sockets.recordListener(
                 ZLinkListenerKind.CLIENT_SERVER,
                 channel.name(),
-                ZLinkChannelSocketRegistry.advertisedEndpoint(
-                        channel.serverBinds().getFirst(),
-                        router,
-                        channel.clientServerAdvertiseHost()));
+                ZLinkListenerIdentity.advertisedEndpoint(
+                        router.lastEndpoint(), channel.clientServerAdvertiseHost()));
         dispatchRegistry.registerClientServer(
                 channel.name(), handlers.sendHandlers(channel), handlers.requestHandlers(channel));
         startRequestLoop.accept(channel.name(), router);
@@ -108,10 +107,8 @@ final class ZLinkChannelRuntimeConfigurator {
                 sockets.recordListener(
                         ZLinkListenerKind.FANOUT,
                         channel.name(),
-                        ZLinkChannelSocketRegistry.advertisedEndpoint(
-                                channel.publisherBinds().getFirst(),
-                                publisher,
-                                channel.fanoutAdvertiseHost()));
+                        ZLinkListenerIdentity.advertisedEndpoint(
+                                publisher.lastEndpoint(), channel.fanoutAdvertiseHost()));
             }
         }
         if (!channel.subscriberEnabled()) {
@@ -138,7 +135,7 @@ final class ZLinkChannelRuntimeConfigurator {
         sockets.registerRouteRouter(channel.name(), router);
         channel.routeConnections().attach(router);
         for (String endpoint : channel.routeBinds()) {
-            router.bind(endpoint);
+            sockets.bindRouteRouter(channel.name(), endpoint);
         }
         dispatchRegistry.registerRoute(
                 channel.name(),

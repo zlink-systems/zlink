@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -28,6 +30,37 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ZLinkFrameworkRuntimeListenerStatusTest {
+    @ParameterizedTest
+    @ValueSource(strings = {"*", "0"})
+    void fanoutListenerStatusPublishesTheBoundPort(String port) {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addFanoutChannel("listener-fanout").enablePublisher("tcp://127.0.0.1:" + port);
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            assertBound(runtime, ZLinkListenerKind.FANOUT, "listener-fanout");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"*", "0"})
+    void routerListenerStatusPublishesTheBoundPort(String port) {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addRouteMesh("listener-mesh")
+                .listen("tcp://127.0.0.1:" + port)
+                .setRoutingId(RoutingId.from("listener-status-mesh"));
+        options.addClientServerChannel("listener-cs")
+                .server()
+                .listen(0)
+                .addRequestHandler(EchoHandler.class, String.class, String.class);
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            assertBound(runtime, ZLinkListenerKind.ROUTE_MESH, "listener-mesh");
+            assertBound(runtime, ZLinkListenerKind.CLIENT_SERVER, "listener-cs");
+        }
+    }
+
     @Test
     void listenerStatusAnswersOnlyWhileTheRuntimeOwnsBoundListeners() {
         ZLinkFrameworkRuntime first =
@@ -150,6 +183,8 @@ final class ZLinkFrameworkRuntimeListenerStatusTest {
         assertEquals(name, status.name());
         assertTrue(status.endpoint().startsWith("tcp://127.0.0.1:"), status.endpoint());
         assertFalse(status.endpoint().endsWith(":0"), status.endpoint());
+        int port = java.net.URI.create(status.endpoint()).getPort();
+        assertTrue(port > 0 && port <= 65_535, status.endpoint());
     }
 
     private static DefaultZLinkFrameworkOptions options() {
