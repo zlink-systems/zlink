@@ -13,22 +13,65 @@ export interface ClassifiedError {
 
 export function classifyError(error: unknown): ClassifiedError {
   if (error instanceof PerfValidationException) {
-    return { namespace: 'harness', key: error.kind, category: error.kind === 'CorrelationExpired' ? 'timeout' : 'failed', publicKind: null, harnessKind: error.kind, connectorCode: null };
+    return {
+      namespace: 'harness',
+      key: error.kind,
+      category: error.kind === 'CorrelationExpired' ? 'timeout' : 'failed',
+      publicKind: null,
+      harnessKind: error.kind,
+      connectorCode: null
+    };
   }
   const shaped = error as { name?: string; kind?: unknown; error?: { code?: unknown } };
-  if (error instanceof Error && shaped.name === 'ZLinkFrameworkException' && typeof shaped.kind === 'number') {
+  if (
+    error instanceof Error &&
+    shaped.name === 'ZLinkFrameworkException' &&
+    typeof shaped.kind === 'number'
+  ) {
     const kind = ZLinkFrameworkErrorKind[shaped.kind];
     if (typeof kind !== 'string') {
-      return { namespace: 'harness', key: 'CollectionFailure', category: 'failed', publicKind: null,
-        harnessKind: 'CollectionFailure', connectorCode: null, unrecognizedFrameworkKind: shaped.kind };
+      return {
+        namespace: 'harness',
+        key: 'CollectionFailure',
+        category: 'failed',
+        publicKind: null,
+        harnessKind: 'CollectionFailure',
+        connectorCode: null,
+        unrecognizedFrameworkKind: shaped.kind
+      };
     }
-    return { namespace: 'byKind', key: kind, category: kind === 'DeadlineExceeded' ? 'timeout' : 'failed', publicKind: kind, harnessKind: null, connectorCode: null };
+    return {
+      namespace: 'byKind',
+      key: kind,
+      category: kind === 'DeadlineExceeded' ? 'timeout' : 'failed',
+      publicKind: kind,
+      harnessKind: null,
+      connectorCode: null
+    };
   }
-  const name = error instanceof Error ? (error.constructor?.name || error.name) : typeof error;
-  if (error instanceof Error && shaped.name === 'ZlinkStreamException' && typeof shaped.error?.code === 'string') {
-    return { namespace: 'language', key: name, category: shaped.error.code === 'requestTimeout' ? 'timeout' : 'failed', publicKind: null, harnessKind: null, connectorCode: shaped.error.code };
+  const name = error instanceof Error ? error.constructor?.name || error.name : typeof error;
+  if (
+    error instanceof Error &&
+    shaped.name === 'ZlinkStreamException' &&
+    typeof shaped.error?.code === 'string'
+  ) {
+    return {
+      namespace: 'language',
+      key: name,
+      category: shaped.error.code === 'requestTimeout' ? 'timeout' : 'failed',
+      publicKind: null,
+      harnessKind: null,
+      connectorCode: shaped.error.code
+    };
   }
   const cancelled = error instanceof Error && error.name === 'AbortError';
   const timedOut = error instanceof Error && error.name === 'TimeoutError';
-  return { namespace: 'language', key: name, category: cancelled ? 'cancelled' : timedOut ? 'timeout' : 'failed', publicKind: null, harnessKind: null, connectorCode: null };
+  return {
+    namespace: 'language',
+    key: name,
+    category: cancelled ? 'cancelled' : timedOut ? 'timeout' : 'failed',
+    publicKind: null,
+    harnessKind: null,
+    connectorCode: null
+  };
 }

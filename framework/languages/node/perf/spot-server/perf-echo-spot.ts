@@ -16,13 +16,22 @@ export class PerfEchoSpot extends ActorlessSpot {}
 
 @zlinkSpotPacketHandler({ spot: () => PerfEchoSpot, packetName: 'PerfEchoRequest' })
 @Injectable()
-export class PerfEchoRequestHandler implements ZLinkSpotRequestHandler<PerfEchoSpot, PerfEchoRequest, PerfEchoReply> {
+export class PerfEchoRequestHandler implements ZLinkSpotRequestHandler<
+  PerfEchoSpot,
+  PerfEchoRequest,
+  PerfEchoReply
+> {
   constructor(
-    @Inject(Measurement) private readonly measurement: Measurement, @Inject(ScenarioMetrics) private readonly metrics: ScenarioMetrics,
+    @Inject(Measurement) private readonly measurement: Measurement,
+    @Inject(ScenarioMetrics) private readonly metrics: ScenarioMetrics,
     @Inject(ROLE_CONFIG) private readonly config: RoleConfig
   ) {}
 
-  async handle(_spot: PerfEchoSpot, request: PerfEchoRequest, _context: ZLinkMessageContext): Promise<PerfEchoReply> {
+  async handle(
+    _spot: PerfEchoSpot,
+    request: PerfEchoRequest,
+    _context: ZLinkMessageContext
+  ): Promise<PerfEchoReply> {
     const received = PerfClock.now();
     const measurement = this.measurement;
     measurement.handlerEnter();
@@ -31,7 +40,14 @@ export class PerfEchoRequestHandler implements ZLinkSpotRequestHandler<PerfEchoS
       const reply = PayloadPattern.reply(request, received);
       measurement.recordReply(request);
       if (request.phase === 'measured') this.metrics.count('spot.applicationHandlerEntries');
-      if (measurement.phase === 'setup' && !this.config.source) measurement.setupEvidence = [{ kind: 'typedProbeReply', source: 'ZLinkSpotRequestHandler<PerfEchoRequest,PerfEchoReply>', observedValue: request.correlationId }];
+      if (measurement.phase === 'setup' && !this.config.source)
+        measurement.setupEvidence = [
+          {
+            kind: 'typedProbeReply',
+            source: 'ZLinkSpotRequestHandler<PerfEchoRequest,PerfEchoReply>',
+            observedValue: request.correlationId
+          }
+        ];
       return reply;
     } catch (error) {
       measurement.recordDiagnostic(error);

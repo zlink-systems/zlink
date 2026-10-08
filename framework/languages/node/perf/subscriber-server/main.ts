@@ -1,6 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ZLINK_FANOUT_RUNTIME } from '@zlink-systems/nestjs';
-import type { ZLinkFanoutHandler, ZLinkFanoutRuntime, ZLinkPublishMessageContext } from '@zlink-systems/framework';
+import type {
+  ZLinkFanoutHandler,
+  ZLinkFanoutRuntime,
+  ZLinkPublishMessageContext
+} from '@zlink-systems/framework';
 import { PerfClock } from '../shared/clock';
 import { PerfPublishEvent } from '../shared/contracts';
 import { Measurement } from '../shared/measurement';
@@ -15,7 +19,10 @@ if (config.scenario !== 'pubsub-fanout-echo' || config.role !== 'subscriber' || 
 // §10.11 Subscriber: the typed fanout handler validates each event and records its unique sequence.
 @Injectable()
 class PerfFanoutHandler implements ZLinkFanoutHandler<PerfPublishEvent> {
-  constructor(@Inject(Measurement) private readonly measurement: Measurement, @Inject(FanoutReceipts) private readonly receipts: FanoutReceipts) {}
+  constructor(
+    @Inject(Measurement) private readonly measurement: Measurement,
+    @Inject(FanoutReceipts) private readonly receipts: FanoutReceipts
+  ) {}
 
   async handle(message: PerfPublishEvent, _context: ZLinkPublishMessageContext): Promise<void> {
     const receivedTicks = PerfClock.now();
@@ -32,20 +39,29 @@ class PerfFanoutHandler implements ZLinkFanoutHandler<PerfPublishEvent> {
 }
 
 const measurement = new Measurement(config, config.source);
-const readiness = new ObjectsReadiness(false, 'No Ready publisher is visible to this Subscriber yet.');
+const readiness = new ObjectsReadiness(
+  false,
+  'No Ready publisher is visible to this Subscriber yet.'
+);
 const receipts = new FanoutReceipts(measurement, config, readiness, cellDirectory);
-runRole({
-  config,
-  objects: readiness,
-  providers: [PerfFanoutHandler, { provide: FanoutReceipts, useValue: receipts }],
-  // Automatic Classic fanout: no endpoint and no subscribe(topic), so this subscriber receives every topic (§10.11).
-  configureFramework: (builder) => {
-    builder.addFanoutChannel(config.channelName!).enableSubscriber().addPublishHandler('PerfPublishEvent', PerfFanoutHandler);
+runRole(
+  {
+    config,
+    objects: readiness,
+    providers: [PerfFanoutHandler, { provide: FanoutReceipts, useValue: receipts }],
+    // Automatic Classic fanout: no endpoint and no subscribe(topic), so this subscriber receives every topic (§10.11).
+    configureFramework: (builder) => {
+      builder
+        .addFanoutChannel(config.channelName!)
+        .enableSubscriber()
+        .addPublishHandler('PerfPublishEvent', PerfFanoutHandler);
+    },
+    prepare: async (app) => {
+      await receipts.prepare(app.get<ZLinkFanoutRuntime>(ZLINK_FANOUT_RUNTIME, { strict: false }));
+    }
   },
-  prepare: async (app) => {
-    await receipts.prepare(app.get<ZLinkFanoutRuntime>(ZLINK_FANOUT_RUNTIME, { strict: false }));
-  }
-}, measurement).catch((error: unknown) => {
+  measurement
+).catch((error: unknown) => {
   console.error(error);
   process.exit(1);
 });

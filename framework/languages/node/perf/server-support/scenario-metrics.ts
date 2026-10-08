@@ -44,8 +44,16 @@ export class ScenarioMetrics {
 
   // §14.1: no public observation of a Spot's mailbox or turn internals; a Spot workload keeps these null with that reason.
   spotInternalsUnsupported(): this {
-    return this.markUnsupported('PUBLIC_OBSERVATION_UNSUPPORTED', 'Public status is a host aggregate; no per-Spot mailbox, turn or resume observation exists.',
-      'spot.mailboxDepth.max', 'spot.mailboxDepth.mean', 'spot.suspendedTurns', 'spot.resumedTurns', 'spot.resumeLatency.p95Ms', 'spot.resumeLatency.p99Ms');
+    return this.markUnsupported(
+      'PUBLIC_OBSERVATION_UNSUPPORTED',
+      'Public status is a host aggregate; no per-Spot mailbox, turn or resume observation exists.',
+      'spot.mailboxDepth.max',
+      'spot.mailboxDepth.mean',
+      'spot.suspendedTurns',
+      'spot.resumedTurns',
+      'spot.resumeLatency.p95Ms',
+      'spot.resumeLatency.p99Ms'
+    );
   }
 
   // A metric family that is the same interval as another (§15.3: spot.remoteCallLatency.* is latency.*).
@@ -70,14 +78,20 @@ export class ScenarioMetrics {
 
   // Only a sample whose operation finished inside the measured window belongs to the window histogram.
   // windowTicks: when the operation this interval belongs to finished (a worker interval ends before its operation does).
-  record(histogramKey: string, startedTicks: bigint, endedTicks: bigint, windowTicks: bigint = endedTicks): void {
+  record(
+    histogramKey: string,
+    startedTicks: bigint,
+    endedTicks: bigint,
+    windowTicks: bigint = endedTicks
+  ): void {
     if (windowTicks >= this.measurement.endTicks) return;
     this.histograms.get(histogramKey)!.histogram.record(endedTicks - startedTicks);
   }
 
   private reset(): void {
     for (const key of this.counts.keys()) this.counts.set(key, 0);
-    for (const [key, entry] of this.histograms) this.histograms.set(key, { prefix: entry.prefix, histogram: new Histogram() });
+    for (const [key, entry] of this.histograms)
+      this.histograms.set(key, { prefix: entry.prefix, histogram: new Histogram() });
     for (const reset of this.resets) reset();
   }
 
@@ -102,7 +116,11 @@ export class ScenarioMetrics {
     }
     for (const [key, { code, reason }] of this.unsupported) {
       snapshot.metrics[key] = null;
-      reasons[`/metrics/${key}`] = nullReason(code, reason, 'spec/server/06-observability/01-runtime-monitoring');
+      reasons[`/metrics/${key}`] = nullReason(
+        code,
+        reason,
+        'spec/server/06-observability/01-runtime-monitoring'
+      );
     }
     for (const [key, { code, reason }] of this.unsupportedHistograms) {
       snapshot.histograms[key] = null;

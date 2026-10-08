@@ -6,7 +6,10 @@ import { PerfMetricsSnapshot } from '../shared/measurement';
 
 // Perf spec §15.4: sequence originals of the PS cells. The Publisher and Subscriber role projects share this file, so the
 // original format has one definition.
-export interface SequenceRange { first: string; last: string }
+export interface SequenceRange {
+  first: string;
+  last: string;
+}
 
 export interface PublisherSequences extends Identity {
   attemptedRanges: SequenceRange[];
@@ -30,14 +33,21 @@ export class SequenceBitSet {
   private readonly chunks = new Map<number, Uint32Array>();
   private size = 0;
 
-  get count(): number { return this.size; }
-  get retainedBytes(): number { return this.chunks.size * CHUNK_WORDS * 4; }
+  get count(): number {
+    return this.size;
+  }
+  get retainedBytes(): number {
+    return this.chunks.size * CHUNK_WORDS * 4;
+  }
 
   // False when the sequence was already in the set.
   trySet(sequence: number): boolean {
     const index = Math.floor(sequence / CHUNK_BITS);
     let chunk = this.chunks.get(index);
-    if (!chunk) { chunk = new Uint32Array(CHUNK_WORDS); this.chunks.set(index, chunk); }
+    if (!chunk) {
+      chunk = new Uint32Array(CHUNK_WORDS);
+      this.chunks.set(index, chunk);
+    }
     const bit = sequence % CHUNK_BITS;
     const mask = 1 << (bit & 31);
     if ((chunk[bit >> 5] & mask) !== 0) return false;
@@ -64,7 +74,10 @@ export class SequenceBitSet {
     };
     const add = (first: number, length: number): void => {
       if (open === undefined) open = first;
-      else if (first !== next) { close(); open = first; }
+      else if (first !== next) {
+        close();
+        open = first;
+      }
       next = first + length;
     };
     for (const index of [...this.chunks.keys()].sort((a, b) => a - b)) {
@@ -73,11 +86,20 @@ export class SequenceBitSet {
       for (let word = 0; word < CHUNK_WORDS; word++) {
         const bits = chunk[word];
         const position = origin + word * 32;
-        if (bits === 0) { close(); continue; }
-        if (bits === 0xffffffff) { add(position, 32); continue; }
+        if (bits === 0) {
+          close();
+          continue;
+        }
+        if (bits === 0xffffffff) {
+          add(position, 32);
+          continue;
+        }
         let bit = 0;
         while (bit < 32) {
-          if (((bits >>> bit) & 1) === 0) { bit++; continue; }
+          if (((bits >>> bit) & 1) === 0) {
+            bit++;
+            continue;
+          }
           let run = 0;
           while (bit + run < 32 && ((bits >>> (bit + run)) & 1) === 1) run++;
           add(position + bit, run);
@@ -91,8 +113,13 @@ export class SequenceBitSet {
 }
 
 // Metric keys a PS role owns or hands to the runner's sequence intersection (§14, §15.4).
-const INTERSECTION_KEYS = ['fanout.subscriberCount', 'fanout.deliveredInWindow', 'fanout.outOfCohortEvents',
-  'fanout.deliveryRatio', 'fanout.deliveryOpsPerSec'];
+const INTERSECTION_KEYS = [
+  'fanout.subscriberCount',
+  'fanout.deliveredInWindow',
+  'fanout.outOfCohortEvents',
+  'fanout.deliveryRatio',
+  'fanout.deliveryOpsPerSec'
+];
 const ECHO_KEYS = ['messages.completed', 'throughput.kops'];
 
 export const FanoutMetrics = {
@@ -110,20 +137,58 @@ export const FanoutMetrics = {
   // Every PS role: the echo outcomes and echo latency do not apply (§10.11); delivery is intersected by the runner.
   applyCommon(snapshot: PerfMetricsSnapshot, hasDeliveryOwner: boolean): void {
     for (const key of INTERSECTION_KEYS)
-      FanoutMetrics.setNull(snapshot, key, 'NOT_APPLICABLE', "Delivery counts come from the runner's intersection of the publisher and subscriber sequence originals (§15.4).");
-    for (const suffix of LATENCY_SUFFIXES) FanoutMetrics.setNull(snapshot, `latency.${suffix}`, 'NOT_APPLICABLE', 'A fanout cell has no echo round trip (§10.11).');
+      FanoutMetrics.setNull(
+        snapshot,
+        key,
+        'NOT_APPLICABLE',
+        "Delivery counts come from the runner's intersection of the publisher and subscriber sequence originals (§15.4)."
+      );
+    for (const suffix of LATENCY_SUFFIXES)
+      FanoutMetrics.setNull(
+        snapshot,
+        `latency.${suffix}`,
+        'NOT_APPLICABLE',
+        'A fanout cell has no echo round trip (§10.11).'
+      );
     for (const key of ['latencyMs']) {
-      MetricCatalog.setNull(snapshot.histograms, snapshot.nullReasons, 'histograms', key, 'NOT_APPLICABLE', 'A fanout cell has no echo round trip (§10.11).');
+      MetricCatalog.setNull(
+        snapshot.histograms,
+        snapshot.nullReasons,
+        'histograms',
+        key,
+        'NOT_APPLICABLE',
+        'A fanout cell has no echo round trip (§10.11).'
+      );
       delete snapshot.nullReasons[`/histograms/${key}/maxNs`];
     }
-    for (const key of ECHO_KEYS) FanoutMetrics.setNull(snapshot, key, 'NOT_APPLICABLE', 'A fanout cell records publish admission, not echo completion (§10.11).');
+    for (const key of ECHO_KEYS)
+      FanoutMetrics.setNull(
+        snapshot,
+        key,
+        'NOT_APPLICABLE',
+        'A fanout cell records publish admission, not echo completion (§10.11).'
+      );
     const code = hasDeliveryOwner ? 'CLOCK_DOMAIN_UNVERIFIED' : 'NOT_APPLICABLE';
     for (const suffix of LATENCY_SUFFIXES)
-      FanoutMetrics.setNull(snapshot, `fanout.deliveryLatency.${suffix}`, code, hasDeliveryOwner
-        ? 'Publisher and Subscriber use process-local monotonic clocks; no shared clock domain is verified (§15.2).' : 'Delivery latency is observed by Subscriber processes.');
+      FanoutMetrics.setNull(
+        snapshot,
+        `fanout.deliveryLatency.${suffix}`,
+        code,
+        hasDeliveryOwner
+          ? 'Publisher and Subscriber use process-local monotonic clocks; no shared clock domain is verified (§15.2).'
+          : 'Delivery latency is observed by Subscriber processes.'
+      );
     for (const key of ['fanoutDeliveryLatencyMs'])
-      MetricCatalog.setNull(snapshot.histograms, snapshot.nullReasons, 'histograms', key, code, hasDeliveryOwner
-        ? 'No verified shared clock domain between Publisher and Subscriber processes (§15.2).' : 'Delivery latency is observed by Subscriber processes.');
+      MetricCatalog.setNull(
+        snapshot.histograms,
+        snapshot.nullReasons,
+        'histograms',
+        key,
+        code,
+        hasDeliveryOwner
+          ? 'No verified shared clock domain between Publisher and Subscriber processes (§15.2).'
+          : 'Delivery latency is observed by Subscriber processes.'
+      );
   },
 
   // The original of this cell is written once and never replaced.
