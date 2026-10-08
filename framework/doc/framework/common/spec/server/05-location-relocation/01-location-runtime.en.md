@@ -854,8 +854,8 @@ lease is valid and the descriptor is the same lifecycle, the reservation isn't r
 
 **An `Active` Actor record whose owner has ended is also released on re-creation.** When an Actor
 `Create` or `GetOrCreate` reads an `Active` record for the same ActorId whose owner lease is missing,
-has a different `LeaseGeneration`, or has expired, and the creating node registers no relocation for that
-Actor type or registers the `Disabled` policy, the Location repository releases that record. A record that carries relocation progress or
+has a different `LeaseGeneration`, or has expired, and the relocation policy registered on the
+creating node for that Actor type is `Disabled`, the Location repository releases that record. A record that carries relocation progress or
 belongs to an aggregate isn't subject to this release and follows that relocation's recovery
 procedure. The
 release checks, in one batch, the same conditions as the reservation release above (authority
@@ -864,8 +864,7 @@ together with that incarnation's membership, and returns the active capacity. Af
 new incarnation is created from `Missing` — the previous incarnation's state isn't restored. Whether the stable type
 matches is checked before the release decision (a different type keeps the existing `TypeMismatch`).
 If the owner lease is valid, the existing result for the type and operation is returned. If the
-owner lease is invalid and the creating node registers a relocation policy
-other than `Disabled` for that Actor type,
+owner lease is invalid and the creating node's policy for that Actor type isn't `Disabled`,
 `Unavailable` is returned. This release is a conditional repository batch, distinct from `Delete`,
 which requires a valid owner lease.
 
