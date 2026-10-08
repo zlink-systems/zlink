@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -16,12 +17,17 @@ import java.util.function.Supplier;
  * this registry; ordinary missing Spot routes do not.
  */
 final class ZLinkJavaInstanceSpotRegistry {
+    private final ZLinkStateLane ingressLane;
     private final Map<String, BiFunction<String, Long, ZLinkBackendSpot>> factories =
             new ConcurrentHashMap<>();
     private final Map<String, ActivationHook> hooks = new ConcurrentHashMap<>();
     private final Map<String, String> stableTypes = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Activation>> activations =
             new ConcurrentHashMap<>();
+
+    ZLinkJavaInstanceSpotRegistry(ZLinkStateLane ingressLane) {
+        this.ingressLane = Objects.requireNonNull(ingressLane, "ingressLane");
+    }
 
     void register(String stableType, BiFunction<String, Long, ZLinkBackendSpot> factory) {
         register(
@@ -87,13 +93,28 @@ final class ZLinkJavaInstanceSpotRegistry {
                             "Instance Spot stable type does not match authority"));
         }
         CompletableFuture<Activation> candidate = new CompletableFuture<>();
-        CompletableFuture<Activation> current = activations.putIfAbsent(spotId, candidate);
-        if (current != null) {
-            while (!activations.replace(spotId, current, candidate)) {
-                current = activations.putIfAbsent(spotId, candidate);
-                if (current == null) break;
-            }
-        }
+        return ingressLane
+                .runAsync(() -> activations.put(spotId, candidate))
+                .thenCompose(
+                        current ->
+                                activateRegistered(
+                                        spotId,
+                                        selected,
+                                        deadlineUnixMs,
+                                        generation,
+                                        restoreFirst,
+                                        candidate,
+                                        current));
+    }
+
+    private CompletionStage<Activation> activateRegistered(
+            String spotId,
+            String selected,
+            long deadlineUnixMs,
+            Supplier<CompletionStage<Long>> generation,
+            java.util.function.Consumer<ZLinkBackendSpot> restoreFirst,
+            CompletableFuture<Activation> candidate,
+            CompletableFuture<Activation> current) {
         if (current != null) {
             var result = new CompletableFuture<Activation>();
             current.whenComplete(
@@ -117,34 +138,46 @@ final class ZLinkJavaInstanceSpotRegistry {
             return result;
         }
         try {
-            generation
-                    .get()
-                    .thenCompose(
-                            objectGeneration -> {
-                                ZLinkBackendSpot spot =
-                                        factories.get(selected).apply(spotId, objectGeneration);
-                                if (spot == null) {
-                                    throw new IllegalStateException(
-                                            "Instance Spot factory returned null");
-                                }
-                                if (spot.lifecycleGeneration() != objectGeneration) {
-                                    throw new IllegalStateException(
-                                            "Instance Spot factory returned a stale generation");
-                                }
-                                return hooks.get(selected)
-                                        .activate(
-                                                selected,
-                                                spotId,
-                                                objectGeneration,
-                                                spot,
-                                                deadlineUnixMs,
-                                                restoreFirst)
-                                        .whenComplete(
-                                                (ignored, failure) -> {
-                                                    if (failure != null) spot.close();
-                                                })
-                                        .thenApply(ignored -> new Activation(selected, spot));
-                            })
+            Supplier<CompletionStage<Activation>> start =
+                    () ->
+                            generation
+                                    .get()
+                                    .thenCompose(
+                                            objectGeneration -> {
+                                                ZLinkBackendSpot spot =
+                                                        factories
+                                                                .get(selected)
+                                                                .apply(spotId, objectGeneration);
+                                                if (spot == null) {
+                                                    throw new IllegalStateException(
+                                                            "Instance Spot factory returned null");
+                                                }
+                                                if (spot.lifecycleGeneration()
+                                                        != objectGeneration) {
+                                                    throw new IllegalStateException(
+                                                            "Instance Spot factory returned a stale"
+                                                                    + " generation");
+                                                }
+                                                return hooks.get(selected)
+                                                        .activate(
+                                                                selected,
+                                                                spotId,
+                                                                objectGeneration,
+                                                                spot,
+                                                                deadlineUnixMs,
+                                                                restoreFirst)
+                                                        .whenComplete(
+                                                                (ignored, failure) -> {
+                                                                    if (failure != null)
+                                                                        spot.close();
+                                                                })
+                                                        .thenApply(
+                                                                ignored ->
+                                                                        new Activation(
+                                                                                selected, spot));
+                                            });
+            hooks.get(selected)
+                    .admit(start)
                     .whenComplete(
                             (value, failure) -> {
                                 if (failure == null) {
@@ -183,15 +216,6 @@ final class ZLinkJavaInstanceSpotRegistry {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("Instance type is not registered"));
         return hook.reserve(envelope);
-    }
-
-    <T> CompletionStage<T> admit(
-            String stableType, java.util.function.Supplier<CompletionStage<T>> work) {
-        ActivationHook hook = hooks.get(stableType);
-        if (hook == null)
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("Instance type is not registered"));
-        return hook.admit(work);
     }
 
     CompletionStage<Void> completed(

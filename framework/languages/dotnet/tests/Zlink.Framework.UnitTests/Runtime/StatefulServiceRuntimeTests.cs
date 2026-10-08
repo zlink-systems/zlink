@@ -4028,6 +4028,61 @@ public sealed partial class StatefulServiceRuntimeTests
     }
 
     [Fact]
+    public async Task SameTargetColdIngressEntersActivationInArrivalOrder()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(context, "fifo-source");
+        await using var target = NewNode(context, "fifo-target");
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetBind($"inproc://fifo-source-{suffix}");
+        var endpoint = $"inproc://fifo-target-{suffix}";
+        target.SetBind(endpoint);
+        source.ConnectPeer(endpoint, target.RoutingId);
+        var activationTarget = new OrderedInstanceSpotActivationTarget();
+        target.SetInstanceSpotActivationTarget(activationTarget);
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
+        try
+        {
+            var activation = new InstanceSpotActivationTarget(
+                "objects",
+                target.RoutingId,
+                target.Status().LifecycleGeneration,
+                "cold-instance",
+                "Sample.InstanceSpot",
+                "descriptor-1"
+            );
+            for (byte operation = 1; operation <= 3; operation++)
+            {
+                using var message = Message.From([operation]);
+                Assert.Equal(
+                    SubmitResult.Ok,
+                    source.ActivateInstanceSpot(
+                        activation,
+                        "caller",
+                        [message],
+                        request: false,
+                        out _,
+                        checked(
+                            (ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds()
+                        ),
+                        TimeSpan.FromSeconds(3)
+                    )
+                );
+            }
+            await WaitUntilAsync(() => activationTarget.Arrivals.Count == 3);
+            Assert.Equal(new byte[] { 1, 2, 3 }, activationTarget.Arrivals.ToArray());
+        }
+        finally
+        {
+            activationTarget.Complete();
+        }
+    }
+
+    [Fact]
     public async Task RemoteInstanceSpotColdActivationDispatchesFirstMessageThroughCommand39()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -5083,6 +5138,34 @@ public sealed partial class StatefulServiceRuntimeTests
                 ServiceWireConstants.FrameworkErrorCode.None,
                 [new byte[] { 7, 6 }]
             );
+        }
+    }
+
+    private sealed class OrderedInstanceSpotActivationTarget : IInstanceSpotActivationTarget
+    {
+        internal System.Collections.Concurrent.ConcurrentQueue<byte> Arrivals { get; } = new();
+        private readonly TaskCompletionSource<InstanceSpotActivationTerminal> _ready = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        internal void Complete() =>
+            _ready.TrySetResult(
+                new InstanceSpotActivationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    Array.Empty<ReadOnlyMemory<byte>>()
+                )
+            );
+
+        public ValueTask<InstanceSpotActivationTerminal> ActivateAsync(
+            InstanceSpotActivationOperation operation,
+            ReadOnlyMemory<byte>? metadata,
+            IReadOnlyList<ReadOnlyMemory<byte>> payload,
+            CancellationToken cancellationToken
+        )
+        {
+            Arrivals.Enqueue(payload[0].Span[0]);
+            return new ValueTask<InstanceSpotActivationTerminal>(_ready.Task);
         }
     }
 
