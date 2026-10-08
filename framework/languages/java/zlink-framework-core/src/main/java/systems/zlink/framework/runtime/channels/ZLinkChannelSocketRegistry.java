@@ -78,7 +78,7 @@ final class ZLinkChannelSocketRegistry {
     private final Map<String, ZLinkBackendPublisherSocket> publishers = new HashMap<>();
     private final Map<String, RoutingId> publisherRoutingIds = new HashMap<>();
     private final Map<String, ZLinkBackendSubscriberSocket> subscribers = new HashMap<>();
-    private final Map<String, ZLinkBackendRouterSocket> routeRouters = new HashMap<>();
+    private final Map<String, RouteRouterRecord> routeRouters = new HashMap<>();
     private final Map<String, ClientServerConnection> clientServerConnections = new HashMap<>();
     private final Map<String, ZLinkClientServerServerDescriptor> clientServerServerDescriptors =
             new HashMap<>();
@@ -220,9 +220,26 @@ final class ZLinkChannelSocketRegistry {
         registerReceiveFlow(socket);
         inStateLane(
                 () -> {
-                    routeRouters.put(channelName, socket);
+                    routeRouters.put(channelName, new RouteRouterRecord(socket, List.of()));
                     routeSocketLocks.put(channelName, new Object());
                     ownedSockets.add(socket);
+                    return null;
+                });
+    }
+
+    void bindRouteRouter(String channelName, String endpoint) {
+        inStateLane(
+                () -> {
+                    RouteRouterRecord record = routeRouters.get(channelName);
+                    record.socket().bind(endpoint);
+                    String boundEndpoint =
+                            ZLinkListenerIdentity.advertisedEndpoint(
+                                    record.socket().lastEndpoint(), null);
+                    List<String> endpoints = new ArrayList<>(record.boundEndpoints());
+                    endpoints.add(boundEndpoint);
+                    routeRouters.put(
+                            channelName,
+                            new RouteRouterRecord(record.socket(), List.copyOf(endpoints)));
                     return null;
                 });
     }
@@ -471,10 +488,10 @@ final class ZLinkChannelSocketRegistry {
                 () -> {
                     Duration timeout =
                             requestTimeoutCore(channelName, timeoutOverride, defaultTimeout);
-                    ZLinkBackendRouterSocket router = routeRouters.get(channelName);
+                    RouteRouterRecord router = routeRouters.get(channelName);
                     if (router != null) {
                         return routerSubmit.apply(
-                                router,
+                                router.socket(),
                                 systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
                                         .remainingTimeout(
                                                 timeout, started, requestNanoTime.getAsLong()));
@@ -626,13 +643,13 @@ final class ZLinkChannelSocketRegistry {
             throw new ZLinkConfigurationException(
                     "SPOT route bridge requires a router channel: " + channelName);
         }
-        ZLinkBackendRouterSocket router = routeRouters.get(channelName);
+        RouteRouterRecord router = routeRouters.get(channelName);
         if (router == null) {
             throw new ZLinkConfigurationException(
                     "route mesh channel is not configured: " + channelName);
         }
         ZLinkBackendSpotRouteBridge bridge = bridgeOwner.get().createRouteBridge();
-        bridge.attachRouterChannel(channelName, router);
+        bridge.attachRouterChannel(channelName, router.socket());
         spotRouteBridges.put(channelName, bridge);
         return bridge;
     }
@@ -1740,7 +1757,11 @@ final class ZLinkChannelSocketRegistry {
     }
 
     ZLinkBackendRouterSocket routeRouter(String channelName) {
-        return inStateLane(() -> routeRouters.get(channelName));
+        return inStateLane(
+                () -> {
+                    RouteRouterRecord record = routeRouters.get(channelName);
+                    return record == null ? null : record.socket();
+                });
     }
 
     Object routeSocketLock(String channelName, Object fallback) {
@@ -1797,7 +1818,7 @@ final class ZLinkChannelSocketRegistry {
                     sources.putAll(servers);
                     sources.putAll(publishers);
                     sources.putAll(subscribers);
-                    sources.putAll(routeRouters);
+                    routeRouters.forEach((name, record) -> sources.put(name, record.socket()));
                     return Map.copyOf(sources);
                 });
     }
@@ -1987,23 +2008,24 @@ final class ZLinkChannelSocketRegistry {
             ChannelRegistration channel,
             List<ZLinkChannelRuntime.AutoConnectSurface> surfaces,
             AutoConnectSnapshot snapshot) {
-        ZLinkBackendRouterSocket router = snapshot.routeRouters().get(channel.name());
-        if (router == null) {
+        RouteRouterRecord record = snapshot.routeRouters().get(channel.name());
+        if (record == null) {
             return;
         }
-        for (int index = 0; index < channel.routeBinds().size(); index++) {
+        ZLinkBackendRouterSocket router = record.socket();
+        for (String endpoint : record.boundEndpoints()) {
             surfaces.add(
                     new ZLinkChannelRuntime.AutoConnectSurface(
                             ZLinkAutoConnectType.ROUTE_MESH,
                             channel.name(),
                             ZLinkLocationRole.ROUTER,
                             channel.routeRoutingId(),
-                            ZLinkListenerIdentity.advertisedEndpoint(router.lastEndpoint(), null),
+                            endpoint,
                             router.peerWeight(),
                             router,
                             channel.routeManualEndpoints()));
         }
-        if (channel.routeBinds().isEmpty()) {
+        if (record.boundEndpoints().isEmpty()) {
             surfaces.add(
                     new ZLinkChannelRuntime.AutoConnectSurface(
                             ZLinkAutoConnectType.ROUTE_MESH,
@@ -2107,8 +2129,11 @@ final class ZLinkChannelSocketRegistry {
             Map<String, RoutingId> serverRoutingIds,
             Map<String, ZLinkBackendPublisherSocket> publishers,
             Map<String, RoutingId> publisherRoutingIds,
-            Map<String, ZLinkBackendRouterSocket> routeRouters,
+            Map<String, RouteRouterRecord> routeRouters,
             Map<ListenerKey, String> listenerEndpoints) {}
+
+    private record RouteRouterRecord(
+            ZLinkBackendRouterSocket socket, List<String> boundEndpoints) {}
 
     private static final class ClientServerConnection {
         private final String connectionId;

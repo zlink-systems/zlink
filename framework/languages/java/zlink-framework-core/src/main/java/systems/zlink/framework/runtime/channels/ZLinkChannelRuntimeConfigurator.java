@@ -135,7 +135,7 @@ final class ZLinkChannelRuntimeConfigurator {
         sockets.registerRouteRouter(channel.name(), router);
         channel.routeConnections().attach(router);
         for (String endpoint : channel.routeBinds()) {
-            router.bind(endpoint);
+            sockets.bindRouteRouter(channel.name(), endpoint);
         }
         dispatchRegistry.registerRoute(
                 channel.name(),
