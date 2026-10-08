@@ -49,6 +49,13 @@ class gamequest_client_scenario_t
             ensure (joined && joined.value ().active_quests.empty (),
                     "player-alice initial join should have no active quests");
 
+            auto bob_initial_join = api_b.request (join_session_req_t{"player-bob"})
+                                      .packet_name (join_session_req_t::packet_name)
+                                      .async<join_session_res_t> ()
+                                      .result ();
+            ensure (bob_initial_join && bob_initial_join.value ().active_quests.empty (),
+                    "player-bob initial join should have no active quests");
+
             auto first_progress = api_a.wait_for<quest_progress_notify_t> ()
                                     .where ([] (const quest_progress_message_t &message) {
                                         const auto &payload = message.payload;
@@ -106,17 +113,28 @@ class gamequest_client_scenario_t
             ensure (duplicate && duplicate.value ().event_id == third_kill.value ().event_id,
                     "duplicate kill idempotency mismatch");
 
+            auto first_herb_progress = api_b.wait_for<quest_progress_notify_t> ()
+                                         .where ([] (const quest_progress_message_t &message) {
+                                             const auto &payload = message.payload;
+                                             return payload.player_id == "player-bob"
+                                                    && payload.progress.quest_id
+                                                         == quest_ids_t::herb_gathering
+                                                    && payload.progress.current_count == 1;
+                                         })
+                                         .timeout (std::chrono::seconds (12))
+                                         .to_future ("first herb progress wait failed");
             api_a.send (collect_item_req_t{"player-bob", "healing-herb", 1, "herb-1"}).submit ();
+            ensure (first_herb_progress.get ().payload.progress.current_count == 1,
+                    "first herb progress push mismatch");
 
             auto bob_joined = api_b.request (join_session_req_t{"player-bob"})
                                 .packet_name (join_session_req_t::packet_name)
                                 .async<join_session_res_t> ()
                                 .result ();
             ensure (static_cast<bool> (bob_joined), "player-bob join failed");
-            /* gameplay event는 one-way라 offline 동안 쌓인 진행이 join 시점에 이미 반영돼 있다는
-             * 보장은 없다. 조회로 반영을 기다린다. */
-            ensure (wait_for_progress (api_b, "player-bob", quest_ids_t::herb_gathering, 1),
-                    "player-bob did not see the offline herb progress");
+            ensure (
+              has_progress (bob_joined.value ().active_quests, quest_ids_t::herb_gathering, 1),
+              "player-bob join did not return the notified herb progress");
 
             auto herb_completed = api_b.wait_for<quest_completed_notify_t> ()
                                     .where ([] (const quest_completed_message_t &message) {
@@ -460,27 +478,6 @@ class gamequest_client_scenario_t
                            .value ()
                            .body;
         ensure (assertion.passed, "server assertion failed");
-    }
-
-    template <typename TClient>
-    static bool wait_for_progress (TClient &client,
-                                   const std::string &player_id,
-                                   const std::string &quest_id,
-                                   int expected_count)
-    {
-        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (12);
-        while (std::chrono::steady_clock::now () < deadline) {
-            auto current = client.request (get_quest_progress_req_t{player_id})
-                             .packet_name (get_quest_progress_req_t::packet_name)
-                             .template async<get_quest_progress_res_t> ()
-                             .result ();
-            if (current
-                && has_progress (current.value ().active_quests, quest_id, expected_count)) {
-                return true;
-            }
-            std::this_thread::sleep_for (std::chrono::milliseconds (100));
-        }
-        return false;
     }
 
     static void ensure (bool condition, const char *message)
