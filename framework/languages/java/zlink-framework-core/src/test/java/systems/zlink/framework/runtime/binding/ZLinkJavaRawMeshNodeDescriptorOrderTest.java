@@ -12,6 +12,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.lang.reflect.Field;
+import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -55,17 +56,24 @@ class ZLinkJavaRawMeshNodeDescriptorOrderTest {
                     });
             assertTrue(blocked.await(2, TimeUnit.SECONDS));
             CompletableFuture<Void> serving = CompletableFuture.runAsync(target::markServiceReady);
+            Field mailboxField = ZLinkStateLane.class.getDeclaredField("mailbox");
+            mailboxField.setAccessible(true);
+            var pendingTurns = (Queue<?>) mailboxField.get(descriptorLane);
+            await(() -> pendingTurns.size() == 1);
 
             source.connectPeer(endpoint, targetRid);
-            // The target admits the HELLO, but its ADMIT waits for the descriptor lane.
-            Thread.sleep(300);
+            // Both the SERVING publication and the HELLO's ADMIT are queued behind the held turn.
+            await(() -> pendingTurns.size() == 2);
             assertTrue(
                     source.peers().stream().noneMatch(p -> p.state() == MeshPeerState.ADMITTED),
                     "admission response left before the pending descriptor publication");
 
             release.countDown();
             serving.get(2, TimeUnit.SECONDS);
-            await(() -> source.readyPeerCount() == 1);
+            // Peer readiness precedes its projection into the channel selector. Observe the
+            // selector that this test asserts rather than treating the peer count as its barrier.
+            await(() -> source.readyChannelMemberCount("orders") == 1);
+            assertEquals(1, source.readyPeerCount());
             assertEquals(1, source.readyChannelMemberCount("orders"));
         } finally {
             release.countDown();
