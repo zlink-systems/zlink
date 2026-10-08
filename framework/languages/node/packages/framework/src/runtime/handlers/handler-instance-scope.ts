@@ -212,7 +212,8 @@ class LifecycleHandlerInstanceScope {
   }
 
   async dispose(detachedTaskRunner: ZLinkDetachedTaskRunner): Promise<void> {
-    const disposeFromActiveInvocation = activeLifecycleScope.getStore() === this;
+    const disposeFromActiveInvocation =
+      this.activeInvocations > 0 && activeLifecycleScope.getStore() === this;
     const disposal = this.beginDisposeCore();
     if (disposal.deferred !== undefined) {
       startOutsideLifecycleInvocation(() => {

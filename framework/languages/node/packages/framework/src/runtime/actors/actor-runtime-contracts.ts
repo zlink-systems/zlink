@@ -49,6 +49,10 @@ export interface ZLinkActorManagerOptions {
     signal?: AbortSignal
   ) => Promise<ZLinkActorCreateResponse | undefined>;
   readonly actorDestroyedCleanup?: (actorId: string) => void;
+  readonly terminateActorActivation?: (
+    actor: ZLinkActor,
+    terminal: () => Promise<void>
+  ) => Promise<void>;
   readonly publishActorAuthority?: (
     actorType: string,
     actorRef: ActorRef,
