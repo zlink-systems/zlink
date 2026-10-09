@@ -852,7 +852,7 @@ checked-in codec tables alone confirm the following.
 **Decode and Admission**
 - A record with an incomplete length, item count, UTF-8 validity, enum/flag value, or topology direction is rejected as a protocol error before application dispatch and never reaches the application.
 - An `update` with a lower `DescriptorRevision` within the same lifecycle, or with different bytes at the same revision, is rejected as a protocol error; resending the same revision with the same bytes leaves state unchanged (idempotent).
-- Inbound traffic other than probe/ACK does not extend the probe round-trip deadline.
+- [Transport liveness §3](05-transport-liveness.en.md#3-routemesh-and-clientserver) owns how the peer deadline is refreshed.
 
 **Relocation Transfer and CAS**
 - Connection-bound accepted work never ends up in a relocation envelope.

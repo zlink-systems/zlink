@@ -189,10 +189,9 @@ selections. The transport options exposed by each topology are only set
 before startup, and a runtime setter isn't provided. RouteMesh SS has no
 Framework-level `MaxMessageSize` option.
 
-Framework service liveness is fixed to a profile that sends a probe
-every 5 seconds regardless of application traffic and must receive the
-matching ACK on the same current connection within 15 seconds. A
-different inbound frame doesn't satisfy the ACK deadline. A C# public
+Framework service liveness uses a fixed 5-second probe and a fixed
+15-second peer deadline. [Transport liveness §3](../../../02-channel-transport/05-transport-liveness.en.md#3-routemesh-and-clientserver) owns how the
+deadline is refreshed. A C# public
 option to change this value isn't provided, and it isn't treated as the
 same setting as the owner lease renew interval.
 

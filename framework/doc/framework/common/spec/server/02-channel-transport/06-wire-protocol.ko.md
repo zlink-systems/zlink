@@ -773,7 +773,7 @@ Schema self-test, 생성된 codec의 golden fixture decode 결과와 checked-in 
   dispatch 전에 protocol error로 거부되어 application에 도달하지 않는다.
 - 같은 lifecycle에서 낮은 `DescriptorRevision`이나 같은 revision에 다른 bytes를 담은 `update`는
   protocol error로 거부되고, 같은 revision·같은 bytes를 다시 보내면 상태가 그대로 유지된다(idempotent).
-- Probe·ACK 외의 inbound traffic을 받아도 probe round-trip deadline은 그대로다.
+- Peer deadline의 갱신은 [Transport liveness §3](05-transport-liveness.ko.md#3-routemesh와-clientserver)이 정한다.
 
 **Relocation 전송과 CAS**
 - Connection-bound accepted work가 relocation envelope에 들어가지 않는다.

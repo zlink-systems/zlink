@@ -64,10 +64,11 @@ Framework는 마지막 정상 확인 뒤 connection을 유지할 수 있는 시�
 - **Framework builder는 이 두 값을 공개하지 않으며, channel·handler·peer마다 다른 값을
   지정할 수도 없다.** 값을 조정 가능하게 만드는 것 자체가 세 연결 방식이 같은 기준을
   사용한다는 계약을 어긴다.
-- **업무 message 수신을 생존 신호로 사용하지 않는다.** 방향이 비대칭이기 때문이다 — peer에서
-  message를 계속 받아도 이 node가 보낸 message가 peer에 도착하는지는 알 수 없다. 수신만으로
-  liveness를 판단하면 한쪽 방향만 끊긴 연결을 정상으로 본다. 일반 application message가
-  connection의 deadline을 연장하지 않는 이유가 이것이다(§3).
+- **Connection에서 받은 record는 종류와 관계없이 그 connection의 생존 증거다.** 한쪽 방향만
+  끊긴 connection은 끊긴 방향의 수신 쪽이 15초 동안 아무 record도 받지 못해 닫고, 그 종료가
+  살아 있는 방향으로 상대에게 전달된다. 따라서 수신을 증거로 사용해도 한쪽 방향 단절은
+  감지된다. Probe·ACK만 증거로 사용하면 application backpressure로 상대 record를 읽지 못하는
+  동안 정상인 상대를 끊는다(§3).
 - **경과 시간·deadline·retention은 언어 runtime의 monotonic clock 하나로 측정한다.** Wall
   clock은 timestamp 표기에만 사용한다. 연결 확인 주기, peer deadline, operation deadline, terminal
   record retention, readiness 대기 상한처럼 "얼마나 지났는가"를 묻는 모든 판정이 대상이다. 호스트
@@ -106,19 +107,25 @@ HWM·PAUSED가 뒤의 liveness record도 늦출 수 있고, 이 문서의 15초 
 2. 해당 ID를 `livenessProbe`에 넣어 보낸다.
 3. 응답을 기다리는 동안 다음 주기가 오면 새 ID를 만들지 않고 같은 ID를 다시 보낸다.
 4. Peer는 받은 ID를 `livenessAck`에 그대로 넣어 반환한다.
-5. 현재 connection이 기다리는 ID와 같은 첫 ACK만 deadline을 다시 15초로 설정한다.
+5. 현재 connection이 기다리는 ID와 같은 첫 ACK가 그 ID를 제거한다.
 
-Connection 하나에는 아직 응답받지 못한 ID를 최대 하나만 유지한다.
+Connection 하나에는 아직 응답받지 못한 ID를 최대 하나만 유지한다. Probe는 application
+traffic이 있어도 5초마다 그대로 보낸다.
+
+**현재 connection에서 record를 받을 때마다 deadline을 다시 15초로 설정한다.** Record는 probe·ACK,
+request·reply·error reply와 일반 application message를 모두 포함한다. RouteMesh에서는 같은
+pair의 Application connection과 Completion connection에서 받은 record가 모두 해당한다.
+Framework가 실제로 receive한 시점에 갱신하며, receive-flow `PAUSED`로 읽지 않은 record는
+갱신하지 않는다.
 
 | 받은 입력 | 현재 connection에 미치는 영향 |
 |---|---|
 | 기다리는 ID와 같은 첫 ACK | 해당 ID를 제거하고 deadline을 다시 15초로 설정한다. |
-| 같은 ACK의 중복 수신 | 상태를 바꾸지 않는다. |
-| 이전 probe ID의 ACK | 상태를 바꾸지 않는다. |
-| 다른 physical connection의 ACK | 현재 connection의 증거로 사용하지 않는다. |
-| 일반 application message | 진단용 마지막 수신 시각만 갱신하고 deadline은 연장하지 않는다. |
+| 같은 ACK의 중복 수신, 이전 probe ID의 ACK | 대기 ID를 바꾸지 않고 deadline을 다시 15초로 설정한다. |
+| 다른 physical connection의 record | 현재 connection의 증거로 사용하지 않는다. |
+| Request·reply·error reply·일반 application message | deadline을 다시 15초로 설정한다. |
 
-15초 안에 올바른 ACK를 받지 못하면 해당 connection을 not-ready로 바꾸고 닫는다.
+15초 동안 현재 connection에서 아무 record도 받지 못하면 해당 connection을 not-ready로 바꾸고 닫는다.
 
 Probe와 ACK는 Framework가 연결 상태만 확인하는 내부 신호다. 업무 payload나 metadata를
 포함하지 않는다. Application queue에 넣거나 handler를 실행하지 않는다.
@@ -130,10 +137,10 @@ sequenceDiagram
 
     Note over A,B: 5초마다, 대기 중인 ID가 없을 때만 새 ID 생성
     A->>B: livenessProbe(id)
-    alt 15초 안에 일치하는 첫 ACK
-        B-->>A: livenessAck(id)
+    alt 15초 안에 B에게서 record 수신(ACK·reply·message)
+        B-->>A: livenessAck(id) 또는 다른 record
         A->>A: [local] deadline을 15초로 재설정
-    else 15초 동안 일치하는 ACK 없음
+    else 15초 동안 B에게서 받은 record 없음
         A->>A: [local] not-ready로 전환, connection 닫기
     end
 ```
@@ -365,14 +372,17 @@ handler에 도달하는 값, connection·runtime snapshot이 보여주는 상태
 
 **양방향 확인**
 
-- RouteMesh·ClientServer가 application traffic 없이 5초마다 probe를 보낸다. Connection마다
+- RouteMesh·ClientServer가 5초마다 probe를 보낸다. Connection마다
   대기 ID는 하나이며 ACK 전에는 같은 ID만 다시 보낸다.
-- 현재 connection의 현재 ID와 같은 첫 ACK만 deadline을 갱신한다. 중복·이전 ID·다른
-  connection의 ACK는 상태를 바꾸지 않는다.
+- 현재 connection의 현재 ID와 같은 첫 ACK만 대기 ID를 제거한다. 현재 connection에서 받은
+  모든 record가 deadline을 갱신하고, 다른 connection의 record는 갱신하지 않는다. Application
+  traffic이 있어도 probe는 5초마다 보낸다.
 - Half-open connection은 15초 안에 not-ready가 된다. Orderly close와 transport 오류는
   즉시 반영한다.
-- Probe와 ACK는 application handler에 전달되지 않는다. 다른 inbound service frame은 peer
-  deadline을 연장하지 않는다.
+- Probe와 ACK는 application handler에 전달되지 않는다.
+- RouteMesh에서 한쪽 node의 Application connection이 `PAUSED`여도 같은 pair의 Completion
+  connection으로 reply를 받는 동안, 그리고 상대가 그 node의 request를 받는 동안 양쪽 모두 연결을
+  유지한다.
 - RouteMesh는 ROUTER-ROUTER 두 physical lane, ClientServer는 DEALER-ROUTER 한 physical lane을
   사용하지만 probe와 ACK는 두 topology 모두 application record로 관찰되고 handler에 전달되지 않는다.
 

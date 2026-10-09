@@ -68,11 +68,12 @@ final time an operation must finish is called a [deadline](../00-foundation/02-g
 - **The framework builder doesn't expose these two values, and different values can't be
   specified per channel, handler, or peer.** Making the value adjustable at all is itself a
   violation of the contract that all three connection methods use the same standard.
-- **Receiving a business message isn't used as a liveness signal.** The reason is
-  directional asymmetry — receiving messages from a peer doesn't show whether messages from
-  this node reach that peer. Using receive traffic alone for liveness would treat a
-  connection broken in one direction as normal. This is why a regular application message
-  doesn't extend a connection's deadline (§3).
+- **Any record received on a connection is evidence that the connection is alive.** When a
+  connection breaks in one direction only, the receiving side of the broken direction gets no
+  record for 15 seconds and closes it, and that close reaches the peer over the direction that
+  still works. Receiving therefore still detects a one-direction break. Using only probe and
+  ACK as evidence would close a healthy peer while application backpressure keeps this node
+  from reading that peer's records (§3).
 - **Elapsed time, deadlines, and retention are measured with the language runtime's
   single monotonic clock.** The wall clock is used only to render timestamps. Every judgment
   that asks "how much time has passed" — the connection check interval, the peer deadline,
@@ -120,21 +121,26 @@ applies.
 3. If the next cycle arrives while waiting for a response, resends the same ID instead of
    building a new one.
 4. The peer returns the received ID as-is in a `livenessAck`.
-5. Only the first ACK matching the ID the current connection is waiting for resets the
-   deadline to 15 seconds.
+5. The first ACK matching the ID the current connection is waiting for removes that ID.
 
-One connection keeps at most one ID still awaiting a response.
+One connection keeps at most one ID still awaiting a response. Probes are still sent every
+5 seconds while application traffic flows.
+
+**Every record received on the current connection resets the deadline to 15 seconds.** A
+record is a probe or ACK, a request, reply, or error reply, or a regular application message.
+In RouteMesh, records received on both the Application connection and the Completion
+connection of the same pair count. The framework resets the deadline when it actually
+receives the record; a record left unread under receive-flow `PAUSED` doesn't reset it.
 
 | Input received | Effect on the current connection |
 |---|---|
 | The first ACK matching the awaited ID | Removes that ID and resets the deadline to 15 seconds. |
-| A duplicate receipt of the same ACK | Doesn't change state. |
-| An ACK for a previous probe ID | Doesn't change state. |
-| ACK from another physical connection | Not used as evidence for the current connection. |
-| A regular application message | Only updates the last-receive time for diagnostics — doesn't extend the deadline. |
+| A duplicate receipt of the same ACK, or an ACK for a previous probe ID | Leaves the awaited ID unchanged and resets the deadline to 15 seconds. |
+| A record from another physical connection | Not used as evidence for the current connection. |
+| A request, reply, error reply, or regular application message | Resets the deadline to 15 seconds. |
 
-If a valid ACK isn't received within 15 seconds, that connection is switched to not-ready and
-closed.
+If no record is received on the current connection for 15 seconds, that connection is
+switched to not-ready and closed.
 
 Probe and ACK are internal signals the framework uses only to check connection status. They
 don't include business payload or metadata. They aren't put on the application queue or run
@@ -147,10 +153,10 @@ sequenceDiagram
 
     Note over A,B: Every 5 seconds, a new ID is built only when no ID is pending
     A->>B: livenessProbe(id)
-    alt First matching ACK within 15 seconds
-        B-->>A: livenessAck(id)
+    alt A record from B within 15 seconds (ACK, reply, or message)
+        B-->>A: livenessAck(id) or another record
         A->>A: [local] reset deadline to 15 seconds
-    else No matching ACK within 15 seconds
+    else No record from B within 15 seconds
         A->>A: [local] switch to not-ready, close connection
     end
 ```
@@ -398,14 +404,18 @@ contract test.
 
 **Bidirectional check**
 
-- RouteMesh/ClientServer sends a probe every 5 seconds with no application traffic. One
+- RouteMesh/ClientServer sends a probe every 5 seconds. One
   pending ID per connection — only the same ID is resent before an ACK.
-- Only the first ACK matching the current connection's current ID refreshes the deadline. A
-  duplicate/previous ID/an ACK from a different connection doesn't change state.
+- Only the first ACK matching the current connection's current ID removes the awaited ID.
+  Every record received on the current connection refreshes the deadline; a record from a
+  different connection doesn't. Probes are sent every 5 seconds even while application
+  traffic flows.
 - A half-open connection becomes not-ready within 15 seconds. Orderly close and transport
   error take effect immediately.
-- Probe and ACK aren't delivered to an application handler. Other inbound service frames
-  don't extend the peer deadline.
+- Probe and ACK aren't delivered to an application handler.
+- In RouteMesh, both nodes keep the connection while one node's Application connection is
+  `PAUSED`, as long as that node receives replies on the pair's Completion connection and the
+  peer receives that node's requests.
 - RouteMesh uses two physical ROUTER-ROUTER lanes and ClientServer uses one
   physical DEALER-ROUTER lane, but probes and ACKs are observed as application
   records in both topologies and aren't delivered to handlers.
