@@ -24,7 +24,7 @@ const {
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Exercise the production sender, STREAM service, backend failure mapping and
-// completion table. Only transport attempts and ready dispatch are supplied here.
+// completion table. Transport attempts and registered completion wiring are supplied here.
 function bindFixture(request) {
   const actor = { nodeRid: 'actor-node', actorId: 'actor-bind-replay', generation: 7n };
   const attempts = [];
@@ -46,20 +46,8 @@ function bindFixture(request) {
   const backend = new ZLinkNodeRawMeshBackend('play', 'session-node', {});
   backend.stateful = runtime;
   const diagnostics = [];
-  const completions = new ZLinkMeshCompletionTable(undefined, d => diagnostics.push(d));
-  backend.readyHandler = () => queueMicrotask(() => {
-    let completion;
-    while ((completion = backend.takeCompletion()) !== undefined) {
-      completions.complete({
-        operationId: completion.operationId,
-        operationKind: completion.operationKind,
-        terminalResult: completion.result.terminalResult,
-        failureErrno: completion.result.failureCode,
-        kindData: completion.result.kindData ?? null,
-        parts: []
-      });
-    }
-  });
+  const completions = new ZLinkMeshCompletionTable(d => diagnostics.push(d));
+  backend.setCompletionHandler((terminal, materialize) => completions.complete(terminal, materialize));
   const service = backend.createStreamSessionService({});
   // Location resolution succeeds before the bind transport scenario starts.
   service.lookupActor = () => backend.observeStateful(OperationKind.ActorLookup, {

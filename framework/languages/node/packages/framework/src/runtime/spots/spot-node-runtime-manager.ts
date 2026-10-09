@@ -62,7 +62,6 @@ import {
 } from '../configuration';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
-import { requireZLinkInfrastructureExecutionArea } from '../execution';
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import {
   type ZLinkMessageFollowOrigin,
@@ -325,6 +324,9 @@ export class ZLinkSpotNodeRuntimeManager {
       let pump: ZLinkMeshDispatchPump | undefined;
       const completions = new ZLinkMeshCompletionTable();
       try {
+        node.setCompletionHandler((terminal, materialize) =>
+          completions.complete(terminal, materialize)
+        );
         node.setBind(bind);
         if (spotNode.router?.advertiseHost !== undefined) {
           node.setAdvertiseHost(spotNode.router.advertiseHost);
@@ -872,17 +874,6 @@ export class ZLinkSpotNodeRuntimeManager {
     owner: ReadyRecord,
     record: ReceiveRecord
   ): Promise<void> {
-    if (record.kind === ReceiveKind.Completion) {
-      requireZLinkInfrastructureExecutionArea();
-      const completions = this.meshCompletions.get(meshName);
-      if (completions === undefined) {
-        throw new ZLinkConfigurationException(
-          `MeshNode '${meshName}' received a completion before its completion table was registered.`
-        );
-      }
-      completions.complete(record);
-      return;
-    }
     const node = this.meshNodes.get(meshName);
     const targetsEntrySpot =
       owner.spotId === null ||
