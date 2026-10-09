@@ -173,6 +173,21 @@ void unlink_writable_wait_locked (
     zlink_assert (previous_count > 0);
 }
 
+bool request_correlation_released (const zlink::socket_completion::reservation_t *reservation_)
+{
+    for (zlink::socket_completion::request_writable_wait_t::const_iterator it =
+           reservation_->request_wait.begin ();
+         it != reservation_->request_wait.end (); ++it) {
+        if (it->first->request_correlation_release_epoch () != it->second)
+            return true;
+    }
+    return false;
+}
+
+void finish_writable_wait_locked (zlink::socket_completion::queue_state_t *state_,
+                                  zlink::socket_completion::reservation_t *current_,
+                                  zlink_send_complete_result_t result_,
+                                  int terminal_errno_);
 }
 
 zlink::socket_completion::reservation_t::reservation_t () :
@@ -240,8 +255,11 @@ int zlink::socket_completion::reserve_writable_wait (queue_state_t *state_,
                                                      const zlink_routing_id_t *peer_rid_,
                                                      reservation_t **reservation_out_,
                                                      zlink_completion_id_t *completion_id_out_,
-                                                     request_writable_wait_t *request_wait_)
+                                                     request_writable_wait_t *request_wait_,
+                                                     bool *published_out_)
 {
+    if (published_out_)
+        *published_out_ = false;
     if (!state_ || !reservation_out_ || !completion_id_out_) {
         errno = EFAULT;
         return -1;
@@ -269,6 +287,16 @@ int zlink::socket_completion::reserve_writable_wait (queue_state_t *state_,
         state_->writable_wait_head = node;
     state_->writable_wait_tail = node;
     state_->writable_waiting_count.fetch_add (1, std::memory_order_release);
+    std::atomic_thread_fence (std::memory_order_seq_cst);
+    // Check only this token while the queue mutex still owns its lifetime.
+    // An earlier release is observed here; a later publisher finds the linked
+    // token under the same mutex. No dequeue can recycle it during the check.
+    if (request_correlation_released (node)) {
+        finish_writable_wait_locked (state_, node, ZLINK_SEND_ADMITTED, 0);
+        state_->changed.notify_all ();
+        if (published_out_)
+            *published_out_ = true;
+    }
     return 0;
 }
 
@@ -388,18 +416,9 @@ int zlink::socket_completion::publish_writable_waiters (
         reservation_t *const next = current->writable_wait_next;
         bool matches = writable_target_matches (current, target_rid_or_null_);
         if (result_ == ZLINK_SEND_ADMITTED) {
-            if (correlation_released_) {
-                matches = false;
-                for (request_writable_wait_t::const_iterator it =
-                       current->request_wait.begin ();
-                     it != current->request_wait.end (); ++it) {
-                    if (it->first->request_correlation_release_epoch ()
-                        != it->second) {
-                        matches = true;
-                        break;
-                    }
-                }
-            } else
+            if (correlation_released_)
+                matches = request_correlation_released (current);
+            else
                 matches = matches && current->request_wait.empty ();
         }
         if (!matches) {

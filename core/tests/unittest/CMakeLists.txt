@@ -66,6 +66,11 @@ set(unittests
     unittest_asio_transport_writev_lifetime
     unittest_control_runtime)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Count the existing epoch observation without instrumenting production Core.
+  list(APPEND unittests unittest_request_writable_registration)
+endif()
+
 # This binary contains several independent socket contracts whose aggregate
 # runtime exceeds the per-test CTest deadline on Windows. Keep the executable
 # shared, but register each existing selector separately on Windows so other
@@ -152,6 +157,10 @@ foreach(test ${unittests})
   endif()
 
   target_link_libraries(${test} testutil-common test-core)
+  if(test STREQUAL "unittest_request_writable_registration")
+    set_property(TARGET ${test} APPEND_STRING PROPERTY LINK_FLAGS
+      " -Wl,--wrap=_ZNK5zlink6pipe_t33request_correlation_release_epochEv")
+  endif()
   set_property(TARGET ${test} PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
 
   if(RT_LIBRARY)
