@@ -89,8 +89,8 @@ specified node doesn't exist or the connection isn't ready, it ends with `NotFou
 
 ### 3.2 Connection Isolation and Reconnect
 
-The Framework reflects orderly close and transport errors immediately, and switches a
-non-responding half-open connection to `not-ready` within the liveness deadline. One peer's
+The Framework reflects orderly close and transport errors immediately. Connection failure
+detection and the transition to not-ready follow [Transport liveness](../02-channel-transport/05-transport-liveness.en.md#3-routemesh-and-clientserver). One peer's
 failure doesn't stop processing by another ready peer or local owner, or turn the whole host
 `Error`.
 

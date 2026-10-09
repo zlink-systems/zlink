@@ -81,8 +81,8 @@ node가 없거나 connection이 준비되지 않으면 `NotFound` 또는 `Unavai
 
 ### 3.2 Connection 격리와 reconnect
 
-Framework는 orderly close와 transport 오류를 즉시 반영하고, 응답이 없는 half-open
-connection을 liveness deadline 안에 `not-ready`로 바꾼다. 한 peer의 장애는 다른 ready peer와
+Framework는 orderly close와 transport 오류를 즉시 반영한다. Connection의 단절 판정 범위와 not-ready
+전환은 [Transport liveness](../02-channel-transport/05-transport-liveness.ko.md#3-routemesh와-clientserver)를 따른다. 한 peer의 장애는 다른 ready peer와
 local owner의 처리를 중단시키거나 host 전체를 `Error`로 바꾸지 않는다.
 
 같은 endpoint의 transport reconnect는 [Core socket `zlink_connect`](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_connect)가

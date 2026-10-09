@@ -376,9 +376,10 @@ connection을 닫아야 하고, 다른 connection의 수신은 이 판정을 바
 - 절차: (a) 대상 connection의 모든 수신 경로를 차단하고 다른 target과의 traffic은 유지한다. (b) A→B
   packet만 차단하고 B→A traffic은 유지한다. 각 경우 public status가 변할 때까지 fixed liveness deadline과
   tolerance로 기다린다.
-- 검증: (a) 대상 connection만 not-ready가 되고 다른 target requests는 성공한다. (b) record를 받지 못하는 B가
-  connection을 닫고, A는 그 종료를 transport disconnect로 관찰한다. B→A 수신이 이어지는 A의 deadline은
-  갱신된다. RouteMesh에서 physical lane 하나만 차단한 경우는 §3의 판정 범위를 따른다.
+- 검증: (a) 대상 connection만 not-ready가 되고 다른 target requests는 성공한다. (b)는 B→A 방향의 record와
+  transport 종료가 A까지 전달되고 A의 수신 처리가 계속되는 조건에서 시험한다. B의 무수신 deadline 종료와
+  A의 실제 disconnect 관찰을 구분해 확인하고, B→A 수신이 이어지는 동안 A의 deadline이 갱신되는지 본다.
+  판정 범위는 Transport liveness §3을 따른다.
 - 세부 동작: [Transport liveness §3](../spec/server/02-channel-transport/05-transport-liveness.ko.md)를
   검증한다.
 

@@ -414,9 +414,10 @@ result?
   target continues. (b) Block only A→B packets while B→A traffic continues. In each case, wait the
   fixed liveness deadline plus tolerance for public status to change.
 - Verification: (a) Only the target connection becomes not-ready, and the other target's requests
-  succeed. (b) B, which receives no record, closes the connection, and A observes the close as a
-  transport disconnect. A's deadline keeps refreshing from B→A receipts. Blocking a single
-  physical lane in RouteMesh follows the detection scope in §3.
+  succeed. (b) Run with B→A records and transport termination forwarded to A and with A
+  continuing to process receives. Check B's no-receipt deadline close separately from A's
+  actual disconnect observation, and check that A's deadline keeps refreshing while B→A
+  receipts continue. The detection scope follows Transport liveness §3.
 - Detailed behavior: verifies [Transport Liveness §3](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
 #### RL-E3 An Old Reply Before Reconnect Does Not Complete A New Request

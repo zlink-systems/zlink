@@ -126,8 +126,10 @@ lane을 읽지 못하는 동안에도 다른 수신이 이어지면 정상인 �
 현재 admitted connection에서 15초 동안 아무 record도 받지 못하면 해당 connection을 not-ready로
 바꾸고 닫는다. 판정 범위는 다음과 같다.
 
-- 한쪽 방향만 끊겨 그 방향의 수신 쪽이 다른 경로로도 record를 받지 못하면, 수신 쪽이 15초 뒤
-  닫고 Core가 그 종료를 상대에게 전달한다.
+- 한쪽 방향이 끊겨 그 방향의 수신 쪽이 같은 admitted connection의 다른 경로로도 record를 받지
+  못하면, 마지막 실제 수신부터 15초 뒤 그 connection을 닫는다. 상대는 Core가 transport 종료를
+  실제로 관찰한 뒤 기존 disconnect 처리에 따라 상태를 바꾸며, 이 관찰이 같은 15초 안에 끝난다고
+  보장하지 않는다.
 - RouteMesh에서는 pair의 어느 lane에서든 record를 받으면 deadline이 갱신되므로, 다른 lane으로
   수신이 이어지는 동안 physical lane 하나의 silent 단절을 15초 안에 감지한다고 보장하지 않는다.
   Core가 lane disconnect를 감지하면 [ZMP §4.1](../../../../../../../core/doc/spec/core/protocol/01-zmp.ko.md#41-request-reply-lane)의 pair 종료 규칙을 따른다.

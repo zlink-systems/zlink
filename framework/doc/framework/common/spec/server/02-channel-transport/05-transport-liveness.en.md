@@ -142,9 +142,11 @@ lane unread, other receipts that keep arriving prevent closing a healthy peer.
 If no record is received on the current admitted connection for 15 seconds, that connection
 is switched to not-ready and closed. The detection scope is as follows.
 
-- When one direction breaks and the receiving side of that direction receives no record on
-  any other path either, the receiving side closes after 15 seconds and Core delivers the
-  close to the peer.
+- If one direction fails and its receiving side receives no record through any other path
+  of the same admitted connection, that side closes the connection 15 seconds after its last
+  actual receipt. The peer changes state through the existing disconnect handling after Core
+  actually observes the transport termination, and that observation isn't guaranteed to
+  complete within the same 15 seconds.
 - In RouteMesh, a record received on either lane of the pair refreshes the deadline, so a
   silent failure of one physical lane isn't guaranteed to be detected within 15 seconds while
   records keep arriving on the other lane. A lane disconnect that Core detects follows the
