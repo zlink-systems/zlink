@@ -243,14 +243,26 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
   }
 
   acquire(signal?: AbortSignal): Promise<ApplicationJobQueuePermit> {
+    return new Promise((resolve, reject) => {
+      const permit = this.acquireOrResume(resolve, reject, signal);
+      if (permit !== undefined) resolve(permit);
+    });
+  }
+
+  acquireOrResume(
+    resume: (permit: ApplicationJobQueuePermit) => void,
+    reject: (reason: unknown) => void,
+    signal?: AbortSignal
+  ): ApplicationJobQueuePermit | undefined {
     if (signal?.aborted === true) {
-      return Promise.reject(abortReason(signal));
+      reject(abortReason(signal));
+      return undefined;
     }
     if (this.waiters.length === 0 && this.permitsInUse() < this.limit()) {
-      return Promise.resolve(this.reserve());
+      return this.reserve();
     }
 
-    return new Promise<ApplicationJobQueuePermit>((resolve, reject) => {
+    new Promise<ApplicationJobQueuePermit>((resolve, reject) => {
       const waiter: CapacityWaiter = {
         resolve,
         reject,
@@ -264,7 +276,10 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
       this.capacityWaitCount += 1n;
       signal?.addEventListener('abort', waiter.abort, { once: true });
       this.drainWaiters();
-    });
+    })
+      .then(resume)
+      .catch(reject);
+    return undefined;
   }
 
   snapshot(): ApplicationJobQueueSnapshot {

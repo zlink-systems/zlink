@@ -203,7 +203,7 @@ function createPair({ endpointOnly, hostAttached, notify }) {
         queues.left.length = 0;
         queues.right.length = 0;
       },
-      async send(target, parts) {
+      submitSend(target, parts) {
         assert.equal(target, remote);
         assert.equal(connected, true);
         if (rejectSubmit !== undefined) {
@@ -211,14 +211,25 @@ function createPair({ endpointOnly, hostAttached, notify }) {
           rejectSubmit = undefined;
           throw error;
         }
-        const record = { sourceRid: rid, routeGeneration, parts: parts.map(part => Buffer.from(part)) };
+        const record = {
+          sourceRid: rid,
+          routeGeneration,
+          parts: parts.map((part) => Buffer.from(part))
+        };
+        const deliver = () => {
+          sent.push(record);
+          queues[remote].push(record);
+        };
         if (heldSubmit !== undefined) {
           const held = heldSubmit;
           heldSubmit = undefined;
-          await held;
+          return { result: SubmitResult.Backpressured, admitted: held.then(deliver) };
         }
-        sent.push(record);
-        queues[remote].push(record);
+        deliver();
+        return { result: SubmitResult.Ok, admitted: Promise.resolve() };
+      },
+      async send(target, parts) {
+        await this.submitSend(target, parts).admitted;
       },
       receive() {
         const record = queues[rid].shift();

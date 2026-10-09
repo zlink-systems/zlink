@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { RawServiceMeshRuntime } = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
 const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
-const { RequestResult, ZLinkBackendResultError } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+const { RequestResult, SubmitResult, ZLinkBackendResultError } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
 //  Core ROUTER §10.1 selects one route per RID; the Framework observes that
@@ -34,6 +34,10 @@ function selectedRouteRuntime(routes) {
       return { drain: () => 0, statusReady: () => true, close() {} };
     },
     routesSnapshot: () => [...routes].map(([routingId, routeGeneration]) => ({ routingId, routeGeneration })),
+    submitSend(target, parts) {
+      sent.push([target, parts[0][3]]);
+      return { result: SubmitResult.Ok, admitted: Promise.resolve() };
+    },
     async send(target, parts) {
       sent.push([target, parts[0][3]]);
     },

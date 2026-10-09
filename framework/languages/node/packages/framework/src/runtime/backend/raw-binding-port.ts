@@ -1,3 +1,10 @@
+import type { SubmitResult } from './runtime-values';
+
+export interface ZLinkRawSendSubmission {
+  readonly result: typeof SubmitResult.Ok | typeof SubmitResult.Backpressured;
+  readonly admitted: Promise<void>;
+}
+
 export interface ZLinkRawReceivedRecord {
   readonly sourceRid: string;
   readonly sourceRoute: Uint8Array;
@@ -49,6 +56,8 @@ export interface ZLinkRawRouterRoute {
 }
 
 export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
+  /** Reports Core submit synchronously; admitted observes only pending admission. */
+  submitSend(targetRid: string, parts: readonly Uint8Array[]): ZLinkRawSendSubmission;
   disconnectRid?(routingId: string): void;
   localEndpoint(): string;
   setRoutingId(routingId: string): void;

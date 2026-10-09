@@ -33,6 +33,7 @@ function fixture(request) {
     setRoutingId() {}, setReceiveFlowState() {}, bind() {}, connectToRoutingId() {}, connect() {},
     disconnect() {}, disconnectRid() {}, close() {}, localEndpoint: () => 'inproc://source-node',
     receive: () => incoming.shift(), send: async () => {},
+    submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }),
     routesSnapshot: () => [...routes].map(([routingId, routeGeneration]) => ({ routingId, routeGeneration })),
     request: async (rid, parts, timeoutMs) => {
       const record = parts[0][3] === 28 ? decodeActorJoin28(parts) : wire.decodeStatefulHeader(parts[0]);

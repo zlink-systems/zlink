@@ -11,6 +11,40 @@ const {
 const OK_BURST_SIZE = 1024;
 const MAX_UNFINISHED_DEPTH = 1;
 
+test('raw router exposes submit result before pending admission completes', (t) => {
+  const pending = new Promise(() => {});
+  let result = zlink.SubmitResult.Ok;
+  const context = zlink.createContext();
+  const createRouterSocket = zlink.createRouterSocket;
+  t.mock.method(zlink, 'createRouterSocket', (value) => {
+    const socket = createRouterSocket(value);
+    t.mock.method(socket, 'send', () => {
+      const operation = {
+        message() {
+          return operation;
+        },
+        submit() {
+          return { result, admitted: pending };
+        }
+      };
+      return operation;
+    });
+    return socket;
+  });
+  const host = new ZLinkNodeRawBindingPort(context).createHost();
+  t.after(() => {
+    host.close();
+    context.close();
+  });
+  const router = host.createRouter();
+  assert.equal(router.submitSend('target', [Buffer.from('control')]).result, zlink.SubmitResult.Ok);
+  result = zlink.SubmitResult.Backpressured;
+  assert.equal(
+    router.submitSend('target', [Buffer.from('control')]).result,
+    zlink.SubmitResult.Backpressured
+  );
+});
+
 test('raw binding port keeps consecutive OK send depth bounded', async t => {
   const neverAdmitted = new Promise(() => {});
   const context = zlink.createContext();

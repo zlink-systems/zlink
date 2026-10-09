@@ -123,6 +123,14 @@ export async function submitBindingAsyncSend(
   operation: ZLinkBindingAsyncSendOperation,
   payload: unknown
 ): Promise<void> {
+  const submission = submitBindingSend(operation, payload);
+  if (submission.result === SubmitResult.Backpressured) await submission.admitted;
+}
+
+export function submitBindingSend(
+  operation: ZLinkBindingAsyncSendOperation,
+  payload: unknown
+): import('../raw-binding-port').ZLinkRawSendSubmission {
   let submission: import('@zlink-systems/zlink').SendSubmission;
   try {
     let current: ZLinkBindingAsyncSendSubmitOperation | undefined;
@@ -137,12 +145,14 @@ export async function submitBindingAsyncSend(
     throw translateBindingResultError(error, 'submit');
   }
   if (submission.result === SubmitResult.Backpressured) {
-    try {
-      await submission.admitted;
-    } catch (error) {
-      throw translateBindingResultError(error, 'completion');
-    }
+    return {
+      result: submission.result,
+      admitted: submission.admitted.catch((error) => {
+        throw translateBindingResultError(error, 'completion');
+      })
+    };
   }
+  return { result: SubmitResult.Ok, admitted: submission.admitted };
 }
 
 export function submitBindingSyncSend(

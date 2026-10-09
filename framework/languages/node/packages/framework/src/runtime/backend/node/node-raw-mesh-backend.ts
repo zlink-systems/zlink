@@ -231,7 +231,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     private readonly bindingPort: ZLinkRawBindingPort,
     private readonly applicationJobQueue?: ApplicationJobQueuePort,
     private readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void,
-    private readonly peerAdmissionSealed?: () => boolean
+    private readonly peerAdmissionSealed?: () => boolean,
+    private readonly infrastructureTaskRunner?: import('../../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -386,6 +387,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       resolveAdvertisedEndpoint: (boundEndpoint) => this.resolveAdvertisedEndpoint(boundEndpoint),
       bindingPort: this.bindingPort,
       applicationJobQueue: this.requireApplicationJobQueue(),
+      onReceiveReady: () => this.onReadable(true, false),
+      infrastructureTaskRunner: this.infrastructureTaskRunner,
       peerAdmissionSealed: this.peerAdmissionSealed,
       onReceiveFlowConfigFailure: this.applicationJobReceiveFlowFailureSink,
       onMailboxReady: (domain) =>

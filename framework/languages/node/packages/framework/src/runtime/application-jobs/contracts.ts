@@ -8,6 +8,12 @@ export interface ApplicationJobPermitPort {
 
 export interface ApplicationJobQueuePort {
   acquire(signal?: AbortSignal): Promise<ApplicationJobPermitPort>;
+  /** Returns a grant now, or registers one FIFO waiter that later calls resume. */
+  acquireOrResume(
+    resume: (permit: ApplicationJobPermitPort) => void,
+    reject: (reason: unknown) => void,
+    signal?: AbortSignal
+  ): ApplicationJobPermitPort | undefined;
   registerReceiveFlowTarget?(
     identity: object,
     applyState: (state: 'running' | 'paused') => void,

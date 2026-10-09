@@ -285,6 +285,7 @@ export class ZLinkSpotNodeRuntimeManager {
         routingId,
         receiveTimeoutMs: spotNode.router?.receiveTimeoutMs,
         applicationJobQueue: this.applicationJobQueue,
+        infrastructureTaskRunner: this.options.detachedTaskRunner,
         applicationJobReceiveFlowFailureSink: this.options.applicationJobReceiveFlowFailureSink,
         peerAdmissionSealed: () => this.options.peerAdmissionSealed?.(spotNodeName) ?? false
       });

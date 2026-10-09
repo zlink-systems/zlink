@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const framework = require('../../packages/framework/dist/internal');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
@@ -31,6 +32,10 @@ for (const withChannel of [true, false]) {
       t.mock.method(raw.router, 'send', async (target, parts) => {
         sent.push({ target, parts: parts.map(part => Buffer.from(part)) });
         if (wire.decodeHeader(parts[0]).command === wire.M6aServiceWireCommand.update) resolvePublished();
+      });
+      t.mock.method(raw.router, 'submitSend', (target, parts) => {
+        sent.push({ target, parts: parts.map(part => Buffer.from(part)) });
+        return { result: SubmitResult.Ok, admitted: Promise.resolve() };
       });
       const local = raw.topology.localDescriptor();
       const admitted = {

@@ -295,6 +295,11 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
       assert.equal(routingId, 'peer-node');
       assert.equal(endpoint, 'tcp://127.0.0.1:28731');
     },
+    submitSend(target: string, parts: readonly Uint8Array[]) {
+      sent.push({ target, parts });
+      completeHello();
+      return { result: SubmitResult.Ok, admitted: Promise.resolve() };
+    },
     async send(target: string, parts: readonly Uint8Array[]) {
       sent.push({ target, parts });
       completeHello();
@@ -709,6 +714,7 @@ test('raw runtime admits a discovered same-RID replacement only after its exact 
     >;
     router: {
       send(targetRid: string, parts: readonly Uint8Array[]): Promise<void>;
+      submitSend: ZLinkRawRouterPort['submitSend'];
       disconnectRid(routingId: string): void;
       disconnect(endpoint: string): void;
     };
@@ -724,6 +730,9 @@ test('raw runtime admits a discovered same-RID replacement only after its exact 
     ): string;
   };
   internal.router = {
+    submitSend() {
+      return { result: SubmitResult.Ok, admitted: Promise.resolve() };
+    },
     async send(): Promise<void> {},
     disconnectRid(routingId): void {
       disconnectedRids.push(routingId);

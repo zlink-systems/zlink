@@ -172,7 +172,8 @@ function testIngressJobOwner(): ApplicationIngressRecordOwner {
     releaseAfterInternalProcessing() {}
   };
   const queue: ApplicationJobQueuePort = {
-    acquire: async () => permit
+    acquire: async () => permit,
+    acquireOrResume: () => permit
   };
   return ApplicationIngressRecordOwner.create(queue, permit, { close() {} });
 }

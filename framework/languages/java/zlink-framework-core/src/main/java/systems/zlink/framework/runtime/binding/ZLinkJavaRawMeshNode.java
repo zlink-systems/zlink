@@ -45,6 +45,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
@@ -99,6 +100,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
@@ -106,6 +108,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -193,13 +196,14 @@ final class ZLinkJavaRawMeshNode
     private volatile MeshNodeState state = MeshNodeState.CREATED;
     private volatile Consumer<ZLinkMeshDispatchRecord> receiver = ZLinkMeshDispatchRecord::close;
     private volatile ZLinkMeshApplicationReceiver applicationReceiver;
-    private volatile systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
-            applicationJobQueue;
+    private volatile ZLinkApplicationJobQueue applicationJobQueue;
     private volatile systems.zlink.framework.runtime.internal.dispatch
                     .ZLinkApplicationJobReceiveFlowController.Registration
             receiveFlowRegistration = () -> {};
     private volatile ZLinkJavaRawSpotNode spotNode;
     private volatile ExecutorService pump;
+    private final AtomicReference<CompletableFuture<ZLinkApplicationJobQueue.Permit>>
+            pendingReceiveAcquire = new AtomicReference<>();
     private volatile long routerHighWaterMark = 16_777_216L;
     private volatile long routerReceiveHighWaterMark = 16_777_216L;
     private volatile Duration routerReceiveTimeout;
@@ -1548,8 +1552,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
-    public void setApplicationJobQueue(
-            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue value) {
+    public void setApplicationJobQueue(ZLinkApplicationJobQueue value) {
         applicationJobQueue = Objects.requireNonNull(value, "applicationJobQueue");
     }
 
@@ -4449,6 +4452,7 @@ final class ZLinkJavaRawMeshNode
             return;
         }
         state = MeshNodeState.STOPPED;
+        ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
         ExecutorService currentPump = pump;
         if (currentPump != null) {
             currentPump.shutdownNow();
@@ -4503,55 +4507,58 @@ final class ZLinkJavaRawMeshNode
         pump =
                 Executors.newSingleThreadExecutor(
                         Thread.ofPlatform().name("zlink-jvm-raw-mesh-" + meshName).factory());
-        pump.execute(
-                () -> {
-                    while (!closed.get()) {
-                        int ready = port.waitForReady(pumpSocket, ingressWaitTimeout);
-                        long now = System.nanoTime();
-                        // This pump is the ROUTER's one route observer (Core
-                        // ROUTER §10.1). Apply selected-route changes before
-                        // the records that the same wait reported.
-                        if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
-                            observeSelectedRoutes();
-                        }
-                        drainPeerCloseRequests();
-                        announceExpectedPeers();
-                        tickLiveness(now);
-                        if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0) {
-                            drainIngressBatch(pumpSocket);
-                        }
-                    }
-                });
+        pump.execute(() -> pumpTurn(pumpSocket));
+    }
+
+    private void pumpTurn(RouterSocket pumpSocket) {
+        if (closed.get()) return;
+        int ready = port.waitForReady(pumpSocket, ingressWaitTimeout);
+        long now = System.nanoTime();
+        // The existing pump remains this ROUTER's one route observer.
+        if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
+            observeSelectedRoutes();
+        }
+        drainPeerCloseRequests();
+        announceExpectedPeers();
+        tickLiveness(now);
+        if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0) {
+            drainIngressBatch(pumpSocket);
+        }
+        if (!closed.get()) {
+            try {
+                pump.execute(() -> pumpTurn(pumpSocket));
+            } catch (RejectedExecutionException stopped) {
+                if (!closed.get()) throw stopped;
+            }
+        }
     }
 
     private void drainIngressBatch(RouterSocket pumpSocket) {
+        if (pendingReceiveAcquire.get() != null || closed.get()) return;
+        drainIngressBatch(pumpSocket, null);
+    }
+
+    private void drainIngressBatch(RouterSocket pumpSocket, ZLinkApplicationJobQueue.Permit grant) {
         long startedAt = System.nanoTime();
         long receivedBytes = 0;
-        List<systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit>
-                permits;
-        try {
-            var queue = applicationJobQueue;
-            permits = queue == null ? List.of() : queue.acquireBatchBlocking(1);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            return;
-        }
-        int consumedPermits = 0;
         int count = 0;
         try {
             while (count < MAX_INGRESS_BATCH && !closed.get()) {
-                if (!permits.isEmpty() && consumedPermits == permits.size()) {
-                    try {
-                        permits =
-                                applicationJobQueue.acquireBatchBlocking(MAX_INGRESS_BATCH - count);
-                        consumedPermits = 0;
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
+                var queue = applicationJobQueue;
+                if (grant == null && queue != null) {
+                    grant =
+                            queue.acquireOrResume(
+                                    pump,
+                                    permit -> drainIngressBatch(pumpSocket, permit),
+                                    pendingReceiveAcquire);
+                    if (closed.get()) {
+                        ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
                         return;
                     }
+                    if (grant == null) return;
                 }
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
-                        permit = permits.isEmpty() ? null : permits.get(consumedPermits++);
+                var permit = grant;
+                grant = null;
                 try {
                     Optional<ZLinkJavaRawServicePort.Inbound> inbound = port.receiveNow(pumpSocket);
                     if (inbound.isEmpty()) {
@@ -4580,9 +4587,7 @@ final class ZLinkJavaRawMeshNode
                 }
             }
         } finally {
-            while (consumedPermits < permits.size()) {
-                permits.get(consumedPermits++).abandonReservation();
-            }
+            if (grant != null) grant.abandonReservation();
         }
     }
 
