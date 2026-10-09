@@ -100,6 +100,8 @@ export type RawServiceIngressHandler = (
 ) => RawServicePumpResult | undefined | Promise<RawServicePumpResult | undefined>;
 
 export interface RawServiceMeshRuntimeOptions {
+  readonly onReceiveReady?: () => void;
+  readonly infrastructureTaskRunner?: import('../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner;
   readonly onPendingOperationsChanged?: () => void;
   readonly descriptor: ServiceNodeDescriptor;
   readonly resolveAdvertisedEndpoint?: (boundEndpoint: string) => string;
@@ -170,6 +172,19 @@ export class RawServiceMeshRuntime {
   private readonly applicationJobQueue: ApplicationJobQueuePort;
   private readonly peerAdmissionSealed?: () => boolean;
   private readonly applicationJobStop = new AbortController();
+  private receiveAcquisition?: Promise<ApplicationJobPermitPort>;
+  private receivePermit?: ApplicationJobPermitPort;
+  private readonly controlSends = new Map<
+    string,
+    {
+      readonly task: Promise<boolean>;
+      next?: () => Promise<boolean>;
+      current?: () => boolean;
+    }
+  >();
+  private infrastructureFailure?: { readonly error: unknown };
+  private readonly onReceiveReady?: () => void;
+  private readonly infrastructureTaskRunner?: RawServiceMeshRuntimeOptions['infrastructureTaskRunner'];
   private readonly onPeerNotRequired?: RawServiceMeshRuntimeOptions['onPeerNotRequired'];
   private readonly onPeerDisconnected?: RawServiceMeshRuntimeOptions['onPeerDisconnected'];
   private readonly onProtocolError?: RawServiceMeshRuntimeOptions['onProtocolError'];
@@ -183,6 +198,8 @@ export class RawServiceMeshRuntime {
   private closed = false;
 
   constructor(options: RawServiceMeshRuntimeOptions) {
+    this.onReceiveReady = options.onReceiveReady;
+    this.infrastructureTaskRunner = options.infrastructureTaskRunner;
     this.operations = new OperationRegistry(undefined, options.onPendingOperationsChanged);
     this.descriptor = options.descriptor;
     this.topology = new ServiceTopologyRegistry(options.descriptor);
@@ -371,7 +388,7 @@ export class RawServiceMeshRuntime {
     for (const listener of this.peerConnectionIntentRemoved) listener(nodeRoutingId);
   }
 
-  async announcePeer(nodeRoutingId: string): Promise<boolean> {
+  announcePeer(nodeRoutingId: string): Promise<boolean> {
     const expected = this.expectedPeers.get(nodeRoutingId);
     const generation = this.selectedRoutes.get(nodeRoutingId);
     if (
@@ -380,17 +397,23 @@ export class RawServiceMeshRuntime {
       expected.helloSubmittedGeneration === generation ||
       this.peerAdmissionSealed?.() === true
     )
-      return false;
-    const accepted = await this.send(nodeRoutingId, [
-      encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
-    ]);
-    if (
-      accepted &&
+      return Promise.resolve(false);
+    const current = () =>
       this.expectedPeers.get(nodeRoutingId) === expected &&
-      this.selectedRoutes.get(nodeRoutingId) === generation
-    )
-      expected.helloSubmittedGeneration = generation;
-    return accepted;
+      this.selectedRoutes.get(nodeRoutingId) === generation;
+    return this.startControlSend(
+      nodeRoutingId,
+      M6aServiceWireCommand.hello,
+      () =>
+        this.send(
+          nodeRoutingId,
+          [encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())],
+          () => {
+            if (current()) expected.helloSubmittedGeneration = generation;
+          }
+        ),
+      current
+    );
   }
 
   isPeerRouteReady(nodeRoutingId: string, lifecycleGeneration?: bigint): boolean {
@@ -607,6 +630,18 @@ export class RawServiceMeshRuntime {
     nowMs = performance.now(),
     observe?: RawServicePumpObserver
   ): Promise<RawServicePumpResult> {
+    const result = await this.receiveOne(nowMs, observe);
+    const acquisition = this.receiveAcquisition;
+    if (acquisition === undefined) return result;
+    // A single receive operation may await its FIFO grant. Infrastructure
+    // rounds use receiveOne directly and end while that grant is pending.
+    try {
+      await acquisition;
+    } catch (error) {
+      if (this.closed) return 'noData';
+      throw error;
+    }
+    if (this.closed) return 'noData';
     return this.receiveOne(nowMs, observe);
   }
 
@@ -616,6 +651,7 @@ export class RawServiceMeshRuntime {
 
   /** Returns whether a receive budget ended before no-data; idle ticks only maintain peers. */
   async pumpBatch(receiveReady = true, routeReady = false): Promise<boolean> {
+    this.observeInfrastructureFailure();
     if (routeReady) await this.observeSelectedRoutes();
     const startedAtMs = performance.now();
     let messages = 0;
@@ -639,8 +675,11 @@ export class RawServiceMeshRuntime {
         break;
     }
     if (!this.closed) {
-      await this.announceExpectedPeers();
-      await this.tickLiveness();
+      for (const nodeRoutingId of this.expectedPeers.keys()) {
+        if (this.topology.peer(nodeRoutingId) === undefined)
+          await this.observeControlAdmission(this.announcePeer(nodeRoutingId));
+      }
+      this.tickLiveness();
     }
     return receiveReady && messages > 0;
   }
@@ -650,13 +689,33 @@ export class RawServiceMeshRuntime {
     observe?: RawServicePumpObserver
   ): Promise<RawServicePumpResult> {
     const router = this.requireStarted();
-    let permit: ApplicationJobPermitPort;
-    try {
-      permit = await this.applicationJobQueue.acquire(this.applicationJobStop.signal);
-    } catch (error) {
-      if (this.closed || this.applicationJobStop.signal.aborted) return 'noData';
-      throw error;
+    this.observeInfrastructureFailure();
+    if (this.receivePermit === undefined && this.receiveAcquisition === undefined) {
+      const acquisition = this.applicationJobQueue.acquire(this.applicationJobStop.signal);
+      this.receiveAcquisition = acquisition;
+      let resume: (() => void) | undefined;
+      acquisition.then(
+        (permit) => {
+          this.receiveAcquisition = undefined;
+          if (this.closed) permit.releaseAfterInternalProcessing();
+          else {
+            this.receivePermit = permit;
+            resume?.();
+          }
+        },
+        (error) => {
+          this.receiveAcquisition = undefined;
+          if (!this.applicationJobStop.signal.aborted) this.reportInfrastructureFailure(error);
+        }
+      );
+      // An immediate FIFO grant belongs to this turn. A pending grant resumes
+      // the same receive owner without holding the infrastructure round.
+      await Promise.resolve();
+      resume = this.onReceiveReady;
     }
+    const permit = this.receivePermit;
+    this.receivePermit = undefined;
+    if (permit === undefined) return 'noData';
     if (this.closed) {
       permit.releaseAfterInternalProcessing();
       return 'noData';
@@ -744,7 +803,7 @@ export class RawServiceMeshRuntime {
       (received.parts.length === 1 && received.parts[0]!.byteLength === 0)
     ) {
       if (this.peerAdmissionSealed?.() === true) return 'dropped';
-      return (await this.send(received.sourceRid, [
+      return (await this.sendControl(received.sourceRid, [
         encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
       ]))
         ? 'infrastructure'
@@ -772,7 +831,7 @@ export class RawServiceMeshRuntime {
           (expected.meshName !== descriptor.meshName ||
             expected.nodeRoutingId !== descriptor.nodeRoutingId)
         ) {
-          await this.send(received.sourceRid, [
+          await this.sendControl(received.sourceRid, [
             encodeReject(enumWireRejectReason('identityMismatch'))
           ]);
           return 'infrastructure';
@@ -796,7 +855,7 @@ export class RawServiceMeshRuntime {
             `RouteMesh admission rejected peer '${received.sourceRid}' as ${result}` +
               (detail === undefined ? '.' : ` (${detail}).`)
           );
-          await this.send(received.sourceRid, [encodeReject(admissionReason(result))]);
+          await this.sendControl(received.sourceRid, [encodeReject(admissionReason(result))]);
           return 'infrastructure';
         }
         if (result === 'admitted') this.selectBilateralConnection(descriptor);
@@ -804,7 +863,7 @@ export class RawServiceMeshRuntime {
           // Hello supplies only the sender's descriptor. Even NotRequired
           // peers must receive ours before the intent owner closes transport;
           // submitting a response does not guarantee delivery before close.
-          await this.send(received.sourceRid, [
+          await this.sendControl(received.sourceRid, [
             encodeRouteMeshAdmission(M6aServiceWireCommand.admit, this.topology.localDescriptor())
           ]);
         } else if (result === 'notRequired') {
@@ -832,7 +891,7 @@ export class RawServiceMeshRuntime {
             record.probeId
           );
           if (ack === undefined) return 'protocolError';
-          const sent = await this.send(received.sourceRid, [
+          const sent = await this.sendControl(received.sourceRid, [
             livenessCodec.encodeLivenessRecord({
               command: M6aServiceWireCommand.livenessAck,
               probeId: record.probeId
@@ -950,16 +1009,19 @@ export class RawServiceMeshRuntime {
     return this.operations.size;
   }
 
-  async tickLiveness(nowMs = performance.now()): Promise<ServiceLivenessTick> {
+  tickLiveness(nowMs = performance.now()): ServiceLivenessTick {
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
     for (const probe of result.probes) {
-      await this.send(probe.nodeRoutingId, [
+      const parts = [
         livenessCodec.encodeLivenessRecord({
           command: M6aServiceWireCommand.livenessProbe,
           probeId: probe.probeId
         })
-      ]);
+      ];
+      this.startControlSend(probe.nodeRoutingId, M6aServiceWireCommand.livenessProbe, () =>
+        this.send(probe.nodeRoutingId, parts)
+      );
     }
     for (const nodeRoutingId of result.timedOutNodes) {
       const peer = this.topology.peer(nodeRoutingId);
@@ -1002,15 +1064,20 @@ export class RawServiceMeshRuntime {
     }
     this.selectedRoutes = observed;
     // A new selected route admits only through a new handshake.
-    for (const nodeRoutingId of selected) await this.announcePeer(nodeRoutingId);
+    for (const nodeRoutingId of selected)
+      await this.observeControlAdmission(this.announcePeer(nodeRoutingId));
     return changes;
   }
 
   close(): void {
     if (this.closed) return;
+    this.closed = true;
     this.applicationJobStop.abort(
       new Error('Raw service runtime application job admission stopped.')
     );
+    this.receivePermit?.releaseAfterInternalProcessing();
+    this.receivePermit = undefined;
+    for (const send of this.controlSends.values()) delete send.next;
     this.mailbox.close();
     this.operations.close('Raw service runtime closed.');
     this.serviceIngress = undefined;
@@ -1022,7 +1089,6 @@ export class RawServiceMeshRuntime {
     if (host !== undefined) host.close();
     this.router = undefined;
     this.host = undefined;
-    this.closed = true;
   }
 
   private requestToTarget(
@@ -1257,18 +1323,119 @@ export class RawServiceMeshRuntime {
     return this.router;
   }
 
-  private async send(targetNodeRoutingId: string, parts: readonly Uint8Array[]): Promise<boolean> {
+  private async sendControl(
+    targetNodeRoutingId: string,
+    parts: readonly Uint8Array[]
+  ): Promise<boolean> {
+    const submission = this.startControlSend(
+      targetNodeRoutingId,
+      decodeHeader(parts[0]!).command,
+      () => this.send(targetNodeRoutingId, parts)
+    );
+    return this.observeControlAdmission(submission);
+  }
+
+  private async observeControlAdmission(submission: Promise<boolean>): Promise<boolean> {
     try {
-      await this.requireStarted().send(targetNodeRoutingId, parts);
-      return true;
+      // Observe immediate admission failures in this turn. Pending admission
+      // remains owned by the infrastructure task and cannot hold receive.
+      return await Promise.race([submission, Promise.resolve().then(() => true)]);
     } catch (error) {
-      if (isZLinkBackendResultError(error) && error.operation === 'submit') {
-        const terminal = submitToRequestResult(error.result, error.phase);
-        if (terminal === RequestResult.NotConnected || terminal === RequestResult.NotFound)
-          return false;
-      }
+      if (this.infrastructureFailure?.error === error) this.infrastructureFailure = undefined;
       throw error;
     }
+  }
+
+  private startControlSend(
+    target: string,
+    command: number,
+    attempt: () => Promise<boolean>,
+    current?: () => boolean
+  ): Promise<boolean> {
+    const key = JSON.stringify([target, command]);
+    const existing = this.controlSends.get(key);
+    if (
+      existing !== undefined &&
+      (command !== M6aServiceWireCommand.hello || existing.current?.() === true)
+    ) {
+      if (command !== M6aServiceWireCommand.hello) {
+        existing.next = attempt;
+        existing.current = current;
+      }
+      return existing.task;
+    }
+    const first = attempt();
+    const owner = this;
+    const state: {
+      task: Promise<boolean>;
+      next?: () => Promise<boolean>;
+      current?: () => boolean;
+    } = {
+      current,
+      task: first.then(function drain(accepted): boolean | Promise<boolean> {
+        if (!owner.closed && state.next !== undefined) {
+          const next = state.next;
+          delete state.next;
+          return next().then(drain);
+        }
+        if (owner.controlSends.get(key) === state) owner.controlSends.delete(key);
+        return accepted;
+      })
+    };
+    this.controlSends.set(key, state);
+    state.task.then(
+      () => {},
+      (error) => {
+        if (this.controlSends.get(key) === state) this.controlSends.delete(key);
+        if (this.infrastructureTaskRunner === undefined) this.reportInfrastructureFailure(error);
+      }
+    );
+    this.infrastructureTaskRunner?.runDetached('RouteMesh control SEND', async () => {
+      await state.task;
+    });
+    return first;
+  }
+
+  private reportInfrastructureFailure(error: unknown): void {
+    this.infrastructureFailure = {
+      error:
+        this.infrastructureFailure === undefined
+          ? error
+          : new AggregateError(
+              [this.infrastructureFailure.error, error],
+              'RouteMesh infrastructure failed.'
+            )
+    };
+    this.onReceiveReady?.();
+  }
+
+  private observeInfrastructureFailure(): void {
+    const failure = this.infrastructureFailure;
+    this.infrastructureFailure = undefined;
+    if (failure !== undefined) throw failure.error;
+  }
+
+  private send(
+    targetNodeRoutingId: string,
+    parts: readonly Uint8Array[],
+    accepted?: () => void
+  ): Promise<boolean> {
+    return this.requireStarted()
+      .send(targetNodeRoutingId, parts)
+      .then(
+        () => {
+          accepted?.();
+          return true;
+        },
+        (error) => {
+          if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+            const terminal = submitToRequestResult(error.result, error.phase);
+            if (terminal === RequestResult.NotConnected || terminal === RequestResult.NotFound)
+              return false;
+          }
+          throw error;
+        }
+      );
   }
 }
 

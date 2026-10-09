@@ -200,6 +200,11 @@ final class ZLinkJavaRawMeshNode
             receiveFlowRegistration = () -> {};
     private volatile ZLinkJavaRawSpotNode spotNode;
     private volatile ExecutorService pump;
+    private final java.util.concurrent.atomic.AtomicReference<
+                    CompletableFuture<
+                            systems.zlink.framework.runtime.internal.dispatch
+                                    .ZLinkApplicationJobQueue.Permit>>
+            pendingReceiveAcquire = new java.util.concurrent.atomic.AtomicReference<>();
     private volatile long routerHighWaterMark = 16_777_216L;
     private volatile long routerReceiveHighWaterMark = 16_777_216L;
     private volatile Duration routerReceiveTimeout;
@@ -4449,6 +4454,8 @@ final class ZLinkJavaRawMeshNode
             return;
         }
         state = MeshNodeState.STOPPED;
+        systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
+                .cancelPendingAcquire(pendingReceiveAcquire);
         ExecutorService currentPump = pump;
         if (currentPump != null) {
             currentPump.shutdownNow();
@@ -4503,55 +4510,62 @@ final class ZLinkJavaRawMeshNode
         pump =
                 Executors.newSingleThreadExecutor(
                         Thread.ofPlatform().name("zlink-jvm-raw-mesh-" + meshName).factory());
-        pump.execute(
-                () -> {
-                    while (!closed.get()) {
-                        int ready = port.waitForReady(pumpSocket, ingressWaitTimeout);
-                        long now = System.nanoTime();
-                        // This pump is the ROUTER's one route observer (Core
-                        // ROUTER §10.1). Apply selected-route changes before
-                        // the records that the same wait reported.
-                        if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
-                            observeSelectedRoutes();
-                        }
-                        drainPeerCloseRequests();
-                        announceExpectedPeers();
-                        tickLiveness(now);
-                        if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0) {
-                            drainIngressBatch(pumpSocket);
-                        }
-                    }
-                });
+        pump.execute(() -> pumpTurn(pumpSocket));
+    }
+
+    private void pumpTurn(RouterSocket pumpSocket) {
+        if (closed.get()) return;
+        int ready = port.waitForReady(pumpSocket, ingressWaitTimeout);
+        long now = System.nanoTime();
+        // The existing pump remains this ROUTER's one route observer.
+        if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
+            observeSelectedRoutes();
+        }
+        drainPeerCloseRequests();
+        announceExpectedPeers();
+        tickLiveness(now);
+        if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0) {
+            drainIngressBatch(pumpSocket);
+        }
+        if (!closed.get()) {
+            try {
+                pump.execute(() -> pumpTurn(pumpSocket));
+            } catch (java.util.concurrent.RejectedExecutionException stopped) {
+                if (!closed.get()) throw stopped;
+            }
+        }
     }
 
     private void drainIngressBatch(RouterSocket pumpSocket) {
+        if (pendingReceiveAcquire.get() != null || closed.get()) return;
+        drainIngressBatch(pumpSocket, null);
+    }
+
+    private void drainIngressBatch(
+            RouterSocket pumpSocket,
+            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
+                    grant) {
         long startedAt = System.nanoTime();
         long receivedBytes = 0;
-        List<systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit>
-                permits;
-        try {
-            var queue = applicationJobQueue;
-            permits = queue == null ? List.of() : queue.acquireBatchBlocking(1);
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            return;
-        }
-        int consumedPermits = 0;
         int count = 0;
         try {
             while (count < MAX_INGRESS_BATCH && !closed.get()) {
-                if (!permits.isEmpty() && consumedPermits == permits.size()) {
-                    try {
-                        permits =
-                                applicationJobQueue.acquireBatchBlocking(MAX_INGRESS_BATCH - count);
-                        consumedPermits = 0;
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
+                var queue = applicationJobQueue;
+                if (grant == null && queue != null) {
+                    grant =
+                            queue.acquireOrResume(
+                                    pump,
+                                    permit -> drainIngressBatch(pumpSocket, permit),
+                                    pendingReceiveAcquire);
+                    if (closed.get()) {
+                        systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
+                                .cancelPendingAcquire(pendingReceiveAcquire);
                         return;
                     }
+                    if (grant == null) return;
                 }
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
-                        permit = permits.isEmpty() ? null : permits.get(consumedPermits++);
+                var permit = grant;
+                grant = null;
                 try {
                     Optional<ZLinkJavaRawServicePort.Inbound> inbound = port.receiveNow(pumpSocket);
                     if (inbound.isEmpty()) {
@@ -4580,9 +4594,7 @@ final class ZLinkJavaRawMeshNode
                 }
             }
         } finally {
-            while (consumedPermits < permits.size()) {
-                permits.get(consumedPermits++).abandonReservation();
-            }
+            if (grant != null) grant.abandonReservation();
         }
     }
 

@@ -10,15 +10,7 @@ import type { Context } from '@zlink-systems/zlink';
 export class ZLinkNodeMeshBackendAdapter implements ZLinkMeshBackendAdapter {
   createMeshNode(
     context: ZLinkBackendContext,
-    options: {
-      readonly meshName: string;
-      readonly routingId?: string;
-      readonly receiveTimeoutMs?: number;
-      readonly trustProfile?: string;
-      readonly applicationJobQueue: import('../../application-jobs/contracts').ApplicationJobQueuePort;
-      readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
-      readonly peerAdmissionSealed?: () => boolean;
-    }
+    options: Parameters<ZLinkMeshBackendAdapter['createMeshNode']>[1]
   ): ZLinkBackendMeshNode {
     if (options.trustProfile !== undefined) {
       throw new Error(
@@ -37,7 +29,8 @@ export class ZLinkNodeMeshBackendAdapter implements ZLinkMeshBackendAdapter {
       new ZLinkNodeRawBindingPort(bindingContext, options.receiveTimeoutMs),
       options.applicationJobQueue,
       options.applicationJobReceiveFlowFailureSink,
-      options.peerAdmissionSealed
+      options.peerAdmissionSealed,
+      options.infrastructureTaskRunner
     );
   }
 }
