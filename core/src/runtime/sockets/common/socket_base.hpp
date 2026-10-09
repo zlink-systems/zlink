@@ -1093,6 +1093,7 @@ class socket_base_t : public own_t,
     int get_events_for_poller (int events_, uint32_t *out_,
                                bool transport_output_,
                                bool consume_primary_signaler_);
+    void notify_send_writable_completion ();
     void publish_send_writable_target (
       const zlink_routing_id_t *target_rid_or_null_,
       bool correlation_released_ = false);

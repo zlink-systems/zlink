@@ -80,12 +80,15 @@ int reserve (queue_state_t *state_,
              const zlink_routing_id_t *peer_rid_,
              reservation_t **reservation_out_,
              zlink_completion_id_t *completion_id_out_);
+// Correlation recheck and linking share the queue mutex. published_out_ tells
+// the socket owner to notify a token that was already made ready by recheck.
 int reserve_writable_wait (queue_state_t *state_,
                            void *user_context_,
                            const zlink_routing_id_t *peer_rid_,
                            reservation_t **reservation_out_,
                            zlink_completion_id_t *completion_id_out_,
-                           request_writable_wait_t *request_wait_ = NULL);
+                           request_writable_wait_t *request_wait_ = NULL,
+                           bool *published_out_ = NULL);
 void release (queue_state_t *state_, reservation_t *reservation_);
 // Physical credit and terminal publication match the target (NULL means the
 // size-zero PAIR/DEALER group). Correlation publication instead checks each
