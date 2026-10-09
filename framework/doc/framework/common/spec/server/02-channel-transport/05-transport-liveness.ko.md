@@ -64,11 +64,7 @@ Framework는 마지막 정상 확인 뒤 connection을 유지할 수 있는 시�
 - **Framework builder는 이 두 값을 공개하지 않으며, channel·handler·peer마다 다른 값을
   지정할 수도 없다.** 값을 조정 가능하게 만드는 것 자체가 세 연결 방식이 같은 기준을
   사용한다는 계약을 어긴다.
-- **Connection에서 받은 record는 종류와 관계없이 그 connection의 생존 증거다.** 한쪽 방향만
-  끊긴 connection은 끊긴 방향의 수신 쪽이 15초 동안 아무 record도 받지 못해 닫고, 그 종료가
-  살아 있는 방향으로 상대에게 전달된다. 따라서 수신을 증거로 사용해도 한쪽 방향 단절은
-  감지된다. Probe·ACK만 증거로 사용하면 application backpressure로 상대 record를 읽지 못하는
-  동안 정상인 상대를 끊는다(§3).
+- **Connection의 생존 증거와 단절 판정 범위는 [§3](#3-routemesh와-clientserver)이 정한다.**
 - **경과 시간·deadline·retention은 언어 runtime의 monotonic clock 하나로 측정한다.** Wall
   clock은 timestamp 표기에만 사용한다. 연결 확인 주기, peer deadline, operation deadline, terminal
   record retention, readiness 대기 상한처럼 "얼마나 지났는가"를 묻는 모든 판정이 대상이다. 호스트
@@ -109,23 +105,34 @@ HWM·PAUSED가 뒤의 liveness record도 늦출 수 있고, 이 문서의 15초 
 4. Peer는 받은 ID를 `livenessAck`에 그대로 넣어 반환한다.
 5. 현재 connection이 기다리는 ID와 같은 첫 ACK가 그 ID를 제거한다.
 
-Connection 하나에는 아직 응답받지 못한 ID를 최대 하나만 유지한다. Probe는 application
-traffic이 있어도 5초마다 그대로 보낸다.
+이 절에서 현재 admitted connection은 RouteMesh에서는 Core의 현재 선택 route에 admission된
+Application·Completion pair를, ClientServer에서는 현재 admission된 single connection을 뜻한다.
+Probe 대기 ID와 peer deadline은 이 단위마다 하나씩 유지하며, 아직 응답받지 못한 ID는 최대 하나다.
+Probe는 application traffic이 있어도 5초마다 그대로 보낸다.
 
-**현재 connection에서 record를 받을 때마다 deadline을 다시 15초로 설정한다.** Record는 probe·ACK,
-request·reply·error reply와 일반 application message를 모두 포함한다. RouteMesh에서는 같은
-pair의 Application connection과 Completion connection에서 받은 record가 모두 해당한다.
-Framework가 실제로 receive한 시점에 갱신하며, receive-flow `PAUSED`로 읽지 않은 record는
-갱신하지 않는다.
+**현재 admitted connection에서 record를 받을 때마다 deadline을 다시 15초로 설정한다.** Record는
+probe·ACK, request·reply·error reply와 일반 application message를 모두 포함하고, RouteMesh에서는
+pair의 어느 lane에서 받은 record든 해당한다. Framework가 실제로 receive한 시점에 갱신하며,
+receive-flow `PAUSED`로 읽지 않은 record는 갱신하지 않는다. 그래서 application backpressure로 한
+lane을 읽지 못하는 동안에도 다른 수신이 이어지면 정상인 상대를 끊지 않는다.
 
 | 받은 입력 | 현재 connection에 미치는 영향 |
 |---|---|
 | 기다리는 ID와 같은 첫 ACK | 해당 ID를 제거하고 deadline을 다시 15초로 설정한다. |
 | 같은 ACK의 중복 수신, 이전 probe ID의 ACK | 대기 ID를 바꾸지 않고 deadline을 다시 15초로 설정한다. |
-| 다른 physical connection의 record | 현재 connection의 증거로 사용하지 않는다. |
+| 다른 admitted pair·single connection 또는 이전 connection lifetime의 record | 현재 connection의 증거로 사용하지 않는다. |
 | Request·reply·error reply·일반 application message | deadline을 다시 15초로 설정한다. |
 
-15초 동안 현재 connection에서 아무 record도 받지 못하면 해당 connection을 not-ready로 바꾸고 닫는다.
+현재 admitted connection에서 15초 동안 아무 record도 받지 못하면 해당 connection을 not-ready로
+바꾸고 닫는다. 판정 범위는 다음과 같다.
+
+- 한쪽 방향만 끊겨 그 방향의 수신 쪽이 다른 경로로도 record를 받지 못하면, 수신 쪽이 15초 뒤
+  닫고 Core가 그 종료를 상대에게 전달한다.
+- RouteMesh에서는 pair의 어느 lane에서든 record를 받으면 deadline이 갱신되므로, 다른 lane으로
+  수신이 이어지는 동안 physical lane 하나의 silent 단절을 15초 안에 감지한다고 보장하지 않는다.
+  Core가 lane disconnect를 감지하면 [ZMP §4.1](../../../../../../../core/doc/spec/core/protocol/01-zmp.ko.md#41-request-reply-lane)의 pair 종료 규칙을 따른다.
+- ClientServer에는 별도 Completion connection이 없으므로, `PAUSED`인 서버가 실제로 어떤 record도
+  받지 못하면 정상 client라도 마지막 수신 뒤 15초에 서버가 연결을 닫는다.
 
 Probe와 ACK는 Framework가 연결 상태만 확인하는 내부 신호다. 업무 payload나 metadata를
 포함하지 않는다. Application queue에 넣거나 handler를 실행하지 않는다.
@@ -377,12 +384,16 @@ handler에 도달하는 값, connection·runtime snapshot이 보여주는 상태
 - 현재 connection의 현재 ID와 같은 첫 ACK만 대기 ID를 제거한다. 현재 connection에서 받은
   모든 record가 deadline을 갱신하고, 다른 connection의 record는 갱신하지 않는다. Application
   traffic이 있어도 probe는 5초마다 보낸다.
-- Half-open connection은 15초 안에 not-ready가 된다. Orderly close와 transport 오류는
-  즉시 반영한다.
+- 현재 admitted connection의 모든 수신 경로를 차단하면 마지막 수신부터 15초 뒤 not-ready가 되고
+  닫힌다. Orderly close와 transport 오류는 즉시 반영한다.
+- 현재 connection의 중복·이전 ID ACK는 deadline을 갱신하고 대기 ID는 그대로 둔다. 다른 peer·pair와
+  이전 lifetime의 record는 대상 deadline을 갱신하지 않는다.
+- ClientServer 서버가 `PAUSED`이고 실제로 받는 record가 없으면 마지막 수신 뒤 15초에 서버가 연결을
+  닫는다.
 - Probe와 ACK는 application handler에 전달되지 않는다.
-- RouteMesh에서 한쪽 node의 Application connection이 `PAUSED`여도 같은 pair의 Completion
-  connection으로 reply를 받는 동안, 그리고 상대가 그 node의 request를 받는 동안 양쪽 모두 연결을
-  유지한다.
+- RouteMesh에서 한쪽 node의 Application connection이 `PAUSED`여도, 그 node가 같은 pair의
+  Completion connection으로 reply를 받고 상대가 그 node의 request를 받으며 각 수신 간격이 15초
+  미만이면 양쪽 모두 연결을 유지한다.
 - RouteMesh는 ROUTER-ROUTER 두 physical lane, ClientServer는 DEALER-ROUTER 한 physical lane을
   사용하지만 probe와 ACK는 두 topology 모두 application record로 관찰되고 handler에 전달되지 않는다.
 
