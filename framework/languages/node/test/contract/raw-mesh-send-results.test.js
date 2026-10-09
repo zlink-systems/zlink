@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { setImmediate: turn } = require('node:timers/promises');
 const { ZLinkBackendResultError, SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const { RawServiceMeshRuntime } = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
 const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
@@ -21,6 +22,18 @@ function fixture() {
   let failure;
   const router = {
     setRoutingId() {}, bind() {}, close() {}, setReceiveFlowState() {}, localEndpoint() { return descriptor("local").advertisedEndpoint; },
+    submitSend(target, parts) {
+      sent.push({ target, command: wire.decodeHeader(parts[0]).command });
+      if (failure !== undefined) {
+        const error = failure;
+        failure = undefined;
+        if (error.phase === 'completion') {
+          return { result: SubmitResult.Backpressured, admitted: Promise.reject(error) };
+        }
+        throw error;
+      }
+      return { result: SubmitResult.Ok, admitted: Promise.resolve() };
+    },
     async send(target, parts) {
       sent.push({ target, command: wire.decodeHeader(parts[0]).command });
       if (failure !== undefined) { const error = failure; failure = undefined; throw error; }
@@ -61,7 +74,8 @@ for (const result of [SubmitResult.NotConnected, SubmitResult.NotFound]) {
               })];
           f.enqueue('peer', parts);
           f.fail(routeError());
-          assert.equal(await f.runtime.pumpOne(0), ['hello', 'livenessAck'].includes(response) ? 'dropped' : 'infrastructure');
+          // Backpressured is submitted; only immediate route rejection drops a response.
+          assert.equal(await f.runtime.pumpOne(0), phase === 'submit' && ['hello', 'livenessAck'].includes(response) ? 'dropped' : 'infrastructure');
         } finally { f.runtime.close(); }
       });
     }
@@ -91,7 +105,13 @@ test('non-route submission failures propagate from receive and update paths', as
     const f = fixture();
     try {
       f.enqueue('peer', []); f.fail(cause);
-      await assert.rejects(f.runtime.pumpOne(0), error => error === cause);
+      if (cause.phase === 'completion') {
+        assert.equal(await f.runtime.pumpOne(0), 'infrastructure');
+        await turn();
+        await assert.rejects(f.runtime.pumpBatch(false), error => error === cause);
+      } else {
+        await assert.rejects(f.runtime.pumpOne(0), error => error === cause);
+      }
       await f.admit('peer'); f.fail(cause);
       await assert.rejects(f.runtime.updateLocalDescriptor({ placementWeight: 50 }), error => error === cause);
     } finally { f.runtime.close(); }

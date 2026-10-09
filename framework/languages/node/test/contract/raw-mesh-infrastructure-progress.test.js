@@ -13,6 +13,10 @@ const {
   ZLinkRuntimeTaskRunner,
   ZLinkRuntimeTaskErrorSink
 } = require('../../packages/framework/dist/runtime/execution');
+const {
+  ZLinkBackendResultError,
+  SubmitResult
+} = require('../../packages/framework/dist/runtime/backend/runtime-values');
 
 function harness(options = {}) {
   const queue = new ApplicationJobQueue(
@@ -50,9 +54,13 @@ function harness(options = {}) {
       observations++;
       return [];
     },
-    async send(target, parts) {
+    send(target, parts) {
       sent.push([target, parts]);
-      await send();
+      return send();
+    },
+    submitSend(target, parts) {
+      sent.push([target, parts]);
+      return { result: SubmitResult.Backpressured, admitted: send() };
     },
     receive: () => records.shift(),
     close() {}
@@ -108,6 +116,53 @@ test('ordinary capacity ends only the receive turn while route observation and l
     held.releaseAfterInternalProcessing();
     h.runtime.close();
     await round;
+  }
+});
+
+test('backpressured control submission stays submitted when route absence settles early or late', async () => {
+  for (const late of [false, true]) {
+    const h = harness();
+    let reject;
+    const cause = new ZLinkBackendResultError('submit', SubmitResult.NotConnected, undefined, {
+      phase: 'completion'
+    });
+    h.setSend(() =>
+      late
+        ? new Promise((_resolve, fail) => {
+            reject = fail;
+          })
+        : Promise.reject(cause)
+    );
+    try {
+      const result = await h.runtime.sendControl('peer', [wire.encodeReject(1)]);
+      assert.equal(result, true, `Backpressured must be submitted (late=${late})`);
+      reject?.(cause);
+      await turn();
+    } finally {
+      reject?.(cause);
+      h.runtime.close();
+    }
+  }
+});
+
+test('queue grants synchronously or resumes its oldest waiter, without promise timing', async () => {
+  const h = harness();
+  try {
+    const resumes = [];
+    const held = h.queue.acquireOrResume((permit) => resumes.push(permit), assert.fail);
+    assert.ok(held);
+    assert.equal(
+      h.queue.acquireOrResume((permit) => resumes.push(permit), assert.fail),
+      undefined
+    );
+    assert.equal(resumes.length, 0);
+    held.releaseAfterInternalProcessing();
+    await turn();
+    assert.equal(resumes.length, 1);
+    resumes[0].releaseAfterInternalProcessing();
+    assert.equal(h.queue.snapshot().permitsInUse, 0n);
+  } finally {
+    h.runtime.close();
   }
 });
 

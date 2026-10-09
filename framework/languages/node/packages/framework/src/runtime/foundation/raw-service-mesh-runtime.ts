@@ -178,7 +178,7 @@ export class RawServiceMeshRuntime {
     string,
     {
       readonly task: Promise<boolean>;
-      next?: () => Promise<boolean>;
+      next?: () => boolean | Promise<boolean>;
       current?: () => boolean;
     }
   >();
@@ -401,18 +401,22 @@ export class RawServiceMeshRuntime {
     const current = () =>
       this.expectedPeers.get(nodeRoutingId) === expected &&
       this.selectedRoutes.get(nodeRoutingId) === generation;
-    return this.startControlSend(
-      nodeRoutingId,
-      M6aServiceWireCommand.hello,
-      () =>
-        this.send(
-          nodeRoutingId,
-          [encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())],
-          () => {
-            if (current()) expected.helloSubmittedGeneration = generation;
-          }
-        ),
-      current
+    return Promise.resolve(
+      this.startControlSend(
+        nodeRoutingId,
+        M6aServiceWireCommand.hello,
+        () =>
+          this.submitControl(
+            nodeRoutingId,
+            [
+              encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
+            ],
+            () => {
+              if (current()) expected.helloSubmittedGeneration = generation;
+            }
+          ),
+        current
+      )
     );
   }
 
@@ -676,8 +680,7 @@ export class RawServiceMeshRuntime {
     }
     if (!this.closed) {
       for (const nodeRoutingId of this.expectedPeers.keys()) {
-        if (this.topology.peer(nodeRoutingId) === undefined)
-          await this.observeControlAdmission(this.announcePeer(nodeRoutingId));
+        if (this.topology.peer(nodeRoutingId) === undefined) await this.announcePeer(nodeRoutingId);
       }
       this.tickLiveness();
     }
@@ -691,27 +694,33 @@ export class RawServiceMeshRuntime {
     const router = this.requireStarted();
     this.observeInfrastructureFailure();
     if (this.receivePermit === undefined && this.receiveAcquisition === undefined) {
-      const acquisition = this.applicationJobQueue.acquire(this.applicationJobStop.signal);
-      this.receiveAcquisition = acquisition;
-      let resume: (() => void) | undefined;
-      acquisition.then(
+      let resolveAcquisition!: (permit: ApplicationJobPermitPort) => void;
+      let rejectAcquisition!: (error: unknown) => void;
+      const acquisition = new Promise<ApplicationJobPermitPort>((resolve, reject) => {
+        resolveAcquisition = resolve;
+        rejectAcquisition = reject;
+      });
+      const permit = this.applicationJobQueue.acquireOrResume(
         (permit) => {
           this.receiveAcquisition = undefined;
           if (this.closed) permit.releaseAfterInternalProcessing();
           else {
             this.receivePermit = permit;
-            resume?.();
+            this.onReceiveReady?.();
           }
+          resolveAcquisition(permit);
         },
-        (error) => {
+        rejectAcquisition,
+        this.applicationJobStop.signal
+      );
+      if (permit !== undefined) this.receivePermit = permit;
+      else {
+        this.receiveAcquisition = acquisition;
+        acquisition.catch((error) => {
           this.receiveAcquisition = undefined;
           if (!this.applicationJobStop.signal.aborted) this.reportInfrastructureFailure(error);
-        }
-      );
-      // An immediate FIFO grant belongs to this turn. A pending grant resumes
-      // the same receive owner without holding the infrastructure round.
-      await Promise.resolve();
-      resume = this.onReceiveReady;
+        });
+      }
     }
     const permit = this.receivePermit;
     this.receivePermit = undefined;
@@ -1020,7 +1029,7 @@ export class RawServiceMeshRuntime {
         })
       ];
       this.startControlSend(probe.nodeRoutingId, M6aServiceWireCommand.livenessProbe, () =>
-        this.send(probe.nodeRoutingId, parts)
+        this.submitControl(probe.nodeRoutingId, parts)
       );
     }
     for (const nodeRoutingId of result.timedOutNodes) {
@@ -1064,8 +1073,7 @@ export class RawServiceMeshRuntime {
     }
     this.selectedRoutes = observed;
     // A new selected route admits only through a new handshake.
-    for (const nodeRoutingId of selected)
-      await this.observeControlAdmission(this.announcePeer(nodeRoutingId));
+    for (const nodeRoutingId of selected) await this.announcePeer(nodeRoutingId);
     return changes;
   }
 
@@ -1327,31 +1335,41 @@ export class RawServiceMeshRuntime {
     targetNodeRoutingId: string,
     parts: readonly Uint8Array[]
   ): Promise<boolean> {
-    const submission = this.startControlSend(
-      targetNodeRoutingId,
-      decodeHeader(parts[0]!).command,
-      () => this.send(targetNodeRoutingId, parts)
+    return this.startControlSend(targetNodeRoutingId, decodeHeader(parts[0]!).command, () =>
+      this.submitControl(targetNodeRoutingId, parts)
     );
-    return this.observeControlAdmission(submission);
   }
 
-  private async observeControlAdmission(submission: Promise<boolean>): Promise<boolean> {
+  private submitControl(
+    target: string,
+    parts: readonly Uint8Array[],
+    accepted?: () => void
+  ): boolean | Promise<boolean> {
+    let submission;
     try {
-      // Observe immediate admission failures in this turn. Pending admission
-      // remains owned by the infrastructure task and cannot hold receive.
-      return await Promise.race([submission, Promise.resolve().then(() => true)]);
+      submission = this.requireStarted().submitSend(target, parts);
     } catch (error) {
-      if (this.infrastructureFailure?.error === error) this.infrastructureFailure = undefined;
-      throw error;
+      return this.sendFailure(error);
     }
+    if (submission.result === SubmitResult.Ok) {
+      accepted?.();
+      return true;
+    }
+    return submission.admitted.then(
+      () => {
+        accepted?.();
+        return true;
+      },
+      (error) => this.sendFailure(error)
+    );
   }
 
   private startControlSend(
     target: string,
     command: number,
-    attempt: () => Promise<boolean>,
+    attempt: () => boolean | Promise<boolean>,
     current?: () => boolean
-  ): Promise<boolean> {
+  ): boolean {
     const key = JSON.stringify([target, command]);
     const existing = this.controlSends.get(key);
     if (
@@ -1362,13 +1380,14 @@ export class RawServiceMeshRuntime {
         existing.next = attempt;
         existing.current = current;
       }
-      return existing.task;
+      return true;
     }
     const first = attempt();
+    if (typeof first === 'boolean') return first;
     const owner = this;
     const state: {
       task: Promise<boolean>;
-      next?: () => Promise<boolean>;
+      next?: () => boolean | Promise<boolean>;
       current?: () => boolean;
     } = {
       current,
@@ -1376,7 +1395,7 @@ export class RawServiceMeshRuntime {
         if (!owner.closed && state.next !== undefined) {
           const next = state.next;
           delete state.next;
-          return next().then(drain);
+          return Promise.resolve(next()).then(drain);
         }
         if (owner.controlSends.get(key) === state) owner.controlSends.delete(key);
         return accepted;
@@ -1393,7 +1412,7 @@ export class RawServiceMeshRuntime {
     this.infrastructureTaskRunner?.runDetached('RouteMesh control SEND', async () => {
       await state.task;
     });
-    return first;
+    return true;
   }
 
   private reportInfrastructureFailure(error: unknown): void {
@@ -1415,27 +1434,26 @@ export class RawServiceMeshRuntime {
     if (failure !== undefined) throw failure.error;
   }
 
-  private send(
-    targetNodeRoutingId: string,
-    parts: readonly Uint8Array[],
-    accepted?: () => void
-  ): Promise<boolean> {
+  private send(targetNodeRoutingId: string, parts: readonly Uint8Array[]): Promise<boolean> {
     return this.requireStarted()
       .send(targetNodeRoutingId, parts)
       .then(
         () => {
-          accepted?.();
           return true;
         },
         (error) => {
-          if (isZLinkBackendResultError(error) && error.operation === 'submit') {
-            const terminal = submitToRequestResult(error.result, error.phase);
-            if (terminal === RequestResult.NotConnected || terminal === RequestResult.NotFound)
-              return false;
-          }
-          throw error;
+          return this.sendFailure(error);
         }
       );
+  }
+
+  private sendFailure(error: unknown): false {
+    if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+      const terminal = submitToRequestResult(error.result, error.phase);
+      if (terminal === RequestResult.NotConnected || terminal === RequestResult.NotFound)
+        return false;
+    }
+    throw error;
   }
 }
 

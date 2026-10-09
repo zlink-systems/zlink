@@ -22,7 +22,8 @@ import {
 import {
   translateBindingResultError,
   bindingRequestReply,
-  submitBindingAsyncSend
+  submitBindingAsyncSend,
+  submitBindingSend
 } from './node-backend-adapter-support';
 import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
 import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
@@ -271,6 +272,12 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     this.requireOpen();
     requireParts(parts);
     return submitBindingAsyncSend(this.socket.send(bindingRoutingId(targetRid)), parts);
+  }
+
+  submitSend(targetRid: string, parts: readonly Uint8Array[]) {
+    this.requireOpen();
+    requireParts(parts);
+    return submitBindingSend(this.socket.send(bindingRoutingId(targetRid)), parts);
   }
 
   async request(
