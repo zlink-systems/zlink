@@ -27,7 +27,6 @@ import type {
   ZLinkSession,
   ZLinkSessionFactory,
   ZLinkSpot,
-  ZLinkSpotPublisherConfig,
   ZLinkStreamCompressionBuilder,
   ZLinkStreamCompressionCodec,
   ZLinkStreamNodeBuilder,
@@ -53,6 +52,7 @@ import type { ZLinkEndpointConnections } from './Connections';
 import { requireMessageFlowLogMode, requireTraceSampleRate } from './DiagnosticsValidation';
 import { normalizeEndpoint } from './EndpointNotation';
 import { requirePublicFanoutTopic } from './FanoutTopic';
+import { requireValidSendTimeoutMs } from './SendTimeoutValidation';
 import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from './InternalDefaults';
 import {
   type ZLinkActorFactoryBuilder,
@@ -519,6 +519,12 @@ class DefaultFanoutChannelBuilder implements ZLinkFanoutChannelBuilder {
     return this;
   }
 
+  setSendTimeout(timeoutMs: number): this {
+    requireValidSendTimeoutMs(`Fanout channel '${this.name}' send timeout`, timeoutMs);
+    this.channel.sendTimeoutMs = timeoutMs;
+    return this;
+  }
+
   enableSubscriber(endpoint?: string): this {
     this.selectSubscriberMode(endpoint === undefined ? 'automatic' : 'manual');
     this.channel.subscriber ??= { manualConnections: [] };
@@ -982,11 +988,6 @@ class DefaultMeshNodeBuilder implements ZLinkMeshNodeBuilder {
   configureRouterSocket(): ZLinkMeshNodeSocketConfig {
     this.node.router ??= {};
     return this.node.router as ZLinkMeshNodeSocketConfig;
-  }
-
-  configureSpotPublisher(): ZLinkSpotPublisherConfig {
-    this.node.publisherConfig ??= {};
-    return this.node.publisherConfig as ZLinkSpotPublisherConfig;
   }
 
   peerConnections(): ZLinkMeshPeerConnections {
@@ -1576,6 +1577,7 @@ interface MutableChannelOptions {
   routingId?: string;
   routingIdPrefix?: string;
   noDrop?: boolean;
+  sendTimeoutMs?: number;
   publisher?: MutablePublisherCapabilityOptions;
   publishHandlers?: ZLinkChannelPublishHandlerRegistration[];
   subscriptions?: string[];
@@ -1607,7 +1609,6 @@ interface MutableClientCapabilityOptions {
 }
 
 interface MutablePublisherCapabilityOptions {
-  sendTimeoutMs?: number;
   bind?: string;
   bindHost?: string;
   advertiseHost?: string;
@@ -1668,11 +1669,6 @@ interface MutableSpotNodeOptions {
   routeSendHandlers?: Array<{ packetName: string; handlerType: Type }>;
   routeRequestHandlers?: Array<{ packetName: string; handlerType: Type }>;
   requestTimeoutMs?: number;
-  publisherConfig?: {
-    sendHighWaterMark?: number;
-    sendTimeoutMs?: number;
-    lingerMs?: number;
-  };
 }
 
 interface MutableObjectFactoryRegistration<T, TImplementation = T, TOptions = unknown> {

@@ -1990,7 +1990,7 @@ test('ClientServer request uses the remaining reply budget and finishes once', a
 for (const sendTimeoutMs of [undefined, 75]) {
   test(`classic fanout PUB exposes creation send timeout ${sendTimeoutMs ?? 'default'}`, async () => {
     const registration = internal.createFrameworkRegistration({
-      channels: { events: { publisher: { bind: 'tcp://127.0.0.1:0', sendTimeoutMs } } }
+      channels: { events: { sendTimeoutMs, publisher: { bind: 'tcp://127.0.0.1:0' } } }
     });
     const adapter = new ZLinkNodeBackendAdapterFactory().createChannelAdapter();
     const context = adapter.createContext();
@@ -2010,7 +2010,7 @@ for (const sendTimeoutMs of [undefined, 75]) {
 for (const sendTimeoutMs of [0, -1, Infinity, 2_147_483_648]) {
   test(`classic fanout publisher rejects invalid send timeout ${sendTimeoutMs}`, () => {
     assert.throws(() => internal.createFrameworkRegistration({
-      channels: { events: { publisher: { bind: 'tcp://127.0.0.1:0', sendTimeoutMs } } }
+      channels: { events: { sendTimeoutMs, publisher: { bind: 'tcp://127.0.0.1:0' } } }
     }), /sendTimeoutMs/);
   });
 }
