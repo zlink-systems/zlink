@@ -802,7 +802,7 @@ final class ChannelMessagingTest {
                 assertTrue(thrown.getCause() instanceof ZLinkFrameworkException);
 
                 fileHandler.flush();
-                String logText = waitForFileLog(logPath, "outcome=failed", 3);
+                String logText = waitForFileLog(logPath, "event_id=zlink.dispatch_error", 3);
                 assertTrue(logText.contains("surface=channel"));
                 assertTrue(logText.contains("kind=request"));
                 assertTrue(logText.contains("reason=no_handler"));
