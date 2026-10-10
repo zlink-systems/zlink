@@ -1763,7 +1763,7 @@ class spot_node_runtime_t
                                                     std::vector<zlink::message_t>)> sender);
     void invalidate_message_follow_route (const runtime::protocol::message_follow_notice_t &notice);
     spot_manager_t manager () const;
-    result_t<actor_join_reply_t> join_actor_to_spot_erased (
+    task_t<actor_join_reply_t> join_actor_to_spot_erased (
       const actor_ref_t &actor_ref,
       spot_id_t spot_id,
       const zlink::message_t &request,
@@ -1772,7 +1772,7 @@ class spot_node_runtime_t
       std::uint64_t completion_operation_id_high = 0,
       std::uint64_t completion_operation_id_low = 0,
       std::function<void (std::function<void (result_t<void>)>)> *source_leave = nullptr);
-    result_t<actor_join_reply_t>
+    task_t<actor_join_reply_t>
     join_remote_actor_to_spot_erased (const actor_ref_t &actor_ref,
                                       spot_id_t spot_id,
                                       const zlink::message_t &request,
@@ -1793,7 +1793,7 @@ class spot_node_runtime_t
                                 std::uint64_t target_spot_generation = 0,
                                 std::uint64_t target_spot_authority_owner_generation = 0);
     void dispatch_wire_actor_join_admission (const spot_id_t &target_spot_id,
-                                             std::function<void ()> admission,
+                                             std::function<task_t<void> ()> admission,
                                              std::function<void ()> rejected,
                                              std::function<void ()> completed = {});
     std::optional<bool> validate_actor_join_relocation_prepare (
@@ -1839,7 +1839,7 @@ class spot_node_runtime_t
     completed_remote_actor_commit (const std::string &transfer_id,
                                    const actor_ref_t &source_actor,
                                    const spot_id_t &target_spot_id) const;
-    result_t<actor_join_reply_t>
+    task_t<actor_join_reply_t>
     commit_remote_actor_to_spot (std::string transfer_id,
                                  const actor_ref_t &actor_ref,
                                  spot_id_t target_spot_id,
@@ -1847,7 +1847,7 @@ class spot_node_runtime_t
                                  actor_context_t actor_context = {},
                                  std::vector<handoff_packet_t> handoff_backlog = {},
                                  service_provider_t *services = nullptr);
-    result_t<actor_join_reply_t> finalize_remote_actor_to_spot (
+    task_t<actor_join_reply_t> finalize_remote_actor_to_spot (
       std::string transfer_id,
       const actor_ref_t &actor_ref,
       spot_id_t target_spot_id,
@@ -1999,7 +1999,7 @@ class spot_node_runtime_t
                                 std::string transfer_id,
                                 std::optional<spot_id_t> spot_id = std::nullopt,
                                 std::optional<node_rid_t> target_node_rid = std::nullopt) const;
-    result_t<actor_join_reply_t> join_actor_to_entry_spot_erased (
+    task_t<actor_join_reply_t> join_actor_to_entry_spot_erased (
       const actor_ref_t &actor_ref,
       node_rid_t spot_node_rid,
       const zlink::message_t &request,
@@ -2118,7 +2118,7 @@ class spot_node_runtime_t
 
     std::shared_ptr<spot_context_state_t>
     find_active_remote_actor_join_target (const spot_id_t &target_spot_id) const;
-    result_t<actor_join_reply_t> run_actor_join_control (
+    task_t<actor_join_reply_t> run_actor_join_control (
       const actor_ref_t &actor,
       const service::actor_control_t &control,
       const std::string &join_spot_id,
@@ -2174,7 +2174,7 @@ class spot_node_runtime_t
                                                                 std::type_index actor_type,
                                                                 spot_id_t spot_id,
                                                                 const actor_ref_t &actor_ref);
-    std::function<void (std::function<void (result_t<void>)>)>
+    task_t<std::function<void (std::function<void (result_t<void>)>)>>
     commit_accepted_actor_join (const std::string &key,
                                 spot_context_t &context,
                                 const actor_ref_t &committed,

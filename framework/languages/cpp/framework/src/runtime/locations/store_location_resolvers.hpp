@@ -125,10 +125,17 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     task_t<std::optional<spot_address_t>> resolve_spot_address (std::string mesh_name,
                                                                 std::string spot_id) override
     {
+        return resolve_spot_address (std::move (mesh_name), std::move (spot_id), false);
+    }
+
+    task_t<std::optional<spot_address_t>>
+    resolve_spot_address (std::string mesh_name, std::string spot_id, bool instance_intent) override
+    {
         if (auto cached = cached_route (_spot_routes, spot_id)) {
             co_return std::optional<spot_address_t>{std::move (*cached)};
         }
-        if (const auto authority = co_await read_ready_authority (false, spot_id)) {
+        if (const auto authority =
+              co_await read_ready_authority (false, spot_id, instance_intent)) {
             const auto projected_id = decode_spot_id (authority->payload);
             if (!projected_id || *projected_id != spot_id)
                 co_return std::optional<spot_address_t>{};
@@ -138,6 +145,10 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                                           *projected_id, authority->object_generation};
             address.node_generation = authority->allocation.target.node_lifecycle_generation;
             apply_authority (address, *authority);
+            if (authority->authority_owner_generation == 0) {
+                address.stable_type = authority->allocation.stable_type;
+                co_return std::optional<spot_address_t>{std::move (address)};
+            }
             // Closing retains its exact owner route, but is never a Ready cache entry.
             const auto ready_user = decode_ready_user_spot_authority_payload (authority->payload);
             const auto instance = ready_user
@@ -349,8 +360,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         std::vector<std::byte> payload;
     };
 
-    task_t<std::optional<authority_projection_t>> read_ready_authority (bool actor,
-                                                                        std::string object_id)
+    task_t<std::optional<authority_projection_t>>
+    read_ready_authority (bool actor, std::string object_id, bool instance_intent = false)
     {
         const auto key = actor ? actor_authority_key (object_id) : spot_authority_key (object_id);
         const auto read = co_await _store->read_authority (key);
@@ -365,10 +376,14 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                 && expected_kind != placement_object_kind_t::instance_spot)) {
             co_return std::nullopt;
         }
-        /* An active authority with an expired owner is not Missing. Keep the
-         * row visible to the failure mapper as bounded Unavailable so callers
-         * do not start a cold activation on another node. */
         if (!(co_await _store->owner_admission_lifetime (snapshot->owner))) {
+            const auto instance =
+              instance_intent && !actor && expected_kind == placement_object_kind_t::instance_spot
+                ? decode_instance_spot_authority_payload (snapshot->payload)
+                : std::nullopt;
+            if (instance && instance->state == instance_spot_authority_state_t::ready)
+                co_return authority_projection_t{
+                  {}, 0, 0, {}, snapshot->allocation, snapshot->payload};
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "Location authority owner lease is unavailable");
         }

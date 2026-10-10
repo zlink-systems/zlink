@@ -100,7 +100,7 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     struct actor_destroy_callback_gate_t;
 
     task_t<spot_create_result_t>
-    create_user_spot (const std::shared_ptr<detail::mesh_node_runtime_t> &source,
+    create_user_spot (std::shared_ptr<detail::mesh_node_runtime_t> source,
                       bool exclusive,
                       std::optional<spot_id_t> spot_id,
                       std::string stable_type,

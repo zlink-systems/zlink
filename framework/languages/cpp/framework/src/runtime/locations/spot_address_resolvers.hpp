@@ -26,6 +26,8 @@ struct spot_address_t
     std::uint64_t authority_owner_generation = 0;
     location_owner_token_t owner;
     std::uint64_t node_generation = 0;
+    // A type without an authority fence carries the stored cold activation route.
+    std::string stable_type;
 };
 
 class spot_address_resolver_t
@@ -34,6 +36,11 @@ class spot_address_resolver_t
     virtual ~spot_address_resolver_t () = default;
     virtual task_t<std::optional<spot_address_t>> resolve_spot_address (std::string mesh_name,
                                                                         std::string spot_id) = 0;
+    virtual task_t<std::optional<spot_address_t>>
+    resolve_spot_address (std::string mesh_name, std::string spot_id, bool /* instance_intent */)
+    {
+        return resolve_spot_address (std::move (mesh_name), std::move (spot_id));
+    }
     virtual void invalidate_spot_address (std::string_view spot_id) = 0;
     virtual bool invalidate_spot_address_if_matches (std::string_view spot_id,
                                                      const spot_address_t &expected)

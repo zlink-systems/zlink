@@ -430,6 +430,9 @@ struct instance_spot_activation_materializer_t
     std::function<task_t<result_t<protocol::instance_spot_activation_header_t>> (
       protocol::instance_spot_activation_header_t)>
       select_target;
+    std::function<std::optional<::zlink::framework::detail::factory_relocation_kind_t> (
+      const std::string &)>
+      relocation_policy;
 
     explicit operator bool () const noexcept
     {
@@ -947,7 +950,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     actor_join_recovery_rollback_t _actor_join_recovery_rollback;
     actor_join_authority_spot_resolver_t _actor_join_authority_spot_resolver;
     actor_join_committed_authority_adopter_t _actor_join_committed_authority_adopter;
-    instance_spot_activation_materializer_t _instance_spot_materializer;
+    std::shared_ptr<const instance_spot_activation_materializer_t> _instance_spot_materializer;
     std::map<std::string,
              std::shared_ptr<task_completion_source_t<instance_activation_admission_t>>>
       _instance_spot_activation_admissions;

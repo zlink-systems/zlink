@@ -2260,7 +2260,8 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
         co_return result_t<void>::failure (framework_error_kind_t::not_configured,
                                            "in_mesh requires Instance Spot intent");
     }
-    const auto address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
+    const auto address =
+      co_await state->runtime->spot_resolver->resolve_spot_address ({}, target, intent.instance);
 
     auto submitted = result_t<void>::success ();
     if (intent.instance) {
@@ -2317,7 +2318,8 @@ task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_er
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "in_mesh requires Instance Spot intent");
     }
-    const auto address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
+    const auto address =
+      co_await state->runtime->spot_resolver->resolve_spot_address ({}, target, intent.instance);
 
     try {
         if (intent.instance) {

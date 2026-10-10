@@ -5964,7 +5964,7 @@ spot_node_runtime_t::actor_admission (spot_context_t &context,
     return result_t<spot_actor_admission_callbacks_t>::success (std::move (*selected));
 }
 
-std::function<void (std::function<void (result_t<void>)>)>
+task_t<std::function<void (std::function<void (result_t<void>)>)>>
 spot_node_runtime_t::commit_accepted_actor_join (const std::string &key,
                                                  spot_context_t &context,
                                                  const actor_ref_t &committed,
@@ -6082,6 +6082,42 @@ spot_node_runtime_t::commit_accepted_actor_join (const std::string &key,
      * observe the committed target Context, and a callback failure must not
      * roll authority back to the previous owner.
      */
+    auto services = _state->lane.run ([&] { return _state->root_services; }).get ();
+    if (services && _state->location_lifecycle) {
+        auto &repository = services->get_required<location_repository_t> ();
+        const auto authority_key = runtime::actor_authority_key (committed.actor_id ().value ());
+        const auto current = co_await repository.read_authority (authority_key);
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
+        auto member = snapshot ? runtime::decode_direct_actor_authority_payload (snapshot->payload)
+                               : std::nullopt;
+        if (!member || snapshot->object_generation != committed.object_generation ())
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Actor membership authority is unavailable");
+        const auto kind = target_state.is_entry_spot ()
+                            ? runtime::actor_authority_spot_kind_t::entry
+                            : runtime::actor_authority_spot_kind_t::user;
+        const auto generation =
+          target_state.is_entry_spot ()
+            ? (plan.native_node ? plan.native_node->status ().lifecycle_generation ()
+                                : target_state.object_generation)
+            : target_state.object_generation;
+        if (member->current_spot_id != std::string (target_state.spot_id)
+            || member->current_spot_generation != generation || member->current_spot_kind != kind) {
+            if (member->has_relocation_state)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Actor membership is relocating");
+            member->current_spot_id = std::string (target_state.spot_id);
+            member->current_spot_generation = generation;
+            member->current_spot_kind = kind;
+            const auto stored = co_await repository.compare_exchange_authority (
+              authority_key, snapshot->store_version,
+              authority_put_t{runtime::encode_actor_authority_payload (*member)});
+            if (!std::holds_alternative<authority_stored_t> (stored))
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Actor membership commit conflicted");
+        }
+    }
+    authority_committed = true;
     const auto location_updated =
       update_actor_location_after_move (_state, committed, target_state, false);
     if (!location_updated) {
@@ -6090,8 +6126,6 @@ spot_node_runtime_t::commit_accepted_actor_join (const std::string &key,
                                        ? location_updated.error ()->what ()
                                        : "actor committed location update failed");
     }
-    authority_committed = true;
-
     std::unique_ptr<service::actor_t> native_actor;
     if (plan.create_native_actor) {
         native_actor = std::make_unique<service::actor_t> (plan.native_node->create_actor (
@@ -6185,9 +6219,9 @@ spot_node_runtime_t::commit_accepted_actor_join (const std::string &key,
         }
     }
     if (!leave.callback)
-        return {};
-    return [leave = std::move (leave), actor,
-            state = _state] (std::function<void (result_t<void>)> completed) mutable {
+        co_return std::function<void (std::function<void (result_t<void>)>)>{};
+    co_return [leave = std::move (leave), actor,
+               state = _state] (std::function<void (result_t<void>)> completed) mutable {
         leave.context->run_serial_task_async (
           "spot-actor-leave",
           [leave, actor] {
@@ -6409,7 +6443,7 @@ void spot_node_runtime_t::replay_actor_handoff_core (
     }
 }
 
-result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
+task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
   const actor_ref_t &actor_ref,
   spot_id_t spot_id,
   const zlink::message_t &request,
@@ -6420,18 +6454,18 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
   std::function<void (std::function<void (result_t<void>)>)> *source_leave)
 {
     if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "actor ref is empty");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                         "actor ref is empty");
     }
     const auto key = actor_key (actor_ref);
     auto join_snapshot = actor_join_state_snapshot (actor_ref, spot_id, request);
     if (!join_snapshot.context) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "target spot is not registered");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                         "target spot is not registered");
     }
     if (!join_snapshot.registration) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "actor factory is not registered");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                         "actor factory is not registered");
     }
     auto &context = *join_snapshot.context;
     auto &registration = *join_snapshot.registration;
@@ -6451,12 +6485,12 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
         std::shared_ptr<void> created_instance;
         if (registration.create_context_instance) {
             if (!actor_context._state) {
-                return result_t<actor_join_reply_t>::failure (
+                co_return result_t<actor_join_reply_t>::failure (
                   framework_error_kind_t::not_configured,
                   "Actor factory requires a Framework Actor context");
             }
             if (actor_context.serializer_registry () == nullptr) {
-                return result_t<actor_join_reply_t>::failure (
+                co_return result_t<actor_join_reply_t>::failure (
                   framework_error_kind_t::protocol_error,
                   "Actor materialization Context has no serializer registry");
             }
@@ -6469,13 +6503,13 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
         }
         application_callback_crossed = true;
         if (!created_instance) {
-            return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                          "actor factory returned null");
+            co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                             "actor factory returned null");
         }
         actor_instance = install_actor_instance (actor_ref, key, std::move (created_instance));
         if (!actor_instance) {
-            return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                          "actor has been destroyed");
+            co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                             "actor has been destroyed");
         }
     }
     if (actor_snapshot) {
@@ -6487,8 +6521,8 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
         auto refreshed_admission =
           actor_admission (context, registration.actor_type, spot_id, actor_ref);
         if (!refreshed_admission) {
-            return detail::propagate_failure<actor_join_reply_t> (refreshed_admission,
-                                                                  "actor admission failed");
+            co_return detail::propagate_failure<actor_join_reply_t> (refreshed_admission,
+                                                                     "actor admission failed");
         }
         join_snapshot.admission.emplace (std::move (refreshed_admission.value ()));
     }
@@ -6498,8 +6532,8 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
           dispatch_error_reason_t::handler_missing, dispatch_error_action_t::reply_error,
           "actor.join", std::nullopt, std::string (spot_id),
           std::string (actor_ref.actor_id ().value ()));
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "spot actor join callback is not registered");
+        co_return result_t<actor_join_reply_t>::failure (
+          framework_error_kind_t::not_found, "spot actor join callback is not registered");
     }
 
     auto &admission_callbacks = *join_snapshot.admission;
@@ -6510,13 +6544,13 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
         : admission_callbacks.join (join_snapshot.spot_instance.get (),
                                     actor_ref.actor_id ().value (), request, serializers);
     if (!response.accepted) {
-        return result_t<actor_join_reply_t>::success (
+        co_return result_t<actor_join_reply_t>::success (
           actor_join_reply_t{1, actor_ref, framework_reply_or_empty (response.reply, serializers)});
     }
 
     if (!_state->actor_transfer_coordinator.try_begin_local (key)) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::rejected,
-                                                      "actor move is already in progress");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::rejected,
+                                                         "actor move is already in progress");
     }
     bool claimed_location = false;
     const auto location_claim = claim_pending_actor_location_before_activation (
@@ -6524,7 +6558,7 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
       claimed_location);
     if (!location_claim) {
         replay_actor_handoff_until_move_closed (actor_ref, key);
-        return result_t<actor_join_reply_t>::failure (
+        co_return result_t<actor_join_reply_t>::failure (
           location_claim.error_kind (), location_claim.error () ? location_claim.error ()->what ()
                                                                 : "actor location claim failed");
     }
@@ -6545,7 +6579,7 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
         if (!registration.create_context_instance) {
             registration.configure_instance (actor_instance.get (), committed, nullptr);
         }
-        auto leave = commit_accepted_actor_join (
+        auto leave = co_await commit_accepted_actor_join (
           key, context, committed, registration.actor_type, actor_instance.get (),
           admission_callbacks, true, request,
           /* The operation id string only feeds the actor-transfer marker —
@@ -6578,23 +6612,23 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
     }
     catch (const framework_exception_t &error) {
         fail_local_commit ();
-        return detail::result_access_t::failure<actor_join_reply_t> (error);
+        co_return detail::result_access_t::failure<actor_join_reply_t> (error);
     }
     catch (const std::exception &error) {
         fail_local_commit ();
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
-                                                      error.what ());
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
+                                                         error.what ());
     }
     catch (...) {
         fail_local_commit ();
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
-                                                      "actor join commit failed");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
+                                                         "actor join commit failed");
     }
-    return result_t<actor_join_reply_t>::success (
+    co_return result_t<actor_join_reply_t>::success (
       actor_join_reply_t{0, committed, framework_reply_or_empty (response.reply, serializers)});
 }
 
-result_t<actor_join_reply_t>
+task_t<actor_join_reply_t>
 spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_ref,
                                                        spot_id_t spot_id,
                                                        const zlink::message_t &request,
@@ -6603,23 +6637,23 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
     if (_state->lane.run ([&] { return _state->host_draining (); }).get ()) {
-        return result_t<actor_join_reply_t>::failure (
+        co_return result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::shutting_down,
           "spot node is draining and rejects new actor joins");
     }
     if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "actor ref is empty");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                         "actor ref is empty");
     }
     const auto key = actor_key (actor_ref);
     auto join_snapshot = actor_join_state_snapshot (actor_ref, spot_id, request);
     if (!join_snapshot.context) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "target spot is not registered");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                         "target spot is not registered");
     }
     if (!join_snapshot.registration) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "actor factory is not registered");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                         "actor factory is not registered");
     }
     auto &context = *join_snapshot.context;
     auto &registration = *join_snapshot.registration;
@@ -6639,7 +6673,7 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
         std::shared_ptr<void> created_instance;
         if (registration.create_context_instance) {
             if (!actor_context._state) {
-                return result_t<actor_join_reply_t>::failure (
+                co_return result_t<actor_join_reply_t>::failure (
                   framework_error_kind_t::not_configured,
                   "Actor factory requires a Framework Actor context");
             }
@@ -6652,13 +6686,13 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
         }
         application_callback_crossed = true;
         if (!created_instance) {
-            return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                          "actor factory returned null");
+            co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                             "actor factory returned null");
         }
         actor_instance = install_actor_instance (actor_ref, key, std::move (created_instance));
         if (!actor_instance) {
-            return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                          "actor has been destroyed");
+            co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                             "actor has been destroyed");
         }
     }
     if (!registration.create_context_instance) {
@@ -6672,8 +6706,8 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
         auto refreshed_admission =
           actor_admission (context, registration.actor_type, spot_id, actor_ref);
         if (!refreshed_admission) {
-            return detail::propagate_failure<actor_join_reply_t> (refreshed_admission,
-                                                                  "actor admission failed");
+            co_return detail::propagate_failure<actor_join_reply_t> (refreshed_admission,
+                                                                     "actor admission failed");
         }
         join_snapshot.admission.emplace (std::move (refreshed_admission.value ()));
     }
@@ -6683,8 +6717,8 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
           dispatch_error_reason_t::handler_missing, dispatch_error_action_t::reply_error,
           "actor.join", std::nullopt, std::string (spot_id),
           std::string (actor_ref.actor_id ().value ()));
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "spot actor join callback is not registered");
+        co_return result_t<actor_join_reply_t>::failure (
+          framework_error_kind_t::not_found, "spot actor join callback is not registered");
     }
 
     auto &admission_callbacks = *join_snapshot.admission;
@@ -6698,7 +6732,7 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
         if (!registration.create_context_instance) {
             registration.configure_instance (actor_instance.get (), actor_ref, &actor_context);
         }
-        return result_t<actor_join_reply_t>::success (
+        co_return result_t<actor_join_reply_t>::success (
           actor_join_reply_t{1, actor_ref, framework_reply_or_empty (response.reply, serializers)});
     }
 
@@ -6706,15 +6740,15 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
     const auto location_claim = claim_pending_actor_location_before_activation (
       _state, actor_ref, spot_id_t{}, committed, *context._state, claimed_location);
     if (!location_claim) {
-        return result_t<actor_join_reply_t>::failure (
+        co_return result_t<actor_join_reply_t>::failure (
           location_claim.error_kind (), location_claim.error () ? location_claim.error ()->what ()
                                                                 : "actor location claim failed");
     }
     bool authority_committed = false;
     try {
-        auto leave = commit_accepted_actor_join (key, context, committed, registration.actor_type,
-                                                 actor_instance.get (), admission_callbacks, false,
-                                                 request, key, authority_committed);
+        auto leave = co_await commit_accepted_actor_join (
+          key, context, committed, registration.actor_type, actor_instance.get (),
+          admission_callbacks, false, request, key, authority_committed);
         if (leave)
             leave ({});
     }
@@ -6724,7 +6758,7 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
         }
         throw;
     }
-    return result_t<actor_join_reply_t>::success (
+    co_return result_t<actor_join_reply_t>::success (
       actor_join_reply_t{0, committed, framework_reply_or_empty (response.reply, serializers)});
 }
 
@@ -8812,29 +8846,25 @@ void spot_node_runtime_t::end_relocation_activation_admissions (
                                                : activation_admission_t::spot_key (target.key));
 }
 
-void spot_node_runtime_t::dispatch_wire_actor_join_admission (const spot_id_t &target_spot_id,
-                                                              std::function<void ()> admission,
-                                                              std::function<void ()> rejected,
-                                                              std::function<void ()> completed)
+void spot_node_runtime_t::dispatch_wire_actor_join_admission (
+  const spot_id_t &target_spot_id,
+  std::function<task_t<void> ()> admission,
+  std::function<void ()> rejected,
+  std::function<void ()> completed)
 {
     const auto target = find_active_remote_actor_join_target (target_spot_id);
     if (!target) {
         rejected ();
         return;
     }
-    target->run_serial_task_async (
-      "spot-actor-admission",
-      [admission = std::move (admission)] {
-          admission ();
-          return task_t<void> (result_t<void>::success ());
-      },
-      [rejected = std::move (rejected),
-       completed = std::move (completed)] (result_t<void> outcome) {
-          if (!outcome)
-              rejected ();
-          if (completed)
-              completed ();
-      });
+    target->run_serial_task_async ("spot-actor-admission", std::move (admission),
+                                   [rejected = std::move (rejected),
+                                    completed = std::move (completed)] (result_t<void> outcome) {
+                                       if (!outcome)
+                                           rejected ();
+                                       if (completed)
+                                           completed ();
+                                   });
 }
 
 std::shared_ptr<spot_context_state_t>
@@ -10662,7 +10692,7 @@ spot_node_runtime_t::completed_remote_actor_commit (const std::string &transfer_
     return actor_join_reply_t{0, target_actor, zlink::message_t{}};
 }
 
-result_t<actor_join_reply_t>
+task_t<actor_join_reply_t>
 spot_node_runtime_t::commit_remote_actor_to_spot (std::string transfer_id,
                                                   const actor_ref_t &actor_ref,
                                                   spot_id_t target_spot_id,
@@ -10678,12 +10708,12 @@ spot_node_runtime_t::commit_remote_actor_to_spot (std::string transfer_id,
       transfer_id, actor_ref, target_spot_id, std::move (transfer_state), std::move (actor_context),
       actor_gateway.has_value ());
     if (!prepared) {
-        return prepared;
+        co_return prepared;
     }
     if (!handoff_backlog.empty () && services == nullptr) {
         fail_handoff_backlog (_state,
                               _state->actor_transfer_coordinator.fail_commit (transfer_id, true));
-        return result_t<actor_join_reply_t>::failure (
+        co_return result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::protocol_error,
           "remote actor handoff backlog requires a service provider");
     }
@@ -10692,19 +10722,19 @@ spot_node_runtime_t::commit_remote_actor_to_spot (std::string transfer_id,
     if (!staged) {
         fail_handoff_backlog (_state,
                               _state->actor_transfer_coordinator.fail_commit (transfer_id, true));
-        return detail::propagate_failure<actor_join_reply_t> (
+        co_return detail::propagate_failure<actor_join_reply_t> (
           staged, "remote actor handoff backlog staging failed");
     }
     if (services != nullptr) {
-        return finalize_remote_actor_to_spot (std::move (transfer_id), actor_ref,
-                                              std::move (target_spot_id), *services,
-                                              actor_gateway ? &*actor_gateway : nullptr);
+        co_return co_await finalize_remote_actor_to_spot (
+          std::move (transfer_id), actor_ref, std::move (target_spot_id), *services,
+          actor_gateway ? &*actor_gateway : nullptr);
     }
     service_collection_t empty_services;
     auto empty_provider = empty_services.build_provider ();
-    return finalize_remote_actor_to_spot (std::move (transfer_id), actor_ref,
-                                          std::move (target_spot_id), empty_provider,
-                                          actor_gateway ? &*actor_gateway : nullptr);
+    co_return co_await finalize_remote_actor_to_spot (std::move (transfer_id), actor_ref,
+                                                      std::move (target_spot_id), empty_provider,
+                                                      actor_gateway ? &*actor_gateway : nullptr);
 }
 
 void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
@@ -11553,7 +11583,7 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
     }
 }
 
-result_t<actor_join_reply_t> spot_node_runtime_t::finalize_remote_actor_to_spot (
+task_t<actor_join_reply_t> spot_node_runtime_t::finalize_remote_actor_to_spot (
   std::string transfer_id,
   const actor_ref_t &actor_ref,
   spot_id_t target_spot_id,
@@ -11568,10 +11598,10 @@ result_t<actor_join_reply_t> spot_node_runtime_t::finalize_remote_actor_to_spot 
       deadline, [completion] (result_t<actor_join_reply_t> value) mutable {
           completion->complete (std::move (value));
       });
-    return result.result ();
+    return result;
 }
 
-result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_entry_spot_erased (
+task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_entry_spot_erased (
   const actor_ref_t &actor_ref,
   node_rid_t spot_node_rid,
   const zlink::message_t &request,
@@ -11582,7 +11612,7 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_entry_spot_erase
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
     if (_state->host_draining ()) {
-        return result_t<actor_join_reply_t>::failure (
+        co_return result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::shutting_down,
           "spot node is draining and rejects new actor joins");
     }
@@ -11622,19 +11652,20 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_entry_spot_erase
         })
         .get ();
     if (entry.selection == entry_selection_t::node_mismatch) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "spot node rid does not match this node");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                         "spot node rid does not match this node");
     }
     if (entry.selection == entry_selection_t::not_registered) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "entry spot is not registered");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                         "entry spot is not registered");
     }
     if (!entry.entry_id) {
-        return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
-                                                      "entry spot is not created");
+        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
+                                                         "entry spot is not created");
     }
-    return join_actor_to_spot_erased (actor_ref, *entry.entry_id, request, actor_snapshot,
-                                      std::move (actor_context), 0, 0, source_leave);
+    co_return co_await join_actor_to_spot_erased (actor_ref, *entry.entry_id, request,
+                                                  actor_snapshot, std::move (actor_context), 0, 0,
+                                                  source_leave);
 }
 
 void spot_node_runtime_t::on_destroy_actor (
@@ -15360,10 +15391,11 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
        request = parts.empty () ? zlink::message_t{} : parts.front (),
        targets_entry_spot = join_dispatch_snapshot.targets_entry_spot,
        local_node_rid = join_dispatch_snapshot.local_node_rid, services = &services,
-       serializers = &serializers] () mutable {
-          join_result->joined.emplace (runtime.run_actor_join_control (
-            actor, control, join_spot_id, parts, request, targets_entry_spot, local_node_rid,
-            *services, *serializers, &join_result->source_leave));
+       serializers = &serializers] () mutable -> task_t<void> {
+          join_result->joined.emplace (co_await runtime::await_result (
+            runtime.run_actor_join_control (actor, control, join_spot_id, parts, request,
+                                            targets_entry_spot, local_node_rid, *services,
+                                            *serializers, &join_result->source_leave)));
       },
       [join_result, settle_once] {
           if (!join_result->joined)
@@ -15387,7 +15419,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
  * operation). It runs in the target Spot's lifecycle item, so the target's
  * own lifecycle steps run inline (Spot-Actor membership: Join on the
  * lifecycle lane; handler turn and execution gate §7). */
-result_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
+task_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
   const actor_ref_t &actor,
   const service::actor_control_t &control,
   const std::string &join_spot_id,
@@ -15402,24 +15434,22 @@ result_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
     if (parts.size () >= 10 && join_spot_id != local_node_rid) {
         const auto target_spot = spot_id_t (join_spot_id);
         const auto transfer_id = parts[2].to_string ();
-        auto admitted =
-          admit_remote_actor_to_spot (transfer_id, actor, spot_id_t (parts[3].to_string ()),
-                                      target_spot, request)
-            .result ();
+        auto admitted = co_await runtime::await_result (admit_remote_actor_to_spot (
+          transfer_id, actor, spot_id_t (parts[3].to_string ()), target_spot, request));
         if (!admitted) {
-            return detail::propagate_failure<actor_join_reply_t> (admitted,
-                                                                  "remote actor admission failed");
+            co_return detail::propagate_failure<actor_join_reply_t> (
+              admitted, "remote actor admission failed");
         }
         const auto admission_reply =
           framework_reply_or_empty (admitted.value ().reply, serializers);
         if (!admitted.value ().accepted) {
-            return result_t<actor_join_reply_t>::success (
+            co_return result_t<actor_join_reply_t>::success (
               actor_join_reply_t{1, actor, admission_reply});
         }
         auto native = native_node ();
         if (!native) {
-            return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
-                                                          "target Core MeshNode is unavailable");
+            co_return result_t<actor_join_reply_t>::failure (
+              framework_error_kind_t::internal_failure, "target Core MeshNode is unavailable");
         }
         service::actor_transfer_prepare_t transfer_prepare{
           .role = service::actor_transfer_role_t::target,
@@ -15431,7 +15461,7 @@ result_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
         service::actor_transfer_token_t transfer_token;
         service::actor_transfer_prepare_result_t transfer_result{actor, 0};
         if (!native->prepare_actor_transfer (transfer_prepare, transfer_token, transfer_result)) {
-            return result_t<actor_join_reply_t>::failure (
+            co_return result_t<actor_join_reply_t>::failure (
               framework_error_kind_t::internal_failure,
               "target Framework Actor relocation prepare failed");
         }
@@ -15443,9 +15473,9 @@ result_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
                 std::string (actor.actor_id ().value ()));
           })
           .get ();
-        auto committed = commit_remote_actor_to_spot (
+        auto committed = co_await runtime::await_result (commit_remote_actor_to_spot (
           transfer_id, actor, target_spot, parts[1],
-          services.get_required<actor_gateway_runtime_t> ().actor_context (actor), {}, &services);
+          services.get_required<actor_gateway_runtime_t> ().actor_context (actor), {}, &services));
         if (!committed) {
             _state->lane
               .run ([&] {
@@ -15453,11 +15483,11 @@ result_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
                     std::string (actor.actor_id ().value ()));
               })
               .get ();
-            return committed;
+            co_return committed;
         }
         const auto new_membership_epoch = transfer_result.membership_epoch + 1;
         if (!transfer_token.commit (new_membership_epoch) || !transfer_token.activate ()) {
-            return result_t<actor_join_reply_t>::failure (
+            co_return result_t<actor_join_reply_t>::failure (
               framework_error_kind_t::internal_failure,
               "target Framework Actor relocation activation failed");
         }
@@ -15465,23 +15495,22 @@ result_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
             emit_actor_transfer_marker ("location_committed", committed.value ().actor, transfer_id,
                                         target_spot);
         }
-        return result_t<actor_join_reply_t>::success (actor_join_reply_t{
+        co_return result_t<actor_join_reply_t>::success (actor_join_reply_t{
           committed.value ().result_code, committed.value ().actor, admission_reply});
     }
-    return targets_entry_spot
-             ? [&] {
-                   auto &actor_gateway = services.get_required<actor_gateway_runtime_t> ();
-                   auto actor_context = actor_gateway.actor_context (actor);
-                   if (actor_context.serializer_registry () == nullptr) {
-                       return result_t<actor_join_reply_t>::failure (
-                         framework_error_kind_t::protocol_error,
-                         "Actor gateway Context has no serializer registry");
-                   }
-                   return join_actor_to_entry_spot_erased (
-                     actor, node_rid_t::from_string (local_node_rid), request, std::nullopt,
-                     std::move (actor_context), source_leave);
-               }()
-             : join_actor_to_spot_erased (actor, spot_id_t (join_spot_id), request, std::nullopt, {}, 0, 0, source_leave);
+    if (targets_entry_spot) {
+        auto &actor_gateway = services.get_required<actor_gateway_runtime_t> ();
+        auto actor_context = actor_gateway.actor_context (actor);
+        if (actor_context.serializer_registry () == nullptr)
+            co_return result_t<actor_join_reply_t>::failure (
+              framework_error_kind_t::protocol_error,
+              "Actor gateway Context has no serializer registry");
+        co_return co_await join_actor_to_entry_spot_erased (
+          actor, node_rid_t::from_string (local_node_rid), request, std::nullopt,
+          std::move (actor_context), source_leave);
+    }
+    co_return co_await join_actor_to_spot_erased (actor, spot_id_t (join_spot_id), request,
+                                                  std::nullopt, {}, 0, 0, source_leave);
 }
 
 
