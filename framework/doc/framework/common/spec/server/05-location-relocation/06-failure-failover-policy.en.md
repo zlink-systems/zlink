@@ -133,13 +133,12 @@ This route does not select a new owner after owner process failure and is not fa
 
 If the owner process of the current `Ready` Actor or Spot terminates, the Framework doesn't
 automatically restore the same object on a different node. It doesn't arbitrarily change the
-owner recorded in the Location Store. A new incarnation from an explicit Actor `Create` or
-`GetOrCreate` follows the creation confirmation procedure after the conditional release of
-[Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas). This rule
-applies equally to Instance Spots. After the owner lease expires, merely being an Instance Spot
-doesn't release the [authority](../00-foundation/02-glossary.en.md#authority) — the reference
-information that determines which node an Actor or Spot is on and which node is currently the
-owner — or convert the next message into cold activation.
+owner recorded in the Location Store. An operation that creates a new incarnation — an Actor
+`Create` or `GetOrCreate`, a User Spot `GetOrCreate`, or a new message with Instance intent —
+creates a new [authority](../00-foundation/02-glossary.en.md#authority), the reference information
+that determines which node an Actor or Spot is on and which node is currently the owner, only
+after the conditional release of [Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas)
+commits. If the release conditions aren't met, that operation ends with `Unavailable`.
 
 ### 4.3 Actor and Spot Creation
 
@@ -178,16 +177,14 @@ distinguishes what the Framework does based on current authority when a message 
 | `Missing`, with no authority record | Selects one eligible node and starts cold activation of a new `ObjectGeneration`. |
 | `Creating`, or `Ready` with the first message not yet restored | Within the same target lifecycle, uses the stored creation record and first message to continue creation of the same `ObjectGeneration`. A `Creating` whose target lifecycle has ended becomes `Missing` after the [Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas) release. Doesn't create a new incarnation before the release. |
 | `Ready` with a valid owner lease | Sends the message to the current owner. Doesn't start cold activation. |
-| The `Ready` owner process terminated, or the owner lease is invalid | Doesn't automatically release the authority record or create a new incarnation on a different node. The operation ends with `Unavailable`. |
+| The `Ready` owner process terminated, or the owner lease is invalid | Once the [Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas) release commits, starts cold activation of a new `ObjectGeneration` from `Missing`. The previous incarnation's state and accepted operations aren't carried over. If the release conditions aren't met, the operation ends with `Unavailable`. |
 | The application's explicit `Close` finished, including authority release | A subsequent lookup returns `Missing`. The next Instance-intent message can start cold activation of a new `ObjectGeneration`. |
 | The application's explicit `Close` is in progress | Forwarding and the execution target of an Instance-intent message follow [Spot address messaging §§7 and 9](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
 | A planned `Relocate` is in progress or finished | Moves the same object and `ObjectGeneration` to the target per the relocation contract. Not treated as cold activation or crash failover. |
 
-So the behavior "once the process terminates and the lease expires, the next message reactivates
-the Instance Spot on a different node" isn't part of the current contract. Providing such behavior
-would require defining a separate failover contract: under what conditions to release a failed
-owner's authority, how to recover stored state and accepted operations, and what fence blocks the
-previous owner.
+So reactivating an Instance Spot whose owner has ended on a different node is only a new
+incarnation of a type whose relocation policy is `Disabled`. A failover that recovers stored state
+and accepted operations isn't part of the contract.
 
 The first-creation recovery information is only used for an Instance Spot's first creation. It
 doesn't apply to Actor, User Spot, an already-`Ready` Instance Spot, or host relocation. The
@@ -312,8 +309,10 @@ Delivering a send or request to one Spot by specifying its global ID is called
 - Destroy/Close, membership, relocation, and creation recovery check that the ObjectGeneration matches.
 - After removing an Actor and re-creating it under the same ActorId, the previous Session binding
   isn't reused.
-- An Instance Spot only starts cold activation when `Missing`. A `Ready` owner process termination
-  or owner lease expiry isn't turned into `Missing` or recovered via cold activation.
+- An Instance Spot only starts cold activation when `Missing`. Seeing an invalid owner alone
+  doesn't produce `Missing`; verification distinguishes a creation that starts a new
+  `ObjectGeneration` after the [Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas)
+  release commits from initial-activation recovery in the same target lifecycle.
 - Even if a `Ready` authority still has an [activation recovery pointer](../00-foundation/02-glossary.en.md#activation-recovery-pointer) identifying the cold activation recovery root and replay cursor, it is used only to resume
   the incomplete first cold-activation operation on the same target node and lifecycle designated
   by the authority. It is never a basis for selecting another target after a steady `Ready` owner

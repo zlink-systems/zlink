@@ -764,17 +764,24 @@ lifecycle이 바뀌어도 이어진다 — 해제하지 않은 모든 allocation
 `Reserved`를 읽었을 때와 startup scan이 이전 lifecycle의 `Creating`을 넘겼을 때 같은 판정을 쓴다.
 Target owner lease가 유효하고 descriptor가 같은 lifecycle이면 해제하지 않는다.
 
-**Owner가 끝난 Actor의 `Active` record도 다시 만들 때 해제한다.** Actor `Create`·`GetOrCreate`가 같은
-ActorId의 `Active` record를 읽었고, 그 record의 owner lease가 없거나 다른 `LeaseGeneration`이거나
-만료됐으며, 생성하는 node에 등록된 그 Actor type의 relocation 정책이 `Disabled`이면 Location
-repository가 그 record를 해제한다. Relocation 진행 정보나 aggregate에 속한 record는 이 해제 대상이
-아니며 그 relocation의 복구 절차를 따른다. 해제는 위 reservation 해제와 같은 조건(authority `StoreVersion`,
-owner lease 상태, descriptor 상태, 수용 공간 record)을 한 batch로 검사하고, authority와 그 incarnation의
-membership을 함께 지우며 active 수용 공간을 반납한다. 해제한 뒤에는 `Missing`에서 새 incarnation을
-만든다 — 이전 incarnation의 상태는 복원하지 않는다. 해제 판정 전에 stable type이 같은지 확인한다(다르면 기존
-`TypeMismatch`). Owner lease가 유효하면 type과 operation에 따른 기존 결과를 반환한다. Owner lease가
-무효이고 생성 node의 해당 Actor type 정책이 `Disabled`가 아니면 `Unavailable`을 반환한다. 이 해제는
-유효한 owner lease를 요구하는 `Delete`와 다른, repository의 조건부 batch다.
+**Owner가 끝난 object의 `Active` record도 다시 만들 때 해제한다.** 같은 ID의 새 incarnation을 만드는
+operation — Actor `Create`·`GetOrCreate`, User Spot `GetOrCreate`, [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent)가 있는 새
+message — 이 `Active` record를 읽었고, 그 record의 owner lease가 없거나 다른 `LeaseGeneration`이거나
+만료됐으며, 새 incarnation을 `Reserve`하는 node에 등록된 그 type의 relocation 정책이 `Disabled`이면
+Location repository가 그 record를 해제한다. `Reserve`하는 node는 Actor와 User Spot에서는 생성을 요청한
+node이고, Instance Spot에서는 activation envelope를 받은 target이다. 그 node에 type이 등록되어 있지
+않으면 `Disabled`로 보지 않는다. User Spot은 그 SpotId와 `ObjectGeneration`의 Actor membership이
+Location Store에 하나도 없을 때만 해제한다. Membership은 Store에서 끝까지 읽어 판정하며, process 안의
+목록이나 일부 page로 판정하지 않는다. 남아 있으면 아무것도 바꾸지 않는다. Relocation 진행 정보나
+aggregate에 속한 record, activation recovery pointer가 남은 Instance Spot은 이 해제 대상이 아니며 각자의
+복구 절차를 따른다. 해제는 위 reservation 해제와 같은 조건(authority `StoreVersion`, owner lease 상태,
+descriptor 상태, 수용 공간 record)을 한 batch로 검사하고, authority와 그 incarnation의 membership을
+함께 지우며 active 수용 공간을 반납한다. 해제가 commit된 뒤에만 `Missing`에서 새 incarnation을
+만든다 — 이전 incarnation의 상태, 수락된 operation과 recovery 정보는 이어받지 않는다. 해제 판정 전에
+kind와 stable type이 같은지 확인한다(다르면 기존 `TypeMismatch`). Owner lease가 유효하면 type과
+operation에 따른 기존 결과를 반환한다. Owner lease가 무효이고 해제 조건을 만족하지 않으면
+`Unavailable`을 반환한다. 일반 message와 `Find`는 이 해제를 시작하지 않는다. 이 해제는 유효한 owner
+lease를 요구하는 `Delete`와 다른, repository의 조건부 batch다.
 
 **`Conflict`를 받은 작업은 작업 자격을 다시 확인해 이어 간다.** Provider `Conflict`는 아무것도 변경하지
 않았지만 어느 조건이 맞지 않았는지는 알려 주지 않는다. Framework는 authority record를 다시 읽어, 처음

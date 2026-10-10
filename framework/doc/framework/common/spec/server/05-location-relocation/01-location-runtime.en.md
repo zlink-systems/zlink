@@ -852,20 +852,28 @@ alone makes this decision — `Reserve` uses the same decision when it reads an 
 and so does the startup scan when it passes a previous lifecycle's `Creating`. If the target owner
 lease is valid and the descriptor is the same lifecycle, the reservation isn't released.
 
-**An `Active` Actor record whose owner has ended is also released on re-creation.** When an Actor
-`Create` or `GetOrCreate` reads an `Active` record for the same ActorId whose owner lease is missing,
-has a different `LeaseGeneration`, or has expired, and the relocation policy registered on the
-creating node for that Actor type is `Disabled`, the Location repository releases that record. A record that carries relocation progress or
-belongs to an aggregate isn't subject to this release and follows that relocation's recovery
-procedure. The
-release checks, in one batch, the same conditions as the reservation release above (authority
-`StoreVersion`, owner lease state, descriptor state, and capacity record), removes the authority
-together with that incarnation's membership, and returns the active capacity. After the release, a
-new incarnation is created from `Missing` — the previous incarnation's state isn't restored. Whether the stable type
-matches is checked before the release decision (a different type keeps the existing `TypeMismatch`).
-If the owner lease is valid, the existing result for the type and operation is returned. If the
-owner lease is invalid and the creating node's policy for that Actor type isn't `Disabled`,
-`Unavailable` is returned. This release is a conditional repository batch, distinct from `Delete`,
+**An `Active` object record whose owner has ended is also released on re-creation.** When an
+operation that creates a new incarnation of the same ID — an Actor `Create` or `GetOrCreate`, a User
+Spot `GetOrCreate`, or a new message with [Instance intent](../00-foundation/02-glossary.en.md#instance-intent) — reads an `Active` record whose
+owner lease is missing, has a different `LeaseGeneration`, or has expired, and the relocation
+policy registered for that type on the node that `Reserve`s the new incarnation is `Disabled`, the
+Location repository releases that record. The node that `Reserve`s is the node that requested
+creation for an Actor or User Spot, and the target that received the activation envelope for an
+Instance Spot. If the type isn't registered on that node, the policy isn't treated as `Disabled`. A
+User Spot is released only when the Location Store holds no Actor membership for that SpotId and
+`ObjectGeneration`. Membership is decided by reading the Store to the end, not from a process-local
+list or a partial page. If any remains, nothing changes. A record that carries relocation progress
+or belongs to an aggregate, and an Instance Spot that still has an activation recovery pointer,
+aren't subject to this release and follow their own recovery procedures. The release checks, in
+one batch, the same conditions as the reservation release above (authority `StoreVersion`, owner
+lease state, descriptor state, and capacity record), removes the authority together with that
+incarnation's membership, and returns the active capacity. Only after the release commits is a new
+incarnation created from `Missing` — the previous incarnation's state, accepted operations, and
+recovery information aren't carried over. Whether the kind and stable type match is checked before
+the release decision (a different type keeps the existing `TypeMismatch`). If the owner lease is
+valid, the existing result for the type and operation is returned. If the owner lease is invalid
+and the release conditions aren't met, `Unavailable` is returned. Ordinary messages and `Find`
+don't start this release. This release is a conditional repository batch, distinct from `Delete`,
 which requires a valid owner lease.
 
 **An operation that receives `Conflict` continues after re-checking its eligibility.** A provider

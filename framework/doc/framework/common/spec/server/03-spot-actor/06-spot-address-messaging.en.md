@@ -228,7 +228,8 @@ If the same caller Spot ID's kind or stable type differs, it's
 `TypeMismatch`.
 
 `GetOrCreate` returns a Ready object of the same User Spot type as
-`Existing`. A different operation observing an in-progress Creating attempt
+`Existing` when its owner lease is valid, and otherwise follows the release
+result of [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas). A different operation observing an in-progress Creating attempt
 doesn't start a new reservation or factory — it waits for the authority
 change. If the earlier attempt ends Ready, it returns `Existing` and that
 incarnation's `SpotRef`. If it becomes Missing via rejection/failure
@@ -363,12 +364,14 @@ The terminal call doesn't split into a separate check and send — it
 performs resolve and activation in the following order.
 
 1. Queries the global Spot ID's current authority.
-2. If Ready authority exists, sends to the current owner using the stored
+2. If Ready authority with a valid owner lease exists, sends to the current owner using the stored
    kind and stable type.
 3. If authority is Missing and there is no Instance intent, ends with the
    result in the §9 table.
-4. If authority is Missing and there is Instance intent, selects an
-   eligible Object Mesh. Starting at this step, only descriptors with a live owner lease
+4. If authority is Missing, or Ready with an invalid owner lease, and there is Instance intent,
+   selects an eligible Object Mesh. In the latter case, the target requests the
+   [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas) release before `Reserve`, and
+   if the release doesn't commit, ends with `Unavailable` without running the factory. Starting at this step, only descriptors with a live owner lease
    are used to compute candidates —
    [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease)
    defines the criteria. If `InMesh` is omitted and there are 0 candidates,

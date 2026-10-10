@@ -189,7 +189,8 @@ ObjectGeneration, creation attempt)` 기준으로 한 번 이상 실행될 수 �
 `AlreadyExists`로 terminal completion을 반환한다. 같은 caller Spot ID의 kind 또는 stable type이
 다르면 `TypeMismatch`다.
 
-`GetOrCreate`는 같은 User Spot type의 Ready object를 `Existing`으로 반환한다. 진행 중인
+`GetOrCreate`는 같은 User Spot type의 Ready object를 owner lease가 유효하면 `Existing`으로 반환하고,
+무효하면 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제 결과를 따른다. 진행 중인
 Creating attempt를 관찰한 서로 다른 operation은 새 reservation이나 factory를 시작하지 않고
 authority 변경을 기다린다. 앞선 attempt가 Ready로 끝나면 `Existing`과 그 incarnation의
 `SpotRef`를 반환한다. Rejected·failure cleanup으로 Missing이 되면 남은 deadline 안에서 새
@@ -308,9 +309,11 @@ placement를 제한하는 option이 아니다.
 Terminal call은 별도 check와 send로 나누지 않고 다음 순서로 resolve와 activation을 수행한다.
 
 1. global Spot ID의 current authority를 조회한다.
-2. Ready authority가 있으면 저장된 kind와 stable type을 사용해 current owner로 전송한다.
+2. Owner lease가 유효한 Ready authority가 있으면 저장된 kind와 stable type을 사용해 current owner로 전송한다.
 3. authority가 Missing이고 Instance intent가 없으면 §9 표의 결과로 끝낸다.
-4. authority가 Missing이고 Instance intent가 있으면 eligible Object Mesh를 선택한다. 이
+4. authority가 Missing이거나 owner lease가 무효인 Ready이고 Instance intent가 있으면 eligible Object
+   Mesh를 선택한다. 뒤의 경우 target은 `Reserve` 전에 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의
+   해제를 요청하고, 해제가 commit되지 않으면 factory를 실행하지 않고 `Unavailable`로 끝낸다. 이
    단계부터 후보 계산에 사용하는 descriptor는 owner lease가 살아 있는 것으로 한정한다 —
    판정 기준은
    [Location runtime §4.1](../05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증)이
