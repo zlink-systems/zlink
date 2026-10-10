@@ -49,6 +49,59 @@ An Instance Spot has no create call of its own. Name the instance type on the fi
 the Framework selects an existing instance or creates one where it is needed, then **handles that
 same message.**
 
+### 1.1 Instance Spot Single Activation Scope
+
+**Nodes sharing the location records in one Location Store do not activate the same Instance
+Spot id in two places at once.** The node currently handling the Spot is its owner. The Framework
+lets only the node that first secures creation rights in the location store run the factory, then
+handles messages after creation commits. This guarantee relies on those location records and owner
+eligibility. Deployments using independent Location Stores do not form one serial execution unit.
+An owner lease, renewed periodically, establishes how long the owner is eligible to accept work.
+
+Single activation does not mean processing continues through every failure. Some operations wait
+or fail instead of creating a duplicate.
+
+| Situation | Message processing result |
+| --- | --- |
+| First messages for the same id arrive at different nodes together | Only the node that secures creation rights creates the Spot. A request at a losing node ends with `Unavailable`, or retains its timeout if the original deadline has passed. Failure of a one-way send whose outbound admission has completed is recorded in diagnostics. |
+| Activation is in progress at the same target | Later operations join that activation. After `Ready`, they enter the queue in arrival order; activation failure follows their original completion contracts. A call whose resolver finds creation in progress also waits for activation. |
+| A `Ready` owner is forcibly stopped or its owner lease is invalid | New requests return `Unavailable`. Neither while the lease remains nor after it expires does the Framework automatically release the location record or recreate the Spot at another node on the next message. |
+| Location Store connection or mutation response is lost | The Framework confirms the mutation result before assuming success; it does not create another node's instance to process the operation. `StoreFailureGrace`, the grace period retaining the existing node list, does not extend owner eligibility. A valid owner can process work until its admission deadline; after that, new message and timer callbacks and state changes are blocked. Completion and cleanup of already accepted work can continue. A request waiting for confirmation retains its original timeout, cancellation, and failure completion conditions. |
+| Planned relocation is in progress | The source finishes the current callback and stops starting new callbacks. Pending work and new messages are transferred and held at the target, which starts execution after restore and owner change commit. Depending on the failure boundary, the source is preserved or the operation fails; both nodes do not execute handlers together. [Relocation](37-relocation.en.md) explains the failure results. |
+
+`Missing` means there is no location record; only this state permits an Instance intent message to
+create a new instance. An existing `Ready` instance becomes `Missing` after explicit close completes
+its location release.
+Recovery before `Ready` can resume within the same target lifecycle and can invoke the factory again
+with the same input. A reservation whose target lifecycle ends during creation becomes `Missing`
+after release. External store changes in a factory therefore need to account for repeated calls.
+
+Single activation after manually clearing the location store or losing location and generation
+records is outside this guarantee. That condition cannot be treated as normal close or owner
+failure recovery.
+
+### 1.2 Durable State and Public Generation Values
+
+**Durable financial state, such as a shared jackpot, also needs protection in the application
+store.** An Instance Spot runs its callbacks serially. It does not put another service's DB writes
+or external I/O already in progress into one transaction. A jackpot balance update and the record
+of its business request id belong in the same DB transaction, with a row lock or conditional update
+protecting other write paths too. After timeout or connection loss, the application queries the
+previous result or prevents duplicate effects with the same business request id before starting
+another operation.
+
+The public Instance Spot context exposes `ObjectGeneration` to **distinguish recreation of the
+same id**.
+
+Read it through `IZLinkInstanceSpotContext.ObjectGeneration`.
+
+Relocation moves the same object and does not change `ObjectGeneration`. This value cannot serve
+as a fencing token that distinguishes owner changes. Fencing means the store rejects a mutation
+carrying an old write authorization. When needed, the application store issues that authorization
+and validates it on every write. The Framework context does not supply an owner-change token.
+Ordering against earlier generation values cannot be assumed after location-store generation
+records are lost either.
+
 ## 2. Lifecycle Callbacks per Kind
 
 The names follow each language; the conditions and the order are the same.

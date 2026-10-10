@@ -220,6 +220,11 @@ Runnable reference samples: [TicTacToe](../../../common/sample/tictactoe/README.
 
 ### 2.2 Concurrent Access to One Entity
 
+Instance Spot serialization applies to nodes sharing location records in one Location Store.
+It does not guarantee automatic recreation after owner failure. Other DB write paths and financial
+state also need protection in the store. [Single activation scope and durable state protection](34-activation-lifetime.en.md#11-instance-spot-single-activation-scope)
+explain failure results and the limits of the public generation value.
+
 **Why it's hard.** There are cases, like a guild, where **several different users need to
 modify the same entity at the same time.** Just like two users applying to join at the same
 time can exceed the roster cap, or two donations landing at once can lose one of them,
@@ -342,6 +347,10 @@ Runnable reference samples: [SupportChat](../../../common/sample/supportchat/REA
 [DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md)
 
 ### 2.4 Simplifying Event-Driven Business Processing
+
+An Instance Spot runs callbacks for the same id serially. The application prevents duplicate business
+effects with request ids and store transactions. [Single activation scope and durable state protection](34-activation-lifetime.en.md#11-instance-spot-single-activation-scope)
+explain waiting and failure during creation races, Store outages, and relocation.
 
 Where ZLink applies isn't limited to real-time features. Business processes like order
 handling, settlement, and inventory — where **the same entity's events must be processed in

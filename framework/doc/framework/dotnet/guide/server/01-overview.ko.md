@@ -202,6 +202,11 @@ mesh 이름과 room 타입 이름은 이 장의 "빙고 room"이 아니라 tutor
 
 ### 2.2 하나의 엔티티에 대한 동시 접근
 
+Instance Spot의 직렬 처리는 같은 Location Store의 위치 정보를 공유하는 node들에 적용된다.
+Owner 장애 뒤 자동 재생성을 보장하지 않으며, DB의 다른 쓰기 경로와 금전 상태는 저장소에서도
+보호한다. [단일 활성 범위와 영속 상태 보호](34-activation-lifetime.ko.md#11-instance-spot의-단일-활성-범위)가
+장애 시 결과와 공개 세대 값의 한계를 설명한다.
+
 **왜 어려운가.** 길드처럼 **서로 다른 여러 유저가 같은 엔티티를 동시에 수정**해야
 하는 경우가 있다. 두 유저가 동시에 가입을 신청해 정원을 넘기거나, 두 기부가 동시에
 반영돼 하나가 유실되는 것처럼, stateless API 서버 여러 대가 같은 row를 동시에
@@ -313,6 +318,10 @@ sticky 라우팅이 있던 자리는 actor의 bound session push로 줄어든다
 [DeliveryDispatch](../../../common/sample/deliverydispatch/README.ko.md)
 
 ### 2.4 이벤트 중심 업무 처리 단순화
+
+Instance Spot은 같은 id의 callback을 직렬로 실행한다. 업무 이벤트의 중복 반영은 application의
+요청 id와 저장소 transaction으로 막는다. [단일 활성 범위와 영속 상태 보호](34-activation-lifetime.ko.md#11-instance-spot의-단일-활성-범위)가
+생성 경쟁·Store 장애·relocation 중의 대기와 실패를 설명한다.
 
 ZLink의 사용 지점은 실시간 기능만이 아니다. 주문 처리·정산·재고처럼 **같은 엔티티의
 이벤트를 순서대로, 중복 없이 처리해야 하는** 업무는 화면에 실시간 push가 하나도 없어도
