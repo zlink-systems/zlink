@@ -48,6 +48,55 @@ Spot은 종류와 무관하게 id와 상태를 가지고 callback을 순서대�
 Instance Spot에는 만드는 호출이 따로 없다. 첫 메시지에 instance type을 적으면 Framework가 있던
 instance를 고르거나 필요한 위치에 만든 뒤 **그 같은 메시지를 처리한다.**
 
+### 1.1 Instance Spot의 단일 활성 범위
+
+**같은 Location Store의 위치 정보를 공유하는 node들은 같은 Instance Spot id를 동시에
+두 곳에서 활성화하지 않는다.** 현재 처리하는 node를 owner라고 한다. Framework는 위치
+저장소에서 생성 권한을 먼저 확보한 node 하나만 factory를 실행하고, 생성 확정 뒤에 메시지를
+처리한다. 이 보장은 해당 저장소의 위치 정보와 owner 자격을 기준으로 적용된다.
+서로 독립된 Location Store를 사용하는 배포를 하나의 직렬 실행 단위로 묶지는 않는다.
+Owner가 일정 기간 작업을 받을 자격은 갱신하는 owner lease로 확인한다.
+
+단일 활성은 장애가 나도 계속 처리할 수 있다는 뜻이 아니다. 중복 생성 대신 대기하거나
+실패하는 경우를 함께 고려해야 한다.
+
+| 상황 | 메시지 처리 결과 |
+| --- | --- |
+| 서로 다른 node에 같은 id의 첫 메시지가 동시에 도착 | 생성 권한을 얻은 node만 만든다. 경쟁에서 진 node의 request는 `Unavailable`로 끝나며, 원래 deadline이 끝났으면 timeout을 유지한다. 이미 송신 수락이 끝난 one-way send의 실패는 diagnostics에 기록한다. |
+| 같은 target에서 activation이 진행 중 | 뒤따른 요청은 같은 activation에 합류한다. `Ready` 뒤 도착 순서대로 queue에 들어가며, activation이 실패하면 원래 완료 계약으로 끝난다. Resolver가 생성 중인 위치를 발견한 호출도 activation을 기다린다. |
+| `Ready` owner가 강제 종료되거나 owner lease가 무효 | 새 요청은 `Unavailable`이다. Lease가 남아 있는 동안뿐 아니라 만료된 뒤에도 위치 정보를 자동 해제하거나 다음 메시지로 다른 node에 재생성하지 않는다. |
+| Location Store 연결 또는 변경 응답 유실 | 변경 결과를 확인하기 전에는 성공을 추측하거나 다른 node를 만들어 처리하지 않는다. 기존 node 목록을 유지하는 유예 시간인 `StoreFailureGrace`는 owner 자격을 연장하지 않는다. 유효한 owner는 허용 시각까지 처리할 수 있지만, 그 시각을 넘으면 새 message·timer callback 시작과 상태 변경을 막는다. 이미 수락한 작업의 결과 처리와 정리는 진행할 수 있다. 결과 확인을 기다리는 request도 원래 timeout·취소·실패 완료 조건을 따른다. |
+| 계획된 relocation 진행 중 | Source는 현재 callback을 마친 뒤 새 callback 실행을 멈춘다. 대기 작업과 새 메시지는 target으로 전달·보관하고, target은 복원과 owner 변경 확정 뒤 실행을 시작한다. 실패 시점에 따라 source를 유지하거나 작업이 실패하며, 두 node가 함께 handler를 실행하지 않는다. 상세 결과는 [Relocation](37-relocation.ko.md)이 다룬다. |
+
+`Missing`은 위치 정보가 없는 상태이며, 이 상태에서만 Instance intent 메시지로 새 instance를
+만든다. 기존 `Ready` instance는 명시적 close로 위치 해제가 끝나야 `Missing`이 된다.
+`Ready`가 되기 전의 생성 복구는 같은
+target 실행에서 이어질 수 있으며 factory가 같은 입력으로 다시 호출될 수 있다.
+생성 중 target 실행이 끝난 reservation은 해제된 뒤 `Missing`이 된다.
+따라서 factory의 외부 저장소 변경도 중복 호출을 고려해야 한다.
+
+위치 저장소를 수동으로 비우거나 위치·세대 정보를 유실한 상황의 단일 활성은 보장 범위에
+포함하지 않는다. 그 상태를 정상적인 close나 owner 장애 복구로 취급해서는 안 된다.
+
+### 1.2 영속 상태와 공개 세대 값
+
+**공동 잭팟처럼 돈이 걸린 영속 상태는 application 저장소에서도 보호한다.** Instance Spot은
+그 Spot으로 들어오는 callback을 직렬로 실행한다. 다른 서비스의 DB 변경이나 이미 시작한
+외부 I/O까지 하나의 transaction으로 묶지는 않는다. 잭팟 잔액 갱신과 업무 요청 id의 중복
+기록을 같은 DB transaction에 두고, row lock 또는 조건부 갱신으로 다른 쓰기 경로도 보호한다.
+Timeout이나 연결 유실 뒤에는 기존 요청의 결과를 조회하거나 같은 업무 요청 id로 중복 영향을
+막은 뒤 새 요청을 시작한다.
+
+공개 Instance Spot context에서 읽는 `ObjectGeneration`은 **같은 id의 재생성을 구분하는 값**이다.
+
+`IZLinkInstanceSpotContext.ObjectGeneration`으로 읽는다.
+
+Relocation은 같은 object를 옮기므로 `ObjectGeneration`이 바뀌지 않는다. 따라서 이 값을
+owner 교체를 구분하는 fencing token으로 사용하지 않는다. Fencing은 저장소가 이전 쓰기
+권한으로 온 변경을 거부하는 방식이다. 그 보호가 필요하면 application 저장소에서 권한을
+발급하고 모든 쓰기에서 검증한다. Framework context가 owner 교체용 token을 제공한다고
+가정하지 않는다. 위치 저장소의 세대 정보를 유실했을 때도 이전 값과의 순서를 가정하지 않는다.
+
 ## 2. 종류마다 받는 lifecycle callback
 
 이름은 언어를 따르고, 호출 조건과 순서는 같다.
