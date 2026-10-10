@@ -648,7 +648,13 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                                 operation.Target.StableType,
                                 1
                             )
+                        ),
+                        registration.InstanceSpotRelocations.TryGetValue(
+                            operation.Target.StableType,
+                            out var policy
                         )
+                            ? policy.PolicyKind
+                            : null
                     ),
                     cancellationToken
                 )

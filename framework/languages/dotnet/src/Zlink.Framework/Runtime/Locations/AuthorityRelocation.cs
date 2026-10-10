@@ -171,7 +171,7 @@ internal sealed record ZLinkObjectReservationRequest(
     ZLinkLocationOwnerToken TargetOwner,
     ReadOnlyMemory<byte> CreatingPayload,
     ZLinkCapacityVector Capacity,
-    byte? ActorRelocationPolicy = null
+    byte? ObjectRelocationPolicy = null
 );
 
 internal sealed record ZLinkObjectReservation(

@@ -219,12 +219,17 @@ public sealed class LocationLifecycleTests
 
         await CreateTrackedActorAsync(node);
 
-        await node.ActorOwnership.NotifyActorJoinedSpotAsync(ActorId, "spot-1", spotGeneration: 4);
+        var spot = await PublishReadySpotAsync(fixture, node, "spot-1", 4);
+        await node.ActorOwnership.NotifyActorJoinedSpotAsync(
+            ActorId,
+            "spot-1",
+            spotGeneration: spot.ObjectGeneration
+        );
 
         var joined = await node.Resolvers.ResolveActorRowAsync(key);
         Assert.Equal(ZLinkSpotKind.User, joined!.SpotKind);
         Assert.Equal("spot-1", joined.SpotId);
-        Assert.Equal(4UL, joined.SpotGeneration);
+        Assert.Equal(spot.ObjectGeneration, joined.SpotGeneration);
         Assert.Equal(ActorId, joined.ActorRef.ActorId);
         Assert.Equal(1UL, joined.MembershipEpoch);
 
@@ -253,17 +258,18 @@ public sealed class LocationLifecycleTests
             actorRef,
             deactivate: null
         );
+        var spot = await PublishReadySpotAsync(fixture, node, "spot-after-create", 9);
         await node.ActorOwnership.NotifyActorJoinedSpotAsync(
             ActorId,
             "spot-after-create",
-            spotGeneration: 9
+            spotGeneration: spot.ObjectGeneration
         );
 
         Assert.True(await node.ActorOwnership.OwnsActorAsync(Actor(ActorId)));
         var joined = await node.Resolvers.ResolveActorRowAsync(new ZLinkActorLocationKey(ActorId));
         Assert.NotNull(joined);
         Assert.Equal("spot-after-create", joined.SpotId);
-        Assert.Equal(9UL, joined.SpotGeneration);
+        Assert.Equal(spot.ObjectGeneration, joined.SpotGeneration);
         Assert.Equal(actorRef, joined.ActorRef);
     }
 
@@ -373,8 +379,13 @@ public sealed class LocationLifecycleTests
         var node = await fixture.NodeAsync("node-a", controlled);
         await CreateTrackedActorAsync(node);
 
+        var spot = await PublishReadySpotAsync(fixture, node, "spot-1", 1);
         var renew = node
-            .ActorOwnership.NotifyActorJoinedSpotAsync(ActorId, "spot-1", spotGeneration: 1)
+            .ActorOwnership.NotifyActorJoinedSpotAsync(
+                ActorId,
+                "spot-1",
+                spotGeneration: spot.ObjectGeneration
+            )
             .AsTask();
         await controlled.RenewStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var release = node.ActorOwnership.ReleaseActorAsync(Actor(ActorId)).AsTask();

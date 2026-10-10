@@ -6987,10 +6987,12 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             var resolved = Assert.IsType<ZLinkResolvedSpotHandle>(
-                await runtime.ResolveInstanceSpotHandleAsync(
-                    new InstanceSpotIntentAddress(string.Empty, string.Empty, "spot-ready"),
-                    CancellationToken.None
-                )
+                (
+                    await runtime.ResolveInstanceSpotAsync(
+                        new InstanceSpotIntentAddress(string.Empty, string.Empty, "spot-ready"),
+                        CancellationToken.None
+                    )
+                ).Handle
             );
             var invalidations = 0;
             var refreshes = 0;
