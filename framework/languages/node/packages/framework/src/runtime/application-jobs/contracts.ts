@@ -1,4 +1,7 @@
+export type ApplicationJobOrigin = 'local' | 'remote';
+
 export interface ApplicationJobPermitPort {
+  readonly origin: ApplicationJobOrigin;
   markApplicationQueued(): void;
   /** Transfers ingress-record cleanup to a detached exact-target handler turn. */
   detachForHandlerTurn?(): void;
@@ -7,12 +10,16 @@ export interface ApplicationJobPermitPort {
 }
 
 export interface ApplicationJobQueuePort {
-  acquire(signal?: AbortSignal): Promise<ApplicationJobPermitPort>;
+  acquire(
+    signal: AbortSignal | undefined,
+    origin: ApplicationJobOrigin
+  ): Promise<ApplicationJobPermitPort>;
   /** Returns a grant now, or registers one FIFO waiter that later calls resume. */
   acquireOrResume(
     resume: (permit: ApplicationJobPermitPort) => void,
     reject: (reason: unknown) => void,
-    signal?: AbortSignal
+    signal: AbortSignal | undefined,
+    origin: ApplicationJobOrigin
   ): ApplicationJobPermitPort | undefined;
   registerReceiveFlowTarget?(
     identity: object,

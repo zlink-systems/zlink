@@ -1,3 +1,5 @@
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
+import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -349,7 +351,12 @@ export class ZLinkFrameworkRuntimeHost
         } catch {
           return false;
         }
-      }
+      },
+      (error) =>
+        (this.errorSink ?? this.preStartErrorSink).reportRuntimeTaskException(
+          'logger-provider',
+          error
+        )
     );
     this.capacityStatus = new HostCapacityStatusProjection(
       options.registration.coreHwm,
@@ -721,13 +728,13 @@ export class ZLinkFrameworkRuntimeHost
       sessionRelocationWire: () => this.serviceRelocation,
       clearRemoteActorPacketTarget: (actorId) =>
         this.boundSessionRelay.clearRemoteActorPacketTarget(actorId),
-      prepareApplicationJob: async (preparationSignal) => {
+      prepareApplicationJob: async (preparationSignal, origin) => {
         const runtimeSignal = this.executionState?.abortController.signal;
         const signal =
           runtimeSignal === undefined
             ? preparationSignal
             : AbortSignal.any([runtimeSignal, preparationSignal]);
-        const permit = await this.applicationJobQueue.acquire(signal);
+        const permit = await this.applicationJobQueue.acquire(signal, origin);
         let state: 'ready' | 'running' | 'closed' = 'ready';
         let closedReason: unknown;
         let abort: (() => void) | undefined;
@@ -2757,6 +2764,7 @@ export class ZLinkFrameworkRuntimeHost
       },
       meshRecordDispatcher: (meshName: string, owner: ReadyRecord, record: ReceiveRecord) =>
         this.dispatchMeshRecord(
+          currentApplicationJobOrigin,
           meshName,
           owner,
           record,
@@ -2767,6 +2775,7 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   private async dispatchMeshRecord(
+    applicationJobOrigin: () => ApplicationJobOrigin,
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord,
@@ -2968,7 +2977,7 @@ export class ZLinkFrameworkRuntimeHost
           );
         }
         return this.admission.run(meshName, 'RouteMesh Actor dispatch', () =>
-          this.spotManager!.dispatchMeshActor(meshName, owner, record)
+          this.spotManager!.dispatchMeshActor(applicationJobOrigin(), meshName, owner, record)
         );
       case ReceiveKind.SendReady:
         return Promise.resolve();
@@ -3012,7 +3021,10 @@ export class ZLinkFrameworkRuntimeHost
     try {
       state.taskRunner.runDetached('mesh-node-local-route-dispatch', async () => {
         try {
-          const permit = await this.applicationJobQueue.acquire(state.abortController.signal);
+          const permit = await this.applicationJobQueue.acquire(
+            state.abortController.signal,
+            'local'
+          );
           permit.markApplicationQueued();
           await runWithApplicationJobPermit(permit, () =>
             channelRuntime.dispatchLocalMeshRoute(meshName, sourceNodeRid, ownedParts)

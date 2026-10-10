@@ -75,7 +75,7 @@ for (const kind of ['spot', 'actor']) {
   for (const terminal of ['deadline', 'cancel', 'shutdown']) {
     test(`local ${kind} request removes capacity waiter on ${terminal}`, async () => {
       const f = fixture();
-      const occupied = await f.queue.acquire();
+      const occupied = await f.queue.acquire(undefined, 'remote');
       try {
         const pending = f.request(kind);
         const rejected = assert.rejects(pending.promise, {
@@ -105,7 +105,7 @@ for (const kind of ['spot', 'actor']) {
 
   test(`local ${kind} request returns raced permit once without publishing after terminal`, async () => {
     const f = fixture();
-    const occupied = await f.queue.acquire();
+    const occupied = await f.queue.acquire(undefined, 'remote');
     let published = 0;
     let returned = 0;
     const reserve = f.raw.reserveLocalIngress.bind(f.raw);

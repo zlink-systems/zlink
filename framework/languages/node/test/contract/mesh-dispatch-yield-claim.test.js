@@ -46,7 +46,7 @@ test('empty ready claims yield at the count boundary after releasing the claim',
   try {
     pump.start();
     ready(ReadyDomain.Application);
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(( resolve ) => setImmediate(resolve));
     assert.deepEqual(timers.map(({ received, claimsHeld }) => ({ received, claimsHeld })),
       [{ received: 16, claimsHeld: 0 }]);
   } finally {
@@ -64,7 +64,7 @@ for (const trigger of ['elapsed', 'records']) {
     const permits = [];
     const count = trigger === 'records' ? 16 : 1;
     for (let i = 0; i <= count; i++) {
-      const permit = await queue.acquire();
+      const permit = await queue.acquire(undefined, 'remote');
       permit.markApplicationQueued();
       permits.push(permit);
     }
@@ -91,7 +91,7 @@ for (const trigger of ['elapsed', 'records']) {
               recvBatch() {
                 if (received) return { ok: false, records: [] };
                 received = true;
-                return { ok: true, records: claim.records.map(record => record.stateful) };
+                return { ok: true, records: claim.records.map(( record ) => record.stateful) };
               },
               release() { mailbox.release(claim); claims.delete(claim); }
             };
@@ -126,13 +126,13 @@ for (const trigger of ['elapsed', 'records']) {
     try {
       pump.start();
       for (let i = 0; i < count; i++) enqueue(i);
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(( resolve ) => setImmediate(resolve));
       assert.ok(timers.length > 0, 'the unchanged fairness condition must cause a timer yield');
       assert.deepEqual({ claimsHeld: timers[0].claimsHeld, dispatched }, {
         claimsHeld: 0,
         dispatched: Array.from({ length: count + 1 }, (_, i) => i)
       }, 'release the claim and enter the next handler before completing the yield timer');
-      assert.ok(timers.every(timer => timer.claimsHeld === 0));
+      assert.ok(timers.every(( timer ) => timer.claimsHeld === 0));
       assert.deepEqual(errors, []);
       assert.equal(queue.snapshot().permitsInUse, 0n);
     } finally {

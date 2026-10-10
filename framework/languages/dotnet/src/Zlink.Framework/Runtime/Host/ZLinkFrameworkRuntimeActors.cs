@@ -4307,7 +4307,11 @@ internal sealed partial class ZLinkFrameworkRuntime
                 $"session_route_watermark actor={actorId} session={sourceSessionRid} accepted={boundSessionFence.SessionSequence}"
             );
         }
-        var batch = ZLinkActorHandoffIngress.CaptureMovingFrames(this, parts);
+        var batch = ZLinkActorHandoffIngress.CaptureMovingFrames(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
+            this,
+            parts
+        );
         if (batch.Count == 0)
         {
             //  A frame for an Actor mid-handoff is captured for replay instead

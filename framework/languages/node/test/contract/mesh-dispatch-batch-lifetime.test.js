@@ -248,7 +248,7 @@ test('application worker reuses its ready and receive batches across sparse read
     pump.start();
     for (let sequence = 0; sequence < 8; sequence++) {
       dispatched = deferred();
-      const permit = await queue.acquire();
+      const permit = await queue.acquire(undefined, 'remote');
       permit.markApplicationQueued();
       pending = { sequence, parts: [], applicationJobPermit: permit };
       ready(ReadyDomain.Application);
@@ -327,7 +327,7 @@ test('shutdown during permit handoff returns the reservation before any receive'
   const waiting = deferred();
   const handoff = deferred();
   const queue = applicationQueue();
-  const permit = await queue.acquire();
+  const permit = await queue.acquire(undefined, 'remote');
   const node = {
     setReadyHandler(handler) { ready = handler; },
     createReadyBatch() {

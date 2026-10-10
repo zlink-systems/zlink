@@ -826,7 +826,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         if (permit == null) {
                             permit =
                                     applicationJobQueue.acquireOrResume(
-                                            receiveExecutor, this::runTurn, pendingAcquire);
+                                            receiveExecutor,
+                                            this::runTurn,
+                                            pendingAcquire,
+                                            systems.zlink.framework.runtime.internal.dispatch
+                                                    .ZLinkApplicationJobQueue.Origin.REMOTE);
                             if (isClosed()) {
                                 systems.zlink.framework.runtime.internal.dispatch
                                         .ZLinkApplicationJobQueue.cancelPendingAcquire(

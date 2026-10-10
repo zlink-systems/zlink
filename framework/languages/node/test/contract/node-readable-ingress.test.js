@@ -59,8 +59,8 @@ function fixture(registrationFailure) {
       readable(true, false);
     },
     notifyRoute() { readable(false, true); },
-    untilDrained() { return new Promise(resolve => { drained = resolve; }); },
-    untilRoutesObserved() { return new Promise(resolve => { routesObserved = resolve; }); }
+    untilDrained() { return new Promise(( resolve ) => { drained = resolve; }); },
+    untilRoutesObserved() { return new Promise(( resolve ) => { routesObserved = resolve; }); }
   };
 }
 
@@ -101,7 +101,7 @@ test('one readiness notification drains beyond a batch to no-data with the host 
 
 test('readiness during a capacity wait coalesces into one drain and resumes without another event', async () => {
   const f = fixture();
-  const occupied = await f.queue.acquire();
+  const occupied = await f.queue.acquire(undefined, 'remote');
   f.backend.start();
   try {
     const drained = f.untilDrained();
@@ -121,7 +121,7 @@ test('readiness during a capacity wait coalesces into one drain and resumes with
 
 for (const handoff of [false, true]) test(`close ends readiness admission across permit handoff=${handoff}`, async () => {
   const f = fixture();
-  const occupied = await f.queue.acquire();
+  const occupied = await f.queue.acquire(undefined, 'remote');
   f.backend.start();
   f.notify(1);
   await nextTurn();
@@ -139,12 +139,12 @@ for (const handoff of [false, true]) test(`close ends readiness admission across
 test('RouteMesh startup fails and closes its socket if readiness registration fails', () => {
   const failure = new Error('watch registration failed');
   const f = fixture(failure);
-  assert.throws(() => f.backend.start(), error => error === failure);
+  assert.throws(() => f.backend.start(), ( error ) => error === failure);
   assert.equal(f.state.closed, true);
   assert.equal(f.state.receives, 0);
 });
 
-test('raw binding port keeps its socket-lifetime event-loop poller on handler replacement', t => {
+test('raw binding port keeps its socket-lifetime event-loop poller on handler replacement', ( t ) => {
   const host = new ZLinkNodeRawBindingPort().createHost();
   try {
     const router = host.createRouter();

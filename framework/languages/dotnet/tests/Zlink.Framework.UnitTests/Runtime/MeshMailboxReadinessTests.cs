@@ -16,7 +16,7 @@ public sealed class MeshMailboxReadinessTests
         var mailbox = new ZLinkMeshNodeOwnedMailbox(_ => { }, _ => { });
         try
         {
-            Assert.True(queue.TryAcquire(out var admission));
+            Assert.True(queue.TryAcquire(out var admission, ZLinkApplicationJobOrigin.Remote));
             Assert.NotNull(admission);
             admission.MarkQueued();
             Assert.True(

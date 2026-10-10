@@ -111,6 +111,7 @@ export class ZLinkSpotActorPacketRelayDispatch {
         actorPacketRelay.messageFollowContext !== undefined &&
         remoteBoundSessionTarget !== undefined;
       const response = await this.options.actorPacketHandler({
+        origin: 'remote',
         actorId: actorPacketRelay.actorId,
         parts: [header, payload],
         returnResponse: !followedBoundSessionReply,

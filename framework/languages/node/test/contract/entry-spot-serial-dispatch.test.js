@@ -494,12 +494,12 @@ test('routed local one-way carries its shared job permit through the owner seria
   let releaseHandler;
   let handlerStarted;
   let handlerFinished = false;
-  const current = new Promise(resolve => { releaseCurrent = resolve; });
-  const currentDidStart = new Promise(resolve => { currentStarted = resolve; });
-  const handler = new Promise(resolve => { releaseHandler = resolve; });
-  const handlerDidStart = new Promise(resolve => { handlerStarted = resolve; });
+  const current = new Promise(( resolve ) => { releaseCurrent = resolve; });
+  const currentDidStart = new Promise(( resolve ) => { currentStarted = resolve; });
+  const handler = new Promise(( resolve ) => { releaseHandler = resolve; });
+  const handlerDidStart = new Promise(( resolve ) => { handlerStarted = resolve; });
   let finishHandler;
-  const handlerDidFinish = new Promise(resolve => { finishHandler = resolve; });
+  const handlerDidFinish = new Promise(( resolve ) => { finishHandler = resolve; });
   class SlowHandler {
     async handle() {
       handlerStarted();
@@ -536,25 +536,25 @@ test('routed local one-way carries its shared job permit through the owner seria
       () => 8n
     )
   );
-  const permit = await queue.acquire();
+  const permit = await queue.acquire(undefined, 'remote');
   permit.markApplicationQueued();
   let admitted = false;
   const first = runWithApplicationJobPermit(permit, () =>
     dispatch.send('capacity-target', 'SlowPacket', {}, {
       channelName: 'test'
     })).then(() => { admitted = true; });
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(( resolve ) => setImmediate(resolve));
   assert.equal(admitted, true);
   assert.equal(handlerFinished, false);
   assert.equal(queue.snapshot().permitsInUse, 1n);
   assert.equal(queue.snapshot().queuedApplicationJobs, 1n);
 
   let nextPermitAcquired = false;
-  const nextPermitPending = queue.acquire().then((nextPermit) => {
+  const nextPermitPending = queue.acquire(undefined, 'remote').then((nextPermit) => {
     nextPermitAcquired = true;
     return nextPermit;
   });
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(( resolve ) => setImmediate(resolve));
   assert.equal(nextPermitAcquired, false);
   assert.equal(queue.snapshot().capacityWaiters, 1n);
 

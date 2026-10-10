@@ -19,9 +19,9 @@ function fixture({ sourceLeave = async () => {}, storeFailure = false } = {}) {
   state.setRemoteActorPacketTarget({ routerChannelId: 'game', targetNodeRid: 'node-a', spotId: 'room' });
   const clearedTargets = [];
   let reportError;
-  const reported = new Promise(resolve => { reportError = resolve; });
+  const reported = new Promise(( resolve ) => { reportError = resolve; });
   let sourceStarted;
-  const notified = new Promise(resolve => { sourceStarted = resolve; });
+  const notified = new Promise(( resolve ) => { sourceStarted = resolve; });
   const source = {
     spotId: 'room',
     meshName: 'game',
@@ -66,7 +66,7 @@ function fixture({ sourceLeave = async () => {}, storeFailure = false } = {}) {
   });
   const entryRuntime = new ZLinkEntryActorRuntimeService({
     actorManager: () => ({ getState: () => state }),
-    spotManager: () => ({ async dispatchRoutedActorPacket() { return 'room'; } }),
+    spotManager: () => ({ async dispatchRoutedActorPacket(_origin ) { return 'room'; } }),
     spotNodeRuntime: () => ({ primaryMeshNode: node }),
     streamBindingRuntime: { async refreshActor() {} },
     boundSessionRelay: {
@@ -85,7 +85,7 @@ function fixture({ sourceLeave = async () => {}, storeFailure = false } = {}) {
         if (storeFailure) throw new Error('Store commit failed');
       }
     },
-    localEntryJoin: actor => entryRuntime.commitActorTransaction(actor, async () => { events.push('joined'); }),
+    localEntryJoin: ( actor ) => entryRuntime.commitActorTransaction(actor, async () => { events.push('joined'); }),
     localSourceLeave: (actor, spotId) => {
       assert.equal(spotId, 'room', 'canonical Join retains the source membership');
       return membership.notifyActorLeftAfterTransfer(spotId, actor);
@@ -124,19 +124,19 @@ test('Spot context leave commits Entry membership before notifying source once',
   await f.leave();
   await f.notified;
   assert.deepEqual(f.events.slice(0, 5), ['store', 'membership', 'joined', 'source-begin', 'source-left']);
-  assert.equal(f.events.filter(event => event === 'source-left').length, 1);
+  assert.equal(f.events.filter(( event ) => event === 'source-left').length, 1);
   assert.equal(f.events.includes('source-clear'), false);
 });
 
 test('Spot context leave completes while source notification remains pending', async () => {
   let release;
-  const pending = new Promise(resolve => { release = resolve; });
+  const pending = new Promise(( resolve ) => { release = resolve; });
   const f = fixture({ sourceLeave: () => pending });
   try {
     await f.leave();
     await f.notified;
     assert.equal(f.location().spotId, 'node-a');
-    assert.equal(f.events.filter(event => event === 'source-left').length, 1);
+    assert.equal(f.events.filter(( event ) => event === 'source-left').length, 1);
     assert.equal(f.events.includes('source-departure'), false);
   } finally { release(); }
 });
@@ -147,8 +147,8 @@ test('Spot context leave source failure is reported without rejecting committed 
   await f.leave();
   assert.equal(await f.reported, failure);
   assert.equal(f.location().spotId, 'node-a');
-  assert.equal(f.events.filter(event => event === 'source-left').length, 1);
-  assert.equal(f.events.filter(event => event === 'source-error').length, 1);
+  assert.equal(f.events.filter(( event ) => event === 'source-left').length, 1);
+  assert.equal(f.events.filter(( event ) => event === 'source-error').length, 1);
 });
 
 test('Spot context leave Store failure preserves source and does not notify it', async () => {

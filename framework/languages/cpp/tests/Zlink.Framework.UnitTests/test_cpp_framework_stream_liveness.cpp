@@ -171,13 +171,16 @@ int main ()
     using jobs_t = zlink::framework::runtime::application_job_queue_t;
     jobs_t jobs (zlink::framework::runtime::application_job_queue_configuration_t{});
     jobs_t::supply_request_t held_supply;
-    auto held = held_supply.take (jobs, 0ms);
+    auto held = held_supply.take (
+      jobs, 0ms, {}, zlink::framework::runtime::application_job_queue_t::origin_t::remote);
     if (!held || !*held)
         return 1;
     jobs_t::supply_request_t pending_supply;
     io.restart ();
     bool woke = false;
-    if (pending_supply.take (jobs, 0ms, [&] { boost::asio::post (io, [&] { woke = true; }); }))
+    if (pending_supply.take (
+          jobs, 0ms, [&] { boost::asio::post (io, [&] { woke = true; }); },
+          zlink::framework::runtime::application_job_queue_t::origin_t::remote))
         return 1;
     const auto keep_alive = boost::asio::make_work_guard (io);
     std::thread stopper ([&] { jobs.stop (); });
@@ -190,7 +193,8 @@ int main ()
         std::cerr << "FAIL: supply stop did not wake the blocking io owner\n";
         return 1;
     }
-    const auto stopped = pending_supply.take (jobs, 0ms);
+    const auto stopped = pending_supply.take (
+      jobs, 0ms, {}, zlink::framework::runtime::application_job_queue_t::origin_t::remote);
     if (!stopped || *stopped)
         return 1;
     std::cout << "PASS owner submission, monotonic handler-entry and force/stop wake\n";

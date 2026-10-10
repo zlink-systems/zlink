@@ -144,7 +144,7 @@ public sealed class MeshPermitHandoffTests
         // Arrange the producer's published state. Its reservation can be
         // consumed before the producer returns; only that consumer owns the
         // successful handoff flag, including registration of a successor.
-        var reservation = await queue.AcquireAsync(stop.Token);
+        var reservation = await queue.AcquireAsync(stop.Token, ZLinkApplicationJobOrigin.Remote);
         SetField(node, "_reservedRawApplicationAdmission", reservation);
         SetField(node, "_rawApplicationAdmissionWaitActive", 1);
         ZLinkApplicationJobQueueLease? held = null;
@@ -152,7 +152,7 @@ public sealed class MeshPermitHandoffTests
         {
             Drain(node, stop.Token);
             Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
-            held = await queue.AcquireAsync(stop.Token);
+            held = await queue.AcquireAsync(stop.Token, ZLinkApplicationJobOrigin.Remote);
 
             Drain(node, stop.Token);
             Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);

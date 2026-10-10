@@ -4554,7 +4554,8 @@ final class ZLinkJavaRawMeshNode
                             queue.acquireOrResume(
                                     pump,
                                     permit -> drainIngressBatch(pumpSocket, permit),
-                                    pendingReceiveAcquire);
+                                    pendingReceiveAcquire,
+                                    ZLinkApplicationJobQueue.Origin.REMOTE);
                     if (closed.get()) {
                         ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
                         return;

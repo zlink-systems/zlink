@@ -407,7 +407,12 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             admissionCount =
                 1
                 + await _applicationJobQueue
-                    .TryAcquireBatchAsync(admissions, 1, admissionBudget - 1)
+                    .TryAcquireBatchAsync(
+                        admissions,
+                        1,
+                        admissionBudget - 1,
+                        ZLinkApplicationJobOrigin.Remote
+                    )
                     .ConfigureAwait(false);
         }
         var ownerSpotId = readyRecord.SpotId;
@@ -567,7 +572,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         var queue = _applicationJobQueue;
         if (
             queue is not null
-            && await queue.TryAcquireAsync().ConfigureAwait(false) is { } immediate
+            && await queue.TryAcquireAsync(ZLinkApplicationJobOrigin.Remote).ConfigureAwait(false)
+                is { } immediate
         )
             return immediate;
         if (
@@ -590,7 +596,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         var transferred = false;
         try
         {
-            admission = await queue.AcquireAsync(cancellationToken).ConfigureAwait(false);
+            admission = await queue
+                .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
+                .ConfigureAwait(false);
             if (cancellationToken.IsCancellationRequested)
                 return;
             Interlocked.Exchange(ref _reservedApplicationAdmission, admission)?.Dispose();
@@ -929,8 +937,14 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         if (parts.Count == 0)
             return false;
         admission?.MarkQueued();
+        // Local records retain their original admission. Binding ingress
+        // without a Framework queue is remote.
         ObserveDispatchResult(
-            state.RaiseActor(parts, AttachAdmission(batch.TakePayloadOwner(index), admission)),
+            state.RaiseActor(
+                admission is null ? ZLinkApplicationJobOrigin.Remote : admission.Origin,
+                parts,
+                AttachAdmission(batch.TakePayloadOwner(index), admission)
+            ),
             pending
         );
         return admission is not null;
@@ -1015,11 +1029,12 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             ZLinkBackendSpotDispatchEvent kind
         )
         {
-            return DispatchHandler?.Invoke(new ZLinkBackendSpotDispatchInfo(kind))
+            return DispatchHandler?.Invoke(new ZLinkBackendSpotDispatchInfo(null, kind))
                 ?? (ValueTask.CompletedTask, null);
         }
 
         public (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain) RaiseActor(
+            ZLinkApplicationJobOrigin origin,
             IReadOnlyList<ZLinkBackendActorPart> parts,
             IDisposable? payloadOwner
         )
@@ -1036,6 +1051,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             {
                 return handler(
                     new ZLinkBackendSpotDispatchInfo(
+                        origin,
                         ZLinkBackendSpotDispatchEvent.ActorReadable,
                         ActorParts: parts,
                         ActorPayloadOwner: payloadOwner

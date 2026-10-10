@@ -1585,7 +1585,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
                 .ToArray();
 
-            using var batch = ZLinkActorHandoffIngress.CaptureMovingFrames(runtime, parts);
+            using var batch = ZLinkActorHandoffIngress.CaptureMovingFrames(
+                Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
+                runtime,
+                parts
+            );
 
             Assert.Equal(0, batch.Count);
             var captured = state.Handoff.SnapshotFrames();
@@ -2522,6 +2526,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             var caller = RoutingId.From("caller-node");
             using var frame = new ZLinkSpotActorFrame(
+                Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
                 actorRef,
                 actorRef,
                 caller,
@@ -3734,6 +3739,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
             var directReplies = new List<byte[]>();
             var frame = new ZLinkSpotActorFrame(
+                Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
                 actor,
                 actor,
                 RoutingId.From("fence-source-node"),
@@ -4704,6 +4710,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var actorBody = actorParts[1].Message;
         await spot.RaiseDispatch(
                 new ZLinkBackendSpotDispatchInfo(
+                    Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
                     ZLinkBackendSpotDispatchEvent.ActorReadable,
                     ActorParts: actorParts
                 )
@@ -4754,6 +4761,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         await spot.RaiseDispatch(
                 new ZLinkBackendSpotDispatchInfo(
+                    Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
                     ZLinkBackendSpotDispatchEvent.ActorReadable,
                     ActorParts: parts
                 )
@@ -4792,6 +4800,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         await spot.RaiseDispatch(
                 new ZLinkBackendSpotDispatchInfo(
+                    Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
                     ZLinkBackendSpotDispatchEvent.ActorReadable,
                     ActorParts: CreateActorRequestParts(
                         actorA,
@@ -4818,6 +4827,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var overflowBody = overflowParts[1].Message;
         await spot.RaiseDispatch(
                 new ZLinkBackendSpotDispatchInfo(
+                    Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
                     ZLinkBackendSpotDispatchEvent.ActorReadable,
                     ActorParts: overflowParts
                 )
@@ -4829,6 +4839,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         await spot.RaiseDispatch(
                 new ZLinkBackendSpotDispatchInfo(
+                    Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
                     ZLinkBackendSpotDispatchEvent.ActorReadable,
                     ActorParts: CreateActorRequestParts(
                         actorB,
@@ -4926,6 +4937,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var received = CreateRoutedReceived("routed-ok");
         await spot.RaiseDispatch(
                 new ZLinkBackendSpotDispatchInfo(
+                    null,
                     ZLinkBackendSpotDispatchEvent.RouteReadable,
                     RoutedMessages: [received]
                 )
@@ -4969,6 +4981,7 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         var submitted = spot.SubmitDispatch(
             new ZLinkBackendSpotDispatchInfo(
+                null,
                 ZLinkBackendSpotDispatchEvent.RouteReadable,
                 RoutedMessages: alreadyDrained ? [first] : null
             )
@@ -5024,6 +5037,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         var submitted = spot.SubmitDispatch(
             new ZLinkBackendSpotDispatchInfo(
+                null,
                 ZLinkBackendSpotDispatchEvent.RouteReadable,
                 RoutedMessages: [first, second]
             )
@@ -6562,7 +6576,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 requestId: 43,
                 flags: 1
             );
-            var frames = ZLinkActorHandoffIngress.CaptureMovingFrames(runtime, parts);
+            var frames = ZLinkActorHandoffIngress.CaptureMovingFrames(
+                Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
+                runtime,
+                parts
+            );
             var manager = Assert.IsType<ZLinkActorSessionManager>(
                 typeof(ZLinkFrameworkRuntime)
                     .GetField(
@@ -10242,6 +10260,7 @@ public sealed partial class EntrySpotActorDispatchTests
     )
     {
         return new ZLinkSpotActorFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             actor,
             actor,
             sourceNodeRid,
@@ -10309,7 +10328,11 @@ public sealed partial class EntrySpotActorDispatchTests
             runtime,
             new ZLinkEntrySpotActorInboundEndpoint(runtime)
         );
-        var frames = ZLinkActorHandoffIngress.CaptureMovingFrames(runtime, parts);
+        var frames = ZLinkActorHandoffIngress.CaptureMovingFrames(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
+            runtime,
+            parts
+        );
         return pipeline.DispatchAsync(frames, cancellationToken);
     }
 

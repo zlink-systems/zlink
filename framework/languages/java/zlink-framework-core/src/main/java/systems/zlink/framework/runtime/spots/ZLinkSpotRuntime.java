@@ -46,6 +46,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
@@ -4776,7 +4777,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         } catch (ZLinkFrameworkException rejected) {
             return CompletableFuture.failedFuture(rejected);
         }
-        var acquisition = applicationJobQueue.acquire().toCompletableFuture();
+        var acquisition =
+                applicationJobQueue
+                        .acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
+                        .toCompletableFuture();
         CompletableFuture<T> completion =
                 new CompletableFuture<>() {
                     @Override
@@ -4803,6 +4807,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             return CompletableFuture.failedFuture(rejected);
         }
         return applicationJobQueue.acquireAndPublish(
+                ZLinkApplicationJobQueue.Origin.LOCAL,
                 task ->
                         destination.enqueueInfrastructureDispatch(
                                 () -> {
@@ -4829,7 +4834,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Permit
             reserveApplicationJob() {
         try {
-            return applicationJobQueue.acquireBlocking();
+            return applicationJobQueue.acquireBlocking(ZLinkApplicationJobQueue.Origin.REMOTE);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             return null;

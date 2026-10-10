@@ -165,7 +165,7 @@ test('Foundation preserves Missing ingress during Active cold initialization wit
   const target = { targetSpotId: 'close-room', stableType: 'room', targetNodeRid: 'node', targetNodeGeneration: 1n, descriptorVersion: '1' };
   const operation = { high: 1n, low: 9n };
   const deadline = BigInt(Date.now() + 10_000);
-  const applicationJobOwner = ApplicationIngressRecordOwner.create(queue, await queue.acquire(), { close() {} });
+  const applicationJobOwner = ApplicationIngressRecordOwner.create(queue, await queue.acquire(undefined, 'remote'), { close() {} });
   ingress({ parts: [wire.encodeInstanceSpotActivationHeader(target, 1n, 'node', undefined,
     'send', operation, deadline), Buffer.from('payload')], sourceRoutingId: 'node', applicationJobOwner });
   const record = await admitted.promise;
@@ -384,7 +384,7 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
     const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
     const { runWithApplicationJobPermit } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
     const jobs = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({}, () => 1n));
-    const permits = await Promise.all([jobs.acquire(), jobs.acquire(), ...(queuedBeforeClose ? [jobs.acquire()] : [])]);
+    const permits = await Promise.all([jobs.acquire(undefined, 'remote'), jobs.acquire(undefined, 'remote'), ...(queuedBeforeClose ? [jobs.acquire(undefined, 'remote')] : [])]);
     const beforeHandler = permits.map(() => 0);
     const scopePermits = permits.map((permit, index) => ({
       releaseBeforeHandler() { beforeHandler[index]++; permit.releaseBeforeHandler(); },
@@ -532,7 +532,7 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
       assert.equal(events.indexOf(`initialize:${targetGeneration}`) < events.indexOf('handler:1'), true);
       assert.equal((await fixture.store.readAuthority(fixture.key)).objectGeneration, targetGeneration);
       if (readyIntent && !queuedBeforeClose && !send) {
-        const permit = await jobs.acquire();
+        const permit = await jobs.acquire(undefined, 'remote');
         scopePermits.push({ releaseBeforeHandler() { assert.fail('stale no-intent Ready frame must not enter a handler'); },
           releaseAfterInternalProcessing() { permit.releaseAfterInternalProcessing(); } });
         lateNoIntent = receive(3, false);
@@ -564,16 +564,16 @@ for (const targetMissing of [true, false]) {
       const { dispatchReasonFromError } = require('../../packages/framework/dist/runtime/diagnostics/dispatch-error-details');
       const intermediate = [];
       const terminal = [];
-      const finalReport = error => terminal.push({ error, reason: dispatchReasonFromError(error) });
+      const finalReport = ( error ) => terminal.push({ error, reason: dispatchReasonFromError(error) });
       const dispatch = new ZLinkRoutedSpotPacketDispatch({
-        resolveActivation: () => targetMissing ? undefined : { handlers: { snapshot: () => [] } },
-        dispatchErrors: { captureEnabled: () => true, report: event => intermediate.push(event) }
+        resolveActivation: () => ( targetMissing ? undefined : { handlers: { snapshot: () => [] } }) ,
+        dispatchErrors: { captureEnabled: () => true, report: ( event ) => intermediate.push(event) }
       });
       const context = { channelName: 'instance',
         activationRecord: { activationRecord: { kind: 'instanceSpot' } },
         onOneWayError: finalReport };
       if (request) {
-        await assert.rejects(dispatch.request('missing-room', 'Ping', {}, context), error => {
+        await assert.rejects(dispatch.request('missing-room', 'Ping', {}, context), ( error ) => {
           assert.ok(error instanceof framework.ZLinkConfigurationException);
           finalReport(error);
           return true;

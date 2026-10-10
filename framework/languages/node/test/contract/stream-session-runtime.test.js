@@ -872,6 +872,7 @@ test('stream ingress acquires managed queue capacity before pulling a Core packe
   let releaseAcquire;
   const acquireGate = new Promise((resolve) => { releaseAcquire = resolve; });
   const permit = {
+    origin: 'remote',
     markApplicationQueued() {},
     releaseAfterInternalProcessing() {}
   };

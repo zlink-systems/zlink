@@ -404,6 +404,7 @@ version을 정하는 caller intent인
 | `zlink.runtime.client_server.server_changed` | ClientServer target의 weight, ready 또는 service 상태가 바뀌었다. |
 | `zlink.runtime.fanout.publisher_changed` | Automatic publisher의 연결 대상 또는 ready 상태가 바뀌었다. |
 | `zlink.runtime.location.store_changed` | Location Store가 ready와 degraded 사이에서 바뀌었다. |
+| `zlink.runtime.host.local_job_backlog_exceeded` | 같은 host에서 만든 job 중 host permit을 기다리는 수가 Application job queue의 effective maximum을 넘었다. |
 
 Log는 timestamp, source 종류와 등록 이름을 기록한다. 필요한 변화에는 Node RID,
 weight, reason과 state를 추가한다. Payload, metadata, Actor ID, Spot ID, owner token,
@@ -425,6 +426,16 @@ terminal까지 1초를 넘기면 `zlink.runtime.relocation.changed`에 `unit_kin
 경고이며 relocation outcome이나 recovery 판단을 바꾸지 않는다. Actor ID와 Spot ID는
 structured log에 넣지 않고 제한된 trace에서만 확인한다. Target admission open은
 source로 ACK하지 않으며 target-local status와 trace에서 관찰한다.
+
+같은 host에서 만든 job — 같은 host의 Spot이나 Actor에게 보내는 호출과 publish의 local target — 은
+[Application job queue 「3」](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)에
+따라 host permit을 기다린다. Permit을 기다리는 같은 host job 수에는 별도 상한을 두지 않는다.
+기다리는 수가 effective maximum
+([Application job queue 「6」](../01-execution/04-application-job-queue-and-backpressure.ko.md#6-pressure-상태와-socket-제어)의 `M`)을
+넘으면 `zlink.runtime.host.local_job_backlog_exceeded`를 Warning으로 한 번 기록하고 `local_waiters`와
+`effective_maximum`을 남긴다. 기다리는 수가 0이 된 뒤 다시 넘으면 다시 기록한다. Remote ingress는
+permit을 얻기 전에 receive하지 않으므로 이 수를 늘리지 않는다. 이 기록은 같은 host의 permit을
+기다리는 local job 수가 effective maximum을 넘었다는 뜻이다. 기록은 대기와 호출 결과를 바꾸지 않는다.
 
 ## 10. Startup과 실패
 
@@ -475,6 +486,12 @@ source로 ACK하지 않으며 target-local status와 trace에서 관찰한다.
 - Object 위치 조회는 Location runtime의 page와 cache 계약을 지킨다.
 - Publish target 수와 target별 수락·실패 결과는 status나 runtime structured log에
   나타나지 않는다.
+- 같은 host job의 permit 대기 수가 처음 effective maximum 이하일 때는 경고를 기록하지 않고,
+  이를 넘으면 `zlink.runtime.host.local_job_backlog_exceeded`를 Warning으로 한 번 기록한다.
+  Log의 `local_waiters`와 `effective_maximum`은 기록 시점의 값과 일치한다. 대기 수가 0이 되기
+  전에는 effective maximum 이하로 줄었다가 다시 넘더라도 추가로 기록하지 않는다. 대기 수가 0이
+  된 뒤 다시 넘으면 한 번 더 기록한다. Remote ingress만으로는 기록하지 않으며, 기록 여부가
+  대기와 호출 결과를 바꾸지 않는다.
 
 ---
 

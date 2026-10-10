@@ -78,7 +78,12 @@ final class ZLinkLocalAdmissionOrderTest {
             queueField.setAccessible(true);
             var queue = (ZLinkApplicationJobQueue) queueField.get(host);
             var submissions = new java.util.ArrayList<CompletableFuture<?>>();
-            try (var held = queue.acquire().toCompletableFuture().get(5, TimeUnit.SECONDS)) {
+            try (var held =
+                    queue.acquire(
+                                    systems.zlink.framework.runtime.internal.dispatch
+                                            .ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS)) {
                 for (int index = 0; index < MESSAGE_COUNT; index++) {
                     var probe = new Probe(index);
                     submissions.add(

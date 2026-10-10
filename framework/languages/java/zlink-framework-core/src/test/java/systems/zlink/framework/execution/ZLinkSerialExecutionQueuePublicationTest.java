@@ -36,7 +36,10 @@ final class ZLinkSerialExecutionQueuePublicationTest {
                                 assertEquals(1, jobs.snapshot().queuedApplicationJobs());
                             });
             try (var ignored =
-                    ZLinkApplicationJobContext.enter(jobs.acquire().toCompletableFuture().join())) {
+                    ZLinkApplicationJobContext.enter(
+                            jobs.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                                    .toCompletableFuture()
+                                    .join())) {
                 serial.enqueueMessage(
                         new Object(),
                         0,
@@ -67,7 +70,10 @@ final class ZLinkSerialExecutionQueuePublicationTest {
             var newOwner =
                     new ZLinkSerialExecutionQueue(tasks::add, ZLinkExecutionLanePolicy.spot());
             oldOwner.sealClosingAdmission();
-            var permit = jobs.acquire().toCompletableFuture().join();
+            var permit =
+                    jobs.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
             try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
                 assertFalse(oldOwner.tryEnqueue(() -> CompletableFuture.completedFuture(null)));
                 assertTrue(ZLinkApplicationJobContext.hasTransferableQueuedOwnership());
@@ -96,7 +102,8 @@ final class ZLinkSerialExecutionQueuePublicationTest {
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
         var tasks = new LinkedBlockingQueue<Runnable>();
         var serial = new ZLinkSerialExecutionQueue(tasks::add, ZLinkExecutionLanePolicy.spot());
-        var ingress = jobs.acquire().toCompletableFuture().join();
+        var ingress =
+                jobs.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         var posting = new CountDownLatch(1);
         var proceed = new CountDownLatch(1);
         var posted = new CompletableFuture<Void>();
@@ -112,6 +119,7 @@ final class ZLinkSerialExecutionQueuePublicationTest {
                         () -> {
                             try {
                                 jobs.acquireAndPublish(
+                                        ZLinkApplicationJobQueue.Origin.REMOTE,
                                         task -> {
                                             posting.countDown();
                                             try {

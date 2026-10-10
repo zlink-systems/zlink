@@ -278,6 +278,7 @@ internal sealed record ZLinkCanonicalActorJoin(
 );
 
 internal readonly record struct ZLinkBackendSpotDispatchInfo(
+    Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin? ApplicationJobOrigin,
     ZLinkBackendSpotDispatchEvent Event,
     Action? DrainChannelReply = null,
     IReadOnlyList<ZLinkBackendActorPart>? ActorParts = null,

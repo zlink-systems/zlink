@@ -35,7 +35,7 @@ export const DEFAULT_ZLINK_DIAGNOSTICS: ZLinkDiagnosticsOptions = {
   includeMessageSizes: false
 };
 
-const telemetryLogger = openTelemetryLogs.getLogger('@zlink-systems/framework');
+export const telemetryLogger = openTelemetryLogs.getLogger('@zlink-systems/framework');
 const telemetryTracer = openTelemetryTrace.getTracer('@zlink-systems/framework');
 
 let diagnosticsGeneration = 0n;

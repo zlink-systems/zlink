@@ -23,6 +23,7 @@ const ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME = 'ZLinkFrameworkActorJoinRequest';
 
 function applicationJobOwner() {
   const permit = {
+    origin: 'remote',
     markApplicationQueued() {},
     detachForHandlerTurn() {},
     releaseBeforeHandler() {},

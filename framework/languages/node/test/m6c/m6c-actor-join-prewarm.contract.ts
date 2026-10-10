@@ -544,6 +544,7 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
   // source's ingress hold) after Accepted but before cutover — exactly the
   // window spec 15 §4.2 requires a relocation temporary queue for.
   const first = dispatch.dispatch(
+    'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('early-1')), Message.from('EARLY-1')],
     false,
@@ -551,6 +552,7 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
     fallbackRef()
   );
   const second = dispatch.dispatch(
+    'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('early-2')), Message.from('EARLY-2')],
     false,
@@ -567,6 +569,7 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
   assert.equal(drained.length, 2);
   for (const arrival of drained) {
     await dispatch.dispatch(
+      'remote',
       ACTOR_ID,
       [Message.from(arrival.header), Message.from(arrival.payload)],
       arrival.returnResponse,
@@ -584,6 +587,7 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
   // A further arrival after migration reaches the Actor directly — the
   // attempt no longer parks anything for this object.
   await dispatch.dispatch(
+    'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('after')), Message.from('AFTER')],
     false,
@@ -616,6 +620,7 @@ test('command 28 registers prewarm before Store validation so early Send and Req
   });
 
   await dispatch.dispatch(
+    'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('early-send')), Message.from('EARLY-SEND')],
     false,
@@ -623,6 +628,7 @@ test('command 28 registers prewarm before Store validation so early Send and Req
     fallbackRef()
   );
   const request = dispatch.dispatch(
+    'remote',
     ACTOR_ID,
     [Message.from(requestHeaderBytes('early-request', 2n)), Message.from('EARLY-REQUEST')],
     false,
@@ -646,6 +652,7 @@ test('command 28 registers prewarm before Store validation so early Send and Req
   );
   actorReady = true;
   await dispatch.dispatch(
+    'remote',
     ACTOR_ID,
     [Message.from(drained[0]!.header), Message.from(drained[0]!.payload)],
     false,
@@ -667,6 +674,7 @@ test('command 28 validation failure releases provisional parked ingress with the
   let parkedFailure: unknown;
   assert.equal(
     harness.registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
+      origin: 'remote',
       header: requestHeaderBytes('early-request', 3n),
       payload: Buffer.from('EARLY-REQUEST'),
       returnResponse: false,
@@ -686,6 +694,7 @@ test('command 28 validation failure releases provisional parked ingress with the
   assert.equal(harness.failures.length, 1);
   assert.equal(
     harness.registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
+      origin: 'remote',
       header: sendHeaderBytes('after-failure'),
       payload: Buffer.from('AFTER'),
       returnResponse: false,
@@ -724,6 +733,7 @@ test('a parked Request replies through the original mailbox correlation once mig
   };
 
   const originalAwait = dispatch.dispatch(
+    'remote',
     ACTOR_ID,
     [Message.from(requestHeaderBytes('ping', 1n)), Message.from('PING')],
     false,
@@ -781,6 +791,7 @@ test('atomic migration admits no arrival racing the drain to be lost or delivere
   });
 
   await dispatch.dispatch(
+    'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('before')), Message.from('BEFORE')],
     false,
@@ -800,6 +811,7 @@ test('atomic migration admits no arrival racing the drain to be lost or delivere
   // the Actor directly (not-found from the registry, then ordinary
   // ingress) rather than parking into a queue nobody will ever drain again.
   const racingRoute = registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
+    origin: 'remote',
     header: sendHeaderBytes('racing'),
     payload: Buffer.from('RACING'),
     returnResponse: false,
@@ -810,6 +822,7 @@ test('atomic migration admits no arrival racing the drain to be lost or delivere
 
   for (const arrival of drained) {
     await dispatch.dispatch(
+      'remote',
       ACTOR_ID,
       [Message.from(arrival.header), Message.from(arrival.payload)],
       arrival.returnResponse,
@@ -819,6 +832,7 @@ test('atomic migration admits no arrival racing the drain to be lost or delivere
     );
   }
   await dispatch.dispatch(
+    'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('racing')), Message.from('RACING')],
     false,
@@ -839,6 +853,7 @@ test('a newer exact identity for the same object evicts the older attempt and fa
   const rejections: unknown[] = [];
   let rejectCount = 0;
   const parked: ZLinkParkedActorArrival = {
+    origin: 'remote',
     header: sendHeaderBytes('stale'),
     payload: Buffer.from('STALE'),
     returnResponse: false,
@@ -863,6 +878,7 @@ test('a newer exact identity for the same object evicts the older attempt and fa
 
   // The new attempt owns the object going forward.
   const newParkedRoute = registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
+    origin: 'remote',
     header: sendHeaderBytes('fresh'),
     payload: Buffer.from('FRESH'),
     returnResponse: false,
@@ -886,6 +902,7 @@ test('Rejected admission and explicit abort fail every parked arrival exactly on
 
   let rejectCount = 0;
   const parkedRoute = registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
+    origin: 'remote',
     header: sendHeaderBytes('doomed'),
     payload: Buffer.from('DOOMED'),
     returnResponse: false,
@@ -904,6 +921,7 @@ test('Rejected admission and explicit abort fail every parked arrival exactly on
   // A further arrival for the same object after rejection is not-found —
   // there is nothing left to park into.
   const afterReject = registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
+    origin: 'remote',
     header: sendHeaderBytes('too-late'),
     payload: Buffer.from('TOO-LATE'),
     returnResponse: false,
@@ -919,6 +937,7 @@ test('Rejected admission and explicit abort fail every parked arrival exactly on
   registry.begin(admission(abortedTransferId, 9n));
   let abortedRejectCount = 0;
   const abortedRoute = registry.routeIngress(ACTOR_ID, 9n, {
+    origin: 'remote',
     header: sendHeaderBytes('aborted'),
     payload: Buffer.from('ABORTED'),
     returnResponse: false,
@@ -962,6 +981,7 @@ test('disabling the ingress prewarm consult reproduces the pre-fix silent drop',
   });
 
   await dispatch.dispatch(
+    'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('early')), Message.from('EARLY')],
     false,

@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Dispatch;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal enum ZLinkActorFrameRoute
@@ -30,6 +32,7 @@ internal sealed record ZLinkActorBoundSessionHandoffFence(
 );
 
 internal sealed record ZLinkActorHandoffFrame(
+    ZLinkApplicationJobOrigin Origin,
     byte[] ReplyActorNodeRid,
     ulong ReplyActorGeneration,
     byte[] SourceNodeRid,
@@ -76,6 +79,7 @@ internal static class ZLinkActorHandoffFrames
             relocationReplyRouteId = frame.RouteContext.ReplyRequestId;
 
         return new ZLinkActorHandoffFrame(
+            frame.Origin,
             frame.ReplyActor.NodeRid.ToBytes().ToArray(),
             frame.ReplyActor.Generation,
             frame.SourceNodeRid.ToBytes().ToArray(),
@@ -133,6 +137,7 @@ internal static class ZLinkActorHandoffFrames
                     frame.ReplyActorGeneration
                 );
                 var restoredFrame = new ZLinkSpotActorFrame(
+                    frame.Origin,
                     actor,
                     replyActor,
                     RidOrDefault(frame.SourceNodeRid),

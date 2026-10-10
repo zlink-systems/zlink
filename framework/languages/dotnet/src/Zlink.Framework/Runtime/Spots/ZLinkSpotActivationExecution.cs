@@ -464,9 +464,10 @@ internal abstract partial class ZLinkSpotActivation
                     QueueSerialized(
                         static (activation, ct) => activation.DispatchActorLifecycleDrainAsync(ct)
                     ),
-                (actorParts, payloadOwner) =>
+                (origin, actorParts, payloadOwner) =>
                 {
                     var dispatchable = ZLinkActorHandoffIngress.CaptureMovingFrames(
+                        origin,
                         _runtime,
                         actorParts,
                         payloadOwner

@@ -1,3 +1,4 @@
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import type {
   ActorRef,
@@ -190,6 +191,7 @@ export interface ZLinkSpotManagerOptions {
     ): Promise<void>;
   };
   readonly dispatchEntryActorPacket?: (
+    origin: ApplicationJobOrigin,
     actorId: string,
     parts: readonly Message[],
     returnResponse?: boolean,
@@ -1532,6 +1534,7 @@ export class DefaultZLinkSpotManager {
   }
 
   dispatchRoutedActorPacket(
+    origin: ApplicationJobOrigin,
     spotId: RoutingId,
     actorId: string,
     parts: readonly Message[],
@@ -1544,6 +1547,7 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException(`Spot '${spotId}' is not active.`);
     }
     return this.dispatchActorPacket(
+      origin,
       activation,
       actorId,
       parts,
@@ -1555,6 +1559,7 @@ export class DefaultZLinkSpotManager {
 
   /** @internal Replays a record already owned by the Actor handoff queue. */
   dispatchRoutedActorPacketDirect(
+    origin: ApplicationJobOrigin,
     spotId: RoutingId,
     actorId: string,
     parts: readonly Message[],
@@ -1567,6 +1572,7 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException(`Spot '${spotId}' is not active.`);
     }
     return this.activationLifecycle.dispatchActorPacketDirect(
+      origin,
       activation,
       actorId,
       parts,
@@ -1965,6 +1971,7 @@ export class DefaultZLinkSpotManager {
   }
 
   async dispatchMeshActor(
+    origin: ApplicationJobOrigin,
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord
@@ -2027,6 +2034,7 @@ export class DefaultZLinkSpotManager {
       }
       const response = targetsEntrySpot
         ? await this.options.dispatchEntryActorPacket?.(
+            origin,
             actor.actorId,
             record.parts,
             request,
@@ -2036,6 +2044,7 @@ export class DefaultZLinkSpotManager {
             record.messageFollowOrigin
           )
         : await this.dispatchMeshActorPacket(
+            origin,
             meshName,
             spotId,
             actor.actorId,
@@ -2693,6 +2702,7 @@ export class DefaultZLinkSpotManager {
                     );
                   }
                   return await this.options.dispatchEntryActorPacket(
+                    'remote',
                     entryActor.context.actorId,
                     parts,
                     returnResponse,
@@ -2922,6 +2932,7 @@ export class DefaultZLinkSpotManager {
               pendingTransfer.handoffBacklog,
               (parts, returnResponse, remoteBoundSessionTarget, _fallbackActorRef) =>
                 this.dispatchActorPacket(
+                  'remote',
                   activation,
                   actor.context.actorId,
                   parts,
@@ -3271,6 +3282,7 @@ export class DefaultZLinkSpotManager {
   }
 
   private async dispatchActorPacket(
+    origin: ApplicationJobOrigin,
     activation: ZLinkSpotActivation,
     actorId: string,
     parts: readonly Message[],
@@ -3281,6 +3293,7 @@ export class DefaultZLinkSpotManager {
     messageFollowOrigin?: ZLinkMessageFollowOrigin
   ): Promise<unknown> {
     return await this.activationLifecycle.dispatchActorPacket(
+      origin,
       activation,
       actorId,
       parts,
@@ -3311,6 +3324,7 @@ export class DefaultZLinkSpotManager {
     for (const arrival of drained) {
       try {
         const response = await this.dispatchActorPacket(
+          arrival.origin,
           activation,
           actor.context.actorId,
           [RuntimeMessage.from(arrival.header), RuntimeMessage.from(arrival.payload)],
@@ -3327,6 +3341,7 @@ export class DefaultZLinkSpotManager {
   }
 
   private async dispatchMeshActorPacket(
+    origin: ApplicationJobOrigin,
     meshName: string,
     spotId: RoutingId,
     actorId: string,
@@ -3343,6 +3358,7 @@ export class DefaultZLinkSpotManager {
       );
     }
     return await this.dispatchActorPacket(
+      origin,
       activation,
       actorId,
       parts,

@@ -27,6 +27,7 @@ public sealed class CanonicalActorAcceptedJournalTests
             )
         );
         var frame = new ZLinkActorHandoffFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             RoutingId.From("reply-node").ToBytes().ToArray(),
             19,
             source.NodeRid.ToBytes().ToArray(),
@@ -121,6 +122,7 @@ public sealed class CanonicalActorAcceptedJournalTests
             )
         );
         var frame = new ZLinkActorHandoffFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             [],
             0,
             source.NodeRid.ToBytes().ToArray(),
@@ -254,6 +256,7 @@ public sealed class CanonicalActorAcceptedJournalTests
             )
         );
         return new ZLinkActorHandoffFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             [],
             0,
             source.NodeRid.ToBytes().ToArray(),

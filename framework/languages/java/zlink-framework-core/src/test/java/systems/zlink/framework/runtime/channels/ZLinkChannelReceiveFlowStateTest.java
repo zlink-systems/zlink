@@ -46,7 +46,8 @@ final class ZLinkChannelReceiveFlowStateTest {
         assertEquals(List.of(ReceiveFlowState.RUNNING), serverStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING), routeStates);
 
-        ZLinkApplicationJobQueue.Permit permit = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit permit =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), dealerStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), serverStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), routeStates);

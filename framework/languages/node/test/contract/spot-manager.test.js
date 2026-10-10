@@ -100,9 +100,9 @@ test('Spot activation idle scan visits at most 64 entries and resumes from its c
   assert.equal(first.length, 64);
   assert.equal(second.length, 64);
   assert.equal(third.length, 2);
-  assert.deepEqual(first.map(value => value.spotId), Array.from({ length: 64 }, (_, index) => `spot-${index}`));
-  assert.deepEqual(second.map(value => value.spotId), Array.from({ length: 64 }, (_, index) => `spot-${index + 64}`));
-  assert.deepEqual(third.slice(0, 2).map(value => value.spotId), ['spot-128', 'spot-129']);
+  assert.deepEqual(first.map(( value ) => value.spotId), Array.from({ length: 64 }, (_, index) => `spot-${index}`));
+  assert.deepEqual(second.map(( value ) => value.spotId), Array.from({ length: 64 }, (_, index) => `spot-${index + 64}`));
+  assert.deepEqual(third.slice(0, 2).map(( value ) => value.spotId), ['spot-128', 'spot-129']);
   assert.equal(registry.nextActiveActivationBatch()[0].spotId, 'spot-0');
 });
 const {
@@ -118,7 +118,7 @@ const {
 test('local SPOT request failure rejects the caller and reports FailCaller', async () => {
   telemetry.reset();
   const events = telemetry.records
-  const dispatcher = new ZLinkRoutedSpotPacketDispatch({
+  ; const dispatcher = new ZLinkRoutedSpotPacketDispatch({
     resolveActivation: () => undefined,
     dispatchErrors: dispatchErrorReporter(
       undefined,
@@ -243,8 +243,8 @@ test('spot runtime owner resolver converts backend actor generation to objectGen
       }
     }),
     actorManager: () => ({
-      getState: (actorId) => actorId === nativeActorRef.actorId ? actorState : undefined
-    }),
+      getState: (actorId) => ( actorId === nativeActorRef.actorId ? actorState : undefined
+    ) }),
     locationLifecycle: () => undefined,
     releaseInstanceAuthority: async () => {},
     beginInstanceIdleClosingAuthority: async () => undefined,
@@ -283,12 +283,12 @@ test('Mesh actor ingress uses the current runtime owner for handoff capture', as
       },
       spotId: currentSpotId
     }),
-    async dispatchEntryActorPacket(_actorId, _parts, _returnResponse, _boundTarget, fallback) {
+    async dispatchEntryActorPacket(_origin, _actorId, _parts, _returnResponse, _boundTarget, fallback) {
       fallbackActorRef = fallback;
     }
   });
 
-  await manager.dispatchMeshActor('test.mesh',
+  await manager.dispatchMeshActor('remote', 'test.mesh',
     {
       spotId: null,
       actor: {
@@ -314,7 +314,7 @@ test('Mesh actor ingress routes the concrete Entry Spot RID to Entry Spot actor 
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     entryNodeRidProvider: () => entryNodeRid,
-    async dispatchEntryActorPacket(actorId, parts, returnResponse, _boundTarget, fallback) {
+    async dispatchEntryActorPacket(_origin, actorId, parts, returnResponse, _boundTarget, fallback) {
       dispatched = true;
       assert.equal(actorId, 'actor-1');
       assert.deepEqual(parts, []);
@@ -323,7 +323,7 @@ test('Mesh actor ingress routes the concrete Entry Spot RID to Entry Spot actor 
     }
   });
 
-  await manager.dispatchMeshActor('test.mesh',
+  await manager.dispatchMeshActor('remote', 'test.mesh',
     {
       spotId: entryNodeRid,
       actor: {
@@ -393,7 +393,7 @@ test('spot actor leave rejoins the actor original remote Entry Spot', async () =
 test('spot actor leave completes inside the current owner turn without nested admission', async () => {
   const events = [];
   let sourceNotified;
-  const sourceNotification = new Promise(resolve => { sourceNotified = resolve; });
+  const sourceNotification = new Promise(( resolve ) => { sourceNotified = resolve; });
   const localNodeRid = zlink.RoutingId.from('play-node-a');
   const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const actor = {
@@ -442,7 +442,7 @@ test('spot actor leave completes inside the current owner turn without nested ad
   });
 
   await sourceNotification;
-  assert.deepEqual(events.filter(event => event !== 'handler:end'), [
+  assert.deepEqual(events.filter(( event ) => event !== 'handler:end'), [
     'handler:start',
     'join-entry:play-node-a',
     'entry-commit',
@@ -451,14 +451,14 @@ test('spot actor leave completes inside the current owner turn without nested ad
     'leave:player-1',
     'commit:player-1'
   ]);
-  assert.equal(events.filter(event => event === 'handler:end').length, 1);
+  assert.equal(events.filter(( event ) => event === 'handler:end').length, 1);
   assert.ok(events.indexOf('handler:end') > events.indexOf('entry-joined'));
 });
 
 test('spot actor leave yields its current turn while the Entry rejoin is pending', async () => {
   const events = [];
   let sourceNotified;
-  const sourceNotification = new Promise(resolve => { sourceNotified = resolve; });
+  const sourceNotification = new Promise(( resolve ) => { sourceNotified = resolve; });
   const localNodeRid = zlink.RoutingId.from('play-node-a');
   let completeJoin;
   const actor = {
@@ -467,7 +467,7 @@ test('spot actor leave yields its current turn while the Entry rejoin is pending
       actorId: 'player-1',
       async [ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME](nodeRid) {
         events.push(`join-entry:${String(nodeRid)}`);
-        return await new Promise(resolve => {
+        return await new Promise(( resolve ) => {
           completeJoin = () => {
             events.push('entry-commit', 'entry-joined');
             void membership.notifyActorLeftAfterTransfer('bingo-room', actor).then(sourceNotified);
@@ -516,7 +516,7 @@ test('spot actor leave yields its current turn while the Entry rejoin is pending
   await leaving;
   await sourceNotification;
 
-  assert.deepEqual(events.filter(event => event !== 'handler:end'), [
+  assert.deepEqual(events.filter(( event ) => event !== 'handler:end'), [
     'join-entry:play-node-a',
     'other-turn',
     'entry-commit',
@@ -525,7 +525,7 @@ test('spot actor leave yields its current turn while the Entry rejoin is pending
     'leave:player-1',
     'commit:player-1'
   ]);
-  assert.equal(events.filter(event => event === 'handler:end').length, 1);
+  assert.equal(events.filter(( event ) => event === 'handler:end').length, 1);
   assert.ok(events.indexOf('handler:end') > events.indexOf('entry-joined'));
 });
 
@@ -2125,7 +2125,7 @@ test('spot handler registry records packet and subscribe registrations from conf
 test('ZLinkSpotManager reports SPOT subscription dispatch errors to the standard logger provider', async () => {
   telemetry.reset();
   const dispatchEvents = telemetry.records
-  class StageSpot {}
+  ; class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
@@ -2222,7 +2222,7 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
   // Publish. This mirrors the BLK-001 precedent for classic fanout publish.
   telemetry.reset();
   const flowEvents = telemetry.records
-  const handled = [];
+  ; const handled = [];
   class StageSpot {}
   class SubscribeHandler {
     async handle(_spot, event) {
@@ -2267,7 +2267,7 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
 test('ZLinkSpotManager reports SPOT actor dispatch errors to the standard logger provider', async () => {
   telemetry.reset();
   const dispatchEvents = telemetry.records
-  const badPart = zlink.Message.from('bad-frame');
+  ; const badPart = zlink.Message.from('bad-frame');
   class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
     detachedTaskRunner: detachedTaskRunner,
@@ -2281,7 +2281,7 @@ test('ZLinkSpotManager reports SPOT actor dispatch errors to the standard logger
 
   try {
     await manager.getOrCreate('test.mesh', StageSpot, 'stage-actor');
-    await manager.dispatchMeshActor('test.mesh',
+    await manager.dispatchMeshActor('remote', 'test.mesh',
       meshActorOwner('stage-actor', 'actor-1'),
       {
         kind: framework.ReceiveKind.ActorSend,
@@ -2320,7 +2320,7 @@ test('ZLinkSpotManager replies routed actor request dispatch errors', async () =
 
   try {
     await manager.getOrCreate('test.mesh', StageSpot, 'stage-routed-actor');
-    await manager.dispatchMeshActor('test.mesh',
+    await manager.dispatchMeshActor('remote', 'test.mesh',
       meshActorOwner('stage-routed-actor', 'actor-1'),
       {
         kind: framework.ReceiveKind.ActorRequest,
@@ -2409,7 +2409,7 @@ test('ZLinkSpotManager does not bind formal Mesh actor packets as remote session
 
   try {
     await manager.getOrCreate('test.mesh', StageSpot, 'stage-no-bind');
-    await manager.dispatchMeshActor('test.mesh',
+    await manager.dispatchMeshActor('remote', 'test.mesh',
       meshActorOwner('stage-no-bind', 'actor-1'),
       {
         kind: framework.ReceiveKind.ActorRequest,
@@ -2433,7 +2433,7 @@ test('ZLinkSpotManager does not bind formal Mesh actor packets as remote session
 
     const backendParts = createActorSendParts('ActorAsk', { value: 'backend' });
     try {
-      await manager.dispatchMeshActor('test.mesh',
+      await manager.dispatchMeshActor('remote', 'test.mesh',
         meshActorOwner('stage-no-bind', 'actor-1'),
         {
           kind: framework.ReceiveKind.ActorSend,
@@ -2559,7 +2559,7 @@ test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerEx
 
   try {
     await manager.getOrCreate('test.mesh', StageSpot, 'stage-no-bind-error');
-    await manager.dispatchMeshActor('test.mesh',
+    await manager.dispatchMeshActor('remote', 'test.mesh',
       meshActorOwner('stage-no-bind-error', 'actor-1'),
       {
         kind: framework.ReceiveKind.ActorRequest,
@@ -2958,7 +2958,7 @@ test('spot manager local actor join commits and runs target lifecycle before one
   const events = [];
   let finishLeave;
   let leaveEntered;
-  const leaveEntry = new Promise(resolve => { leaveEntered = resolve; });
+  const leaveEntry = new Promise(( resolve ) => { leaveEntered = resolve; });
   class StageSpot {
     async onActorJoin(actorId, request) {
       events.push(`join:${actorId}:${request.decode()}`);
@@ -3053,7 +3053,7 @@ test('source leave gate error is reported after target commit without blocking a
   const events = [];
   const errors = [];
   let reportCompleted;
-  const reportCompletion = new Promise(resolve => { reportCompleted = resolve; });
+  const reportCompletion = new Promise(( resolve ) => { reportCompleted = resolve; });
   class RoomSpot {
     constructor(context) {
       this.context = context;
@@ -3666,7 +3666,7 @@ test('formal remote Actor transfer to Entry Spot materializes state before commi
     path.resolve(__dirname, '../../../../runtime/conformance/relocation-behavior-v1.json'),
     'utf8'
   ));
-  const actorJoin = relocationBehavior.profiles.find(value => value.name === 'actorJoin');
+  const actorJoin = relocationBehavior.profiles.find(( value ) => value.name === 'actorJoin');
   assert.ok(actorJoin, 'relocation behavior fixture must define Actor Join');
   assert.ok(relocationBehavior.commonLifecycle.requiredOrder.some(([before, after]) =>
     before === 'ownershipCommitted' && after === 'targetLifecycleCompleted'
@@ -3876,9 +3876,9 @@ test('formal Actor Join runtime port preserves fixture order through target Read
     path.resolve(__dirname, '../../../../runtime/conformance/relocation-behavior-v1.json'),
     'utf8'
   ));
-  const actorJoin = relocationBehavior.profiles.find(value => value.name === 'actorJoin');
+  const actorJoin = relocationBehavior.profiles.find(( value ) => value.name === 'actorJoin');
   const boundSessionRoute = relocationBehavior.optionalBranches.find(
-    value => value.name === 'boundSessionRoute'
+    ( value ) => value.name === 'boundSessionRoute'
   );
   assert.ok(actorJoin, 'relocation behavior fixture must define Actor Join');
   assert.ok(boundSessionRoute, 'relocation behavior fixture must define the Session route branch');
@@ -3920,7 +3920,7 @@ test('formal Actor Join runtime port preserves fixture order through target Read
       payloadChecksumSha256: messageFollow.actorMessageFollowPayloadChecksum(savedParts)
     }
   }];
-  savedParts.forEach(part => part.close());
+  savedParts.forEach(( part ) => part.close());
   const commonTransfer = {
     packetName: '__zlink.actor.join_spot.request',
     actorId: actor.context.actorId,
@@ -4087,12 +4087,12 @@ test('formal Actor Join runtime port preserves fixture order through target Read
 
     const readyParts = createActorSendParts('ReadyAfterRelocation', { kind: 'ready' });
     try {
-      await manager.dispatchMeshActor('test.mesh', meshActorOwner('room-1', actor.actorId), {
+      await manager.dispatchMeshActor('remote', 'test.mesh', meshActorOwner('room-1', actor.actorId), {
         kind: framework.ReceiveKind.ActorSend,
         parts: readyParts
       });
     } finally {
-      readyParts.forEach(part => part.close());
+      readyParts.forEach(( part ) => part.close());
     }
 
     assert.equal(detached.length, 2);
@@ -4301,7 +4301,7 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
     async () => targetSpotRef
   );
   let resolveSendTarget;
-  const sendTargetResolution = new Promise(resolve => { resolveSendTarget = resolve; });
+  const sendTargetResolution = new Promise(( resolve ) => { resolveSendTarget = resolve; });
   const sendTargetSpot = framework.createSpotHandle(targetSpotRef.spotId, async () => {
     const resolved = await sendTargetResolution;
     assert.deepEqual(resolved, targetSpotRef);
@@ -4690,14 +4690,14 @@ test('Spot timer callbacks advance nominal ticks when platform delays truncate f
       await clock.runNext();
       await clock.runNext();
       await clock.runNext();
-      assert.deepEqual(ticks.map(tick => tick.deliveryIndex), [1n, 2n, 3n]);
-      assert.deepEqual(ticks.map(tick => tick.scheduledIndex), [1n, 2n, 3n]);
-      assert.deepEqual(ticks.map(tick => tick.skippedTicks), [0n, 0n, 0n]);
-      assert.ok(ticks.every(tick => tick.scheduledIndex >= tick.deliveryIndex));
+      assert.deepEqual(ticks.map(( tick ) => tick.deliveryIndex), [1n, 2n, 3n]);
+      assert.deepEqual(ticks.map(( tick ) => tick.scheduledIndex), [1n, 2n, 3n]);
+      assert.deepEqual(ticks.map(( tick ) => tick.skippedTicks), [0n, 0n, 0n]);
+      assert.ok(ticks.every(( tick ) => tick.scheduledIndex >= tick.deliveryIndex));
     } finally {
       await closeUserSpot(manager, 'test.mesh', created.spotId);
     }
-  }, delay => Math.max(1, Math.trunc(delay)));
+  }, ( delay ) => Math.max(1, Math.trunc(delay)));
 });
 
 test('spot managed timer keeps elapsed scheduling monotonic and relocation cursors in Unix milliseconds', async () => {
@@ -4785,8 +4785,8 @@ test('concurrent timer cancel callers observe the same resource cleanup failure'
   const second = timer.cancel();
   assert.strictEqual(first, second);
   const [firstResult, secondResult] = await Promise.all([
-    first.then(() => undefined, failure => failure),
-    second.then(() => undefined, failure => failure)
+    first.then(() => undefined, ( failure ) => failure),
+    second.then(() => undefined, ( failure ) => failure)
   ]);
   assert.strictEqual(firstResult, cleanupFailure);
   assert.strictEqual(secondResult, firstResult);
@@ -4831,8 +4831,8 @@ test('timer cancel preserves a running timer task failure for every caller', asy
   assert.strictEqual(first, second);
   failureRelease.resolve();
   const [firstResult, secondResult] = await Promise.all([
-    first.then(() => undefined, failure => failure),
-    second.then(() => undefined, failure => failure)
+    first.then(() => undefined, ( failure ) => failure),
+    second.then(() => undefined, ( failure ) => failure)
   ]);
   assert.strictEqual(firstResult, taskFailure);
   assert.strictEqual(secondResult, firstResult);
@@ -5091,7 +5091,7 @@ test('spot timer handlers retain one instance for the Spot activation', async ()
   assert.equal(disposes, 1);
 });
 
-async function withFakeTimerClock(run, platformDelay = delay => delay) {
+async function withFakeTimerClock(run, platformDelay = ( delay ) => delay) {
   let now = 0;
   let utcNow = Date.now();
   let nextId = 1;
@@ -5355,12 +5355,12 @@ test('HostShutdown observes callback errors only after all Spot cleanup terminal
   const failure = new Error('shutdown callback failed');
   let finishClosing;
   let otherClosing;
-  const started = new Promise(resolve => { otherClosing = resolve; });
+  const started = new Promise(( resolve ) => { otherClosing = resolve; });
   class FailingSpot { async onClosing() { throw failure; } }
   class PendingSpot {
     async onClosing() {
       otherClosing();
-      await new Promise(resolve => { finishClosing = resolve; });
+      await new Promise(( resolve ) => { finishClosing = resolve; });
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
@@ -5375,7 +5375,7 @@ test('HostShutdown observes callback errors only after all Spot cleanup terminal
     settled = true;
   });
   await started;
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(( resolve ) => setImmediate(resolve));
   assert.equal(settled, false);
   finishClosing();
   await observed;

@@ -31,11 +31,17 @@ final class ZLinkApplicationJobQueueTest {
     @Test
     void inlineAcquireContinuationDoesNotBlockAnotherGrant() throws Exception {
         try (var queue = queue(2)) {
-            var heldFirst = queue.acquire().toCompletableFuture().join();
-            var heldSecond = queue.acquire().toCompletableFuture().join();
+            var heldFirst =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
+            var heldSecond =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
             var entered = new CountDownLatch(1);
             var proceed = new CountDownLatch(1);
-            var first = queue.acquire().toCompletableFuture();
+            var first = queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
             first.thenAccept(
                     permit -> {
                         entered.countDown();
@@ -48,7 +54,8 @@ final class ZLinkApplicationJobQueueTest {
                             permit.close();
                         }
                     });
-            var second = queue.acquire().toCompletableFuture();
+            var second =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
             var release = CompletableFuture.runAsync(heldFirst::close);
             try {
                 assertTrue(entered.await(5, TimeUnit.SECONDS));
@@ -66,12 +73,19 @@ final class ZLinkApplicationJobQueueTest {
     @Test
     void publicationStaysInGrantOrderAcrossConcurrentReturnsAndHandlerEntry() {
         try (var queue = queue(2)) {
-            var heldFirst = queue.acquire().toCompletableFuture().join();
-            var heldSecond = queue.acquire().toCompletableFuture().join();
+            var heldFirst =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
+            var heldSecond =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
             var deliveries = new java.util.ArrayDeque<Runnable>();
             var published = new ArrayList<Integer>();
             var first =
                     queue.acquireAndPublish(
+                            ZLinkApplicationJobQueue.Origin.REMOTE,
                             task -> {
                                 deliveries.add(task);
                                 return CompletableFuture.completedFuture(null);
@@ -87,6 +101,7 @@ final class ZLinkApplicationJobQueueTest {
                             });
             var second =
                     queue.acquireAndPublish(
+                            ZLinkApplicationJobQueue.Origin.REMOTE,
                             task -> {
                                 deliveries.add(task);
                                 return CompletableFuture.completedFuture(null);
@@ -119,6 +134,7 @@ final class ZLinkApplicationJobQueueTest {
             var deliveries = new java.util.ArrayDeque<Runnable>();
             var first =
                     queue.acquireAndPublish(
+                                    ZLinkApplicationJobQueue.Origin.REMOTE,
                                     task -> {
                                         deliveries.add(task);
                                         return CompletableFuture.completedFuture(null);
@@ -129,6 +145,7 @@ final class ZLinkApplicationJobQueueTest {
                             .toCompletableFuture();
             var second =
                     queue.acquireAndPublish(
+                                    ZLinkApplicationJobQueue.Origin.REMOTE,
                                     task -> {
                                         deliveries.add(task);
                                         return CompletableFuture.completedFuture(null);
@@ -155,6 +172,7 @@ final class ZLinkApplicationJobQueueTest {
         var posted = new CompletableFuture<Void>();
         var result =
                 queue.acquireAndPublish(
+                                ZLinkApplicationJobQueue.Origin.REMOTE,
                                 task -> {
                                     deliveries.add(task);
                                     return posted;
@@ -228,7 +246,8 @@ final class ZLinkApplicationJobQueueTest {
     @Test
     void tracksReservedQueuedAndInUseUntilTheHandlerFirstInstruction() {
         ZLinkApplicationJobQueue queue = queue(1);
-        ZLinkApplicationJobQueue.Permit permit = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit permit =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
 
         assertQueue(queue, 1, 0, 1, 1, 0);
         permit.queued();
@@ -244,14 +263,15 @@ final class ZLinkApplicationJobQueueTest {
     @Test
     void handsReleasedCapacityToTheOldestLiveWaiterWithoutBarging() {
         ZLinkApplicationJobQueue queue = queue(1);
-        ZLinkApplicationJobQueue.Permit active = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit active =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         List<Integer> order = new ArrayList<>();
         CompletableFuture<ZLinkApplicationJobQueue.Permit> first =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         CompletableFuture<ZLinkApplicationJobQueue.Permit> cancelledOldest =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         CompletableFuture<ZLinkApplicationJobQueue.Permit> third =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         first.thenAccept(permit -> order.add(1));
         cancelledOldest.thenAccept(permit -> order.add(2));
         third.thenAccept(permit -> order.add(3));
@@ -266,7 +286,7 @@ final class ZLinkApplicationJobQueueTest {
         assertFalse(third.isDone());
 
         CompletableFuture<ZLinkApplicationJobQueue.Permit> barger =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         firstPermit.handlerStarted();
         ZLinkApplicationJobQueue.Permit thirdPermit = third.join();
         assertEquals(List.of(1, 3), order);
@@ -286,9 +306,10 @@ final class ZLinkApplicationJobQueueTest {
                         OptionalLong.of(1),
                         candidates(8),
                         now::get);
-        ZLinkApplicationJobQueue.Permit active = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit active =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         CompletableFuture<ZLinkApplicationJobQueue.Permit> waiter =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         now.addAndGet(5_000_000L);
         assertTrue(waiter.cancel(false));
 
@@ -317,9 +338,10 @@ final class ZLinkApplicationJobQueueTest {
                         OptionalLong.of(1),
                         candidates(1),
                         now::get);
-        ZLinkApplicationJobQueue.Permit active = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit active =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         CompletableFuture<ZLinkApplicationJobQueue.Permit> waiter =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         assertEquals(1, queue.snapshot().capacityWaitCount());
 
         now.set(2_000L);
@@ -336,9 +358,10 @@ final class ZLinkApplicationJobQueueTest {
     @Test
     void closeReleasesParkedWaitersExactlyOnceAndStaysIdempotent() {
         ZLinkApplicationJobQueue queue = queue(1);
-        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit held =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         CompletableFuture<ZLinkApplicationJobQueue.Permit> parked =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         assertFalse(parked.isDone());
         assertEquals(1, queue.snapshot().capacityWaiters());
 
@@ -357,7 +380,10 @@ final class ZLinkApplicationJobQueueTest {
         //  of parking forever.
         queue.close();
         assertQueue(queue, 0, 0, 0, 1, 0);
-        assertTrue(queue.acquire().toCompletableFuture().isCompletedExceptionally());
+        assertTrue(
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                        .toCompletableFuture()
+                        .isCompletedExceptionally());
     }
 
     @Test
@@ -367,11 +393,12 @@ final class ZLinkApplicationJobQueueTest {
         ZLinkApplicationJobQueue queue = queue(1);
         List<Integer> materialized = new ArrayList<>();
 
-        ZLinkApplicationJobQueue.Permit firstChild = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit firstChild =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         firstChild.queued();
         materialized.add(1);
         CompletableFuture<ZLinkApplicationJobQueue.Permit> secondChild =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         assertFalse(secondChild.isDone());
         assertEquals(List.of(1), materialized);
 
@@ -380,7 +407,7 @@ final class ZLinkApplicationJobQueueTest {
         secondPermit.queued();
         materialized.add(2);
         CompletableFuture<ZLinkApplicationJobQueue.Permit> thirdChild =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         assertFalse(thirdChild.isDone());
 
         secondPermit.handlerStarted();
@@ -409,7 +436,10 @@ final class ZLinkApplicationJobQueueTest {
         var registration = queue.registerReceiveFlowTarget(applied::add);
         List<ZLinkApplicationJobQueue.Permit> permits = new ArrayList<>();
         for (int index = 0; index < 8; index++) {
-            permits.add(queue.acquire().toCompletableFuture().join());
+            permits.add(
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join());
         }
 
         var paused = queue.snapshot();
@@ -454,7 +484,8 @@ final class ZLinkApplicationJobQueueTest {
                         0);
         List<ReceiveFlowState> applied = new ArrayList<>();
         var registration = queue.registerReceiveFlowTarget(applied::add);
-        ZLinkApplicationJobQueue.Permit permit = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit permit =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         registration.close();
         permit.close();
 
@@ -479,7 +510,10 @@ final class ZLinkApplicationJobQueueTest {
                         state -> {
                             applied.add(state);
                             if (state == ReceiveFlowState.RUNNING) {
-                                held.set(queue.acquire().toCompletableFuture().join());
+                                held.set(
+                                        queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                                                .toCompletableFuture()
+                                                .join());
                                 // This is deliberately inside the initial setter. The target
                                 // has already been registered but its initial snapshot has
                                 // not completed, matching the registration/transition race.
@@ -517,7 +551,8 @@ final class ZLinkApplicationJobQueueTest {
         assertEquals(1, calls.get());
         assertEquals(1, queue.pressureMetrics().flowStateConfigFailureCount());
 
-        ZLinkApplicationJobQueue.Permit permit = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit permit =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         permit.close();
         assertEquals(1, calls.get());
     }
@@ -550,9 +585,10 @@ final class ZLinkApplicationJobQueueTest {
                         candidates(1),
                         100,
                         0);
-        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit held =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         CompletableFuture<ZLinkApplicationJobQueue.Permit> waiting =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         AtomicLong calls = new AtomicLong();
         AtomicReference<ZLinkApplicationJobReceiveFlowController.Registration> registration =
                 new AtomicReference<>();
@@ -604,7 +640,11 @@ final class ZLinkApplicationJobQueueTest {
         var first = queue.registerReceiveFlowTarget(apply::accept);
         var second = queue.registerReceiveFlowTarget(apply::accept);
         CompletableFuture<ZLinkApplicationJobQueue.Permit> acquire =
-                CompletableFuture.supplyAsync(() -> queue.acquire().toCompletableFuture().join());
+                CompletableFuture.supplyAsync(
+                        () ->
+                                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                                        .toCompletableFuture()
+                                        .join());
         assertTrue(firstPauseEntered.await(1, TimeUnit.SECONDS));
 
         CompletableFuture<Void> close = CompletableFuture.runAsync(queue::close);
@@ -677,7 +717,8 @@ final class ZLinkApplicationJobQueueTest {
                         throw new ZlinkConfigException(ConfigResult.INVALID_STATE);
                     }
                 });
-        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit held =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         now.addAndGet(10L);
 
         var before = queue.pressureMetrics();

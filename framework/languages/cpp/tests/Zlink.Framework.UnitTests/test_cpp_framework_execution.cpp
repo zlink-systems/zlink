@@ -7738,26 +7738,32 @@ int main (int argc, char **argv)
         std::vector<int> grants;
         std::optional<queue_t::permit_t> second;
         std::optional<queue_t::permit_t> third;
-        auto cancelled = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
-            if (permit) {
-                std::lock_guard lock (grants_mutex);
-                grants.push_back (1);
-            }
-        });
-        auto second_waiter = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
-            std::lock_guard lock (grants_mutex);
-            if (permit) {
-                grants.push_back (2);
-                second.emplace (std::move (*permit));
-            }
-        });
-        auto third_waiter = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
-            std::lock_guard lock (grants_mutex);
-            if (permit) {
-                grants.push_back (3);
-                third.emplace (std::move (*permit));
-            }
-        });
+        auto cancelled = queue.wait_for_supply (
+          [&] (std::optional<queue_t::permit_t> permit) {
+              if (permit) {
+                  std::lock_guard lock (grants_mutex);
+                  grants.push_back (1);
+              }
+          },
+          zlink::framework::runtime::application_job_queue_t::origin_t::remote);
+        auto second_waiter = queue.wait_for_supply (
+          [&] (std::optional<queue_t::permit_t> permit) {
+              std::lock_guard lock (grants_mutex);
+              if (permit) {
+                  grants.push_back (2);
+                  second.emplace (std::move (*permit));
+              }
+          },
+          zlink::framework::runtime::application_job_queue_t::origin_t::remote);
+        auto third_waiter = queue.wait_for_supply (
+          [&] (std::optional<queue_t::permit_t> permit) {
+              std::lock_guard lock (grants_mutex);
+              if (permit) {
+                  grants.push_back (3);
+                  third.emplace (std::move (*permit));
+              }
+          },
+          zlink::framework::runtime::application_job_queue_t::origin_t::remote);
         if (!cancelled.cancel ()) {
             return 101;
         }

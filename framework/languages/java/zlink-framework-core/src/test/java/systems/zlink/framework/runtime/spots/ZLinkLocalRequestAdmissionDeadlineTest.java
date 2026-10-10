@@ -93,7 +93,12 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                             .spotActivationFor("room-a")
                             .backendSpot;
             var executor = Executors.newSingleThreadExecutor();
-            try (var held = queue.acquire().toCompletableFuture().get(5, TimeUnit.SECONDS)) {
+            try (var held =
+                    queue.acquire(
+                                    systems.zlink.framework.runtime.internal.dispatch
+                                            .ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS)) {
                 var submitted =
                         executor.submit(
                                 () ->

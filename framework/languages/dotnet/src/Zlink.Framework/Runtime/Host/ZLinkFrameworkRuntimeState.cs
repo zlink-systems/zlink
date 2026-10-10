@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Timers;
@@ -34,7 +36,10 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
                 errorSink.ReportRuntimeTaskException(
                     "application-job-queue-receive-flow",
                     exception
-                )
+                ),
+            logger: services.GetService<ILogger<ZLinkApplicationJobQueue>>(),
+            loggerFailureReporter: exception =>
+                errorSink.ReportRuntimeTaskException("logger-provider", exception)
         );
         context.ConfigureApplicationJobQueue(ApplicationJobQueue);
         Capacity = new ZLinkHostCapacityProjection(

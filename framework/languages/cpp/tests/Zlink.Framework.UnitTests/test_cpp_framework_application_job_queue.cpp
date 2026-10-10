@@ -6,6 +6,7 @@
 //  test_cpp_framework_execution.cpp.
 
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 
 #include <gtest/gtest.h>
@@ -28,6 +29,97 @@ namespace
 {
 
 using queue_t = zlink::framework::runtime::application_job_queue_t;
+
+TEST (ApplicationJobQueue, LocalBacklogWarnsOnceUntilAllLocalWaitersLeave)
+{
+    using namespace zlink::framework;
+    std::vector<log_record_t> records;
+    logging_builder_t logging;
+    queue_t *observed_queue = nullptr;
+    logging.use_callback_sink ([&] (const log_record_t &record) {
+        EXPECT_EQ (8u, observed_queue->snapshot ().capacity_waiters);
+        records.push_back (record);
+    });
+    auto monitoring = std::make_shared<detail::monitoring_runtime_state_t> ();
+    monitoring->diagnostics_logger = logging.create_logger ("zlink.framework.runtime");
+    queue_t queue (
+      {application_job_queue_profile_t::balanced, std::uint32_t{3}, 1, 3}, {},
+      [monitoring] (std::uint64_t local, std::uint32_t maximum) {
+          detail::monitoring_runtime_t (monitoring).publish_local_job_backlog (local, maximum);
+      });
+    observed_queue = &queue;
+    std::vector<queue_t::permit_t> held;
+    for (int i = 0; i < 3; ++i)
+        held.push_back (std::move (*queue.try_reserve_supply ()));
+    auto add = [&] (queue_t::origin_t origin) {
+        return queue.wait_for_supply ([] (std::optional<queue_t::permit_t>) {}, origin);
+    };
+    std::vector<queue_t::waiter_t> remote;
+    for (int i = 0; i < 4; ++i)
+        remote.push_back (add (queue_t::origin_t::remote));
+    EXPECT_TRUE (records.empty ());
+    for (std::size_t episode = 1; episode <= 2; ++episode) {
+        std::vector<queue_t::waiter_t> local;
+        for (int i = 0; i < 3; ++i)
+            local.push_back (add (queue_t::origin_t::local));
+        EXPECT_EQ (episode - 1, records.size ());
+        auto excess = add (queue_t::origin_t::local);
+        ASSERT_EQ (episode, records.size ());
+        EXPECT_EQ (log_level_t::warn, records.back ().level);
+        EXPECT_EQ ("zlink.runtime.host.local_job_backlog_exceeded", records.back ().message);
+        auto field = [&] (const char *key) {
+            for (const auto &value : records.back ().fields)
+                if (value.key == key)
+                    return value.value;
+            return std::string ();
+        };
+        EXPECT_EQ ("4", field ("local_waiters"));
+        EXPECT_EQ ("3", field ("effective_maximum"));
+        excess.cancel ();
+        auto repeated = add (queue_t::origin_t::local);
+        EXPECT_EQ (episode, records.size ());
+        queue.reset_metrics ();
+        repeated.cancel ();
+        for (auto &waiter : local)
+            waiter.cancel ();
+    }
+    queue.stop ();
+}
+
+TEST (ApplicationJobQueue, LocalBacklogLoggerFailureDoesNotChangeWaitingOrGrant)
+{
+    using namespace zlink::framework;
+    std::size_t attempts = 0;
+    logging_builder_t logging;
+    logging.use_callback_sink ([&] (const log_record_t &) {
+        ++attempts;
+        throw std::runtime_error ("logger failure");
+    });
+    auto monitoring = std::make_shared<detail::monitoring_runtime_state_t> ();
+    monitoring->diagnostics_logger = logging.create_logger ("zlink.framework.runtime");
+    queue_t queue (
+      {application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1}, {},
+      [monitoring] (std::uint64_t local, std::uint32_t maximum) {
+          detail::monitoring_runtime_t (monitoring).publish_local_job_backlog (local, maximum);
+      });
+    auto held = queue.try_reserve_supply ();
+    std::vector<queue_t::waiter_t> waiters;
+    std::size_t granted = 0;
+    for (int i = 0; i < 3; ++i) {
+        waiters.push_back (queue.wait_for_supply (
+          [&] (std::optional<queue_t::permit_t> permit) {
+              if (permit)
+                  ++granted;
+          },
+          queue_t::origin_t::local));
+    }
+    EXPECT_EQ (1u, attempts);
+    EXPECT_EQ (3u, queue.snapshot ().capacity_waiters);
+    held.reset ();
+    EXPECT_EQ (3u, granted);
+    EXPECT_EQ (0u, queue.snapshot ().capacity_waiters);
+    queue.stop ();
+}
 
 zlink::framework::runtime::application_job_queue_configuration_t limit_one_configuration ()
 {
@@ -280,11 +372,13 @@ TEST (ZLinkFrameworkApplicationJobQueue, LimitOneHoldsNextOrdinaryRecordUntilHan
     //  queued before its handler's first instruction.
     bool granted = false;
     std::optional<queue_t::permit_t> second;
-    auto waiter = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
-        granted = true;
-        if (permit)
-            second.emplace (std::move (*permit));
-    });
+    auto waiter = queue.wait_for_supply (
+      [&] (std::optional<queue_t::permit_t> permit) {
+          granted = true;
+          if (permit)
+              second.emplace (std::move (*permit));
+      },
+      zlink::framework::runtime::application_job_queue_t::origin_t::remote);
     EXPECT_FALSE (granted);
     const auto parked = queue.snapshot ();
     EXPECT_EQ (1u, parked.capacity_waiters);
@@ -360,18 +454,22 @@ TEST (ZLinkFrameworkApplicationJobQueue, OneToManyChildrenNeverExceedSecuredPerm
     std::vector<int> materialized;
     std::optional<queue_t::permit_t> child_two;
     std::optional<queue_t::permit_t> child_three;
-    auto second_waiter = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
-        if (permit) {
-            materialized.push_back (2);
-            child_two.emplace (std::move (*permit));
-        }
-    });
-    auto third_waiter = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
-        if (permit) {
-            materialized.push_back (3);
-            child_three.emplace (std::move (*permit));
-        }
-    });
+    auto second_waiter = queue.wait_for_supply (
+      [&] (std::optional<queue_t::permit_t> permit) {
+          if (permit) {
+              materialized.push_back (2);
+              child_two.emplace (std::move (*permit));
+          }
+      },
+      zlink::framework::runtime::application_job_queue_t::origin_t::remote);
+    auto third_waiter = queue.wait_for_supply (
+      [&] (std::optional<queue_t::permit_t> permit) {
+          if (permit) {
+              materialized.push_back (3);
+              child_three.emplace (std::move (*permit));
+          }
+      },
+      zlink::framework::runtime::application_job_queue_t::origin_t::remote);
 
     //  Both children stay unmaterialized while the parent holds the only
     //  permit.
@@ -408,10 +506,12 @@ TEST (ZLinkFrameworkApplicationJobQueue, StopReleasesParkedWaitersExactlyOnceAnd
 
     int waiter_signals = 0;
     bool waiter_granted = false;
-    auto waiter = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
-        ++waiter_signals;
-        waiter_granted = static_cast<bool> (permit);
-    });
+    auto waiter = queue.wait_for_supply (
+      [&] (std::optional<queue_t::permit_t> permit) {
+          ++waiter_signals;
+          waiter_granted = static_cast<bool> (permit);
+      },
+      zlink::framework::runtime::application_job_queue_t::origin_t::remote);
     EXPECT_EQ (0, waiter_signals);
     EXPECT_EQ (1u, queue.snapshot ().capacity_waiters);
 
@@ -430,10 +530,12 @@ TEST (ZLinkFrameworkApplicationJobQueue, StopReleasesParkedWaitersExactlyOnceAnd
     EXPECT_FALSE (queue.try_reserve_supply ());
     int late_signals = 0;
     bool late_granted = false;
-    auto late = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
-        ++late_signals;
-        late_granted = static_cast<bool> (permit);
-    });
+    auto late = queue.wait_for_supply (
+      [&] (std::optional<queue_t::permit_t> permit) {
+          ++late_signals;
+          late_granted = static_cast<bool> (permit);
+      },
+      zlink::framework::runtime::application_job_queue_t::origin_t::remote);
     EXPECT_EQ (1, late_signals);
     EXPECT_FALSE (late_granted);
 
@@ -573,7 +675,8 @@ TEST (ZLinkFrameworkApplicationJobQueue, CapacityWaiterAndPermitHandoffDoNotIncr
 
     std::optional<queue_t::permit_t> handed_off;
     auto waiter = queue.wait_for_supply (
-      [&] (std::optional<queue_t::permit_t> permit) { handed_off = std::move (permit); });
+      [&] (std::optional<queue_t::permit_t> permit) { handed_off = std::move (permit); },
+      zlink::framework::runtime::application_job_queue_t::origin_t::remote);
     EXPECT_FALSE (handed_off);
     EXPECT_EQ (2u, queue.snapshot ().permits_in_use);
     EXPECT_EQ (1u, queue.snapshot ().capacity_waiters);

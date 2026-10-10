@@ -465,6 +465,7 @@ export class ZLinkEntrySpotActivation {
       messageFollowOrigin
     } = delivery;
     const handoff = this.options.actorHandoffRuntime?.capture(
+      delivery.origin,
       actorId,
       parts,
       returnResponse,
@@ -480,6 +481,7 @@ export class ZLinkEntrySpotActivation {
       ) =>
         this.spotSerialExecutor.executeActor(actorId, () =>
           this.dispatchActorPacketInsideMailbox({
+            origin: delivery.origin,
             actorId,
             parts: replayedParts,
             returnResponse: replayReturnResponse,
@@ -503,6 +505,7 @@ export class ZLinkEntrySpotActivation {
       (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
         this.spotSerialExecutor.executeActor(actor.context.actorId, () =>
           this.dispatchActorPacketInsideMailbox({
+            origin: 'remote',
             actorId: actor.context.actorId,
             parts,
             returnResponse,

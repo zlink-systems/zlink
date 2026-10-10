@@ -28,7 +28,12 @@ public sealed class BlockingSubmitTests
                         new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
                     )
                 )
-                using (var lease = await queue.AcquireAsync(CancellationToken.None))
+                using (
+                    var lease = await queue.AcquireAsync(
+                        CancellationToken.None,
+                        ZLinkApplicationJobOrigin.Remote
+                    )
+                )
                 using (ZLinkApplicationJobQueueInvocation.Enter(lease))
                 {
                     await ZLinkHandlerInvocationEngine.InvokeAsync(

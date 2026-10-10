@@ -1,3 +1,4 @@
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import type {
   ActorRef,
   RoutingId,
@@ -151,6 +152,7 @@ export interface ZLinkSpotBoundSessionRuntime {
 
 export interface ZLinkSpotActorHandoffRuntime {
   capture(
+    origin: ApplicationJobOrigin,
     actorId: string,
     parts: readonly Message[],
     returnResponse?: boolean,

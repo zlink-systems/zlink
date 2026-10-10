@@ -3401,9 +3401,11 @@ class stream_host_service_t::listener_t
                             if (const auto connection_owner = weak_owner.lock ())
                                 connection_owner->wake_reader ();
                         };
-                        while (!(reserved = supply.take (*_application_jobs,
-                                                         std::chrono::milliseconds::zero (), wake))
-                               && !stream_stop_requested (*_stop, &owner->closing)) {
+                        while (
+                          !(reserved = supply.take (
+                              *_application_jobs, std::chrono::milliseconds::zero (), wake,
+                              zlink::framework::runtime::application_job_queue_t::origin_t::remote))
+                          && !stream_stop_requested (*_stop, &owner->closing)) {
                             io.restart ();
                             const auto running = asio::make_work_guard (io);
                             io.run_one ();

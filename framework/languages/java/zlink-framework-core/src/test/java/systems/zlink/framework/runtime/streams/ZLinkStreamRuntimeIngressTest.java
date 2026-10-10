@@ -974,7 +974,10 @@ final class ZLinkStreamRuntimeIngressTest {
         try {
             ZLinkFrameworkRegistration registration = streamRegistration(options, 64 * 1024);
             queue = registration.applicationJobQueue();
-            held = queue.acquire().toCompletableFuture().join();
+            held =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
             ZLinkStreamRuntime runtime = start(stream, registration);
             runtimes.add(runtime);
             ZLinkApplicationJobQueue waiting = queue;
@@ -1005,7 +1008,8 @@ final class ZLinkStreamRuntimeIngressTest {
         options.configureInboundDispatch().setMaxQueuedApplicationJobs(1);
         ZLinkFrameworkRegistration registration = streamRegistration(options, 64 * 1024);
         ZLinkApplicationJobQueue queue = registration.applicationJobQueue();
-        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit held =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         try {
             ZLinkStreamRuntime runtime = start(stream, registration);
             runtimes.add(runtime);
@@ -1013,7 +1017,10 @@ final class ZLinkStreamRuntimeIngressTest {
             runtime.closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
             awaitCondition(() -> queue.snapshot().capacityWaiters() == 0);
             held.close();
-            try (var next = queue.acquire().toCompletableFuture().get(1, TimeUnit.SECONDS)) {
+            try (var next =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .get(1, TimeUnit.SECONDS)) {
                 assertEquals(0, stream.successfulReceives.get());
                 assertEquals(1, queue.snapshot().permitsInUse());
             }

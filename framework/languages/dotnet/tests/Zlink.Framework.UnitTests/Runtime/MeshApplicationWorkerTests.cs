@@ -28,7 +28,10 @@ public sealed class MeshApplicationWorkerTests
         var rid = RoutingId.From("local-order-node");
         node.SetRoutingId(rid);
         node.Start();
-        using var held = await jobs.AcquireAsync(CancellationToken.None);
+        using var held = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         var spot = node.GetOrCreateSpot("local-spot", out _);
         var actor = node.CreateActor("local-actor");
         using var payload = Message.From(new byte[16]);
@@ -110,7 +113,10 @@ public sealed class MeshApplicationWorkerTests
         var rid = RoutingId.From("local-admission-node");
         node.SetRoutingId(rid);
         node.Start();
-        using var held = await jobs.AcquireAsync(CancellationToken.None);
+        using var held = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         var spot = node.GetOrCreateSpot("local-spot", out _);
         var actor = node.CreateActor("local-actor");
         var initialMessages = node.Status().PendingApplicationMessages;
@@ -153,7 +159,10 @@ public sealed class MeshApplicationWorkerTests
         node.SetRoutingId(rid);
         node.Start();
         var spot = node.GetOrCreateSpot("local-spot", out _);
-        using var held = await jobs.AcquireAsync(CancellationToken.None);
+        using var held = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         using var payload = Message.From(new byte[16]);
         using var cancellation = new CancellationTokenSource();
         var requests = Enumerable
@@ -186,7 +195,10 @@ public sealed class MeshApplicationWorkerTests
         Assert.Equal(0UL, jobs.GetStatus().CapacityWaiters);
         Assert.Equal(1UL, jobs.GetStatus().PermitsInUse);
         held.Dispose();
-        using var next = await jobs.AcquireAsync(CancellationToken.None);
+        using var next = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         Assert.Equal(0UL, node.Status().PendingApplicationMessages);
     }
 
@@ -235,7 +247,10 @@ public sealed class MeshApplicationWorkerTests
                 Assert.Equal(SubmitResult.Ok, received.Reply(received.Parts));
             }
         }
-        using var held = await jobs.AcquireAsync(CancellationToken.None);
+        using var held = await jobs.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         using var payload = Message.From(new byte[16]);
         pump.EnsureStarted();
         var request = node.RequestToSpotDirectAsync(

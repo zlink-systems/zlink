@@ -368,7 +368,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                         // receive thread. Admission must not resume the poll loop
                         // on an application ThreadPool worker.
                         admission = _applicationJobQueue
-                            .AcquireAsync(stop.Token)
+                            .AcquireAsync(stop.Token, ZLinkApplicationJobOrigin.Remote)
                             .GetAwaiter()
                             .GetResult();
                         if (!Socket.RecvPacket(out received, RecvFlags.DontWait))

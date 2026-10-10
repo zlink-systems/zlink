@@ -2698,7 +2698,10 @@ public sealed class ServiceRuntimeFoundationTests
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
 
-        using var occupied = await applicationJobQueue.AcquireAsync(CancellationToken.None);
+        using var occupied = await applicationJobQueue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         Assert.Equal(
             ZLinkApplicationJobQueuePressureState.Paused,
             applicationJobQueue.GetStatus().PressureState
@@ -2848,7 +2851,10 @@ public sealed class ServiceRuntimeFoundationTests
 
         //  Saturate the requester's ordinary job flow: the single permit is
         //  held externally, so Core pauses the inbound application lane.
-        using var occupied = await applicationJobQueue.AcquireAsync(CancellationToken.None);
+        using var occupied = await applicationJobQueue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
         Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
 

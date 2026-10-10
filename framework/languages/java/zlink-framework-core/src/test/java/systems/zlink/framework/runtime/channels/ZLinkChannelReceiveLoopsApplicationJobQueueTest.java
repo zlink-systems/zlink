@@ -155,7 +155,8 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
         router.inbound.add(received("after-grant"));
         CountDownLatch dispatched = new CountDownLatch(1);
         ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(queue);
-        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit held =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         try {
             loops.startRequest(
                     router,
@@ -191,7 +192,8 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
         FakeRouter router = new FakeRouter();
         router.inbound.add(received("after-close"));
         ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(queue);
-        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit held =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         try {
             loops.startRequest(
                     router,
@@ -206,7 +208,10 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             loops.awaitTermination();
             awaitCondition(() -> queue.snapshot().capacityWaiters() == 0);
             held.close();
-            try (var next = queue.acquire().toCompletableFuture().get(1, TimeUnit.SECONDS)) {
+            try (var next =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .get(1, TimeUnit.SECONDS)) {
                 assertEquals(0, router.receiveCount.get());
                 assertEquals(1, queue.snapshot().permitsInUse());
             }

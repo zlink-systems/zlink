@@ -238,7 +238,10 @@ final class ZLinkChannelBlockingSubmissionTest {
             var serial =
                     new ZLinkSerialExecutionQueue(
                             Runnable::run, ZLinkExecutionLanePolicy.generic());
-            var permit = jobs.acquire().toCompletableFuture().join();
+            var permit =
+                    jobs.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
             CompletionStage<Void> turn;
             try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
                 turn =
