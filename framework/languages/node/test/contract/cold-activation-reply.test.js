@@ -29,6 +29,7 @@ const TEST_NATIVE_REQUEST_SEQUENCE = 1n;
 
 function ingressOwner() {
   const permit = {
+    origin: 'remote',
     markApplicationQueued() {},
     detachForHandlerTurn() {},
     releaseBeforeHandler() {},
@@ -84,7 +85,7 @@ function pair() {
         events.push(`send:${rid}:${parts[0][SERVICE_WIRE_COMMAND_OFFSET]}`);
         const destination = nodes.get(target);
         const received = { sourceRoutingId: rid, parts };
-        const permit = await destination.applicationJobQueue.acquire();
+        const permit = await destination.applicationJobQueue.acquire(undefined, 'remote');
         try {
           await destination.receive(received);
           return true;
@@ -125,7 +126,7 @@ function pair() {
               );
             }
           };
-          void destination.applicationJobQueue.acquire().then(
+          void destination.applicationJobQueue.acquire(undefined, 'remote').then(
             async (permit) => {
               if (settled) {
                 permit.releaseAfterInternalProcessing();
@@ -183,7 +184,7 @@ function pair() {
       async occupyAllApplicationPermits() {
         const permits = [];
         const limit = applicationJobQueue.snapshot().effectiveMaxQueuedApplicationJobs;
-        while (BigInt(permits.length) < limit) permits.push(await applicationJobQueue.acquire());
+        while (BigInt(permits.length) < limit) permits.push(await applicationJobQueue.acquire(undefined, 'remote'));
         let released = false;
         return () => {
           if (released) return;

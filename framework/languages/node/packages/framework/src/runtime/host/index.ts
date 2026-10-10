@@ -1,3 +1,5 @@
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
+import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -2762,6 +2764,7 @@ export class ZLinkFrameworkRuntimeHost
       },
       meshRecordDispatcher: (meshName: string, owner: ReadyRecord, record: ReceiveRecord) =>
         this.dispatchMeshRecord(
+          currentApplicationJobOrigin,
           meshName,
           owner,
           record,
@@ -2772,6 +2775,7 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   private async dispatchMeshRecord(
+    applicationJobOrigin: () => ApplicationJobOrigin,
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord,
@@ -2973,7 +2977,7 @@ export class ZLinkFrameworkRuntimeHost
           );
         }
         return this.admission.run(meshName, 'RouteMesh Actor dispatch', () =>
-          this.spotManager!.dispatchMeshActor(meshName, owner, record)
+          this.spotManager!.dispatchMeshActor(applicationJobOrigin(), meshName, owner, record)
         );
       case ReceiveKind.SendReady:
         return Promise.resolve();

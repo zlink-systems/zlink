@@ -53,6 +53,7 @@ internal static class ZLinkActorHandoffIngress
         var index = 1;
         if (
             !ZLinkSpotActorFrameReader.TryRead(
+                ZLinkApplicationJobOrigin.Remote,
                 parts,
                 ref index,
                 headerPart,
@@ -127,6 +128,7 @@ internal static class ZLinkActorHandoffIngress
     }
 
     public static ZLinkSpotActorFrameBatch CaptureMovingFrames(
+        ZLinkApplicationJobOrigin origin,
         ZLinkFrameworkRuntime runtime,
         IReadOnlyList<ZLinkBackendActorPart> parts,
         IDisposable? payloadOwner = null
@@ -139,6 +141,7 @@ internal static class ZLinkActorHandoffIngress
             var headerPart = parts[index++];
             if (
                 !ZLinkSpotActorFrameReader.TryRead(
+                    origin,
                     parts,
                     ref index,
                     headerPart,

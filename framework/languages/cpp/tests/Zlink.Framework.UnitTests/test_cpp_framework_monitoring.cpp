@@ -141,7 +141,8 @@ bool capacity_collection_preserves_epoch_without_status_queries ()
     if (!permit)
         return false;
     permit->mark_queued ();
-    auto waiter = jobs->wait_for_supply ([] (auto) {});
+    auto waiter = jobs->wait_for_supply (
+      [] (auto) {}, zlink::framework::runtime::application_job_queue_t::origin_t::remote);
     if (!waiter.cancel ())
         return false;
     // No status query and no collection occurred while the queue accumulated.

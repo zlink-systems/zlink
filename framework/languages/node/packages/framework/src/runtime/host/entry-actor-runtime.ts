@@ -95,6 +95,7 @@ export class ZLinkEntryActorRuntimeService implements ZLinkEntryActorRuntime {
     return {
       handled: true,
       response: await spotManager.dispatchRoutedActorPacket(
+        'remote',
         spotId,
         actorId,
         parts,

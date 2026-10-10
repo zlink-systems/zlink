@@ -4812,6 +4812,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
             throw new Error('Relocated Entry Spot Actor dispatch is unavailable.');
           }
           return runtime.dispatchEntryActorPacket(
+            'remote',
             hidden.actor!.context.actorId,
             parts,
             returnResponse,
@@ -4820,6 +4821,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
           );
         }
         return this.requireSpotManager().dispatchRoutedActorPacket(
+          'remote',
           state.spotId,
           hidden.actor!.context.actorId,
           parts,

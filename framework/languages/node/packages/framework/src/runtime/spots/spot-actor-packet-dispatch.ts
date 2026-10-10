@@ -1,3 +1,4 @@
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -57,6 +58,7 @@ export interface ZLinkActorRequestTerminal {
 
 /** One admitted Actor packet and the routing context that must move with it. */
 export interface ZLinkActorPacketDelivery {
+  readonly origin: ApplicationJobOrigin;
   readonly actorId: string;
   readonly parts: readonly Message[];
   readonly returnResponse: boolean;
@@ -79,6 +81,7 @@ export type ZLinkRouteToActorJoinPrewarm = (
   actorId: string,
   objectGeneration: bigint,
   arrival: {
+    readonly origin: ApplicationJobOrigin;
     readonly header: Buffer;
     readonly payload: Buffer;
     readonly returnResponse: boolean;
@@ -133,6 +136,7 @@ export class ZLinkSpotActorPacketDispatch {
   constructor(private readonly options: ZLinkSpotActorPacketDispatchOptions) {}
 
   dispatch(
+    origin: ApplicationJobOrigin,
     actorId: string,
     parts: readonly Message[],
     returnResponse = false,
@@ -141,6 +145,7 @@ export class ZLinkSpotActorPacketDispatch {
     requestTerminal?: ZLinkActorRequestTerminal
   ): Promise<unknown> {
     return this.dispatchDelivery({
+      origin,
       actorId,
       parts,
       returnResponse,
@@ -212,6 +217,7 @@ export class ZLinkSpotActorPacketDispatch {
         const actor = this.options.resolveActor(actorId);
         if (actor === undefined) {
           return this.handleMissingActor(
+            delivery.origin,
             actorId,
             parts,
             header,
@@ -250,6 +256,7 @@ export class ZLinkSpotActorPacketDispatch {
   }
 
   private async handleMissingActor(
+    origin: ApplicationJobOrigin,
     actorId: string,
     parts: readonly Message[],
     header: ReturnType<typeof decodeStreamHeader>,
@@ -271,6 +278,7 @@ export class ZLinkSpotActorPacketDispatch {
       (messageKind !== ZLinkDispatchMessageKind.ActorRequest || requestTerminal !== undefined)
     ) {
       const parked = this.parkForActorJoinPrewarm(
+        origin,
         actorId,
         parts,
         messageKind,
@@ -328,6 +336,7 @@ export class ZLinkSpotActorPacketDispatch {
    * lifetime.
    */
   private parkForActorJoinPrewarm(
+    origin: ApplicationJobOrigin,
     actorId: string,
     parts: readonly Message[],
     messageKind: ZLinkDispatchMessageKind,
@@ -369,6 +378,7 @@ export class ZLinkSpotActorPacketDispatch {
       actorId,
       fallbackActorRef.objectGeneration,
       {
+        origin,
         header: Buffer.from(parts[0].data()),
         payload: Buffer.from(parts[1].data()),
         returnResponse,

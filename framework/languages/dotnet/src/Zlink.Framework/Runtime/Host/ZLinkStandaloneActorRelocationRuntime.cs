@@ -4464,7 +4464,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         Func<T, Task> dispatch,
         ICollection<Task> completions,
         CancellationToken cancellationToken,
-        Func<T, ZLinkApplicationJobOrigin>? origin = null
+        Func<T, ZLinkApplicationJobOrigin> origin
     )
     {
         ArgumentNullException.ThrowIfNull(queue);
@@ -4475,10 +4475,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         foreach (var item in backlog)
         {
             var admission = await queue
-                .AcquireAsync(
-                    cancellationToken,
-                    origin?.Invoke(item) ?? ZLinkApplicationJobOrigin.Remote
-                )
+                .AcquireAsync(cancellationToken, origin(item))
                 .ConfigureAwait(false);
             admission.MarkQueued();
             completions.Add(DispatchDurableTurnAsync(admission, item, dispatch));

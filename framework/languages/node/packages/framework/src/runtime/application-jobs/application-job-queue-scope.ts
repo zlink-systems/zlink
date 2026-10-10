@@ -44,7 +44,7 @@ export function hasApplicationJobPermit(): boolean {
 
 /** Keeps the ingress origin when a durable record later reacquires its permit. */
 export function currentApplicationJobOrigin(): ApplicationJobOrigin {
-  return applicationJobPermitScope.getStore()?.permit.origin ?? 'remote';
+  return applicationJobPermitScope.getStore()!.permit.origin;
 }
 
 /** Re-enters the captured permit scope when a serial executor runs later. */

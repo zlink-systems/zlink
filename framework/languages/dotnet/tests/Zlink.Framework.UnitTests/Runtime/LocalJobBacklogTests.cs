@@ -65,6 +65,26 @@ public sealed class LocalJobBacklogTests
         }
     }
 
+    [Fact]
+    public async Task Logger_failure_reporter_exception_is_visible_to_the_caller()
+    {
+        var failure = new InvalidOperationException("reporter failure");
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1),
+            logger: new CaptureLogger { Throw = true },
+            loggerFailureReporter: _ => throw failure
+        );
+        using var held = await queue.AcquireAsync(default, ZLinkApplicationJobOrigin.Remote);
+        using var stop = new CancellationTokenSource();
+        var first = queue.AcquireAsync(stop.Token, ZLinkApplicationJobOrigin.Local).AsTask();
+        var observed = Assert.Throws<InvalidOperationException>(() =>
+            queue.AcquireAsync(stop.Token, ZLinkApplicationJobOrigin.Local)
+        );
+        Assert.Same(failure, observed);
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+    }
+
     private sealed class CaptureLogger : ILogger<ZLinkApplicationJobQueue>
     {
         internal bool Throw { get; init; }

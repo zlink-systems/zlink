@@ -140,7 +140,9 @@ class channel_host_service_t::server_loop_t
             /* Permit before receive (Application job queue §3). While the
              * supply is pending the loop keeps its management work: monitor
              * events and replies (messaging hot path I1). */
-            auto permit = _supply.take (*_application_jobs, channel_poll_interval);
+            auto permit =
+              _supply.take (*_application_jobs, channel_poll_interval, {},
+                            zlink::framework::runtime::application_job_queue_t::origin_t::remote);
             if (!permit) {
                 drain_monitor_events ();
                 continue;
@@ -436,7 +438,9 @@ class channel_host_service_t::subscriber_loop_t
             }
             // Permit before receive (Application job queue §3); runtime connection
             // changes keep applying while the supply is pending (hot path I1).
-            auto permit = _supply.take (*_application_jobs, channel_poll_interval);
+            auto permit =
+              _supply.take (*_application_jobs, channel_poll_interval, {},
+                            zlink::framework::runtime::application_job_queue_t::origin_t::remote);
             if (!permit)
                 continue;
             if (!*permit)

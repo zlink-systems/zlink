@@ -23,7 +23,8 @@ final class ZLinkJavaRawMeshNodeReceiveFlowTest {
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null),
                         100,
                         0);
-        ZLinkApplicationJobQueue.Permit held = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit held =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
 
         try (Context context = Zlink.createContext();
                 ZLinkJavaRawMeshNode owner = new ZLinkJavaRawMeshNode(context, "owner");

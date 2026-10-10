@@ -243,7 +243,7 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
   };
   const runtime = new ZLinkActorTransferRuntime({
     spotManager: () => ({
-      async dispatchRoutedActorPacket() {
+      async dispatchRoutedActorPacket(_origin: 'local' | 'remote') {
         return { handled: true };
       }
     }),
@@ -2936,7 +2936,11 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     meshNode: () => targetNode,
     spotManager: () => targetSpotManager,
     spotNodeRuntime: () => ({
-      async dispatchEntryActorPacket(_actorId: string, parts: readonly Message[]) {
+      async dispatchEntryActorPacket(
+        _origin: 'local' | 'remote',
+        _actorId: string,
+        parts: readonly Message[]
+      ) {
         events.push(`replay:${Buffer.from(parts[1]!.data()).toString()}`);
       }
     }),

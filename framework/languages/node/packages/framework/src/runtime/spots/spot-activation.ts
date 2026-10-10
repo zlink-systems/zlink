@@ -1,3 +1,4 @@
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import type {
   ActorRef,
   RoutingId,
@@ -857,6 +858,7 @@ export class ZLinkSpotActivationLifecycle {
   }
 
   async dispatchActorPacket(
+    origin: ApplicationJobOrigin,
     activation: ZLinkSpotActivation,
     actorId: string,
     parts: readonly Message[],
@@ -867,6 +869,7 @@ export class ZLinkSpotActivationLifecycle {
     messageFollowOrigin?: ZLinkMessageFollowOrigin
   ): Promise<unknown> {
     return await this.actorAdmission.dispatchActorPacket(
+      origin,
       activation,
       actorId,
       parts,
@@ -880,6 +883,7 @@ export class ZLinkSpotActivationLifecycle {
 
   /** @internal Dispatches a held Actor record after its handoff owner releases it. */
   dispatchActorPacketDirect(
+    origin: ApplicationJobOrigin,
     activation: ZLinkSpotActivation,
     actorId: string,
     parts: readonly Message[],
@@ -888,6 +892,7 @@ export class ZLinkSpotActivationLifecycle {
     fallbackActorRef?: ActorRef
   ): Promise<unknown> {
     return this.actorAdmission.dispatchActorPacketDirect(
+      origin,
       activation,
       actorId,
       parts,

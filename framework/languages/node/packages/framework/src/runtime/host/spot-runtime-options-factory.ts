@@ -102,6 +102,7 @@ export class ZLinkSpotRuntimeOptionsFactory {
           Promise.resolve()
       },
       dispatchEntryActorPacket: (
+        origin,
         actorId,
         parts,
         returnResponse,
@@ -117,6 +118,7 @@ export class ZLinkSpotRuntimeOptionsFactory {
           );
         }
         return runtime.dispatchEntryActorPacket(
+          origin,
           actorId,
           parts,
           returnResponse,

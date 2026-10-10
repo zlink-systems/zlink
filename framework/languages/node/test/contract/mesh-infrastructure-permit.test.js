@@ -64,7 +64,7 @@ test('canonical Actor Join returns the ingress permit before waiting for the Loc
     parts: [request],
     replyFailure: () => SubmitResult.Ok
   };
-  const first = await queue.acquire();
+  const first = await queue.acquire(undefined, 'remote');
   first.markApplicationQueued();
   const dispatch = runWithApplicationJobPermit(first, () =>
     DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin.call(
@@ -77,7 +77,7 @@ test('canonical Actor Join returns the ingress permit before waiting for the Loc
   try {
     await entered.promise;
     assert.equal(queue.snapshot().permitsInUse, 0n);
-    const next = await queue.acquire();
+    const next = await queue.acquire(undefined, 'remote');
     next.releaseAfterInternalProcessing();
   } finally {
     store.resolve({ actorType: 'Player' });
@@ -126,15 +126,15 @@ test('ActorBinding tombstone returns the ingress permit before remote binding re
     kindData: binding,
     reply: () => SubmitResult.Ok
   };
-  const first = await queue.acquire();
+  const first = await queue.acquire(undefined, 'remote');
   first.markApplicationQueued();
   const dispatch = runWithApplicationJobPermit(first, () =>
-    ZLinkFrameworkRuntimeHost.prototype.dispatchMeshRecord.call(host, 'mesh-a', {}, record)
+    ZLinkFrameworkRuntimeHost.prototype.dispatchMeshRecord.call(host, () => 'remote', 'mesh-a', {}, record)
   );
   try {
     await entered.promise;
     assert.equal(queue.snapshot().permitsInUse, 0n);
-    const next = await queue.acquire();
+    const next = await queue.acquire(undefined, 'remote');
     next.releaseAfterInternalProcessing();
   } finally {
     retired.resolve(true);

@@ -82,8 +82,17 @@ final class ZLinkApplicationJobQueueRuntimeMonitoringTest {
                         options, new ZLinkJavaBackendAdapterFactory());
         try {
             var queue = options.registration().applicationJobQueue();
-            var permit = queue.acquire().toCompletableFuture().join();
-            var waiter = queue.acquire().toCompletableFuture();
+            var permit =
+                    queue.acquire(
+                                    systems.zlink.framework.runtime.internal.dispatch
+                                            .ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
+            var waiter =
+                    queue.acquire(
+                                    systems.zlink.framework.runtime.internal.dispatch
+                                            .ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture();
             var before = runtime.status().capacity();
 
             assertEquals(1, before.applicationJobQueue().configuredManualMax().orElseThrow());

@@ -207,14 +207,14 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
 
     internal ValueTask<ZLinkApplicationJobQueueLease> AcquireAsync(
         CancellationToken cancellationToken,
-        ZLinkApplicationJobOrigin origin = ZLinkApplicationJobOrigin.Remote
+        ZLinkApplicationJobOrigin origin
     ) => AcquireAsyncCore(cancellationToken, null, origin);
 
     internal async Task AcquireAndPostAsync(
         CancellationToken cancellationToken,
         ZLinkStateLane destination,
         Action<ZLinkApplicationJobQueueLease> publish,
-        ZLinkApplicationJobOrigin origin = ZLinkApplicationJobOrigin.Remote
+        ZLinkApplicationJobOrigin origin
     )
     {
         ValueTask publication = default;
@@ -317,30 +317,37 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         return new ValueTask<ZLinkApplicationJobQueueLease>(waiter.Completion.Task);
     }
 
-    internal bool TryAcquire(out ZLinkApplicationJobQueueLease? lease)
+    internal bool TryAcquire(
+        out ZLinkApplicationJobQueueLease? lease,
+        ZLinkApplicationJobOrigin origin
+    )
     {
-        lease = AwaitStateLane(TryAcquireAsync());
+        lease = AwaitStateLane(TryAcquireAsync(origin));
         return lease is not null;
     }
 
-    internal async ValueTask<ZLinkApplicationJobQueueLease?> TryAcquireAsync()
+    internal async ValueTask<ZLinkApplicationJobQueueLease?> TryAcquireAsync(
+        ZLinkApplicationJobOrigin origin
+    )
     {
         var acquired = await _lane.RunAsync(() => ReserveAvailableOnLane(1)).ConfigureAwait(false);
         if (acquired.PressureChanged)
             _receiveFlowController.ApplyPending();
-        return acquired.Count == 0 ? null : new ZLinkApplicationJobQueueLease(this);
+        return acquired.Count == 0 ? null : new ZLinkApplicationJobQueueLease(this, origin);
     }
 
     internal int TryAcquireBatch(
         ZLinkApplicationJobQueueLease?[] destination,
         int offset,
-        int maximum
-    ) => AwaitStateLane(TryAcquireBatchAsync(destination, offset, maximum));
+        int maximum,
+        ZLinkApplicationJobOrigin origin
+    ) => AwaitStateLane(TryAcquireBatchAsync(destination, offset, maximum, origin));
 
     internal async ValueTask<int> TryAcquireBatchAsync(
         ZLinkApplicationJobQueueLease?[] destination,
         int offset,
-        int maximum
+        int maximum,
+        ZLinkApplicationJobOrigin origin
     )
     {
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
@@ -351,7 +358,7 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             .RunAsync(() => ReserveAvailableOnLane(maximum))
             .ConfigureAwait(false);
         for (var index = 0; index < acquired.Count; index++)
-            destination[offset + index] = new ZLinkApplicationJobQueueLease(this);
+            destination[offset + index] = new ZLinkApplicationJobQueueLease(this, origin);
         if (acquired.PressureChanged)
             _receiveFlowController.ApplyPending();
         return acquired.Count;
@@ -606,14 +613,7 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         }
         catch (Exception error)
         {
-            try
-            {
-                _loggerFailureReporter?.Invoke(error);
-            }
-            catch (Exception)
-            {
-                // Diagnostics cannot change the acquisition.
-            }
+            _loggerFailureReporter?.Invoke(error);
         }
     }
 
@@ -1124,7 +1124,7 @@ internal sealed class ZLinkApplicationJobQueueLease : IDisposable
 
     internal ZLinkApplicationJobQueueLease(
         ZLinkApplicationJobQueue owner,
-        ZLinkApplicationJobOrigin origin = ZLinkApplicationJobOrigin.Remote
+        ZLinkApplicationJobOrigin origin
     )
     {
         _owner = owner;
@@ -1197,8 +1197,7 @@ internal sealed class ZLinkApplicationJobQueueRecordOwner : IDisposable
 internal static class ZLinkApplicationJobQueueInvocation
 {
     private static readonly AsyncLocal<Scope?> Current = new();
-    internal static ZLinkApplicationJobOrigin CurrentOrigin =>
-        Current.Value?.Origin ?? ZLinkApplicationJobOrigin.Remote;
+    internal static ZLinkApplicationJobOrigin CurrentOrigin => Current.Value!.Origin;
 
     // Handler entry releases the queue permit, but the invocation still owns its turn.
     internal static bool IsActive => Current.Value is not null;

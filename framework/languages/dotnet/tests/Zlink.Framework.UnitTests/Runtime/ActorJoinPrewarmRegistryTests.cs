@@ -187,6 +187,7 @@ public sealed class ActorJoinPrewarmRegistryTests
 
     private static ZLinkActorHandoffFrame Frame(string body) =>
         new(
+            Origin: Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             ReplyActorNodeRid: [],
             ReplyActorGeneration: 0,
             SourceNodeRid: [],

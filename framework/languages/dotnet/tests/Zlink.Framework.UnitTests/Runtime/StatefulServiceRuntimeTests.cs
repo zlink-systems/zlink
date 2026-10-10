@@ -4982,7 +4982,10 @@ public sealed partial class StatefulServiceRuntimeTests
         await WaitUntilAsync(() =>
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
-        using var held = await queue.AcquireAsync(CancellationToken.None);
+        using var held = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         var activation = new InstanceSpotActivationTarget(
             "objects",
             target.RoutingId,
@@ -5064,7 +5067,7 @@ public sealed partial class StatefulServiceRuntimeTests
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
         using var held = await queue
-            .AcquireAsync(CancellationToken.None)
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
             .AsTask()
             .WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1UL, queue.GetStatus().PermitsInUse);

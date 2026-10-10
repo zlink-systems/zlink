@@ -115,6 +115,7 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
             return (ValueTask.CompletedTask, null);
 
         var dispatchable = ZLinkActorHandoffIngress.CaptureMovingFrames(
+            info.ApplicationJobOrigin!.Value,
             _runtime,
             actorParts,
             info.ActorPayloadOwner

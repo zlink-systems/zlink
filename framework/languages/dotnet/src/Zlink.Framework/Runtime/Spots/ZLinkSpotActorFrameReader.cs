@@ -3,6 +3,7 @@ using Zlink.Framework.Runtime.Dispatch;
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotActorFrame(
+    ZLinkApplicationJobOrigin origin,
     ZLinkBackendActorRef actor,
     ZLinkBackendActorRef replyActor,
     RoutingId sourceNodeRid,
@@ -20,6 +21,8 @@ internal sealed class ZLinkSpotActorFrame(
 ) : IDisposable
 {
     private Message? _body = body;
+
+    public ZLinkApplicationJobOrigin Origin { get; } = origin;
 
     public ZLinkBackendActorRef Actor { get; } = actor;
 
@@ -141,6 +144,7 @@ internal sealed class ZLinkSpotActorFrameBatch(
 internal static class ZLinkSpotActorFrameReader
 {
     public static bool TryRead(
+        ZLinkApplicationJobOrigin origin,
         IReadOnlyList<ZLinkBackendActorPart> parts,
         ref int index,
         ZLinkBackendActorPart headerPart,
@@ -175,6 +179,7 @@ internal static class ZLinkSpotActorFrameReader
         }
 
         frame = new ZLinkSpotActorFrame(
+            origin,
             headerPart.Actor,
             headerPart.ReplyActor ?? headerPart.Actor,
             headerPart.SourceNodeRid,

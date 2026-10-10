@@ -1168,10 +1168,11 @@ void verify_local_node_submit_bridge ()
         using permit_t = zlink::framework::runtime::application_job_queue_t::permit_t;
         auto released_capacity = std::make_shared<std::promise<std::optional<permit_t>>> ();
         auto available = released_capacity->get_future ();
-        auto waiter =
-          application_jobs->wait_for_supply ([released_capacity] (std::optional<permit_t> permit) {
+        auto waiter = application_jobs->wait_for_supply (
+          [released_capacity] (std::optional<permit_t> permit) {
               released_capacity->set_value (std::move (permit));
-          });
+          },
+          zlink::framework::runtime::application_job_queue_t::origin_t::remote);
         assert (available.wait_for (1s) == std::future_status::ready);
         auto permit = available.get ();
         assert (permit);

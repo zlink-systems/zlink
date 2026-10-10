@@ -662,7 +662,7 @@ test('degraded host rejects object messages and timers until owner lease recover
     );
 
     await assert.rejects(
-      scenario.runtime.dispatchMeshRecord(
+      scenario.runtime.dispatchMeshRecord(() => 'remote',
         'play',
         { ownerKind: framework.ReadyOwnerKind.Node },
         { kind: framework.ReceiveKind.ActorSend, parts: [] }
@@ -675,7 +675,7 @@ test('degraded host rejects object messages and timers until owner lease recover
 
     scenario.recover();
     await waitForCondition(() => scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
-    await scenario.runtime.dispatchMeshRecord(
+    await scenario.runtime.dispatchMeshRecord(() => 'remote',
       'play',
       { ownerKind: framework.ReadyOwnerKind.Node },
       { kind: framework.ReceiveKind.ActorSend, parts: [] }
@@ -757,7 +757,7 @@ test('degraded host rejects relocation and peer capacity admission until owner l
     assert.equal(scenario.runtime.status.acceptingWork, false);
     assert.equal(scenario.runtime.spotNodeRuntime.options.peerAdmissionSealed('play'), true);
     await assert.rejects(
-      scenario.runtime.dispatchMeshRecord(
+      scenario.runtime.dispatchMeshRecord(() => 'remote',
         'play',
         { ownerKind: framework.ReadyOwnerKind.Node },
         { kind: framework.ReceiveKind.NodeSend, parts: [] }
@@ -776,7 +776,7 @@ test('degraded host rejects relocation and peer capacity admission until owner l
     await waitForCondition(() => scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
     assert.equal(scenario.runtime.status.acceptingWork, true);
     assert.equal(scenario.runtime.spotNodeRuntime.options.peerAdmissionSealed('play'), false);
-    await scenario.runtime.dispatchMeshRecord(
+    await scenario.runtime.dispatchMeshRecord(() => 'remote',
       'play',
       { ownerKind: framework.ReadyOwnerKind.Node },
       { kind: framework.ReceiveKind.NodeSend, parts: [] }

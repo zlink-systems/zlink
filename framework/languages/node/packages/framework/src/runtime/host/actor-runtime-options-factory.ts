@@ -280,6 +280,7 @@ export class ZLinkActorRuntimeOptionsFactory {
         this.actorBelongsToMesh(meshName, actorId) &&
         !this.options.actorHandoff.isProvisional(actorId)
           ? this.options.actorHandoff.capture(
+              'local',
               actorId,
               parts,
               returnResponse,

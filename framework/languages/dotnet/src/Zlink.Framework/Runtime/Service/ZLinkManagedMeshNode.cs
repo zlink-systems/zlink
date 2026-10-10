@@ -5264,7 +5264,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 Volatile.Write(ref _rawApplicationAdmissionWaitActive, 0);
             count = reserved is null ? 0 : 1;
             admissions[0] = reserved;
-            count += queue.TryAcquireBatch(admissions, count, ReceiveBatchSize - count);
+            count += queue.TryAcquireBatch(
+                admissions,
+                count,
+                ReceiveBatchSize - count,
+                ZLinkApplicationJobOrigin.Remote
+            );
             if (count == 0)
             {
                 if (Interlocked.CompareExchange(ref _rawApplicationAdmissionWaitActive, 1, 0) == 0)

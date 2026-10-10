@@ -147,7 +147,7 @@ class SharedIngressRecordState {
     initialPermit: ApplicationJobPermitPort,
     private readonly record: IngressRecordPort
   ) {
-    this.origin = initialPermit.origin ?? 'remote';
+    this.origin = initialPermit.origin;
     this.initialPermit = initialPermit;
   }
 

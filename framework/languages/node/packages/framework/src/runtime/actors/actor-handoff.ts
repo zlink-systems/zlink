@@ -2,10 +2,7 @@ import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../co
 
 import type { Message } from '../../contracts/Common/Message';
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
-import {
-  currentApplicationJobOrigin,
-  releaseApplicationJobPermitForDurableHandoff
-} from '../application-jobs/application-job-queue-scope';
+import { releaseApplicationJobPermitForDurableHandoff } from '../application-jobs/application-job-queue-scope';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import {
@@ -771,6 +768,7 @@ export class ZLinkActorHandoffCoordinator {
   }
 
   capture(
+    origin: ApplicationJobOrigin,
     actorId: string,
     parts: readonly Message[],
     returnResponse = false,
@@ -829,7 +827,7 @@ export class ZLinkActorHandoffCoordinator {
         this.reportRequestFrame(actorId, packet);
       }
       if (!returnResponse) {
-        handoff.pending.push({ packet, origin: currentApplicationJobOrigin() });
+        handoff.pending.push({ packet, origin });
         // The durable handoff now owns this record. Return the ingress permit
         // before waiting for a later replay, which must acquire its own fresh
         // application-job permit.
@@ -867,7 +865,7 @@ export class ZLinkActorHandoffCoordinator {
         this.replyRoutes.set(source.replyRouteId, route);
         handoff.pending.push({
           packet: requestPacket,
-          origin: currentApplicationJobOrigin(),
+          origin,
           resolve,
           reject
         });

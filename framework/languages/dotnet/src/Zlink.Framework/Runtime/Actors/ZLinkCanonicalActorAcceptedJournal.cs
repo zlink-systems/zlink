@@ -311,6 +311,7 @@ internal static class ZLinkCanonicalActorAcceptedJournal
         )
             throw new InvalidDataException("The accepted Actor route context is invalid.");
         return new ZLinkActorHandoffFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             replyActorRid,
             replyActorGeneration,
             requestSource.NodeRid.ToBytes().ToArray(),

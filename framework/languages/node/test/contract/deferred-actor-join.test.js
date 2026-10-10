@@ -147,6 +147,7 @@ for (const targetKind of ['entry', 'user']) {
           return {
             takeInitial() {
               return {
+                origin: 'local',
                 markApplicationQueued() {},
                 releaseBeforeHandler() {},
                 releaseAfterInternalProcessing() {},
@@ -699,7 +700,7 @@ test('Core-routed Actor request submits its reply before deferred Join completio
   ];
   let replies = 0;
 
-  const result = await dispatch.dispatch('alice', parts, true, undefined, undefined, (reply) => {
+  const result = await dispatch.dispatch('remote', 'alice', parts, true, undefined, undefined, (reply) => {
     replies += 1;
     events.push(`reply:${reply.accepted}`);
   });
@@ -830,7 +831,7 @@ test('deferred Actor Join is discarded when request reply encoding fails', async
   ];
 
   await assert.rejects(
-    dispatch.dispatch('alice', parts, true, undefined, undefined, () => {
+    dispatch.dispatch('remote', 'alice', parts, true, undefined, undefined, () => {
       throw new Error('reply encoding failed');
     }),
     /reply encoding failed/

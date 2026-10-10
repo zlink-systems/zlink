@@ -346,8 +346,8 @@ class application_job_queue_t
          * permit after the queue stopped. Empty while the supply is pending. */
         std::optional<std::optional<permit_t>> take (application_job_queue_t &queue,
                                                      std::chrono::milliseconds wait,
-                                                     std::function<void ()> notify = {},
-                                                     origin_t origin = origin_t::remote)
+                                                     std::function<void ()> notify,
+                                                     origin_t origin)
         {
             if (!_supply.valid ()) {
                 auto filled = std::make_shared<std::promise<std::optional<permit_t>>> ();
@@ -399,7 +399,7 @@ class application_job_queue_t
         return permit;
     }
 
-    waiter_t wait_for_supply (supply_callback_t callback, origin_t origin = origin_t::remote)
+    waiter_t wait_for_supply (supply_callback_t callback, origin_t origin)
     {
         if (!callback)
             throw std::invalid_argument ("Application Job Queue waiter callback is required");
@@ -441,7 +441,7 @@ class application_job_queue_t
     }
 
     // For a caller whose own call is the wait (a synchronous public submit).
-    std::optional<permit_t> wait_for_supply_blocking (origin_t origin = origin_t::remote)
+    std::optional<permit_t> wait_for_supply_blocking (origin_t origin)
     {
         supply_request_t request;
         for (;;) {

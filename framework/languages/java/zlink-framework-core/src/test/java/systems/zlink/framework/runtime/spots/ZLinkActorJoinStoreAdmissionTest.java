@@ -86,7 +86,11 @@ final class ZLinkActorJoinStoreAdmissionTest {
                                     .ZLinkApplicationJobQueue.Permit>();
             try {
                 for (; ; ) {
-                    var claim = jobs.acquire().toCompletableFuture();
+                    var claim =
+                            jobs.acquire(
+                                            systems.zlink.framework.runtime.internal.dispatch
+                                                    .ZLinkApplicationJobQueue.Origin.REMOTE)
+                                    .toCompletableFuture();
                     if (!claim.isDone()) {
                         claim.cancel(false);
                         break;

@@ -37,7 +37,10 @@ public sealed class RouteMeshReceiveFlowTests
         dealer.Connect(endpoint);
         await ReceiveFlowMonitor.ReceiveAsync(monitor, MonitorEventType.ConnectionReady);
 
-        var lease = await queue.AcquireAsync(CancellationToken.None);
+        var lease = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         await ReceiveFlowMonitor.ReceiveAsync(monitor, MonitorEventType.SendFlowPaused);
         await lease.ReleaseForHandlerStartAsync();
         await ReceiveFlowMonitor.ReceiveAsync(monitor, MonitorEventType.SendFlowResumed);
@@ -50,7 +53,10 @@ public sealed class RouteMeshReceiveFlowTests
             afterCloseStates.Add
         );
         Assert.Equal([ReceiveFlowState.Running], afterCloseStates);
-        using var afterCloseLease = await queue.AcquireAsync(CancellationToken.None);
+        using var afterCloseLease = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], afterCloseStates);
         Assert.Equal(0UL, queue.GetPressureMetrics().FlowStateConfigFailures);
     }

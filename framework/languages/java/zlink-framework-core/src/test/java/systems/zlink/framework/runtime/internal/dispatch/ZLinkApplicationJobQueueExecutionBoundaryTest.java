@@ -21,7 +21,8 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
     void receiveOwnerClaimsAvailablePermitsAsOneBoundedBatch() throws Exception {
         ZLinkApplicationJobQueue queue = queue(4);
 
-        List<ZLinkApplicationJobQueue.Permit> permits = queue.acquireBatchBlocking(64);
+        List<ZLinkApplicationJobQueue.Permit> permits =
+                queue.acquireBatchBlocking(ZLinkApplicationJobQueue.Origin.REMOTE, 64);
 
         assertEquals(4, permits.size());
         assertEquals(4, queue.snapshot().reservedSupplyPermits());
@@ -35,7 +36,8 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
         ZLinkSerialExecutionQueue serial =
                 new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.generic());
         CompletableFuture<Void> handlerContinuation = new CompletableFuture<>();
-        ZLinkApplicationJobQueue.Permit first = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit first =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
 
         try (var ignored = ZLinkApplicationJobContext.enter(first)) {
             serial.enqueue(
@@ -51,7 +53,8 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
             first.abandonReservation();
         }
 
-        ZLinkApplicationJobQueue.Permit second = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit second =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         assertEquals(1, queue.snapshot().permitsInUse());
         assertFalse(handlerContinuation.isDone());
         second.close();
@@ -81,7 +84,10 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
         firstStarted.get();
 
         ZLinkApplicationJobQueue.Permit permit =
-                applicationJobs.acquire().toCompletableFuture().join();
+                applicationJobs
+                        .acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                        .toCompletableFuture()
+                        .join();
         CompletionStage<Void> transferred;
         try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
             transferred =
@@ -113,7 +119,8 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
     void transferredQueuedJobOutlivesItsParentCallAndReleasesExactlyOnce() {
         ZLinkApplicationJobQueue queue = queue(1);
         ZLinkApplicationJobContext.QueuedOwnership ownership;
-        ZLinkApplicationJobQueue.Permit permit = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit permit =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
 
         try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
             ownership = ZLinkApplicationJobContext.transferToQueuedJob();
@@ -130,7 +137,7 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
         assertEquals(1, queue.snapshot().permitsInUse());
         assertEquals(0, queue.snapshot().reservedSupplyPermits());
         CompletableFuture<ZLinkApplicationJobQueue.Permit> waiter =
-                queue.acquire().toCompletableFuture();
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
         assertFalse(waiter.isDone());
 
         //  The later executor turn re-enters the transferred ownership and
@@ -153,7 +160,8 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
     @Test
     void rejectedOrNonDispatchedReservationIsReturnedWithoutAHiddenBacklog() {
         ZLinkApplicationJobQueue queue = queue(1);
-        ZLinkApplicationJobQueue.Permit permit = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit permit =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
 
         try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
             assertTrue(ZLinkApplicationJobContext.current().isPresent());
@@ -162,13 +170,17 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
         }
 
         assertEquals(0, queue.snapshot().permitsInUse());
-        assertTrue(queue.acquire().toCompletableFuture().isDone());
+        assertTrue(
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                        .toCompletableFuture()
+                        .isDone());
     }
 
     @Test
     void commonJavaAndKotlinInvocationBoundaryReturnsCapacityAutomatically() throws Exception {
         ZLinkApplicationJobQueue queue = queue(1);
-        ZLinkApplicationJobQueue.Permit permit = queue.acquire().toCompletableFuture().join();
+        ZLinkApplicationJobQueue.Permit permit =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         permit.queued();
         FirstInstructionHandler handler = new FirstInstructionHandler(queue);
 
@@ -183,7 +195,10 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
         }
 
         assertEquals(0, queue.snapshot().permitsInUse());
-        assertTrue(queue.acquire().toCompletableFuture().isDone());
+        assertTrue(
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                        .toCompletableFuture()
+                        .isDone());
     }
 
     private static ZLinkApplicationJobQueue queue(long limit) {

@@ -253,8 +253,8 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
   }
 
   acquire(
-    signal?: AbortSignal,
-    origin: ApplicationJobOrigin = 'remote'
+    signal: AbortSignal | undefined,
+    origin: ApplicationJobOrigin
   ): Promise<ApplicationJobQueuePermit> {
     return new Promise((resolve, reject) => {
       const permit = this.acquireOrResume(resolve, reject, signal, origin);
@@ -265,8 +265,8 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
   acquireOrResume(
     resume: (permit: ApplicationJobQueuePermit) => void,
     reject: (reason: unknown) => void,
-    signal?: AbortSignal,
-    origin: ApplicationJobOrigin = 'remote'
+    signal: AbortSignal | undefined,
+    origin: ApplicationJobOrigin
   ): ApplicationJobQueuePermit | undefined {
     if (signal?.aborted === true) {
       reject(abortReason(signal));
@@ -455,11 +455,7 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
         }
       });
     } catch (error) {
-      try {
-        this.loggerFailureReporter?.(error);
-      } catch {
-        // A diagnostics reporter cannot change an acquisition either.
-      }
+      this.loggerFailureReporter?.(error);
     }
   }
 

@@ -89,7 +89,7 @@ function harness(options = {}) {
 
 test('ordinary capacity ends only the receive turn while route observation and liveness continue', async () => {
   const h = harness();
-  const held = await h.queue.acquire();
+  const held = await h.queue.acquire(undefined, 'remote');
   let ticks = 0;
   h.runtime.liveness.tick = () => {
     ticks++;
@@ -149,10 +149,12 @@ test('queue grants synchronously or resumes its oldest waiter, without promise t
   const h = harness();
   try {
     const resumes = [];
-    const held = h.queue.acquireOrResume((permit) => resumes.push(permit), assert.fail);
+    const held = h.queue.acquireOrResume((permit) => resumes.push(permit), assert.fail,
+      undefined,
+      'remote');
     assert.ok(held);
     assert.equal(
-      h.queue.acquireOrResume((permit) => resumes.push(permit), assert.fail),
+      h.queue.acquireOrResume((permit) => resumes.push(permit), assert.fail, undefined, 'remote'),
       undefined
     );
     assert.equal(resumes.length, 0);
@@ -198,7 +200,7 @@ test('late control SEND faults reach the existing infrastructure task owner', as
 
 test('closing the receive owner cancels its one FIFO acquisition without retaining a grant', async () => {
   const h = harness();
-  const held = await h.queue.acquire();
+  const held = await h.queue.acquire(undefined, 'remote');
   await h.runtime.pumpBatch(true);
   assert.equal(h.queue.snapshot().capacityWaiters, 1n);
   h.runtime.close();

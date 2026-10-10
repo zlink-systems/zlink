@@ -32,6 +32,7 @@ internal sealed record ZLinkActorBoundSessionHandoffFence(
 );
 
 internal sealed record ZLinkActorHandoffFrame(
+    ZLinkApplicationJobOrigin Origin,
     byte[] ReplyActorNodeRid,
     ulong ReplyActorGeneration,
     byte[] SourceNodeRid,
@@ -46,8 +47,7 @@ internal sealed record ZLinkActorHandoffFrame(
     ZLinkServiceWireCodec.RequestSourceFence? RequestSource = null,
     ulong RelocationReplyRouteId = 0,
     long CanonicalEncodedLength = 0,
-    ZLinkActorBoundSessionHandoffFence? BoundSessionSource = null,
-    ZLinkApplicationJobOrigin Origin = ZLinkApplicationJobOrigin.Remote
+    ZLinkActorBoundSessionHandoffFence? BoundSessionSource = null
 );
 
 internal sealed record ZLinkActorAcceptedRecord(
@@ -79,6 +79,7 @@ internal static class ZLinkActorHandoffFrames
             relocationReplyRouteId = frame.RouteContext.ReplyRequestId;
 
         return new ZLinkActorHandoffFrame(
+            frame.Origin,
             frame.ReplyActor.NodeRid.ToBytes().ToArray(),
             frame.ReplyActor.Generation,
             frame.SourceNodeRid.ToBytes().ToArray(),
@@ -97,8 +98,7 @@ internal static class ZLinkActorHandoffFrames
                 out var boundSession
             )
                 ? boundSession
-                : null,
-            Origin: ZLinkApplicationJobQueueInvocation.CurrentOrigin
+                : null
         );
     }
 
@@ -137,6 +137,7 @@ internal static class ZLinkActorHandoffFrames
                     frame.ReplyActorGeneration
                 );
                 var restoredFrame = new ZLinkSpotActorFrame(
+                    frame.Origin,
                     actor,
                     replyActor,
                     RidOrDefault(frame.SourceNodeRid),

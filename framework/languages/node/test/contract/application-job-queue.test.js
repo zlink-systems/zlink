@@ -97,6 +97,38 @@ test('local backlog logger failure preserves the waiting acquisition and episode
   }
 });
 
+test('local backlog failure reporter exceptions remain visible', async () => {
+  const {
+    telemetryLogger
+  } = require('../../packages/framework/dist/runtime/diagnostics/message-flow');
+  const emit = telemetryLogger.emit;
+  const failure = new Error('reporter failure');
+  telemetryLogger.emit = () => {
+    throw new Error('logger failure');
+  };
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 1n),
+    undefined,
+    undefined,
+    () => {
+      throw failure;
+    }
+  );
+  const held = await queue.acquire(undefined, 'remote');
+  const stop = new AbortController();
+  const first = queue.acquire(stop.signal, 'local');
+  try {
+    const second = queue.acquire(stop.signal, 'local');
+    stop.abort();
+    await assert.rejects(second, (error) => error === failure);
+  } finally {
+    telemetryLogger.emit = emit;
+    stop.abort();
+    await assert.rejects(first, { name: 'AbortError' });
+    held.releaseAfterInternalProcessing();
+  }
+});
+
 test('ingress record follow-up permits keep their original local origin', async () => {
   telemetry.reset();
   const queue = new ApplicationJobQueue(
@@ -226,7 +258,7 @@ test('application job queue hands a released permit to the oldest live waiter', 
     () => now
   );
 
-  const first = await queue.acquire();
+  const first = await queue.acquire(undefined, 'remote');
   first.markApplicationQueued();
   assert.deepEqual(queue.snapshot(), {
     configuredProfile: 'balanced',
@@ -253,12 +285,12 @@ test('application job queue hands a released permit to the oldest live waiter', 
   });
 
   const order = [];
-  const secondPending = queue.acquire().then((permit) => {
+  const secondPending = queue.acquire(undefined, 'remote').then((permit) => {
     order.push('second');
     return permit;
   });
   const thirdController = new AbortController();
-  const thirdPending = queue.acquire(thirdController.signal).then(
+  const thirdPending = queue.acquire(thirdController.signal, 'remote').then(
     () => order.push('third'),
     () => order.push('third-cancelled')
   );
@@ -289,8 +321,8 @@ test('application job queue reset keeps gauges and rebases the peak', async () =
   const queue = new ApplicationJobQueue(
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 2n }, () => 8n)
   );
-  const first = await queue.acquire();
-  const second = await queue.acquire();
+  const first = await queue.acquire(undefined, 'remote');
+  const second = await queue.acquire(undefined, 'remote');
   first.markApplicationQueued();
   second.markApplicationQueued();
 
@@ -312,8 +344,8 @@ test('capacity waiter metrics stay in the epoch where the wait started', async (
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 1n),
     () => now
   );
-  const active = await queue.acquire();
-  const waiter = queue.acquire();
+  const active = await queue.acquire(undefined, 'remote');
+  const waiter = queue.acquire(undefined, 'remote');
   assert.equal(queue.snapshot().capacityWaitCount, 1n);
 
   now = 400;
@@ -380,7 +412,7 @@ test('application job queue pressure transitions use permits in use and reset on
     states.push({ state, sequence });
   });
   const permits = [];
-  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire());
+  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire(undefined, 'remote'));
   assert.equal(queue.snapshot().pressureState, 'paused');
   assert.deepEqual(states, [{ state: 'paused', sequence: 1n }]);
 
@@ -432,7 +464,7 @@ test('one application job queue controller owns channel and raw receive-flow tar
   );
   assert.deepEqual(states, ['channel:running', 'raw:running']);
 
-  const permit = await queue.acquire();
+  const permit = await queue.acquire(undefined, 'remote');
   assert.deepEqual(states, ['channel:running', 'raw:running', 'channel:paused', 'raw:paused']);
 
   queue.unregisterReceiveFlowTarget(channel);
@@ -465,7 +497,7 @@ test('receive-flow target may unregister reentrantly during a queue transition',
     if (state === 'paused') queue.unregisterReceiveFlowTarget(target);
   });
 
-  const permit = await queue.acquire();
+  const permit = await queue.acquire(undefined, 'remote');
   permit.releaseAfterInternalProcessing();
   assert.deepEqual(states, ['running', 'paused']);
 });
@@ -497,7 +529,7 @@ test('application job permit stays queued until the first user callback instruct
   const queue = new ApplicationJobQueue(
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 8n)
   );
-  const permit = await queue.acquire();
+  const permit = await queue.acquire(undefined, 'remote');
   permit.markApplicationQueued();
 
   await runWithApplicationJobPermit(permit, async () => {
@@ -514,7 +546,7 @@ test('detached exact-target turn retains its ingress permit until callback start
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 8n)
   );
   let retainedCloseCount = 0;
-  const owner = ApplicationIngressRecordOwner.create(queue, await queue.acquire(), {
+  const owner = ApplicationIngressRecordOwner.create(queue, await queue.acquire(undefined, 'remote'), {
     close: () => {
       retainedCloseCount += 1;
     }
@@ -532,7 +564,7 @@ test('detached exact-target turn retains its ingress permit until callback start
   assert.equal(queue.snapshot().permitsInUse, 1n);
   assert.equal(retainedCloseCount, 0);
 
-  const nextPending = queue.acquire();
+  const nextPending = queue.acquire(undefined, 'remote');
   await Promise.resolve();
   assert.equal(queue.snapshot().capacityWaiters, 1n);
 

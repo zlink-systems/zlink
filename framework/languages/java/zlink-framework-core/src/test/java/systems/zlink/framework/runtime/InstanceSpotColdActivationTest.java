@@ -140,7 +140,9 @@ final class InstanceSpotColdActivationTest {
                 echoHandled.get(4, TimeUnit.SECONDS);
                 try (var permit =
                         applicationJobQueue
-                                .acquire()
+                                .acquire(
+                                        systems.zlink.framework.runtime.internal.dispatch
+                                                .ZLinkApplicationJobQueue.Origin.REMOTE)
                                 .toCompletableFuture()
                                 .get(5, TimeUnit.SECONDS)) {
                     assertEquals(

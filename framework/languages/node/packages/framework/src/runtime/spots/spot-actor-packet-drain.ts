@@ -135,6 +135,7 @@ export class ZLinkSpotActorPacketDrain {
         await this.dispatchNoBindActorRequest(noBindInfo, actorId, parts, actorRef);
       } else {
         await this.options.actorPacketHandler({
+          origin: 'remote',
           actorId,
           parts,
           returnResponse: false,
@@ -198,6 +199,7 @@ export class ZLinkSpotActorPacketDrain {
   ): Promise<void> {
     try {
       const response = await this.options.actorPacketHandler?.({
+        origin: 'remote',
         actorId,
         parts,
         returnResponse: true,

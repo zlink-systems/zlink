@@ -1,3 +1,4 @@
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { RuntimeDisposal } from '../disposal';
 import { randomUUID } from 'node:crypto';
 import {
@@ -1043,6 +1044,7 @@ export class ZLinkSpotNodeRuntimeManager {
   }
 
   async dispatchEntryActorPacket(
+    origin: ApplicationJobOrigin,
     actorId: string,
     parts: readonly Message[],
     returnResponse = false,
@@ -1082,6 +1084,7 @@ export class ZLinkSpotNodeRuntimeManager {
       );
     }
     return await activation.dispatchActorPacket({
+      origin,
       actorId,
       parts,
       returnResponse,

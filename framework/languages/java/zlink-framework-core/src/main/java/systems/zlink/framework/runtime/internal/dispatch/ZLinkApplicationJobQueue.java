@@ -153,10 +153,6 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         LOCAL
     }
 
-    public CompletionStage<Permit> acquire() {
-        return acquire(Origin.REMOTE);
-    }
-
     public CompletionStage<Permit> acquire(Origin origin) {
         Objects.requireNonNull(origin, "origin");
         PressureSnapshot transition = null;
@@ -189,12 +185,6 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
      * grant. The post function must only enqueue the task, never run it inline. Its stage reports
      * destination rejection or shutdown so a dropped task returns its reservation.
      */
-    public <T> CompletionStage<T> acquireAndPublish(
-            Function<Runnable, CompletionStage<Void>> post,
-            Function<Permit, CompletionStage<T>> publication) {
-        return acquireAndPublish(Origin.REMOTE, post, publication);
-    }
-
     public <T> CompletionStage<T> acquireAndPublish(
             Origin origin,
             Function<Runnable, CompletionStage<Void>> post,
@@ -314,10 +304,6 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     }
 
     /** Blocking bridge for dedicated receive-loop threads. */
-    public Permit acquireBlocking() throws InterruptedException {
-        return acquireBlocking(Origin.REMOTE);
-    }
-
     public Permit acquireBlocking(Origin origin) throws InterruptedException {
         CompletableFuture<Permit> future = acquire(origin).toCompletableFuture();
         try {
@@ -342,12 +328,13 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
      * owner then takes only capacity that is immediately available without crossing an older
      * waiter.
      */
-    public List<Permit> acquireBatchBlocking(int maximum) throws InterruptedException {
+    public List<Permit> acquireBatchBlocking(Origin origin, int maximum)
+            throws InterruptedException {
         if (maximum < 1) {
             throw new IllegalArgumentException("maximum must be positive");
         }
         ArrayList<Permit> permits = new ArrayList<>(maximum);
-        permits.add(acquireBlocking());
+        permits.add(acquireBlocking(origin));
         PressureSnapshot transition = null;
         synchronized (lock) {
             while (!closed
