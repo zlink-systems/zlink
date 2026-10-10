@@ -182,12 +182,12 @@ inline void validate_framework_options (const framework_options_state_t &options
               "fanout channel '" + channel_name
                 + "' cannot combine automatic discovery with manual subscriber endpoints");
         }
-        if (options.fanout_channels_with_no_drop_configuration.contains (channel_name)
+        if (options.fanout_channels_with_publisher_configuration.contains (channel_name)
             && !options.fanout_channels_with_publisher.contains (channel_name)) {
             throw framework_exception_t (
               framework_error_kind_t::protocol_error,
               "fanout channel '" + channel_name
-                + "' cannot configure NoDrop without a publisher capability");
+                + "': NoDrop and send timeout require the publisher role");
         }
         if (options.fanout_subscription_topics.contains (channel_name)
             && !options.fanout_channels_with_subscriber.contains (channel_name)) {

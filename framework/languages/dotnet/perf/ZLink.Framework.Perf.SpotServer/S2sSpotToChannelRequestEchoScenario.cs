@@ -126,13 +126,13 @@ public sealed class S2sSpotToChannelRequestEchoScenario(
     }
 
     public Task RunAsync() =>
-        ServerDrivenStreams.RunRequestsAsync(
+        ServerDrivenStreams.RunTerminalStreamsAsync(
             measurement,
             config.workload.logicalStreams!.Value,
             LoopAsync
         );
 
-    // The local driver: one PerfDriveRequest per operation; the in-flight slot is the driver's until the handler returns.
+    // Each local stream starts its next PerfDriveRequest after the handler returns.
     private async Task LoopAsync(int stream)
     {
         var spotId = config.spotIds[stream % config.spotIds.Length];

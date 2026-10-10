@@ -6905,7 +6905,8 @@ void public_host_runtime_t::admit_local_application (
               publish ();
           else
               host->_local_dispatch_completion_lane.try_post (std::move (publish));
-      });
+      },
+      application_job_queue_t::origin_t::local);
 }
 
 zlink::submit_result_t public_host_runtime_t::enqueue_local_actor_message (

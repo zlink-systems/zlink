@@ -37,7 +37,7 @@ for (const domain of [ReadyDomain.Infrastructure, ReadyDomain.Application]) {
           }
         ],
         applicationJobPermit:
-          domain === ReadyDomain.Application ? await queue.acquire() : undefined,
+          domain === ReadyDomain.Application ? await queue.acquire(undefined, 'remote') : undefined,
         releaseRetainedIngress() {
           released[sequence]++;
         }

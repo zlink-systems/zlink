@@ -1658,7 +1658,7 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
 
     //  Saturate the requester's ordinary job flow: hold its only permit and
     //  park the receive pump as a capacity waiter.
-    const occupied = await leftJobs.acquire();
+    const occupied = await leftJobs.acquire(undefined, 'remote');
     const parked = left.pumpOne();
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(leftJobs.snapshot().capacityWaiters, 1n);

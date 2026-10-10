@@ -224,11 +224,10 @@ is neither cancelled nor rolled back.
 
 | Option | What it sets | Where it's configured |
 | --- | --- | --- |
-| `DefaultSocketSendTimeout` | Classic fanout publisher wait ceiling (1 second by default) | .NET root option |
+| Classic fanout publisher send timeout | Admission wait limit | The channel's fanout builder; see [Channel messaging §7](../../../common/spec/server/02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic). |
 | — | The value actually applied **differs by send path** (below) | — |
 | `sendHighWaterMark` | Bytes that can be held **to send**, per peer. `0` means unlimited | `configureRouterSocket()` |
 | `receiveHighWaterMark` | Bytes that can be held **after receiving**, per peer. `0` means unlimited | `configureRouterSocket()` |
-| `sendHighWaterMark` · `linger` | The pub/sub publish socket's ceiling and how long a pending publish waits at shutdown | `configureSpotPublisher()` |
 | `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | The Core context's ordinary-queue byte budget | root inbound-dispatch configuration |
 | `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` · pause/resume thresholds | The host instance's queued-application-job limit and flow-transition boundaries | root inbound-dispatch configuration |
 
@@ -391,7 +390,7 @@ settings and status/reset semantics.
 | `MaxQueuedApplicationJobs = 0` fails startup | `0` is not unlimited. Omit the manual value to select Auto. |
 | The same profile label does not move byte and job limits by the same ratio | `CoreHwmProfile` and `ApplicationJobQueueProfile` share labels only; their units and calculations are independent. |
 | Replies still complete while the application job queue is full | Terminal reply/error completion identifiable before receive bypasses the shared permit and ordinary Core HWM, so this is expected. |
-| Raising the ceiling made the symptom show up later | Congestion absorbed into memory surfaces the failure later. Review the queue ceiling and receiver throughput together. `DefaultSocketSendTimeout` controls only the Classic fanout publisher wait. |
+| Raising the ceiling made the symptom show up later | Congestion absorbed into memory surfaces the failure later. Review the queue ceiling and receiver throughput together. Set the Classic fanout publisher's admission wait limit on the channel's fanout builder; see [Channel messaging §7](../../../common/spec/server/02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic). |
 | `publish` completed normally, but the subscriber never received it | Publish completion means only that it was ready to send and the runtime accepted the submission. Delivery, resend, and ack aren't provided ([Channel Messaging](30-channel-patterns.en.md#7-what-it-means-for-a-call-to-be-finished)). |
 | A request inside a handler hangs for a long time | If both sides' processing is delayed at the same time, a finite timeout is where recovery starts. Give a nested request a `timeout(...)`. |
 | One slow node is also delaying other calls | The send queue is separate per peer, but waiting inside the same handler also occupies that handler's execution slot. Do not put a call to a slow-responding target in the same handler as other calls. |

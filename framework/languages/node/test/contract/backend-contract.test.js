@@ -2001,7 +2001,7 @@ test('framework host dispatches MeshNode node-direct send and request records', 
       'DirectNotice',
       { value: 'sent' }
     ).map((part) => zlink.Message.from(part));
-    await host.dispatchMeshRecord(meshName, { ownerKind: framework.ReadyOwnerKind.Node }, {
+    await host.dispatchMeshRecord(() => 'remote', meshName, { ownerKind: framework.ReadyOwnerKind.Node }, {
       kind: framework.ReceiveKind.NodeSend,
       sourceNodeRid: target,
       parts: sendParts
@@ -2019,7 +2019,7 @@ test('framework host dispatches MeshNode node-direct send and request records', 
       { value: 'asked' }
     ).map((part) => zlink.Message.from(part));
     let replyParts;
-    await host.dispatchMeshRecord(meshName, { ownerKind: framework.ReadyOwnerKind.Node }, {
+    await host.dispatchMeshRecord(() => 'remote', meshName, { ownerKind: framework.ReadyOwnerKind.Node }, {
       kind: framework.ReceiveKind.NodeRequest,
       sourceNodeRid: target,
       parts: requestParts,

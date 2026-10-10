@@ -222,7 +222,6 @@ public sealed class MonitoringTests : RegistrationValidationSupport
 
         Assert.NotNull(filter);
         Assert.Equal(TimeSpan.FromSeconds(5), registration.DefaultRequestTimeout);
-        Assert.Equal(TimeSpan.FromMilliseconds(1000), registration.DefaultSocketSendTimeout);
         Assert.Contains("application/x-protobuf", registration.Codecs.Serializers.Keys);
         Assert.True(registration.Locations.Enabled);
         Assert.Contains("profile", registration.SpotNodes.Keys);

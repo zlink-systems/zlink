@@ -97,6 +97,7 @@ public sealed class MessagePayloadOwnershipConvergenceTests
             .GetInt32();
         var actor = new ZLinkBackendActorRef(RoutingId.From("node"), "actor", 1);
         var frame = new ZLinkSpotActorFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             actor,
             actor,
             RoutingId.From("source"),

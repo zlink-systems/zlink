@@ -19,12 +19,10 @@ import systems.zlink.framework.configuration.ZLinkMeshObjectRoleBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshPeerConnection;
 import systems.zlink.framework.configuration.ZLinkMeshPeerConnections;
-import systems.zlink.framework.configuration.ZLinkSpotPublisherConfig;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.runtime.internal.channels.ZLinkChannelAdmissionTimeout;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.InstanceSpotFactoryConfiguration;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableActorFactory;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableInstanceSpotFactory;
@@ -72,7 +70,6 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
             new LinkedHashMap<>();
     private final ObjectRoles objectRoles = new ObjectRoles();
     private final RouterSocketConfig routerSocket = new RouterSocketConfig();
-    private final SpotPublisherConfig spotPublisher = new SpotPublisherConfig();
     private String bindEndpoint;
     private String bindHost;
     private String advertiseHost;
@@ -441,11 +438,6 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     @Override
     public ZLinkMeshNodeSocketConfig configureRouterSocket() {
         return routerSocket;
-    }
-
-    @Override
-    public ZLinkSpotPublisherConfig configureSpotPublisher() {
-        return spotPublisher;
     }
 
     @Override
@@ -1040,42 +1032,6 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         @Override
         public void setReceiveTimeout(Duration value) {
             receiveTimeout = value;
-        }
-    }
-
-    private static final class SpotPublisherConfig implements ZLinkSpotPublisherConfig {
-        private int sendHighWaterMark = 1000;
-        private Duration sendTimeout;
-        private Duration linger;
-
-        @Override
-        public int sendHighWaterMark() {
-            return sendHighWaterMark;
-        }
-
-        @Override
-        public void setSendHighWaterMark(int value) {
-            sendHighWaterMark = value;
-        }
-
-        @Override
-        public Optional<Duration> sendTimeout() {
-            return Optional.ofNullable(sendTimeout);
-        }
-
-        @Override
-        public void setSendTimeout(Duration value) {
-            sendTimeout = value == null ? null : ZLinkChannelAdmissionTimeout.requireValid(value);
-        }
-
-        @Override
-        public Optional<Duration> linger() {
-            return Optional.ofNullable(linger);
-        }
-
-        @Override
-        public void setLinger(Duration value) {
-            linger = value;
         }
     }
 }

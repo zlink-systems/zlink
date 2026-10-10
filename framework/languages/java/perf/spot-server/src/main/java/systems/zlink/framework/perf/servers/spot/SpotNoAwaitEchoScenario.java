@@ -158,7 +158,7 @@ public final class SpotNoAwaitEchoScenario {
     }
 
     public CompletionStage<Void> run() {
-        return Streams.launchRequests(config, measurement, this::issue);
+        return Streams.launchTerminals(config, measurement, this::issue);
     }
 
     private Optional<CompletionLoop.Iteration<PerfEchoReply>> issue(int stream) {

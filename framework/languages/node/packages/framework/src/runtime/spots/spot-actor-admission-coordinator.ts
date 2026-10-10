@@ -1,3 +1,5 @@
+import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import type { ActorRef, ZLinkActor } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
@@ -39,6 +41,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
   constructor(private readonly options: AdmissionOptions) {}
 
   async dispatchActorPacket(
+    origin: ApplicationJobOrigin,
     activation: ZLinkSpotActivation,
     actorId: string,
     parts: readonly Message[],
@@ -49,6 +52,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
     messageFollowOrigin?: ZLinkMessageFollowOrigin
   ): Promise<unknown> {
     const handoff = this.options.actorHandoffRuntime?.capture(
+      origin,
       actorId,
       parts,
       returnResponse,
@@ -63,6 +67,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
         replayFallbackActorRef
       ) =>
         this.dispatchActorPacketDirect(
+          origin,
           activation,
           actorId,
           replayedParts,
@@ -73,6 +78,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
     );
     if (handoff !== undefined) return await handoff;
     return await this.dispatchActorPacketDirect(
+      origin,
       activation,
       actorId,
       parts,
@@ -116,6 +122,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
       packets: {
         handle: (delivery) =>
           this.dispatchActorPacket(
+            'remote',
             activation,
             delivery.actorId,
             delivery.parts,
@@ -149,6 +156,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
 
   /** @internal Dispatches a coordinator-owned replay without recapturing it. */
   dispatchActorPacketDirect(
+    origin: ApplicationJobOrigin,
     activation: ZLinkSpotActivation,
     actorId: string,
     parts: readonly Message[],
@@ -159,6 +167,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
   ): Promise<unknown> {
     return activation.executeActor(actorId, (actorSerial) =>
       this.dispatchActorPacketInActorTurn(
+        origin,
         activation,
         actorSerial,
         actorId,
@@ -190,6 +199,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
           record.drain((parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
             executeChild((actorSerial) =>
               this.dispatchActorPacketInActorTurn(
+                currentApplicationJobOrigin(),
                 activation,
                 actorSerial,
                 actorId,
@@ -217,6 +227,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
   }
 
   private dispatchActorPacketInActorTurn(
+    origin: ApplicationJobOrigin,
     activation: ZLinkSpotActivation,
     actorSerial: ZLinkSpotSerialTurnExecutor,
     actorId: string,
@@ -250,6 +261,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
       dispatchErrors: this.options.dispatchErrors,
       routeToActorJoinPrewarm: this.options.routeToActorJoinPrewarm
     }).dispatch(
+      origin,
       actorId,
       parts,
       returnResponse,
@@ -305,6 +317,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
       backlog,
       (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
         this.dispatchActorPacketDirect(
+          'remote',
           activation,
           actor.context.actorId,
           parts,

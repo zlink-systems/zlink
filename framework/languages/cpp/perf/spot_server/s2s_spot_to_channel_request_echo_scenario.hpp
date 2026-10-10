@@ -150,11 +150,11 @@ class s2s_spot_to_channel_request_echo_scenario_t
 
     void run (const loops_t &loops)
     {
-        spawn_request_streams (loops, _role, [this] (int stream) { return loop (stream); });
+        spawn_stream_loops (loops, _role, [this] (int stream) { return loop (stream); });
     }
 
   private:
-    // The local driver submits each PerfDriveRequest without waiting for an earlier drive reply.
+    // Each local stream starts its next PerfDriveRequest after the previous drive reply.
     fw::task_t<void> loop (int stream)
     {
         auto &measurement = _role.measurement;

@@ -197,6 +197,7 @@ test('operation deadline cancellation completes with DeadlineExceeded instead of
   let replied;
   const reply = new Promise((resolve) => { replied = resolve; });
   const permit = {
+    origin: 'remote',
     markApplicationQueued() {}, detachForHandlerTurn() {},
     releaseBeforeHandler() {}, releaseAfterInternalProcessing() {}
   };
@@ -268,6 +269,7 @@ test('Instance activation does not start payload put when its deadline expires d
     }
   });
   const permit = {
+    origin: 'remote',
     markApplicationQueued() {}, detachForHandlerTurn() {},
     releaseBeforeHandler() {}, releaseAfterInternalProcessing() {}
   };

@@ -140,6 +140,7 @@ export interface ZLinkNestFanoutChannelBuilder extends ZLinkNestFrameworkOptions
  routingId(routingId: string | undefined): this;
  setRoutingIdPrefix(prefix: string): this;
  setNoDrop(noDrop?: boolean): this;
+ setSendTimeout(timeoutMs: number): this;
  subscribe(topic: string): this;
  enableSubscriber(endpoint?: string | readonly string[]): this;
  addPublishHandler(packetName: string, handlerType: Type): this;
@@ -242,7 +243,6 @@ export interface ZLinkNestMeshNodeBuilder extends ZLinkNestFrameworkOptionsBuild
  setInstanceSpotIdleTimeout(timeoutMs: number): this;
  objects(): ZLinkNestMeshObjectRoleBuilder;
  configureRouterSocket(): ZLinkMeshNodeSocketConfig;
- configureSpotPublisher(): ZLinkSpotPublisherConfig;
  peerConnections(): ZLinkMeshPeerConnections;
  addSendHandler(packetName: string, handlerType: Type): this;
  addRequestHandler(packetName: string, handlerType: Type): this;

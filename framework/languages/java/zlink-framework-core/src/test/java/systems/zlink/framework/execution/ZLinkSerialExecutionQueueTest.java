@@ -509,7 +509,7 @@ final class ZLinkSerialExecutionQueueTest {
                         OptionalLong.of(1),
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, 1, 1, 1))) {
             CompletableFuture<Void> result;
-            var permit = jobs.acquireBlocking();
+            var permit = jobs.acquireBlocking(ZLinkApplicationJobQueue.Origin.REMOTE);
             try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
                 result =
                         queue.enqueue(

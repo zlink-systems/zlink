@@ -3697,10 +3697,13 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
               .result ()
               .value ()
             == zlink::submit_result_t::ok);
+    // Receive after the source probe timestamp, including when admission
+    // already refreshed the deadline with a later real-clock receipt.
+    const auto receipt_time = std::max (clock_t::now (), probe_time + 1ms);
     mesh::raw_mesh_pump_result_t ack_barrier = mesh::raw_mesh_pump_result_t::no_data;
     while (ack_barrier != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < io_deadline) {
-        ack_barrier = await_task (source->transport ().pump_one (probe_time));
+        ack_barrier = await_task (source->transport ().pump_one (receipt_time));
         assert (ack_barrier != mesh::raw_mesh_pump_result_t::protocol_error);
         if (ack_barrier == mesh::raw_mesh_pump_result_t::no_data)
             wait_for_input (source->transport (), io_deadline);
@@ -3718,16 +3721,22 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
     assert (marker_parts.front ().to_string () == "after-probe-ack");
     assert (source->transport ().mailbox ().release (*marker));
 
-    // The ACK refreshes the unchanged 15 second peer deadline.  Check just
-    // before that virtual deadline without adding a product timeout.
-    const auto after_ack = await_task (source->transport ().tick_liveness (probe_time + 15s - 1ms));
+    // Every received record refreshes the peer deadline. Admission may
+    // have received records after the first probe was due, so use the
+    // connection's current deadline instead of deriving it from probe_time.
+    const auto connection =
+      source->transport ().liveness ().connection (target_status.routing_id ().to_bytes ());
+    assert (connection);
+    const auto peer_deadline = connection->deadline.load ();
+    assert (peer_deadline >= receipt_time + 15s);
+    const auto after_ack = await_task (source->transport ().tick_liveness (peer_deadline - 1ms));
     assert (after_ack.timed_out_nodes.empty ());
     assert (after_ack.probes.size () == 1);
     assert (after_ack.probes.front ().probe_id != tick.probes.front ().probe_id);
     assert (source->transport ().topology ().peer (target_status.routing_id ().to_bytes ()));
     assert (target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()));
 
-    const auto expired = await_task (source->transport ().tick_liveness (probe_time + 15s));
+    const auto expired = await_task (source->transport ().tick_liveness (peer_deadline));
     assert (expired.timed_out_nodes.size () == 1);
     assert (expired.timed_out_nodes.front () == target_status.routing_id ().to_bytes ());
     assert (!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ()));
@@ -7351,6 +7360,10 @@ int main (int argc, char **argv)
     zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 2 && std::string_view (argv[1]) == "--owner-request-rejection") {
         verify_queued_owner_accepts_request_without_blocking_other_owner ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--fifo-liveness") {
+        verify_public_host_fifo_drains_before_liveness_probe ();
         return 0;
     }
     verify_actor_create_replays_after_reciprocal_handover ();

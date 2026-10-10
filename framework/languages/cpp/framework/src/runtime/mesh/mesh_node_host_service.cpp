@@ -3056,7 +3056,8 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
             || !current_location_owner ())
             return zlink::submit_result_t::terminated;
     }
-    auto application_permit = _application_jobs->wait_for_supply_blocking ();
+    auto application_permit =
+      _application_jobs->wait_for_supply_blocking (application_job_queue_t::origin_t::local);
     if (!application_permit)
         return zlink::submit_result_t::terminated;
     auto application_job =

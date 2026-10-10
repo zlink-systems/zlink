@@ -7,6 +7,7 @@
 #include <zlink.hpp>
 
 #include <chrono>
+#include <cerrno>
 #include <iostream>
 #include <utility>
 #include <type_traits>
@@ -19,12 +20,18 @@ static_assert (
 
 int main ()
 {
-    if (messaging::map_submit_request_result (zlink::submit_result_t::backpressured, false)
-          != zlink::request_result_t::not_connected
-        || messaging::map_submit_request_result (zlink::submit_result_t::backpressured, true)
-             != zlink::request_result_t::internal_error) {
-        std::cerr << "capacity snapshot escaped as a public terminal\n";
-        return 1;
+    const zlink::submit_error_t capacity_refusal (zlink::submit_result_t::backpressured, EAGAIN);
+    for (const bool completion_failure : {false, true}) {
+        const auto capacity_error = messaging::map_request_result_exception (
+          messaging::map_submit_request_result (capacity_refusal.result (), completion_failure),
+          "request");
+        if (capacity_error.kind () != zlink::framework::framework_error_kind_t::unavailable
+            || std::string (capacity_error.what ()).find ("submission capacity is unavailable")
+                 == std::string::npos) {
+            std::cerr << "tokenless capacity refusal lost its cause: " << capacity_error.what ()
+                      << '\n';
+            return 1;
+        }
     }
     if (messaging::map_submit_completion_result (zlink::submit_result_t::not_found)
           != zlink::submit_result_t::not_connected

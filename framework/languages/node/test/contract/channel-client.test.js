@@ -60,7 +60,7 @@ test('pending channel requests keep the Node event loop alive until they settle'
   let keepalive;
   let cleared;
   let resolveReply;
-  const reply = new Promise(resolve => {
+  const reply = new Promise(( resolve ) => {
     resolveReply = resolve;
   });
   global.setTimeout = (callback, delay) => {
@@ -68,7 +68,7 @@ test('pending channel requests keep the Node event loop alive until they settle'
     keepalive = { callback, delay, ref: true };
     return keepalive;
   };
-  global.clearTimeout = timer => {
+  global.clearTimeout = ( timer ) => {
     cleared = timer;
   };
   try {
@@ -94,7 +94,7 @@ test('two in-process ClientServer nodes deliver a delayed reply to an awaited cl
           packetName: 'Ping',
           handler: {
             async handle(payload) {
-              await new Promise(resolve => setTimeout(resolve, 25));
+              await new Promise(( resolve ) => setTimeout(resolve, 25));
               return { value: payload.value };
             }
           }
@@ -139,9 +139,9 @@ test('ClientServer send waits for readiness until shutdown while request keeps i
       error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded;
     let settled = false;
     const send = client.sendToChannel('empty', typedPacket('Notice', { id: 1 })).submit();
-    const shutdown = assert.rejects(send, error => error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown);
+    const shutdown = assert.rejects(send, ( error ) => error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown);
     send.then(() => { settled = true; }, () => { settled = true; });
-    await new Promise(resolve => setTimeout(resolve, 3100));
+    await new Promise(( resolve ) => setTimeout(resolve, 3100));
     assert.equal(settled, false);
     await assert.rejects(
       () => client.requestToChannel('empty', typedPacket('Question', { id: 2 }))
@@ -176,7 +176,7 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
   try {
     client.start();
     server.start();
-    server.setServiceIngress(record => {
+    server.setServiceIngress(( record ) => {
       if (record.command !== serviceWire.M6aServiceWireCommand.channelRequest) return undefined;
       const request = serviceWire.decodeChannelRequestHeader(record.parts[0]);
       server.replyService(record, [
@@ -198,7 +198,7 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
       await client.announceExpectedPeers(); await server.announceExpectedPeers();
       await client.tickLiveness(); await server.tickLiveness();
       await client.pumpOne(); await server.pumpOne();
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(( resolve ) => setImmediate(resolve));
     }
     assert.equal(client.isPeerRouteReady('channel-server'), true);
     const pending = client.requestToChannel('api', {
@@ -207,7 +207,7 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
     for (let turn = 0; turn < 300; turn += 1) {
       await client.tickLiveness(); await server.tickLiveness();
       await client.pumpOne(); await server.pumpOne();
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(( resolve ) => setImmediate(resolve));
       if (await Promise.race([pending.promise.then(() => true), Promise.resolve(false)])) break;
     }
     const reply = await pending.promise;
@@ -235,7 +235,7 @@ test('raw RouteMesh applies current receive-flow state before bind and unregiste
     resumeThresholdPercent: 40
   }, () => 1n));
   const permits = [];
-  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire());
+  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire(undefined, 'remote'));
   const runtime = new RawServiceMeshRuntime({
     descriptor: {
       meshName: 'flow', nodeRoutingId: 'flow-node', lifecycleGeneration: 1n,
@@ -265,7 +265,7 @@ test('raw RouteMesh applies current receive-flow state before bind and unregiste
   assert.deepEqual(calls.slice(-2), ['flow:running', 'router:close']);
   const countAfterClose = calls.length;
   const afterClose = [];
-  for (let index = 0; index < 4; index += 1) afterClose.push(await queue.acquire());
+  for (let index = 0; index < 4; index += 1) afterClose.push(await queue.acquire(undefined, 'remote'));
   assert.equal(calls.length, countAfterClose);
   for (const permit of afterClose) permit.releaseAfterInternalProcessing();
 });
@@ -315,7 +315,7 @@ test('raw RouteMesh receive-flow controller preserves the latest reentrant trans
   });
 
   runtime.start();
-  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire());
+  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire(undefined, 'remote'));
 
   assert.equal(queue.pressureState(), 'running');
   assert.deepEqual(calls, [
@@ -369,7 +369,7 @@ test('raw RouteMesh reports a receive-flow configuration failure once', async ()
   });
   runtime.start();
   const permits = [];
-  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire());
+  for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire(undefined, 'remote'));
 
   assert.deepEqual(reported, [expected]);
   assert.equal(queue.snapshot().flowStateConfigFailureCount, 1n);
@@ -1002,7 +1002,7 @@ test('RouteMesh ready remote weight-zero channel reports Unavailable for send an
         runtime.sendToChannel('zero-channel', payload),
         runtime.requestToChannel('zero-channel', payload, 100).promise
       ]),
-      new Promise(resolve => setImmediate(() => resolve('waited for an event-loop turn')))
+      new Promise(( resolve ) => setImmediate(() => resolve('waited for an event-loop turn')))
     ]);
     // Framework API §no-eligible-select-one-member: raw NotConnected maps to public Unavailable.
     assert.deepEqual(results, [zlink.SubmitResult.NotConnected,
@@ -1690,7 +1690,7 @@ test('aborted raw SPOT request closes its late binding reply', async () => {
   let lateReplyClosed = 0;
   const lateReply = { close() { lateReplyClosed++; } };
   releases.shift()([lateReply]);
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(( resolve ) => setImmediate(resolve));
   assert.equal(lateReplyClosed, 1);
   releases.shift()([zlink.Message.from(Buffer.from('second-reply'))]);
   const secondReply = await second;
@@ -1730,7 +1730,7 @@ test('raw SPOT request timeout is delegated to the binding request promise', asy
   releases.shift()([zlink.Message.from(Buffer.from('first-reply'))]);
   releases.shift()([zlink.Message.from(Buffer.from('second-reply'))]);
   const replies = await Promise.all([first, second]);
-  replies.flat().forEach(part => part.close());
+  replies.flat().forEach(( part ) => part.close());
 });
 
 test('SpotNode router is not classified as packet route channel', () => {
@@ -1901,7 +1901,7 @@ test('source Spot raw request aborts after native submission and closes a late r
   let closeCount = 0;
   const lateReply = { close() { closeCount += 1; } };
   complete([lateReply]);
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(( resolve ) => setImmediate(resolve));
   assert.equal(closeCount, 1);
   request.close();
 });
@@ -2593,7 +2593,7 @@ test('DERR-001 ZLinkFrameworkRuntimeHost replies error and reports provider reco
   let endpoint = 'tcp://127.0.0.1:0';
   telemetry.reset();
   const dispatchEvents = telemetry.records
-  const serverRegistration = framework.createFrameworkRegistration({
+  ; const serverRegistration = framework.createFrameworkRegistration({
     dispatch: dispatchOptions(),
     channels: {
       play: {
@@ -2662,7 +2662,7 @@ test('DERR-002 ZLinkFrameworkRuntimeHost reports provider record for missing cha
   let endpoint = 'tcp://127.0.0.1:0';
   telemetry.reset();
   const dispatchEvents = telemetry.records
-  const serverRegistration = framework.createFrameworkRegistration({
+  ; const serverRegistration = framework.createFrameworkRegistration({
     dispatch: dispatchOptions(),
     channels: {
       [channelName]: {
@@ -2692,9 +2692,9 @@ test('DERR-002 ZLinkFrameworkRuntimeHost reports provider record for missing cha
   const runtimeFailures = [];
 
   try {
-    serverRuntime.errorSink.onRuntimeTaskException(failure => runtimeFailures.push({ host: 'server', ...failure }));
+    serverRuntime.errorSink.onRuntimeTaskException(( failure ) => runtimeFailures.push({ host: 'server', ...failure }));
     await clientRuntime.start();
-    clientRuntime.errorSink.onRuntimeTaskException(failure => runtimeFailures.push({ host: 'client', ...failure }));
+    clientRuntime.errorSink.onRuntimeTaskException(( failure ) => runtimeFailures.push({ host: 'client', ...failure }));
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
 
     await waitForClientServerTargets(clientRuntime.clientServerRuntime, channelName, 1);
@@ -2915,7 +2915,7 @@ test('DERR-007 ZLinkFrameworkRuntimeHost replies error and reports provider reco
   let endpoint = 'tcp://127.0.0.1:0';
   telemetry.reset();
   const dispatchEvents = telemetry.records
-  const serverRegistration = framework.createFrameworkRegistration({
+  ; const serverRegistration = framework.createFrameworkRegistration({
     dispatch: dispatchOptions(),
     channels: {
       play: {
@@ -4312,7 +4312,7 @@ test('ClientServer malformed metadata replies ProtocolError before handlers', as
     )
   );
   const invalidCases = [
-    ...fixture.cases.filter(item => !item.valid),
+    ...fixture.cases.filter(( item ) => !item.valid),
     {name: 'invalid UTF-8', metadata: {k: 'byte-marker'}, invalidUtf8: true}
   ];
   for (const scenario of invalidCases) {
@@ -4369,10 +4369,10 @@ test('ClientServer malformed metadata replies ProtocolError before handlers', as
     const channelCodec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
     assert.throws(
       () => channelCodec.decodeChannelReply(replies),
-      error => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError,
+      ( error ) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError,
       scenario.name
     );
-    parts.forEach(part => part.close());
+    parts.forEach(( part ) => part.close());
   }
 });
 
@@ -4419,7 +4419,7 @@ test('ZLinkChannelRequestDispatcher preserves source node identity for RouteMesh
 test('ZLinkChannelRequestDispatcher replies error and reports provider record for missing request handler', async () => {
   telemetry.reset();
   const events = telemetry.records
-  const replies = [];
+  ; const replies = [];
   const dispatcher = new framework.ZLinkChannelRequestDispatcher({
     channelName: 'api',
     dispatchErrors: dispatchErrorReporter(
@@ -4972,11 +4972,11 @@ async function startRouteMeshPeer(mode, bind, peer) {
   let stderr = '';
   const queued = [];
   const waiters = [];
-  child.stderr.on('data', chunk => {
+  child.stderr.on('data', ( chunk ) => {
     stderr += chunk.toString();
   });
-  child.on('message', message => {
-    const waiterIndex = waiters.findIndex(waiter => waiter.type === message?.type);
+  child.on('message', ( message ) => {
+    const waiterIndex = waiters.findIndex(( waiter ) => waiter.type === message?.type);
     if (waiterIndex >= 0) {
       const [waiter] = waiters.splice(waiterIndex, 1);
       waiter.resolve(message);
@@ -4998,7 +4998,7 @@ async function startRouteMeshPeer(mode, bind, peer) {
   });
 
   const next = (type, timeoutMs = 10000) => {
-    const queuedIndex = queued.findIndex(message => message?.type === type);
+    const queuedIndex = queued.findIndex(( message ) => message?.type === type);
     if (queuedIndex >= 0) {
       return Promise.resolve(queued.splice(queuedIndex, 1)[0]);
     }
@@ -5010,11 +5010,11 @@ async function startRouteMeshPeer(mode, bind, peer) {
         if (index >= 0) waiters.splice(index, 1);
         reject(new Error(`Timed out waiting for RouteMesh peer '${type}'.${stderr.length === 0 ? '' : `\n${stderr}`}`));
       }, timeoutMs);
-      waiter.resolve = message => {
+      waiter.resolve = ( message ) => {
         clearTimeout(timer);
         resolve(message);
       };
-      waiter.reject = error => {
+      waiter.reject = ( error ) => {
         clearTimeout(timer);
         reject(error);
       };
@@ -5038,9 +5038,9 @@ async function startRouteMeshPeer(mode, bind, peer) {
 async function waitForRouteMeshPeerReady(runtime, meshName, peerRid) {
   for (;;) {
     const status = runtime.routeMeshRuntime.snapshot(meshName);
-    if (status.peers.some(peer =>
+    if (status.peers.some(( peer ) =>
       String(peer.nodeRid) === peerRid && peer.state === framework.ZLinkPeerState.Ready)) return;
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(( resolve ) => setImmediate(resolve));
   }
 }
 

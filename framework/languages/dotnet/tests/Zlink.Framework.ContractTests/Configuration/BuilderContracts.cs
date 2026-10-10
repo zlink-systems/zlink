@@ -28,9 +28,7 @@ public sealed class BuilderContracts
         typeof(IZLinkSocketConfig),
         typeof(IZLinkStreamSocketConfig),
         typeof(IZLinkRouteConfig),
-        typeof(IZLinkOutboundRouteConfig),
-        typeof(IZLinkSpotPublisherConfig),
-        typeof(IZLinkSpotSubscriberConfig)
+        typeof(IZLinkOutboundRouteConfig)
     )]
     public void Framework_options_expose_the_10_0_registration_surface()
     {

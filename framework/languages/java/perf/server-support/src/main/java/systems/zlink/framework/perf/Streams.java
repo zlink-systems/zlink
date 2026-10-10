@@ -35,6 +35,17 @@ public final class Streams {
                 .thenCompose(ignored -> measurement.operationsDrained());
     }
 
+    /** Advances each stream after its call terminal: local reply or remote one-way admission. */
+    public static <T> CompletionStage<Void> launchTerminals(
+            RoleConfig config,
+            Measurement measurement,
+            IntFunction<Optional<CompletionLoop.Iteration<T>>> next) {
+        return launch(
+                config,
+                measurement,
+                (stream, done) -> CompletionLoop.run(done, () -> next.apply(stream)));
+    }
+
     /**
      * Request calls advance on submission, not on reply; the completion loop drains all submitted
      * replies.

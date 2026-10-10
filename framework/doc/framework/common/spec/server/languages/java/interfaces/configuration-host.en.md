@@ -153,7 +153,6 @@ public interface ZLinkMeshNodeBuilder {
  ZLinkMeshNodeBuilder setInstanceSpotIdleTimeout(Duration timeout);
  ZLinkMeshObjectRoleBuilder objects();
  ZLinkMeshNodeSocketConfig configureRouterSocket();
- ZLinkSpotPublisherConfig configureSpotPublisher();
  ZLinkMeshPeerConnections peerConnections();
  ZLinkMeshNodeBuilder setDefaultRequestTimeout(Duration timeout);
 
@@ -240,6 +239,7 @@ public interface FanoutChannelBuilder {
  FanoutChannelBuilder setRoutingId(RoutingId publisherRoutingId);
  FanoutChannelBuilder setRoutingIdPrefix(String prefix);
  FanoutChannelBuilder setNoDrop(boolean noDrop);
+ FanoutChannelBuilder setSendTimeout(Duration timeout);
  FanoutChannelBuilder enableSubscriber();
  FanoutChannelBuilder subscribe(String topic);
  FanoutChannelBuilder connect(String endpoint);
@@ -440,6 +440,7 @@ public interface systems.zlink.framework.configuration.FanoutChannelBuilder {
  public abstract systems.zlink.framework.configuration.FanoutChannelBuilder setRoutingId(systems.zlink.contracts.core.RoutingId);
  public abstract systems.zlink.framework.configuration.FanoutChannelBuilder setRoutingIdPrefix(java.lang.String);
  public abstract systems.zlink.framework.configuration.FanoutChannelBuilder setNoDrop(boolean);
+ public abstract systems.zlink.framework.configuration.FanoutChannelBuilder setSendTimeout(java.time.Duration);
  public abstract systems.zlink.framework.configuration.FanoutChannelBuilder enableSubscriber();
  public abstract systems.zlink.framework.configuration.FanoutChannelBuilder subscribe(java.lang.String);
  public abstract systems.zlink.framework.configuration.FanoutChannelBuilder connect(java.lang.String);
@@ -548,14 +549,6 @@ public final class systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 public interface systems.zlink.framework.configuration.ZLinkMetadataPolicyBuilder {
  public abstract systems.zlink.framework.configuration.ZLinkMetadataPolicyBuilder allowSessionToActor(java.lang.String);
  public abstract systems.zlink.framework.configuration.ZLinkMetadataPolicyBuilder allowActorToSession(java.lang.String);
-}
-public interface systems.zlink.framework.configuration.ZLinkSpotPublisherConfig {
- public abstract long sendHighWaterMark();
- public abstract void setSendHighWaterMark(long);
- public abstract java.util.Optional<java.time.Duration> sendTimeout();
- public abstract void setSendTimeout(java.time.Duration);
- public abstract java.util.Optional<java.time.Duration> linger();
- public abstract void setLinger(java.time.Duration);
 }
 public interface systems.zlink.framework.configuration.ZLinkStreamCompressionBuilder {
  public abstract systems.zlink.framework.configuration.ZLinkStreamCompressionBuilder useDefault();
@@ -714,7 +707,6 @@ public interface systems.zlink.framework.configuration.ZLinkMeshNodeBuilder {
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setInstanceSpotIdleTimeout(java.time.Duration);
  public abstract systems.zlink.framework.configuration.ZLinkMeshObjectRoleBuilder objects();
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeSocketConfig configureRouterSocket();
- public abstract systems.zlink.framework.configuration.ZLinkSpotPublisherConfig configureSpotPublisher();
  public abstract systems.zlink.framework.configuration.ZLinkMeshPeerConnections peerConnections();
  public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setDefaultRequestTimeout(java.time.Duration);
  public abstract <THandler, TMessage> systems.zlink.framework.configuration.ZLinkMeshNodeBuilder addRouteSendHandler(java.lang.Class<THandler>, java.lang.Class<TMessage>);

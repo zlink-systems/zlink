@@ -322,13 +322,13 @@ test('managed stream heartbeat awaits the asynchronous binding terminal', async 
     send() { assert.fail('heartbeat must not block in synchronous admission'); },
     async submit(_routingId, payload) {
       control = payload;
-      await new Promise(resolve => { complete = resolve; });
+      await new Promise(( resolve ) => { complete = resolve; });
       assert.ok(payload.data().length > 0);
     }
   }, 'session-rid');
   let completed = false;
   const pending = stream.writeControl('$zlink.heartbeat.ping').then(() => { completed = true; });
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(( resolve ) => setImmediate(resolve));
   assert.equal(completed, false);
   assert.ok(control.data().length > 0);
   complete();
@@ -722,7 +722,7 @@ test('managed stream projects STREAM submit failures by admission phase', async 
   const failures = [
     [SubmitResult.NotConnected, 'completion', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable],
     [SubmitResult.NotConnected, 'submit', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable],
-    [SubmitResult.Backpressured, 'completion', ZLinkSubmitStatus.TimedOut, ZLinkFrameworkErrorKind.DeadlineExceeded],
+    [SubmitResult.Backpressured, 'completion', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable],
     [SubmitResult.Backpressured, 'submit', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable]
   ];
   for (const [result, phase, status, kind] of failures) {
@@ -1091,7 +1091,7 @@ test('built stream runtime rejects an unbound fallback disconnect without native
 
   await assert.rejects(
     () => session.disconnect(),
-    error => error?.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
+    ( error ) => error?.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
   );
   assert.equal(nativeDisconnects, 0);
   assert.equal(transportDisconnects, 0);
@@ -1424,7 +1424,7 @@ test('initial managed stream actor bind removes its provisional route and surfac
       actorId: 'actor-confirm-nack-observed',
       generation: 1n
     }),
-    error => error === confirmationFailure
+    ( error ) => error === confirmationFailure
   );
   assert.equal(await context.actors.find('actor-confirm-nack-observed'), undefined);
   assert.equal(await runtime.find('actor-confirm-nack-observed'), undefined);
@@ -1472,7 +1472,7 @@ test('fire-and-forget remote actor session bind propagates its first send failur
       undefined,
       { waitForAcknowledgement: false }
     ),
-    error => error === sendFailure
+    ( error ) => error === sendFailure
   );
   assert.equal(sendCalls, 1);
 });
@@ -1593,7 +1593,7 @@ test('managed stream actor bind failure does not create stale local binding', as
 
   await assert.rejects(
     () => context.actors.bind({ nodeRid: 'node-a', actorId: 'actor-a', generation: 1n }),
-    error => {
+    ( error ) => {
       assert.equal(error, typedFailure);
       assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
       return true;
@@ -2978,7 +2978,7 @@ test('command 42 seal is exact and idempotent while command 43 echoes its immuta
       ...seal,
       actor: { ...seal.actor, authorityOwnerGeneration: 11n }
     }),
-    error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+    ( error ) => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
   );
 
   const unknownAbort = serviceSessionRelocationRoute({
@@ -3539,7 +3539,7 @@ test('one-way remote Actor relay releases its Session frame before a deferred Jo
       getState() { return { spotId: 'game-room' }; }
     }),
     spotManager: () => ({
-      async dispatchRoutedActorPacket() {
+      async dispatchRoutedActorPacket(_origin ) {
         handlerStarted();
         await handlerCanFinish;
         handlerFinished = true;
@@ -3700,7 +3700,7 @@ test('Session relocation seal timeout uses the configured Location option', asyn
     await assert.rejects(
       host.boundSessionRelay.boundSessions
         .receiveServiceWireSessionRelocationSeal(serviceSessionRelocationSeal(actor.actorId)),
-      error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+      ( error ) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
     );
   } finally {
     clearTimeout(keepAlive);
@@ -3736,7 +3736,7 @@ test('command 42 sender deadline terminates even while RouteMesh submit is pendi
         'session-owner',
         serviceSessionRelocationSeal('actor-pending-command-42')
       ),
-      error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+      ( error ) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
     );
   } finally {
     clearTimeout(keepAlive);
@@ -3769,7 +3769,7 @@ test('service-wire command 42 accepts one-way ingress before matching abort deli
       ...seal,
       actor: { ...seal.actor, authorityOwnerGeneration: 12n }
     }),
-    error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+    ( error ) => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
   );
 
   context.enterDispatch(serviceRelayDispatchHeader('HeldAfterSeal'));
@@ -3848,7 +3848,7 @@ test('one-way service-wire command 44 switches the route after relay admission',
         ...commit,
         route: { ...commit.route, targetNodeGeneration: 5n }
       }),
-      error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+      ( error ) => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
     );
   } finally {
     context.exitDispatch();
@@ -4169,7 +4169,7 @@ test('M1 actorJoin actual command 36 reaches the current Session binding during 
       ...commit,
       route: { ...commit.route, targetNodeGeneration: 5n }
     }),
-    error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+    ( error ) => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
   );
   await host.boundSessionRelay.boundSessions
     .receiveServiceWireSessionRelocationRoute(commit);
@@ -4217,7 +4217,7 @@ test('command 36 refused as not current is traced with the closed flow vocabular
     flow: {
       begin(outcome) {
         begun.push(outcome);
-        return tracing ? { trace: event => traced.push(event) } : undefined;
+        return tracing ? { trace: ( event ) => traced.push(event) } : undefined;
       }
     }
   }, 'play.route');
@@ -4234,7 +4234,7 @@ test('command 36 refused as not current is traced with the closed flow vocabular
   assert.equal(bindingResult.terminalResult, RequestResult.Ok);
   const binding = serviceRuntime.sessionBindings('session')[0];
   assert.ok(binding);
-  const command36 = expectedBindingGeneration => serviceIngress({
+  const command36 = ( expectedBindingGeneration ) => serviceIngress({
     command: serviceStatefulWire.M6bServiceWireCommand.boundSessionSend,
     flags: 0,
     sourceRoutingId: 'session-owner',
@@ -4327,7 +4327,7 @@ test('actual raw command 36 from an authenticated peer is admitted by the curren
     contentType: 'application/json',
     payload: Buffer.from('{"accepted":true}')
   });
-  const ingress = sourceRid => raw.processReceived({
+  const ingress = ( sourceRid ) => raw.processReceived({
     sourceRid,
     sourceRoute: Buffer.from(sourceRid),
     parts: [header, payload]
@@ -4469,7 +4469,7 @@ test('relocation target binding republish delivers the post-Join bound-session p
     'utf8'
   ));
   const behavior = relocationBehavior.trafficScenarios.find(
-    value => value.name === 'target-lifecycle-callback-bound-session-push'
+    ( value ) => value.name === 'target-lifecycle-callback-bound-session-push'
   );
   assert.ok(behavior, 'relocation behavior fixture must define the callback push scenario');
   assert.equal(boundSessionBehavior.trafficScenarios.actorJoinLifecycle, behavior.name);
@@ -4615,7 +4615,7 @@ test('relocation target binding republish delivers the post-Join bound-session p
   assert.equal(deliveredApplicationFrameCount(), 1);
 
   const bindingTerminals = [];
-  await targetHost.dispatchMeshRecord(
+  await targetHost.dispatchMeshRecord(() => 'remote',
     'callback.mesh',
     { ownerKind: framework.ReadyOwnerKind.Actor },
     {
@@ -4718,9 +4718,9 @@ test('M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact term
   const sentCommands = [];
   let routeCommitCalls = 0;
   let publishFirstCommit;
-  const firstCommitPublished = new Promise(resolve => { publishFirstCommit = resolve; });
+  const firstCommitPublished = new Promise(( resolve ) => { publishFirstCommit = resolve; });
   let releaseFirstCommit;
-  const firstCommitTerminalGate = new Promise(resolve => { releaseFirstCommit = resolve; });
+  const firstCommitTerminalGate = new Promise(( resolve ) => { releaseFirstCommit = resolve; });
   const commitActorRoute = host.streamBindingRuntime.commitActorRoute
     .bind(host.streamBindingRuntime);
   host.streamBindingRuntime.commitActorRoute = async (...args) => {
@@ -4753,9 +4753,9 @@ test('M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact term
       }
     }),
     boundSessionRelocation: {
-      receiveSeal: value =>
+      receiveSeal: ( value ) =>
         host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(value),
-      receiveRoute: value =>
+      receiveRoute: ( value ) =>
         host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),
       clear: () =>
         host.boundSessionRelay.boundSessions.clearServiceWireSessionRelocations()
@@ -4794,7 +4794,7 @@ test('M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact term
     );
     releaseFirstCommit();
     const concurrentRoutes = await Promise.allSettled(concurrentRoutePromises);
-    assert.equal(concurrentRoutes.every(result =>
+    assert.equal(concurrentRoutes.every(( result ) =>
       result.status === 'fulfilled' && result.value === true
     ), true);
     assert.equal(routeCommitCalls, 1);
@@ -4985,7 +4985,7 @@ test('concurrent identical abort terminals reopen once after push submits during
     actorPacketTargetForState: () => undefined
   });
   await relay.receiveServiceWireSessionRelocationSeal(seal);
-  const retained = operation => relay.receiveRemoteBoundSessionSend({
+  const retained = ( operation ) => relay.receiveRemoteBoundSessionSend({
     packetName: framework.ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET,
     actorId,
     message: { operation },
@@ -5011,7 +5011,7 @@ test('concurrent identical abort terminals reopen once after push submits during
   const duplicate = relay.receiveServiceWireSessionRelocationRoute(abort);
   await assert.rejects(
     conflicting,
-    error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+    ( error ) => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
   );
   const [first, duplicateResult] = await Promise.all([
     valid,
@@ -5048,7 +5048,7 @@ test('service-wire relocation single-flights concurrent commands and rejects con
     });
   await assert.rejects(
     conflictingSeal,
-    error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+    ( error ) => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
   );
   assert.deepEqual(await identicalSeal, await firstSeal);
 
@@ -5067,7 +5067,7 @@ test('service-wire relocation single-flights concurrent commands and rejects con
       session: seal.session,
       route: { action: 'abort', currentAuthorityOwnerGeneration: 11n }
     }),
-    error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+    ( error ) => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
   );
   await applying;
   assert.equal(String((await host.streamBindingRuntime.find('actor-service-single-flight')).ref.nodeRid), 'target');
@@ -5096,7 +5096,7 @@ test('failed one-way command 44 native rebind keeps prior relay admission comple
   try {
     const relaying = actor.relay(serviceRelayMessage('{"held":true}'));
     await relaying;
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(( resolve ) => setImmediate(resolve));
     socket.bindError = new Error('injected native rebind failure');
     await assert.rejects(
       host.boundSessionRelay.boundSessions
@@ -5186,7 +5186,7 @@ test('command 42 exact fences reject stale bindings and command 44 exact retry i
   ]) {
     await assert.rejects(
       host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(stale),
-      error => error instanceof framework.ZLinkRemoteBoundSessionFenceError
+      ( error ) => error instanceof framework.ZLinkRemoteBoundSessionFenceError
     );
     assert.equal(String((await host.streamBindingRuntime.find('actor-fence')).ref.nodeRid), 'actor-source');
   }
@@ -5206,7 +5206,7 @@ test('command 42 exact fences reject stale bindings and command 44 exact retry i
       ...route,
       route: { ...route.route, targetNodeGeneration: 5n }
     }),
-    error => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
+    ( error ) => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
   );
   assert.equal(String((await host.streamBindingRuntime.find('actor-fence')).ref.nodeRid), 'actor-target');
 });
@@ -5372,7 +5372,7 @@ test('remote actor packet target refresh replaces the session actor cache after 
   };
   const store = new ZLinkRemoteActorPacketTargetStore({
     actorManager: () => undefined,
-    streamBindingRuntime: () => ({ find: (actorId) => actorId === actor.actorId ? actor : undefined }),
+    streamBindingRuntime: () => ({ find: (actorId) => ( actorId === actor.actorId ? actor : undefined ) }),
     meshRouters: {},
     primaryNodeRid: () => 'session-node'
   });
@@ -5442,7 +5442,7 @@ test('remote actor packet target wire preserves the complete Ready authority fen
   };
   const store = new ZLinkRemoteActorPacketTargetStore({
     actorManager: () => undefined,
-    streamBindingRuntime: () => ({ find: (actorId) => actorId === actor.actorId ? actor : undefined }),
+    streamBindingRuntime: () => ({ find: (actorId) => ( actorId === actor.actorId ? actor : undefined ) }),
     meshRouters: {},
     primaryNodeRid: () => 'session-node'
   });
@@ -5562,8 +5562,8 @@ test('remote actor packet route failure is submitted once and stays Unavailable'
       },
       payload
     ).then(
-      value => ({ value }),
-      error => ({ error })
+      ( value ) => ({ value }),
+      ( error ) => ({ error })
     );
 
     assert.equal(submitCalls, 1);
@@ -5936,7 +5936,7 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
     }
   });
 
-  await host.dispatchMeshRecord(
+  await host.dispatchMeshRecord(() => 'remote',
     meshName,
     { ownerKind: framework.ReadyOwnerKind.Actor },
     // OwnerLeaseGeneration is preserved on the envelope, but is not a bind
@@ -5948,7 +5948,7 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
   assert.equal(state.ownerLeaseGeneration, 10n);
   assert.deepEqual(failures, []);
 
-  await host.dispatchMeshRecord(
+  await host.dispatchMeshRecord(() => 'remote',
     meshName,
     { ownerKind: framework.ReadyOwnerKind.Actor },
     bindingRecord('tombstone', 3n, 100n)
@@ -5956,7 +5956,7 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
   assert.equal(state.boundSessionBindingGeneration, 0n);
   assert.equal(state.boundSession, undefined);
 
-  await host.dispatchMeshRecord(
+  await host.dispatchMeshRecord(() => 'remote',
     meshName,
     { ownerKind: framework.ReadyOwnerKind.Actor },
     bindingRecord('active', 4n, 1n)
@@ -5964,13 +5964,13 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
   assert.equal(state.boundSessionBindingGeneration, 1n);
   assert.equal(state.boundSession.sessionOwnerNodeGeneration, 4n);
 
-  await host.dispatchMeshRecord(
+  await host.dispatchMeshRecord(() => 'remote',
     meshName,
     { ownerKind: framework.ReadyOwnerKind.Actor },
     bindingRecord('tombstone', 3n, 100n)
   );
   assert.equal(state.boundSessionBindingGeneration, 1n);
-  await host.dispatchMeshRecord(
+  await host.dispatchMeshRecord(() => 'remote',
     meshName,
     { ownerKind: framework.ReadyOwnerKind.Actor },
     bindingRecord('tombstone', 4n, 1n)
@@ -5979,17 +5979,17 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
   assert.equal(state.boundSession, undefined);
   assert.equal(localRetireCalls, 0);
 
-  await host.dispatchMeshRecord(
+  await host.dispatchMeshRecord(() => 'remote',
     meshName,
     { ownerKind: framework.ReadyOwnerKind.Actor },
     bindingRecord('active', 4n, 2n, 8n)
   );
-  await host.dispatchMeshRecord(
+  await host.dispatchMeshRecord(() => 'remote',
     meshName,
     { ownerKind: framework.ReadyOwnerKind.Actor },
     bindingRecord('active', 4n, 2n, actor.generation, 10n, 6n)
   );
-  await host.dispatchMeshRecord(
+  await host.dispatchMeshRecord(() => 'remote',
     meshName,
     { ownerKind: framework.ReadyOwnerKind.Actor },
     bindingRecord('active', 4n, 2n, actor.generation, 10n, 5n, 10n)
@@ -6731,7 +6731,7 @@ test('service-wire relocation replaces a learned source packet route before the 
   const targetRequestSequences = [];
   targetHost.spotManager = {
     async dispatchRoutedActorPacket(
-      spotId,
+      _origin, spotId,
       requestedActorId,
       parts,
       returnResponse,
@@ -7030,7 +7030,7 @@ test('runtime host completes local bound actor request without native SessionRel
     hasActiveSpot(spotId) {
       return spotId === 'play-node';
     },
-    async dispatchRoutedActorPacket(spotId, actorId, parts, returnResponse) {
+    async dispatchRoutedActorPacket(_origin, spotId, actorId, parts, returnResponse) {
       dispatches.push({
         spotId,
         actorId,
@@ -7552,7 +7552,7 @@ test('local bound session error response preserves request sequence and error pa
   assert.equal(frame.header.requestSeq, requestSeq);
   assert.deepEqual(JSON.parse(new TextDecoder().decode(frame.payload)), {
     code: 'internal_failure',
-    message: 'remote actor failed',
+    message: 'remote actor failed'
   });
 });
 
@@ -7898,7 +7898,7 @@ test('bound session without binding is a retriable framework error', async () =>
   });
 
   await assert.rejects(
-    () => runtime.createBoundSession('missing').send({}).submit(),
+    () => runtime.createBoundSession('missing').send({}).submit()
   );
 });
 

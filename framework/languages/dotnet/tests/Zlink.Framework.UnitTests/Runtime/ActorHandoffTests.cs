@@ -8,6 +8,7 @@ using Zlink.Framework.Runtime;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 
@@ -15,6 +16,55 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class ActorHandoffTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Native_frame_reader_preserves_original_job_origin(bool local)
+    {
+        var origin = local ? ZLinkApplicationJobOrigin.Local : ZLinkApplicationJobOrigin.Remote;
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        using var permit = await queue.AcquireAsync(default, origin);
+        using var scope = ZLinkApplicationJobQueueInvocation.Enter(permit);
+        var actor = ActorRef("node-a", 1);
+        using var header = Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(Header("Packet")));
+        using var body = Message.From("origin"u8);
+        var headerPart = new ZLinkBackendActorPart(actor, default, default, 1, 0, header, true);
+        var parts = new[]
+        {
+            headerPart,
+            new ZLinkBackendActorPart(actor, default, default, 1, 0, body, false),
+        };
+        var index = 1;
+        Assert.True(
+            ZLinkSpotActorFrameReader.TryRead(
+                permit.Origin,
+                parts,
+                ref index,
+                headerPart,
+                false,
+                out var frame
+            )
+        );
+        using (frame)
+            Assert.Equal(origin, frame.Origin);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Restored_frame_capture_preserves_origin_without_a_permit_scope(bool local)
+    {
+        var origin = local ? ZLinkApplicationJobOrigin.Local : ZLinkApplicationJobOrigin.Remote;
+        var actor = ActorRef("node-a", 1);
+        using var body = Message.From("origin"u8);
+        using var original = Frame(body, actor, "session-a");
+        var captured = ZLinkActorHandoffFrames.Capture(original, 1) with { Origin = origin };
+        using var restored = ZLinkActorHandoffFrames.Restore(actor, [captured]);
+        Assert.Equal(origin, ZLinkActorHandoffFrames.Capture(restored[0], 2).Origin);
+    }
+
     [Theory]
     [InlineData("abort")]
     [InlineData("reset")]
@@ -132,6 +182,7 @@ public sealed class ActorHandoffTests
             19
         );
         using var frame = new ZLinkSpotActorFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             ActorRef("node-a", 1),
             ActorRef("node-a", 1),
             sourceNode,
@@ -193,6 +244,7 @@ public sealed class ActorHandoffTests
             19
         );
         using var frame = new ZLinkSpotActorFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             ActorRef("node-b", 1),
             ActorRef("node-b", 1),
             sourceNode,
@@ -267,6 +319,7 @@ public sealed class ActorHandoffTests
         var actor = ActorRef("node-a", 1);
         var sourceNodeRid = RoutingId.From("source-node");
         using var invalid = new ZLinkSpotActorFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             actor,
             actor,
             sourceNodeRid,
@@ -308,6 +361,7 @@ public sealed class ActorHandoffTests
         // registry. A failed capture therefore leaves no receiver reservation
         // that could reject a later valid frame with the same correlation.
         using var valid = new ZLinkSpotActorFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             actor,
             actor,
             sourceNodeRid,
@@ -2397,7 +2451,21 @@ public sealed class ActorHandoffTests
                 .TryBeginCompletionAsync(
                     completion with
                     {
-                        Frames = [new ZLinkActorHandoffFrame([], 0, [], [], 1, 0, [], [], 0)],
+                        Frames =
+                        [
+                            new ZLinkActorHandoffFrame(
+                                Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
+                                [],
+                                0,
+                                [],
+                                [],
+                                1,
+                                0,
+                                [],
+                                [],
+                                0
+                            ),
+                        ],
                     },
                     targetSpot
                 )
@@ -2438,7 +2506,21 @@ public sealed class ActorHandoffTests
         };
         var enriched = raw with
         {
-            HandoffFrames = [new ZLinkActorHandoffFrame([], 0, [], [], 1, 0, [], [], 0)],
+            HandoffFrames =
+            [
+                new ZLinkActorHandoffFrame(
+                    Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
+                    [],
+                    0,
+                    [],
+                    [],
+                    1,
+                    0,
+                    [],
+                    [],
+                    0
+                ),
+            ],
         };
         const string targetSpot = "spot-1";
         var accepted = ZLinkRemoteActorJoinPackets.CreateJoinReply(true, ActorRef("node-b", 2));
@@ -2693,6 +2775,7 @@ public sealed class ActorHandoffTests
         var sourceNodeRid = RoutingId.From("session-node");
         const ulong sourceNodeGeneration = 7;
         var frame = new ZLinkSpotActorFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             actor,
             actor,
             sourceNodeRid,
@@ -2736,7 +2819,7 @@ public sealed class ActorHandoffTests
         System.Text.Encoding.UTF8.GetString(frame.Body);
 
     private static ZLinkActorHandoffFrame HandoffFrame(ulong requestId, long arrivalIndex) =>
-        new([], 0, [], [], requestId, 0, [], [], arrivalIndex);
+        new(ZLinkApplicationJobOrigin.Remote, [], 0, [], [], requestId, 0, [], [], arrivalIndex);
 
     private static ZlinkStreamHeader Header(string packetName) =>
         new(

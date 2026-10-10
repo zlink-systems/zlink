@@ -34,16 +34,16 @@ export async function runRequestStreams(
   }
 }
 
-// One-way streams advance only after the previous public call reaches its admission terminal.
-export function runAdmissionStreams(
+// Each stream advances after the supplied call terminal: local reply or remote one-way admission.
+export function runTerminalStreams(
   streams: number,
   canIssue: () => boolean,
-  submit: (stream: number) => Promise<boolean>
+  submit: (stream: number) => Promise<boolean | void>
 ): Promise<void> {
   return Promise.all(
     Array.from({ length: streams }, async (_, stream) => {
       while (canIssue()) {
-        if (!(await submit(stream))) return;
+        if ((await submit(stream)) === false) return;
       }
     })
   ).then(() => undefined);

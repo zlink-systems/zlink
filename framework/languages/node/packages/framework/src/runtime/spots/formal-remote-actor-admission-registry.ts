@@ -1,3 +1,4 @@
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import type { ActorRef, RoutingId, ZLinkActor, ZLinkActorJoinOperationId } from '../../contracts';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors/actor-runtime-state';
 import type { ZLinkDeferredJoinCompletion } from '../actors/deferred-join-completion';
@@ -13,6 +14,7 @@ const ADMISSION_RETENTION_MS = 30_000;
  * how long the underlying buffer stays valid.
  */
 export interface ZLinkParkedActorArrival {
+  readonly origin: ApplicationJobOrigin;
   readonly header: Buffer;
   readonly payload: Buffer;
   readonly returnResponse: boolean;

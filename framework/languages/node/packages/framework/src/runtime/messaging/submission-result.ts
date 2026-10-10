@@ -18,13 +18,13 @@ export interface ZLinkSubmitResult {
   readonly status: ZLinkSubmitStatus;
 }
 
-/** Projects immediate refusal and pending admission failure from their Core phase. */
+/** Projects typed submit failure; capacity refusal has no admission wait token. */
 export function submitToRequestResult(result: number, phase: 'submit' | 'completion'): number {
   switch (result) {
     case SubmitResult.Ok:
       return RequestResult.Ok;
     case SubmitResult.Backpressured:
-      return phase === 'submit' ? RequestResult.NotConnected : RequestResult.TimedOut;
+      return RequestResult.NotConnected;
     case SubmitResult.NotConnected:
       return RequestResult.NotConnected;
     case SubmitResult.NotFound:

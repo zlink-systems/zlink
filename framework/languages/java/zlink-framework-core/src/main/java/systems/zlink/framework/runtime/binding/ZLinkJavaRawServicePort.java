@@ -10,10 +10,8 @@ import systems.zlink.contracts.messaging.ReplyToken;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
-import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterRoute;
 import systems.zlink.contracts.sockets.RouterSocket;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
@@ -121,22 +119,26 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         List<Message> ownedMessages = claimMessages(messages);
         boolean completionOwns = false;
         try {
-            ensureOwned(router);
-            Objects.requireNonNull(target, "target");
-            if (ownedMessages.isEmpty()) {
-                throw new IllegalArgumentException("service multipart must not be empty");
-            }
-            var send = router.send(target);
-            var submit = send.message(ownedMessages.getFirst());
-            for (int index = 1; index < ownedMessages.size(); index++) {
-                submit.message(ownedMessages.get(index));
-            }
-            CompletionStage<Void> completion;
-            try {
-                completion = ZLinkJavaSocketSupport.submit(submit);
-            } catch (RuntimeException failure) {
-                completion = CompletableFuture.failedFuture(failure);
-            }
+            CompletionStage<Void> completion =
+                    inStateLane(
+                            () -> {
+                                ensureOwnedOnLane(router);
+                                Objects.requireNonNull(target, "target");
+                                if (ownedMessages.isEmpty()) {
+                                    throw new IllegalArgumentException(
+                                            "service multipart must not be empty");
+                                }
+                                var send = router.send(target);
+                                var submit = send.message(ownedMessages.getFirst());
+                                for (int index = 1; index < ownedMessages.size(); index++) {
+                                    submit.message(ownedMessages.get(index));
+                                }
+                                try {
+                                    return ZLinkJavaSocketSupport.submit(submit);
+                                } catch (RuntimeException failure) {
+                                    return CompletableFuture.failedFuture(failure);
+                                }
+                            });
             if (ZLinkOneWayCalls.isImmediateAdmission(completion)) {
                 Message.closeAll(ownedMessages);
             } else {
@@ -238,7 +240,6 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         List<Message> ownedMessages = claimMessages(messages);
         boolean completionOwns = false;
         try {
-            ensureOwned(router);
             Objects.requireNonNull(decodeReply, "decodeReply");
             Objects.requireNonNull(discardReply, "discardReply");
             Objects.requireNonNull(target, "target");
@@ -251,14 +252,20 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                     receivedAdmission != null
                             ? receivedAdmission
                             : receiveSource == null ? null : receiveSource.apply(target);
-            var request = router.request(target);
-            RequestSubmitOperation submit = request.message(ownedMessages.getFirst());
-            for (int index = 1; index < ownedMessages.size(); index++) {
-                submit.message(ownedMessages.get(index));
-            }
+            var submission =
+                    inStateLane(
+                            () -> {
+                                ensureOwnedOnLane(router);
+                                var request = router.request(target);
+                                RequestSubmitOperation submit =
+                                        request.message(ownedMessages.getFirst());
+                                for (int index = 1; index < ownedMessages.size(); index++) {
+                                    submit.message(ownedMessages.get(index));
+                                }
+                                return submit.timeout(timeout).submit();
+                            });
             CompletionStage<List<Message>> bindingReply =
-                    ZLinkJavaSocketSupport.reply(
-                            submit.timeout(timeout).submit(), deadlineNanos, admission);
+                    ZLinkJavaSocketSupport.reply(submission, deadlineNanos, admission);
             CompletableFuture<T> completion = new CompletableFuture<>();
             bindingReply.whenComplete(
                     (reply, failure) -> {
@@ -281,15 +288,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             completionOwns = true;
             return completion;
         } catch (RuntimeException failure) {
-            RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);
-            return CompletableFuture.failedFuture(
-                    terminal == null
-                            ? failure
-                            : new ZLinkFrameworkException(
-                                    ZLinkJavaRawMeshNode.backendResult(terminal)
-                                            .toFrameworkErrorKind(),
-                                    failure.getMessage(),
-                                    failure));
+            return CompletableFuture.failedFuture(ZLinkJavaRawMeshNode.requestFailure(failure));
         } finally {
             if (!completionOwns) {
                 Message.closeAll(ownedMessages);
@@ -317,16 +316,21 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             List<Message> replyMessages) {
         List<Message> messages = claimMessages(replyMessages);
         try {
-            ensureOwned(router);
-            if (requestSequence == null || messages.isEmpty()) {
-                throw new IllegalArgumentException(
-                        "service reply requires request sequence and frames");
-            }
-            var submit = router.reply(target, requestSequence).message(messages.getFirst());
-            for (int index = 1; index < messages.size(); index++) {
-                submit.message(messages.get(index));
-            }
-            submit.submit();
+            inStateLane(
+                    () -> {
+                        ensureOwnedOnLane(router);
+                        if (requestSequence == null || messages.isEmpty()) {
+                            throw new IllegalArgumentException(
+                                    "service reply requires request sequence and frames");
+                        }
+                        var submit =
+                                router.reply(target, requestSequence).message(messages.getFirst());
+                        for (int index = 1; index < messages.size(); index++) {
+                            submit.message(messages.get(index));
+                        }
+                        submit.submit();
+                        return null;
+                    });
         } finally {
             Message.closeAll(messages);
         }
@@ -424,8 +428,8 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                         });
         if (completion == attempt) {
             try {
-                // The close claim excludes registry operations; disposal may wait on the
-                // binding's operation gate and therefore runs outside the state turn.
+                // Claim close after every started native submission has left the state turn.
+                // Pending operation completion and resource disposal remain outside the turn.
                 var remaining =
                         inStateLane(() -> List.copyOf(receivePollers.reversed().entrySet()));
                 for (var entry : remaining) {
@@ -453,14 +457,6 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         if (!receivePollers.containsKey(Objects.requireNonNull(router, "router"))) {
             throw new IllegalArgumentException("router is not owned by this service port");
         }
-    }
-
-    private void ensureOwned(RouterSocket router) {
-        inStateLane(
-                () -> {
-                    ensureOwnedOnLane(router);
-                    return null;
-                });
     }
 
     private ZLinkJavaSocketReceivePoller receivePollerOnLane(RouterSocket router) {

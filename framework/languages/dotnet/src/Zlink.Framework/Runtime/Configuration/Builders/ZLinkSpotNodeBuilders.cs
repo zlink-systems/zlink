@@ -127,8 +127,6 @@ internal sealed class ZLinkMeshNodeBuilder(ZLinkSpotNodeRegistration registratio
 
     public IZLinkMeshNodeSocketConfig ConfigureRouterSocket() => EnsureRouter().SocketConfig;
 
-    public IZLinkSpotPublisherConfig ConfigureSpotPublisher() => registration.SpotPublisherConfig;
-
     public IZLinkMeshPeerConnections PeerConnections =>
         _peerConnections ??= new ZLinkMeshPeerConnections(EnsureRouter());
 

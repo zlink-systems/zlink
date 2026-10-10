@@ -57,7 +57,8 @@ class binding_fanout_pair_t
         slow = std::make_unique<zlink::sub_socket_t> (context);
 
         if (no_drop) {
-            zlink::framework::detail::apply_fanout_publisher_socket_options (*publisher, true);
+            zlink::framework::detail::apply_fanout_publisher_socket_options (*publisher, true,
+                                                                             std::nullopt);
         }
         publisher->options ().linger (0ms);
         publisher->options ().send_hwm (zlink::byte_count_t::bytes (record_hwm));
@@ -260,7 +261,8 @@ TEST (cpp_framework_fanout_no_drop, builder_value_reaches_pub_and_xpub_socket_op
     fixture.options.add_fanout_channel ("default").enable_publisher (unique_endpoint ());
     fixture.options.add_fanout_channel ("no-drop")
       .enable_publisher (unique_endpoint ())
-      .set_no_drop ();
+      .set_no_drop ()
+      .set_send_timeout (75ms);
     fixture.options.apply ();
 
     const auto snapshots =
@@ -280,12 +282,28 @@ TEST (cpp_framework_fanout_no_drop, builder_value_reaches_pub_and_xpub_socket_op
     zlink::context_t context;
     zlink::pub_socket_t automatic_socket (context);
     zlink::xpub_socket_t manual_socket (context);
+    const auto automatic_hwm = automatic_socket.options ().send_hwm ();
+    const auto manual_hwm = manual_socket.options ().send_hwm ();
     zlink::framework::detail::apply_fanout_publisher_socket_options (
-      automatic_socket, no_drop_channel->publisher.no_drop);
+      automatic_socket, no_drop_channel->publisher.no_drop,
+      no_drop_channel->publisher.send_timeout);
     zlink::framework::detail::apply_fanout_publisher_socket_options (
-      manual_socket, no_drop_channel->publisher.no_drop);
+      manual_socket, default_channel->publisher.no_drop, default_channel->publisher.send_timeout);
     EXPECT_TRUE (automatic_socket.options ().no_drop ());
-    EXPECT_TRUE (manual_socket.options ().no_drop ());
+    EXPECT_FALSE (manual_socket.options ().no_drop ());
+    EXPECT_EQ (automatic_socket.options ().send_timeout (), 75ms);
+    EXPECT_EQ (manual_socket.options ().send_timeout (), 1000ms);
+    EXPECT_EQ (automatic_socket.options ().send_hwm ().bytes (), automatic_hwm.bytes ());
+    EXPECT_EQ (manual_socket.options ().send_hwm ().bytes (), manual_hwm.bytes ());
+    EXPECT_EQ (automatic_socket.options ().linger (), 0ms);
+    EXPECT_EQ (manual_socket.options ().linger (), 0ms);
+}
+
+TEST (cpp_framework_fanout_no_drop, timeout_without_publisher_is_rejected_at_startup)
+{
+    framework_options_fixture_t fixture;
+    fixture.options.add_fanout_channel ("subscriber").enable_subscriber ().set_send_timeout (75ms);
+    EXPECT_THROW (fixture.options.apply (), zlink::framework::framework_exception_t);
 }
 
 } // namespace

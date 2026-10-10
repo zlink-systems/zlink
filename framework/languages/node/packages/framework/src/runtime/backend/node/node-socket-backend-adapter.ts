@@ -3,7 +3,6 @@ import type { Socket } from '@zlink-systems/zlink';
 import type { ZLinkBackendObject } from '../contracts';
 import {
   closeBindingHandle,
-  disableSocketLinger,
   isBindingNotFound,
   isContextTerminatedError,
   isRouteRecvRetryable,
@@ -36,10 +35,12 @@ export function wrapSocket<T extends { close(): void }>(
       recvTimeout?: number;
       sendTimeout?: number;
       noDrop?: boolean;
+      linger?: number;
       maxMsgSize?: bigint;
       lastEndpoint?: string;
     };
   };
+  if (socket.options !== undefined) socket.options.linger = 0;
   const hasRequest = typeof (nativeInstance as { request?: unknown }).request === 'function';
   const hasRoutedPeer =
     hasRequest && typeof (nativeInstance as { reply?: unknown }).reply === 'function';
@@ -54,7 +55,6 @@ export function wrapSocket<T extends { close(): void }>(
       import('../../foundation/service-liveness-registry').ServiceLivenessConnection | undefined,
     async dispose(): Promise<void> {
       eventLoopPoller?.dispose();
-      disableSocketLinger(nativeInstance);
       closeBindingHandle(nativeInstance);
     },
     close(): void {
@@ -115,6 +115,12 @@ export function wrapSocket<T extends { close(): void }>(
       (nativeInstance as T & { setRoutingId(value: unknown): void }).setRoutingId(
         toNativeRoutingId(routingId)
       );
+    },
+    get lingerMs(): number {
+      return requireSocketOptions(socket).linger!;
+    },
+    set lingerMs(value: number) {
+      requireSocketOptions(socket).linger = value;
     },
     get peerWeight(): number {
       return socket.options?.peerWeight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT;

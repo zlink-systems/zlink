@@ -485,12 +485,11 @@ test('Node registration rejects invalid Spot timer options before startup', () =
 test('Classic fanout publisher timeout retains integer milliseconds validation', () => {
   for (const sendTimeoutMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
     for (const options of [
-      { channels: { events: { publisher: { bind: 'tcp://127.0.0.1:0', sendTimeoutMs } } } },
-      { spotNodes: { play: { router: { bind: 'tcp://127.0.0.1:0' }, publisherConfig: { sendTimeoutMs } } } }
+      { channels: { events: { sendTimeoutMs, publisher: { bind: 'tcp://127.0.0.1:0' } } } }
     ]) assert.throws(() => framework.createFrameworkRegistration(options), /between 1 and 2147483647 milliseconds/);
   }
   framework.createFrameworkRegistration({ channels: {
-    events: { publisher: { bind: 'tcp://127.0.0.1:0', sendTimeoutMs: 2_147_483_647 } }
+    events: { sendTimeoutMs: 2_147_483_647, publisher: { bind: 'tcp://127.0.0.1:0' } }
   } });
 });
 

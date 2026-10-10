@@ -181,7 +181,7 @@ class spot_worker_offload_echo_scenario_t
 
     void run (const loops_t &loops)
     {
-        spawn_request_streams (loops, _role, [this] (int stream) { return loop (stream); });
+        spawn_stream_loops (loops, _role, [this] (int stream) { return loop (stream); });
     }
 
   private:

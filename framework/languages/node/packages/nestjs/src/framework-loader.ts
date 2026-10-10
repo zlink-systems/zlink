@@ -107,6 +107,7 @@ interface FrameworkIntegrationModule {
     runtime: ZLinkNestIntegrationRuntimeHost
   ): ZLinkHttpExecutionScheduler;
   validateActorTransferTimeout(timeoutMs: number): number;
+  requireValidSendTimeoutMs(label: string, value: number | undefined): void;
   validateMessageFollowDuration(timeoutMs: number): number;
   validateSessionReplacementCallbackTimeout(timeoutMs: number): number;
   validateRoutingIdPrefix(prefix: string): string;
@@ -155,7 +156,8 @@ function loadFramework(): FrameworkIntegrationModule {
     isValidPositiveCapacity: internal.isValidPositiveCapacity,
     isValidListenerPort: internal.isValidListenerPort,
     isValidCapacity: internal.isValidCapacity,
-    requirePublicWeight: internal.requirePublicWeight
+    requirePublicWeight: internal.requirePublicWeight,
+    requireValidSendTimeoutMs: internal.requireValidSendTimeoutMs
   } as FrameworkIntegrationModule;
 }
 

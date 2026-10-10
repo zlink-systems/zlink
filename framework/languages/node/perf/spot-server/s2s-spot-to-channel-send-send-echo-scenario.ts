@@ -25,7 +25,7 @@ import { Measurement } from '../shared/measurement';
 import { ScenarioMetrics } from '../server-support/scenario-metrics';
 import { SendSendCorrelation } from '../server-support/send-send-correlation';
 import { ObjectsReadiness, ROLE_CONFIG, runRole } from '../server-support/server-application';
-import { runRequestStreams, until } from '../server-support/wait';
+import { runTerminalStreams, until } from '../server-support/wait';
 import { ActorlessSpot, configureSpotRole, createSpots, publishSpots } from './spot-role';
 
 // §10.6 s2s-spot-to-channel-send-send-echo. Question: what a send from a Spot to a Channel that comes back to the
@@ -33,8 +33,8 @@ import { ActorlessSpot, configureSpotRole, createSpots, publishSpots } from './s
 // Server + local public driver, this file) x1, Channel target (Object Client) x1. The driver sends PerfDriveRequest
 // to the Spot with ZLinkSpotOutbound.requestToSpot; the Spot handler registers the correlation, makes the first
 // sendToChannel and returns once that send is admitted, so the turn is free when the Channel's send comes back to
-// the Spot's return handler. The driver, outside the turn, waits for the correlation and keeps the in-flight slot
-// until the echo is validated (§13). One operation: correlation registration / first send -> return handler echo
+// the Spot's return handler. Outside the turn, echo completion records the correlation
+// independently of the next local driver call (§13). One operation: correlation registration / first send -> return handler echo
 // validation. The DTO's returnSpotId names the source User SpotId. send-send; ordinary; payload 4096 bytes.
 // Store: run Docker Redis. Null: physical connections, worker, Actor, fanout; Spot internals are not observable.
 export class S2sSpotToChannelSendSendEchoScenario {
@@ -100,11 +100,10 @@ export class S2sSpotToChannelSendSendEchoScenario {
   }
 
   run = (): Promise<void> =>
-    runRequestStreams(
+    runTerminalStreams(
       this.config.workload.logicalStreams as number,
       () => this.measurement.canIssue,
-      (stream) => this.loop(stream),
-      (error) => this.measurement.recordDiagnostic(error)
+      (stream) => this.loop(stream)
     );
 
   private async loop(stream: number): Promise<void> {
@@ -140,7 +139,20 @@ export class S2sSpotToChannelSendSendEchoScenario {
         measurement.recordDiagnostic(new Error('The started drive registered no correlation.'));
       return;
     }
-    // Outside the Spot turn: the final result of the correlation the handler registered (§13).
+    // Remote echoes do not gate the next local driver call (§4.3).
+    void this.completeEcho(entry, driverError, driven, driverStarted, driverCompletedTicks).catch(
+      (error) => measurement.recordDiagnostic(error)
+    );
+  }
+
+  private async completeEcho(
+    entry: ReturnType<SendSendCorrelation['register']>,
+    driverError: unknown,
+    driven: PerfDriveReply | undefined,
+    driverStarted: bigint,
+    driverCompletedTicks: bigint | undefined
+  ): Promise<void> {
+    const { measurement, metrics } = this;
     const { error, completedTicks } = await this.correlations.completeAsync(entry);
     const operationSucceeded = measurement.completeOperation(
       entry.startedTicks,

@@ -478,6 +478,7 @@ objects move to.
 | `zlink.runtime.client_server.server_changed` | A ClientServer target's weight, ready, or service state changed. |
 | `zlink.runtime.fanout.publisher_changed` | An automatic publisher's connection target or ready state changed. |
 | `zlink.runtime.location.store_changed` | The Location Store changed between ready and degraded. |
+| `zlink.runtime.host.local_job_backlog_exceeded` | The number of same-host jobs waiting for a host permit exceeded the Application job queue's effective maximum. |
 
 A log records timestamp, source kind, and registration name. For relevant
 changes, it also records Node RID, weight, reason, and state. Payload,
@@ -506,6 +507,21 @@ or recovery judgment. Actor ID and Spot ID aren't put in structured logs
 and are only checked via limited-scope trace. The opening of target admission
 isn't acknowledged to the source and is observed through target-local
 status and tracing.
+
+Jobs created on the same host — calls to a Spot or Actor on the same host and
+the local targets of a publish — wait for a host permit as
+[Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order)
+requires. There is no separate cap on the number of same-host jobs waiting for
+a permit. When the number waiting exceeds the
+effective maximum (`M` in
+[Application job queue §6](../01-execution/04-application-job-queue-and-backpressure.en.md#6-pressure-state-and-socket-control)),
+the framework records `zlink.runtime.host.local_job_backlog_exceeded` once as a
+Warning with `local_waiters` and `effective_maximum`. After the number waiting
+returns to 0, exceeding it again records it again. Remote ingress doesn't
+receive before it obtains a permit, so it doesn't add to this number. This
+record means the number of local jobs waiting for a permit on the same host
+exceeded the effective maximum. The record doesn't change the wait or any call
+result.
 
 ## 10. Startup and Failure
 
@@ -565,6 +581,15 @@ or contract test.
   contract.
 - Publish target count and per-target accept/failure results don't appear
   in status or runtime structured logs.
+- No warning is recorded while the number of same-host jobs waiting for a
+  permit initially remains at or below the effective maximum. When it exceeds
+  the maximum, `zlink.runtime.host.local_job_backlog_exceeded` is recorded
+  once as a Warning. The log's `local_waiters` and `effective_maximum` match
+  their values at the time of recording. Before the number waiting reaches 0,
+  no additional record is emitted even if the count falls to or below the
+  effective maximum and exceeds it again. After the count reaches 0, exceeding
+  the maximum again emits one more record. Remote ingress alone emits no
+  record, and logging doesn't change the wait or any call result.
 
 ---
 

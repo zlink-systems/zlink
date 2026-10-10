@@ -269,25 +269,6 @@ export function isContextTerminatedError(error: unknown): boolean {
   return error instanceof Error && /context was terminated/i.test(error.message);
 }
 
-export function disableSocketLinger(target: unknown): void {
-  if (
-    target !== null &&
-    typeof target === 'object' &&
-    'options' in target &&
-    typeof target.options === 'object' &&
-    target.options !== null &&
-    'linger' in target.options
-  ) {
-    try {
-      (target.options as { linger: number }).linger = 0;
-    } catch (error) {
-      if (!isContextTerminatedError(error)) {
-        throw error;
-      }
-    }
-  }
-}
-
 export function toNativeRoutingId(routingId: unknown): unknown {
   if (typeof routingId === 'string') return zlink.RoutingId.from(routingId);
   const toHex = (routingId as { readonly toHex?: unknown } | null)?.toHex;

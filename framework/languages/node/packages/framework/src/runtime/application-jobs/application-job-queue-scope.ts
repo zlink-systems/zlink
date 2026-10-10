@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-import type { ApplicationJobPermitPort } from './contracts';
+import type { ApplicationJobOrigin, ApplicationJobPermitPort } from './contracts';
 
 interface ApplicationJobPermitScope {
   readonly permit: ApplicationJobPermitPort;
@@ -40,6 +40,11 @@ export function releaseApplicationJobPermitForDurableHandoff(): void {
 /** True while dispatch already owns the host-wide application job permit. */
 export function hasApplicationJobPermit(): boolean {
   return applicationJobPermitScope.getStore() !== undefined;
+}
+
+/** Keeps the ingress origin when a durable record later reacquires its permit. */
+export function currentApplicationJobOrigin(): ApplicationJobOrigin {
+  return applicationJobPermitScope.getStore()!.permit.origin;
 }
 
 /** Re-enters the captured permit scope when a serial executor runs later. */

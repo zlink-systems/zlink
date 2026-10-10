@@ -11,7 +11,9 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
@@ -21,10 +23,12 @@ import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
 
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -38,14 +42,12 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
      */
     @Test
     void failedStreamBindReleasesEverythingTheStartAlreadyOpened() throws Exception {
-        int streamPort = freePort();
-        int meshPort = freePort();
         RecordingProvider provider = new RecordingProvider(new ZLinkJavaBackendAdapterFactory());
         try (ServerSocket occupied = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-            options.addRouteMesh("rollback").listen("tcp://127.0.0.1:" + meshPort);
+            options.addRouteMesh("rollback").listen("tcp://127.0.0.1:0");
             options.addStreamNode("first")
-                    .bind("tcp://127.0.0.1:" + streamPort)
+                    .bind("tcp://127.0.0.1:0")
                     .registerSession(FirstSession.class);
             options.addStreamNode("second")
                     .bind("tcp://127.0.0.1:" + occupied.getLocalPort())
@@ -56,10 +58,7 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
                     () -> ZLinkFrameworkRuntimeTestAccess.start(options, provider));
         }
 
-        //  Binding a port again fails with "address in use" while a socket
-        //  that the failed start opened has no owner.
-        assertPortReleased(streamPort);
-        assertPortReleased(meshPort);
+        assertListenersReleased(provider, 1);
         assertEquals(1, provider.contexts.size());
         IllegalStateException closed =
                 assertThrows(
@@ -74,11 +73,10 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
      */
     @Test
     void failedMeshBindReleasesEverythingTheStartAlreadyOpened() throws Exception {
-        int firstMeshPort = freePort();
         RecordingProvider provider = new RecordingProvider(new ZLinkJavaBackendAdapterFactory());
         try (ServerSocket occupied = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-            options.addRouteMesh("first").listen("tcp://127.0.0.1:" + firstMeshPort);
+            options.addRouteMesh("first").listen("tcp://127.0.0.1:0");
             options.addRouteMesh("second").listen("tcp://127.0.0.1:" + occupied.getLocalPort());
 
             assertThrows(
@@ -86,7 +84,7 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
                     () -> ZLinkFrameworkRuntimeTestAccess.start(options, provider));
         }
 
-        assertPortReleased(firstMeshPort);
+        assertListenersReleased(provider, 0);
         assertEquals(1, provider.contexts.size());
         IllegalStateException closed =
                 assertThrows(
@@ -102,13 +100,12 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
      */
     @Test
     void startFailingWithAnErrorIsRolledBack() throws Exception {
-        int meshPort = freePort();
         RecordingProvider provider = new RecordingProvider(new ZLinkJavaBackendAdapterFactory());
         provider.streamAdapterFailure = new AssertionError("stream adapter failed");
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.addRouteMesh("rollback").listen("tcp://127.0.0.1:" + meshPort);
+        options.addRouteMesh("rollback").listen("tcp://127.0.0.1:0");
         options.addStreamNode("stream")
-                .bind("tcp://127.0.0.1:" + freePort())
+                .bind("tcp://127.0.0.1:0")
                 .registerSession(FirstSession.class);
 
         AssertionError failure =
@@ -117,7 +114,7 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
                         () -> ZLinkFrameworkRuntimeTestAccess.start(options, provider));
 
         assertSame(provider.streamAdapterFailure, failure);
-        assertPortReleased(meshPort);
+        assertListenersReleased(provider, 0);
         assertEquals(1, provider.contexts.size());
         IllegalStateException closed =
                 assertThrows(
@@ -126,10 +123,14 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
         assertEquals("context is closed", closed.getMessage());
     }
 
-    private static int freePort() throws Exception {
-        try (ServerSocket probe = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-            return probe.getLocalPort();
+    private static void assertListenersReleased(RecordingProvider provider, int streamCount)
+            throws Exception {
+        assertEquals(streamCount, provider.streamEndpoints.size());
+        for (String endpoint : provider.streamEndpoints) {
+            assertPortReleased(URI.create(endpoint).getPort());
         }
+        assertPortReleased(
+                URI.create(provider.meshNodes.getFirst().advertisedEndpoint()).getPort());
     }
 
     private static void assertPortReleased(int port) throws Exception {
@@ -142,6 +143,8 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
     private static final class RecordingProvider implements ZLinkBackendAdapterProvider {
         private final ZLinkBackendAdapterProvider delegate;
         private final List<ZLinkBackendContext> contexts = new ArrayList<>();
+        private final List<String> streamEndpoints = new ArrayList<>();
+        private final List<ZLinkInternalMeshNode> meshNodes = new ArrayList<>();
         private Error streamAdapterFailure;
 
         RecordingProvider(ZLinkBackendAdapterProvider delegate) {
@@ -156,12 +159,7 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
                             ZLinkChannelBackendAdapter.class.getClassLoader(),
                             new Class<?>[] {ZLinkChannelBackendAdapter.class},
                             (proxy, method, arguments) -> {
-                                Object result;
-                                try {
-                                    result = method.invoke(adapter, arguments);
-                                } catch (InvocationTargetException failure) {
-                                    throw failure.getCause();
-                                }
+                                Object result = invoke(adapter, method, arguments);
                                 if (method.getName().equals("createContext")) {
                                     contexts.add((ZLinkBackendContext) result);
                                 }
@@ -176,7 +174,12 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
 
         @Override
         public ZLinkMeshBackendAdapter createMeshAdapter(ZLinkBackendAdapterOptions options) {
-            return delegate.createMeshAdapter(options);
+            var adapter = delegate.createMeshAdapter(options);
+            return (context, name) -> {
+                var node = adapter.createMeshNode(context, name);
+                meshNodes.add(node);
+                return node;
+            };
         }
 
         @Override
@@ -184,7 +187,30 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
             if (streamAdapterFailure != null) {
                 throw streamAdapterFailure;
             }
-            return delegate.createStreamAdapter(options);
+            var adapter = delegate.createStreamAdapter(options);
+            return (context, mesh) -> {
+                var socket = adapter.createStreamSocket(context, mesh);
+                return (ZLinkBackendStreamSocket)
+                        Proxy.newProxyInstance(
+                                ZLinkBackendStreamSocket.class.getClassLoader(),
+                                new Class<?>[] {ZLinkBackendStreamSocket.class},
+                                (proxy, method, arguments) -> {
+                                    Object result = invoke(socket, method, arguments);
+                                    if (method.getName().equals("bind")) {
+                                        streamEndpoints.add(socket.lastEndpoint());
+                                    }
+                                    return result;
+                                });
+            };
+        }
+
+        private static Object invoke(Object target, Method method, Object[] arguments)
+                throws Throwable {
+            try {
+                return method.invoke(target, arguments);
+            } catch (InvocationTargetException failure) {
+                throw failure.getCause();
+            }
         }
 
         @Override

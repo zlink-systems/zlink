@@ -713,7 +713,7 @@ test('Entry relocation staging preserves absent joined Spot membership', async (
     }
   });
   const manager = createActorManager({
-    actorFactories: new Map([['player', { create: context => new PlayerActor(context) }]]),
+    actorFactories: new Map([['player', { create: ( context ) => new PlayerActor(context) }]]),
     nativeActorNode: node
   });
   try {
@@ -865,7 +865,7 @@ for (const trace of ['absent', 'disabled']) {
       framework.ZLinkMessage.fromEncoded(framework.ZLinkEncodedPayload.from(Buffer.alloc(0)))
     );
     await resolveLifecycleHandler(actor, Handler);
-    await assert.rejects(manager.rollbackTransferredActor(actor), error => error === failure);
+    await assert.rejects(manager.rollbackTransferredActor(actor), ( error ) => error === failure);
     assert.equal(releases, 1);
   });
 }
@@ -1371,7 +1371,7 @@ test('Spot registry owns actor packet dispatch without Actor Context handlers', 
   registry.addHandler(ActorPingHandler);
   const dispatcher = new framework.ZLinkSpotActorDispatcher({
     registry,
-    spot: { name: 'game' },
+    spot: { name: 'game' }
   });
 
   const reply = await dispatcher.dispatchRequest(
@@ -1925,7 +1925,7 @@ test('actor manager fluent getOrCreate uses global id lookup and returns the exa
   }
   const manager = createActorManager({
     actorFactories: new Map([['player', PlayerFactory]]),
-    actorMeshNameProvider: (actorType) => actorType === 'player' ? 'play-mesh' : undefined,
+    actorMeshNameProvider: (actorType) => ( actorType === 'player' ? 'play-mesh' : undefined) ,
     actorCreatedNodeRidProvider: () => rid('node-a')
   });
 
@@ -3342,8 +3342,8 @@ test('precommit abort reopens source admission and replays backlog before one-wa
       admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
         events.push('prefix-admitted');
         const terminals = mailbox.admitDurablePrefix(
-          records.map(record => ({
-            operation: executeChild => record.drain((parts) =>
+          records.map(( record ) => ({
+            operation: ( executeChild ) => record.drain((parts) =>
               executeChild(async () => {
                 assert.equal(outerEnded, true, 'replay cannot overtake the Join failure turn');
                 events.push(`replay:${parts[1].data().toString()}`);
@@ -3355,15 +3355,15 @@ test('precommit abort reopens source admission and replays backlog before one-wa
         prefixTerminal = Promise.all(terminals).then(() => undefined);
         return { terminal: prefixTerminal };
       },
-      async dispatchRoutedActorPacket() {
+      async dispatchRoutedActorPacket(_origin ) {
         throw new Error('handoff replay must bypass ordinary capture');
       },
-      async dispatchRoutedActorPacketDirect(_spotId, _actorId, parts) {
+      async dispatchRoutedActorPacketDirect(_origin, _spotId, _actorId, parts) {
         events.push(`replay:${parts[1].data().toString()}`);
       }
     }),
     async prepareApplicationJob(signal) {
-      const permit = await applicationQueue.acquire();
+      const permit = await applicationQueue.acquire(undefined, 'remote');
       permit.markApplicationQueued();
       replayAdmissions += 1;
       let ready = true;
@@ -3418,19 +3418,19 @@ test('precommit abort reopens source admission and replays backlog before one-wa
       async sendSessionRelocationRoute(_meshName, _targetNodeRid, route) {
         assert.equal(route.route.action, 'abort');
         events.push('session-abort');
-        const permit = await applicationQueue.acquire();
+        const permit = await applicationQueue.acquire(undefined, 'remote');
         permit.markApplicationQueued();
         events.push('tail-permit-acquired');
         const parts = [zlink.Message.from('header:Q'), zlink.Message.from('Q')];
         try {
           await runWithApplicationJobPermit(permit, async () => {
-            const captured = coordinator.capture('actor-abort-reopen', parts, false);
+            const captured = coordinator.capture('remote', 'actor-abort-reopen', parts, false);
             assert.notEqual(captured, undefined, 'rollback hold must retain later ingress');
             await captured;
             events.push('tail-captured');
           });
         } finally {
-          parts.forEach(part => part.close());
+          parts.forEach(( part ) => part.close());
         }
       }
     }),
@@ -3451,7 +3451,7 @@ test('precommit abort reopens source admission and replays backlog before one-wa
           );
           for (const value of ['P1', 'P2']) {
             const parts = [zlink.Message.from(`header:${value}`), zlink.Message.from(value)];
-            await coordinator.capture('actor-abort-reopen', parts, false);
+            await coordinator.capture('remote', 'actor-abort-reopen', parts, false);
             parts.forEach((part) => part.close());
           }
           await prepared.rollback();
@@ -4442,7 +4442,7 @@ test('Entry actor commit keeps accepted state while stream binding retries post-
 test('same-node Join reports the local admission framework error through completion', async () => {
   const f = await localCoordinatorFixture({ admissionError: new framework.ZLinkFrameworkException(framework.ZLinkFrameworkErrorKind.NotFound, 'target absent') });
   await assert.rejects(() => submitDeferredActorJoin(f.actor, f.actor.context.joinSpot('stage-1')),
-    error => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
+    ( error ) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
   assert.deepEqual(f.events, ['admission']);
 });
 
@@ -4613,7 +4613,7 @@ test('spot actor dispatch rejects malformed JSON as PayloadDecodeFailed before i
   })));
 
   await assert.rejects(
-    () => dispatch.dispatch('alice', [header, zlink.Message.from(Buffer.from('{'))]),
+    () => dispatch.dispatch('remote', 'alice', [header, zlink.Message.from(Buffer.from('{'))]),
     (error) => error instanceof framework.ZLinkFrameworkException
       && error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError
   );
@@ -4657,7 +4657,7 @@ test('spot actor dispatch rejects a missing handler before payload deserializati
   const payload = zlink.Message.from(Buffer.from('{not-json'));
 
   await assert.rejects(
-    () => dispatch.dispatch('alice', [header, payload]),
+    () => dispatch.dispatch('remote', 'alice', [header, payload]),
     (error) => error instanceof framework.ZLinkFrameworkException
       && error.kind === framework.ZLinkFrameworkErrorKind.NotFound
   );
@@ -4709,8 +4709,8 @@ test('queued bound-session Actor request reports DeadlineExceeded before handler
   const mailbox = new ZLinkActorSerialExecutor('alice', 'room-1');
   let releaseBlocker;
   let markStarted;
-  const started = new Promise(resolve => { markStarted = resolve; });
-  const blocked = new Promise(resolve => { releaseBlocker = resolve; });
+  const started = new Promise(( resolve ) => { markStarted = resolve; });
+  const blocked = new Promise(( resolve ) => { releaseBlocker = resolve; });
 
   try {
     const blocker = mailbox.execute(async () => {
@@ -4718,12 +4718,12 @@ test('queued bound-session Actor request reports DeadlineExceeded before handler
       await blocked;
     });
     await started;
-    const queued = mailbox.execute(() => dispatch.dispatch(
+    const queued = mailbox.execute(() => dispatch.dispatch('remote',
       'alice',
       [header, payload],
       false
     ));
-    await new Promise(resolve => setTimeout(resolve, 30));
+    await new Promise(( resolve ) => setTimeout(resolve, 30));
     releaseBlocker();
     await blocker;
     assert.equal(await queued, undefined);
@@ -4801,7 +4801,7 @@ test('Message Follow replay keeps its captured Session route packet-scoped', asy
   };
 
   try {
-    await dispatch.dispatch(
+    await dispatch.dispatch('remote',
       'alice',
       [header, payload],
       false,
@@ -4860,7 +4860,7 @@ test('spot actor dispatch selects the decoder from the packet codec header', asy
   })));
   const payload = zlink.Message.from(Buffer.from('not-json'));
 
-  await dispatch.dispatch('alice', [header, payload]);
+  await dispatch.dispatch('remote', 'alice', [header, payload]);
 
   assert.equal(deserializeCalls, 1);
   assert.deepEqual(received, [{ packed: 'not-json' }]);

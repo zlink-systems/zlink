@@ -4,6 +4,7 @@
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/backend/raw_route_port.hpp"
 #include "runtime/messaging/request_deadline.hpp"
+#include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/host/bound_session_send_stage_trace.hpp"
@@ -155,11 +156,14 @@ void verify_request_submission_stages ()
             assert (observed.terminal == zlink::request_result_t::ok);
             assert (!observed.failure);
         } else {
-            // A reply timeout is valid; BACKPRESSURED in an admission
-            // terminal is an invalid binding completion, not a deadline.
-            assert (observed.terminal
-                    == (admission_error ? zlink::request_result_t::internal_error
-                                        : zlink::request_result_t::timed_out));
+            // Submit section 5 also applies when a retained operation's next
+            // submit fails without a wait token. A reply timeout stays a deadline.
+            assert (
+              zlink::framework::runtime::messaging::map_request_result_exception (observed.terminal,
+                                                                                  "request")
+                .kind ()
+              == (admission_error ? zlink::framework::framework_error_kind_t::unavailable
+                                  : zlink::framework::framework_error_kind_t::deadline_exceeded));
             assert (observed.failure);
             assert (observed.failure->internal_errno == expected_error);
         }
@@ -228,7 +232,11 @@ void verify_capacity_refusal_phase_controls_public_terminal ()
     namespace client_server = zlink::framework::runtime::client_server;
     const auto initial = zlink::framework::runtime::messaging::map_submit_request_result (
       zlink::submit_result_t::backpressured, false);
-    assert (initial == zlink::request_result_t::not_connected);
+    const auto initial_error = zlink::framework::runtime::messaging::map_request_result_exception (
+      initial, "tokenless request");
+    assert (initial_error.kind () == framework_error_kind_t::unavailable);
+    assert (std::string (initial_error.what ()).find ("submission capacity is unavailable")
+            != std::string::npos);
     const auto refused = client_server::client_server_operation_exception (
       foundation::operation_terminal_t::transport_failed, "tokenless capacity");
     try {
@@ -241,7 +249,12 @@ void verify_capacity_refusal_phase_controls_public_terminal ()
     }
     const auto completion = zlink::framework::runtime::messaging::map_submit_request_result (
       zlink::submit_result_t::backpressured, true);
-    assert (completion == zlink::request_result_t::internal_error);
+    const auto completion_error =
+      zlink::framework::runtime::messaging::map_request_result_exception (completion,
+                                                                          "tokenless request");
+    assert (completion_error.kind () == framework_error_kind_t::unavailable);
+    assert (std::string (completion_error.what ()).find ("submission capacity is unavailable")
+            != std::string::npos);
     const auto expired = client_server::client_server_operation_exception (
       foundation::operation_terminal_t::timed_out, "caller request budget");
     try {

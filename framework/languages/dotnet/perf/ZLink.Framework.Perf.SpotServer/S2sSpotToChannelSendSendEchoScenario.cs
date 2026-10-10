@@ -11,8 +11,8 @@ namespace ZLink.Framework.Perf;
 // Server + local public driver, this file) x1, Channel target (Object Client) x1. The driver sends PerfDriveRequest
 // to the Spot with IZLinkSpotClient.RequestToSpot; the Spot handler registers the correlation, makes the first
 // SendToChannel and returns once that send is admitted, so the turn is free when the Channel's send comes back to
-// the Spot's return handler. The driver, outside the turn, waits for the correlation and keeps the in-flight slot
-// until the echo is validated (§13). One operation: correlation registration / first send -> return handler echo
+// the Spot's return handler. Outside the turn, echo completion records the correlation
+// independently of the next local driver call (§13). One operation: correlation registration / first send -> return handler echo
 // validation. The DTO's returnSpotId names the source User SpotId. send-send; ordinary; payload 4096 bytes.
 // Store: run Docker Redis. Null: physical connections, worker, Actor, fanout; Spot internals are not observable.
 public sealed class S2sSpotToChannelSendSendEchoScenario(
@@ -128,7 +128,7 @@ public sealed class S2sSpotToChannelSendSendEchoScenario(
     }
 
     public Task RunAsync() =>
-        ServerDrivenStreams.RunRequestsAsync(
+        ServerDrivenStreams.RunTerminalStreamsAsync(
             measurement,
             config.workload.logicalStreams!.Value,
             LoopAsync
@@ -178,14 +178,31 @@ public sealed class S2sSpotToChannelSendSendEchoScenario(
                 );
             return;
         }
-        var (result, completed) = await correlations.CompleteAsync(entry);
-        var operationSucceeded = measurement.CompleteOperation(
-            entry.StartedTicks,
-            result,
-            completedTicks: completed
-        );
-        if (driven?.started == true && operationSucceeded)
-            metrics.Record("driverLatencyMs", driverStarted, driverEnded);
+        _ = CompleteEchoAsync(entry, driven?.started == true, driverStarted, driverEnded);
+    }
+
+    private async Task CompleteEchoAsync(
+        SendSendCorrelation.Entry entry,
+        bool driverSucceeded,
+        long driverStarted,
+        long driverEnded
+    )
+    {
+        try
+        {
+            var (result, completed) = await correlations.CompleteAsync(entry);
+            var operationSucceeded = measurement.CompleteOperation(
+                entry.StartedTicks,
+                result,
+                completedTicks: completed
+            );
+            if (driverSucceeded && operationSucceeded)
+                metrics.Record("driverLatencyMs", driverStarted, driverEnded);
+        }
+        catch (Exception error)
+        {
+            measurement.RecordDiagnostic(error);
+        }
     }
 }
 

@@ -86,7 +86,7 @@ test('request failures retain the Core terminal and classify submit results by m
   const submitted = (result) =>
     requestFailureResult(new ZLinkBackendResultError('submit', result, 2));
   assert.deepEqual(submitted(SubmitResult.Backpressured), {
-    terminalResult: RequestResult.TimedOut,
+    terminalResult: RequestResult.NotConnected,
     failureCode: 0
   });
   assert.deepEqual(submitted(SubmitResult.NotConnected), {
@@ -131,7 +131,7 @@ test('request failures retain the Core terminal and classify submit results by m
   });
 });
 
-test('tokenless submit refusal is Unavailable while writable completion timeout keeps its deadline', () => {
+test('tokenless submit capacity refusal is Unavailable at either boundary', () => {
   const zlink = require('@zlink-systems/zlink');
   const {
     constants: {
@@ -149,13 +149,19 @@ test('tokenless submit refusal is Unavailable while writable completion timeout 
   } = require('../../packages/framework/dist/runtime/framework-errors-internal');
   const failure = new zlink.SubmitError(zlink.SubmitResult.Backpressured, EAGAIN);
   const immediate = requestFailureResult(translateBindingResultError(failure, 'submit'));
-  const expired = requestFailureResult(translateBindingResultError(failure, 'completion'));
+  const completionRefusal = requestFailureResult(translateBindingResultError(failure, 'completion'));
 
   assert.equal(
     requestResultToPublicErrorKind(immediate.terminalResult),
     framework.ZLinkFrameworkErrorKind.Unavailable
   );
   assert.notEqual(immediate.terminalResult, RequestResult.Backpressured);
+  assert.equal(completionRefusal.terminalResult, immediate.terminalResult);
+  assert.equal(
+    requestResultToPublicErrorKind(completionRefusal.terminalResult),
+    framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  const expired = requestFailureResult(new zlink.RequestError(zlink.RequestResult.TimedOut));
   assert.equal(expired.terminalResult, RequestResult.TimedOut);
   assert.equal(
     requestResultToPublicErrorKind(expired.terminalResult),
@@ -254,7 +260,7 @@ test('raw router and dealer requests preserve the binding failure phase', async 
   ]) {
     for (const [nextPhase, expected] of [
       ['submit', RequestResult.NotConnected],
-      ['completion', RequestResult.TimedOut]
+      ['completion', RequestResult.NotConnected]
     ]) {
       phase = nextPhase;
       const error = await request().then(
@@ -365,7 +371,7 @@ test('Logical Multicast preserves source refusal and zero-recipient statuses', (
 
 for (const [phase, expectedStatus, expectedKind] of [
   ['submit', 'routeNotConnected', framework.ZLinkFrameworkErrorKind.Unavailable],
-  ['completion', 'timedOut', framework.ZLinkFrameworkErrorKind.DeadlineExceeded]
+  ['completion', 'routeNotConnected', framework.ZLinkFrameworkErrorKind.Unavailable]
 ]) {
   test(`STREAM capacity ${phase} preserves its public status and error kind`, async () => {
     const zlink = require('@zlink-systems/zlink');

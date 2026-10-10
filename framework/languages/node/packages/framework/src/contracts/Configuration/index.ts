@@ -20,12 +20,7 @@ export type {
   ZLinkStreamSocketConfig,
   ZLinkStreamNodeBuilder
 } from './Builders';
-export type {
-  ZLinkOutboundRouteConfig,
-  ZLinkRouteConfig,
-  ZLinkSocketConfig,
-  ZLinkSpotPublisherConfig
-} from './Configs';
+export type { ZLinkOutboundRouteConfig, ZLinkRouteConfig, ZLinkSocketConfig } from './Configs';
 export * from './Connections';
 export * from './ObjectRoles';
 export type {

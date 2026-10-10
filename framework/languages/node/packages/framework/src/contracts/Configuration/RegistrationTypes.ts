@@ -166,6 +166,7 @@ export interface ZLinkChannelOptions {
   readonly routingId?: string;
   readonly routingIdPrefix?: string;
   readonly noDrop?: boolean;
+  readonly sendTimeoutMs?: number;
   readonly requestTimeoutMs?: number;
   readonly client?: ZLinkClientCapabilityOptions;
   readonly publisher?: ZLinkPublisherCapabilityOptions;
@@ -196,7 +197,6 @@ export interface ZLinkClientCapabilityOptions {
 }
 
 export interface ZLinkPublisherCapabilityOptions {
-  readonly sendTimeoutMs?: number;
   readonly bind?: string;
   readonly bindHost?: string;
   readonly advertiseHost?: string;
@@ -297,11 +297,6 @@ export interface ZLinkSpotNodeOptions {
   readonly routeSendHandlers?: readonly ZLinkRouteMeshSendHandlerRegistration[];
   readonly routeRequestHandlers?: readonly ZLinkRouteMeshRequestHandlerRegistration[];
   readonly requestTimeoutMs?: number;
-  readonly publisherConfig?: {
-    readonly sendHighWaterMark?: number;
-    readonly sendTimeoutMs?: number;
-    readonly lingerMs?: number;
-  };
   readonly entrySpotTimerHandlers?: readonly ZLinkEntrySpotTimerHandlerRegistration[];
   readonly entrySpotPacketHandlers?: readonly ZLinkEntrySpotPacketHandlerRegistration[];
   readonly entrySpotSubscriptionHandlers?: readonly ZLinkEntrySpotSubscriptionHandlerRegistration[];

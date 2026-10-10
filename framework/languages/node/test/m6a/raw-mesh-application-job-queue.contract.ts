@@ -45,7 +45,7 @@ function descriptor(): ServiceNodeDescriptor {
 
 test('raw receive waits for the host permit before touching the binding', async () => {
   const applicationJobs = queue();
-  const occupied = await applicationJobs.acquire();
+  const occupied = await applicationJobs.acquire(undefined, 'remote');
   let receives = 0;
   const router = {
     setRoutingId() {},
@@ -88,7 +88,7 @@ test('raw receive waits for the host permit before touching the binding', async 
 
 test('raw shutdown cancels a pre-receive capacity wait without touching the binding', async () => {
   const applicationJobs = queue();
-  const occupied = await applicationJobs.acquire();
+  const occupied = await applicationJobs.acquire(undefined, 'remote');
   let receives = 0;
   const router = {
     setRoutingId() {},
@@ -180,7 +180,7 @@ test('logical 1:N children acquire sequential permits and share one Framework in
   let retainedCloseCount = 0;
   const owner = ApplicationIngressRecordOwner.create(
     applicationJobs,
-    await applicationJobs.acquire(),
+    await applicationJobs.acquire(undefined, 'remote'),
     { close: () => (retainedCloseCount += 1) }
   );
   let drained = 0;
@@ -224,7 +224,7 @@ test('mailbox shutdown closes queued permits and ingress records without a leak'
   let retainedCloseCount = 0;
   const owner = ApplicationIngressRecordOwner.create(
     applicationJobs,
-    await applicationJobs.acquire(),
+    await applicationJobs.acquire(undefined, 'remote'),
     { close: () => (retainedCloseCount += 1) }
   );
   const applicationJob = await owner.acquire('application');

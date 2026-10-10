@@ -148,11 +148,12 @@ class s2s_spot_to_channel_send_send_echo_scenario_t
 
     void run (const loops_t &loops)
     {
-        spawn_request_streams (loops, _role, [this] (int stream) { return loop (stream); });
+        spawn_stream_loops (loops, _role,
+                            [this, loops] (int stream) { return loop (stream, loops); });
     }
 
   private:
-    fw::task_t<void> loop (int stream)
+    fw::task_t<void> loop (int stream, const loops_t &loops)
     {
         auto &measurement = _role.measurement;
         auto &route = _role.service<fw::route_client_t> ();
@@ -187,6 +188,17 @@ class s2s_spot_to_channel_send_send_echo_scenario_t
                   "UnknownCorrelation", "The started drive registered no correlation.")));
             co_return;
         }
+        loops->spawn (complete_echo (entry, driver_started, driver_finished),
+                      [this] (std::exception_ptr error) {
+                          _role.measurement.record_diagnostic (std::move (error));
+                      });
+    }
+
+    fw::task_t<void> complete_echo (send_send_correlation_t::entry_ptr_t entry,
+                                    std::int64_t driver_started,
+                                    std::optional<std::int64_t> driver_finished)
+    {
+        auto &measurement = _role.measurement;
         const auto [result, completed] = co_await _role.correlations->complete (entry);
         if (measurement.complete_operation (entry->started_ticks, result, completed)
             && driver_finished)

@@ -1048,7 +1048,7 @@ export class ZLinkStreamSessionNodeRuntime {
       let packet: ZLinkBackendStreamPacket | undefined;
       let packetTransferred = false;
       try {
-        permit = await this.options.applicationJobQueue.acquire(signal);
+        permit = await this.options.applicationJobQueue.acquire(signal, 'remote');
         if (this.isReceiveStopped(signal)) {
           permit.releaseAfterInternalProcessing();
           break;

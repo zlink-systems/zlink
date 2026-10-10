@@ -108,7 +108,12 @@ final class ZLinkJavaRawMeshNodeInfrastructureProgressTest {
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null),
                         100,
                         0);
-        var held = queue.acquire().toCompletableFuture().join();
+        var held =
+                queue.acquire(
+                                systems.zlink.framework.runtime.internal.dispatch
+                                        .ZLinkApplicationJobQueue.Origin.REMOTE)
+                        .toCompletableFuture()
+                        .join();
         var executor = Executors.newSingleThreadExecutor();
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "infra-progress")) {

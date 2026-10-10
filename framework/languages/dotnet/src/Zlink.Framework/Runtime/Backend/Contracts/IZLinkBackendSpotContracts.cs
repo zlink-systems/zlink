@@ -67,11 +67,6 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     // node, spot, Actor, and service-operation ingress owner. Idempotent.
     void ActivateIngress() { }
 
-    void ApplyRoleConfig(
-        IZLinkSpotPublisherConfig? publisher,
-        IZLinkSpotSubscriberConfig? subscriber
-    );
-
     void ConnectPeer(string endpoint);
 
     void ConnectPeer(

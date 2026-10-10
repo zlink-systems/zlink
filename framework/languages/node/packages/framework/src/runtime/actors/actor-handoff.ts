@@ -3,6 +3,7 @@ import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../co
 import type { Message } from '../../contracts/Common/Message';
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import { releaseApplicationJobPermitForDurableHandoff } from '../application-jobs/application-job-queue-scope';
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import {
   MessageFollowSuppressionRegistry,
@@ -108,7 +109,8 @@ export interface ZLinkActorHandoffPreparedReplayAdmission {
 }
 
 export type ZLinkActorHandoffReplayPreparation = (
-  signal: AbortSignal
+  signal: AbortSignal,
+  origin: ApplicationJobOrigin
 ) => Promise<ZLinkActorHandoffPreparedReplayAdmission>;
 
 export interface ZLinkActorHandoffPrefixAdmission {
@@ -137,6 +139,7 @@ export type ZLinkActorHandoffPrefixQueue = (
 ) => ZLinkActorHandoffPrefixAdmission;
 
 interface PendingPacket {
+  readonly origin: ApplicationJobOrigin;
   readonly packet: ZLinkActorHandoffPacket;
   readonly resolve?: (value: unknown) => void;
   readonly reject?: (reason: unknown) => void;
@@ -554,7 +557,7 @@ export class ZLinkActorHandoffCoordinator {
           try {
             await waitForHandoffReplayStart(release.start, signal);
             if (release.preparation !== undefined) {
-              const next = await release.preparation(signal);
+              const next = await release.preparation(signal, pending.origin);
               if (signal.aborted) {
                 next.cancel();
                 throw signal.reason;
@@ -765,6 +768,7 @@ export class ZLinkActorHandoffCoordinator {
   }
 
   capture(
+    origin: ApplicationJobOrigin,
     actorId: string,
     parts: readonly Message[],
     returnResponse = false,
@@ -823,7 +827,7 @@ export class ZLinkActorHandoffCoordinator {
         this.reportRequestFrame(actorId, packet);
       }
       if (!returnResponse) {
-        handoff.pending.push({ packet });
+        handoff.pending.push({ packet, origin });
         // The durable handoff now owns this record. Return the ingress permit
         // before waiting for a later replay, which must acquire its own fresh
         // application-job permit.
@@ -859,7 +863,12 @@ export class ZLinkActorHandoffCoordinator {
         }, RELOCATION_REPLY_RETENTION_MS);
         route.deadline.unref();
         this.replyRoutes.set(source.replyRouteId, route);
-        handoff.pending.push({ packet: requestPacket, resolve, reject });
+        handoff.pending.push({
+          packet: requestPacket,
+          origin,
+          resolve,
+          reject
+        });
       });
       releaseApplicationJobPermitForDurableHandoff();
       if (handoff.prefixRelease !== undefined) {

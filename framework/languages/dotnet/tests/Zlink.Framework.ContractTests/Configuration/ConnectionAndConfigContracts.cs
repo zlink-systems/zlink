@@ -10,13 +10,11 @@ public sealed class ConnectionAndConfigContracts
         typeof(IZLinkSocketConfig),
         typeof(IZLinkRouteConfig),
         typeof(IZLinkOutboundRouteConfig),
-        typeof(IZLinkSpotPublisherConfig),
-        typeof(IZLinkSpotSubscriberConfig),
         typeof(IZLinkDispatchOptions),
         typeof(IZLinkUnhandledDispatchOptions),
         typeof(IZLinkDiagnosticsOptions)
     )]
-    public void Configuration_contracts_keep_socket_routing_spot_and_dispatch_options_typed()
+    public void Configuration_contracts_keep_socket_routing_and_dispatch_options_typed()
     {
         var socket = new SocketConfig
         {
@@ -45,32 +43,12 @@ public sealed class ConnectionAndConfigContracts
 
         var outbound = new OutboundRouteConfig { ProbeRouterOnConnect = true };
 
-        IZLinkSpotPublisherConfig publisher = new SpotPublisherConfig
-        {
-            SendHighWaterMark = 32,
-            SendTimeout = TimeSpan.FromMilliseconds(20),
-            Linger = TimeSpan.Zero,
-        };
-
-        IZLinkSpotSubscriberConfig subscriber = new SpotSubscriberConfig
-        {
-            ReceiveHighWaterMark = 64,
-            ReceiveTimeout = TimeSpan.FromMilliseconds(30),
-            Linger = TimeSpan.Zero,
-        };
-
         var dispatch = new DispatchOptions();
 
         Assert.True(socket.Immediate);
         Assert.True(socket.TcpNoDelay);
         Assert.True(route.RequireKnownPeer);
         Assert.True(outbound.ProbeRouterOnConnect);
-        Assert.Equal(32UL, publisher.SendHighWaterMark);
-        Assert.Equal(TimeSpan.FromMilliseconds(20), publisher.SendTimeout);
-        Assert.Equal(TimeSpan.Zero, publisher.Linger);
-        Assert.Equal(64UL, subscriber.ReceiveHighWaterMark);
-        Assert.Equal(TimeSpan.FromMilliseconds(30), subscriber.ReceiveTimeout);
-        Assert.Equal(TimeSpan.Zero, subscriber.Linger);
         Assert.NotNull(dispatch.Unhandled);
     }
 
@@ -119,24 +97,6 @@ public sealed class ConnectionAndConfigContracts
     internal sealed class OutboundRouteConfig : IZLinkOutboundRouteConfig
     {
         public bool ProbeRouterOnConnect { get; set; }
-    }
-
-    internal sealed class SpotPublisherConfig : IZLinkSpotPublisherConfig
-    {
-        public ulong SendHighWaterMark { get; set; }
-
-        public TimeSpan? SendTimeout { get; set; }
-
-        public TimeSpan? Linger { get; set; }
-    }
-
-    internal sealed class SpotSubscriberConfig : IZLinkSpotSubscriberConfig
-    {
-        public ulong ReceiveHighWaterMark { get; set; }
-
-        public TimeSpan? ReceiveTimeout { get; set; }
-
-        public TimeSpan? Linger { get; set; }
     }
 
     internal sealed class DispatchOptions : IZLinkDispatchOptions

@@ -886,7 +886,7 @@ class fanout_channel_builder_t
     fanout_channel_builder_t &set_no_drop (bool no_drop = true)
     {
         _no_drop = no_drop;
-        _options->fanout_channels_with_no_drop_configuration.insert (_channel_name);
+        _options->fanout_channels_with_publisher_configuration.insert (_channel_name);
         apply ();
         return *this;
     }
@@ -895,6 +895,7 @@ class fanout_channel_builder_t
     fanout_channel_builder_t &set_send_timeout (std::chrono::duration<Rep, Period> timeout)
     {
         _send_timeout = detail::normalize_channel_send_timeout (timeout);
+        _options->fanout_channels_with_publisher_configuration.insert (_channel_name);
         apply ();
         return *this;
     }
@@ -954,7 +955,7 @@ class fanout_channel_builder_t
         const auto routing_id = _routing_id;
         const auto automatic_routing_id_prefix = _automatic_routing_id_prefix;
         const auto no_drop = _no_drop;
-        const auto send_timeout = _send_timeout;
+        const auto send_timeout = _send_timeout.value_or (detail::default_fanout_send_timeout);
         const auto subscriber_enabled = _subscriber_enabled;
         const auto subscriber_endpoints =
           _options->subscriber_endpoint_connections[_channel_name].list_connections ();
@@ -997,8 +998,7 @@ class fanout_channel_builder_t
                   auto publisher = channel.enable_publisher (
                     routing_id.has_value () || automatic_routing_id_prefix.has_value ());
                   publisher.set_no_drop (no_drop);
-                  if (send_timeout)
-                      publisher.set_send_timeout (*send_timeout);
+                  publisher.set_send_timeout (send_timeout);
                   if (routing_id) {
                       publisher.set_routing_id (*routing_id);
                   } else if (automatic_routing_id_prefix) {

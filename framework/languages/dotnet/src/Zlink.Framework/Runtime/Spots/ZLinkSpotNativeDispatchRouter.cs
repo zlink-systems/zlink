@@ -9,7 +9,11 @@ internal static class ZLinkSpotNativeDispatchRouter
         Func<ValueTask> subscribeReadable,
         Action actorJoinReadable,
         Action actorLifecycleReadable,
-        Action<IReadOnlyList<ZLinkBackendActorPart>, IDisposable?> actorPartsReadable
+        Action<
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin,
+            IReadOnlyList<ZLinkBackendActorPart>,
+            IDisposable?
+        > actorPartsReadable
     )
     {
         try
@@ -35,7 +39,11 @@ internal static class ZLinkSpotNativeDispatchRouter
                         break;
                     case ZLinkBackendSpotDispatchEvent.ActorReadable
                         when info.ActorParts is { Count: > 0 } actorParts:
-                        actorPartsReadable(actorParts, info.ActorPayloadOwner);
+                        actorPartsReadable(
+                            info.ApplicationJobOrigin!.Value,
+                            actorParts,
+                            info.ActorPayloadOwner
+                        );
                         break;
                 }
                 return (ValueTask.CompletedTask, null);

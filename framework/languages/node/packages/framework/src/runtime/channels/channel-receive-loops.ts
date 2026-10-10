@@ -359,7 +359,7 @@ export class ZLinkChannelReceiveLoop {
 
   private async acquirePermit(signal: AbortSignal): Promise<ApplicationJobQueuePermit | undefined> {
     try {
-      return await this.applicationJobQueue.acquire(signal);
+      return await this.applicationJobQueue.acquire(signal, 'remote');
     } catch (error) {
       if (this.isStopped() || signal.aborted) return undefined;
       throw error;
@@ -585,7 +585,7 @@ export class ZLinkSubscriberReceiveLoop {
 
   private async acquirePermit(signal: AbortSignal): Promise<ApplicationJobQueuePermit | undefined> {
     try {
-      return await this.applicationJobQueue.acquire(signal);
+      return await this.applicationJobQueue.acquire(signal, 'remote');
     } catch (error) {
       if (this.isStopped() || signal.aborted) return undefined;
       throw error;
@@ -795,7 +795,7 @@ export class ZLinkRouteReceiveLoop {
 
   private async acquirePermit(signal: AbortSignal): Promise<ApplicationJobQueuePermit | undefined> {
     try {
-      return await this.applicationJobQueue.acquire(signal);
+      return await this.applicationJobQueue.acquire(signal, 'remote');
     } catch (error) {
       if (this.isStopped() || signal.aborted) return undefined;
       throw error;

@@ -4388,7 +4388,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     }
                 },
                 queued,
-                ShutdownToken
+                ShutdownToken,
+                static _ => ZLinkApplicationJobOrigin.Remote
             )
             .ConfigureAwait(false);
 
@@ -4429,7 +4430,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                             }
                         },
                         queued,
-                        ShutdownToken
+                        ShutdownToken,
+                        static frame => frame.Origin
                     )
                     .ConfigureAwait(false);
                 reservedThrough = Math.Max(
@@ -4461,7 +4463,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         IReadOnlyList<T> backlog,
         Func<T, Task> dispatch,
         ICollection<Task> completions,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Func<T, ZLinkApplicationJobOrigin> origin
     )
     {
         ArgumentNullException.ThrowIfNull(queue);
@@ -4471,7 +4474,9 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         foreach (var item in backlog)
         {
-            var admission = await queue.AcquireAsync(cancellationToken).ConfigureAwait(false);
+            var admission = await queue
+                .AcquireAsync(cancellationToken, origin(item))
+                .ConfigureAwait(false);
             admission.MarkQueued();
             completions.Add(DispatchDurableTurnAsync(admission, item, dispatch));
         }

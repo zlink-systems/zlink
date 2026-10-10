@@ -97,7 +97,7 @@ test('framework host routes Core TransferControl records to the configured autho
   host.locationRuntimeQuery;
   const control = transferControl('carol', 3n);
 
-  await host.dispatchMeshRecord('game', { ownerKind: framework.ReadyOwnerKind.Node }, {
+  await host.dispatchMeshRecord(() => 'remote', 'game', { ownerKind: framework.ReadyOwnerKind.Node }, {
     kind: framework.ReceiveKind.TransferControl,
     kindData: {
       ...control,

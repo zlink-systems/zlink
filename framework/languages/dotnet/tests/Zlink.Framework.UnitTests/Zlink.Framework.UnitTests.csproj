@@ -41,6 +41,7 @@
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
+        <Compile Include="Configuration/FanoutPublisherConfigurationTests.cs"/>
         <Compile Include="Configuration/StartupDependencyMetadataTests.cs"/>
         <Compile Include="Configuration/Registration/HandlerExposure.cs"/>
         <Compile Include="Configuration/Registration/NodesAndServices.cs"/>
@@ -91,6 +92,7 @@
         <Compile Include="Runtime/SmallStateOwnershipMechanismTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
         <Compile Include="Runtime/ApplicationJobQueueTests.cs"/>
+        <Compile Include="Runtime/LocalJobBacklogTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementLifecycleTests.cs"/>
         <Compile Include="Runtime/TransportFailFastTests.cs"/>
         <Compile Include="Runtime/BackendAdapterFactoryTests.cs"/>

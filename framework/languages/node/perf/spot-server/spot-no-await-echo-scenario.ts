@@ -13,7 +13,7 @@ import { Measurement } from '../shared/measurement';
 import { PayloadPattern } from '../shared/payload';
 import { ScenarioMetrics } from '../server-support/scenario-metrics';
 import { ObjectsReadiness, runRole } from '../server-support/server-application';
-import { runRequestStreams } from '../server-support/wait';
+import { runTerminalStreams } from '../server-support/wait';
 import { PerfEchoRequestHandler, PerfEchoSpot } from './perf-echo-spot';
 import { configureSpotRole, createSpots, publishSpots } from './spot-role';
 
@@ -76,11 +76,10 @@ export class SpotNoAwaitEchoScenario {
   }
 
   run = (): Promise<void> =>
-    runRequestStreams(
+    runTerminalStreams(
       this.config.workload.logicalStreams as number,
       () => this.measurement.canIssue,
-      (stream) => this.loop(stream),
-      (error) => this.measurement.recordDiagnostic(error)
+      (stream) => this.loop(stream)
     );
 
   private async loop(stream: number): Promise<void> {

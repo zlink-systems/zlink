@@ -42,8 +42,8 @@ import java.util.concurrent.atomic.AtomicLongArray;
 // sendToChannel and returns once
 // that send is admitted, so the turn is free when the Channel's send comes back to the Spot's
 // return handler. The driver,
-// outside the turn, waits for the correlation and keeps the in-flight slot until the echo is
-// validated (§13). One operation:
+// outside the turn, records correlation completion independently of the next local driver call
+// (§13). One operation:
 // correlation registration / first send -> return handler echo validation. The DTO's returnSpotId
 // names the source User
 // SpotId. send-send; ordinary; payload 4096 bytes. Store: run Docker Redis. Null: physical
@@ -259,7 +259,7 @@ public final class S2sSpotToChannelSendSendEchoScenario {
     }
 
     public CompletionStage<Void> run() {
-        return Streams.launchRequests(config, measurement, this::issue);
+        return Streams.launchTerminals(config, measurement, this::issue);
     }
 
     private Optional<CompletionLoop.Iteration<Void>> issue(int stream) {
@@ -284,21 +284,27 @@ public final class S2sSpotToChannelSendSendEchoScenario {
         }
         CompletionStage<Void> operation =
                 call.handle(
-                                (driven, error) -> {
-                                    if (error != null) {
-                                        driverFailed(error);
-                                        return completeCorrelation(echo, driverStarted, 0, false);
-                                    } else if (!driven.started()) {
-                                        metrics.count("driver.notStarted");
-                                        return CompletableFuture.<Void>completedFuture(null);
-                                    } else {
-                                        // Outside the Spot turn: the final result of the
-                                        // correlation the handler registered (§13).
-                                        return completeCorrelation(
+                        (driven, error) -> {
+                            CompletionStage<Void> echoCompletion;
+                            if (error != null) {
+                                driverFailed(error);
+                                echoCompletion = completeCorrelation(echo, driverStarted, 0, false);
+                            } else if (!driven.started()) {
+                                metrics.count("driver.notStarted");
+                                return null;
+                            } else {
+                                // Outside the Spot turn: the final result of the
+                                // correlation the handler registered (§13).
+                                echoCompletion =
+                                        completeCorrelation(
                                                 echo, driverStarted, PerfClock.now(), true);
-                                    }
-                                })
-                        .thenCompose(result -> result);
+                            }
+                            echoCompletion.whenComplete(
+                                    (ignored, failure) -> {
+                                        if (failure != null) measurement.recordDiagnostic(failure);
+                                    });
+                            return null;
+                        });
         return Optional.of(
                 new CompletionLoop.Iteration<>(
                         operation,

@@ -527,7 +527,8 @@ public sealed class StandaloneActorRelocationRuntimeTests
                 new[] { 1, 2, 3 },
                 Dispatch,
                 completions,
-                CancellationToken.None
+                CancellationToken.None,
+                static _ => ZLinkApplicationJobOrigin.Remote
             )
             .AsTask();
 
@@ -575,7 +576,8 @@ public sealed class StandaloneActorRelocationRuntimeTests
             new[] { 1 },
             static _ => Task.FromException(new InvalidOperationException("dispatch failed")),
             completions,
-            CancellationToken.None
+            CancellationToken.None,
+            static _ => ZLinkApplicationJobOrigin.Remote
         );
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => Task.WhenAll(completions));
@@ -645,7 +647,12 @@ public sealed class StandaloneActorRelocationRuntimeTests
             new ZLinkBackendActorPart(actor, source.NodeRid, default, 0, 0, body, false),
         };
 
-        var batch = ZLinkActorHandoffIngress.CaptureMovingFrames(runtime, parts, payloadOwner);
+        var batch = ZLinkActorHandoffIngress.CaptureMovingFrames(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
+            runtime,
+            parts,
+            payloadOwner
+        );
 
         Assert.Equal(0, batch.Count);
         Assert.True(IsDisposed(header));
@@ -694,6 +701,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
 
         Assert.Throws<ZLinkActorHandoffRejectedException>(() =>
             ZLinkActorHandoffIngress.CaptureMovingFrames(
+                Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
                 runtime,
                 rejectedParts,
                 rejectedPayloadOwner
@@ -1792,6 +1800,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
             )
         );
         return new ZLinkActorHandoffFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             [],
             0,
             RoutingId.From("source").ToBytes().ToArray(),
@@ -1831,6 +1840,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
             )
         );
         return new ZLinkActorHandoffFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             [],
             0,
             source.NodeRid.ToBytes().ToArray(),

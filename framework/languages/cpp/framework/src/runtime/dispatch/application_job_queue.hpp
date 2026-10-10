@@ -216,6 +216,13 @@ class application_job_queue_t
         std::shared_ptr<permit_state_t> _state;
     };
 
+    enum class origin_t
+    {
+        remote,
+        local
+    };
+    using local_backlog_sink_t = std::function<void (std::uint64_t, std::uint32_t)>;
+
     using supply_callback_t = std::function<void (std::optional<permit_t>)>;
 
     using receive_flow_state_setter_t =
@@ -339,7 +346,8 @@ class application_job_queue_t
          * permit after the queue stopped. Empty while the supply is pending. */
         std::optional<std::optional<permit_t>> take (application_job_queue_t &queue,
                                                      std::chrono::milliseconds wait,
-                                                     std::function<void ()> notify = {})
+                                                     std::function<void ()> notify,
+                                                     origin_t origin)
         {
             if (!_supply.valid ()) {
                 auto filled = std::make_shared<std::promise<std::optional<permit_t>>> ();
@@ -349,7 +357,8 @@ class application_job_queue_t
                       filled->set_value (std::move (permit));
                       if (notify)
                           notify ();
-                  });
+                  },
+                  origin);
             }
             if (_supply.wait_for (wait) != std::future_status::ready)
                 return std::nullopt;
@@ -363,8 +372,10 @@ class application_job_queue_t
     };
 
     explicit application_job_queue_t (application_job_queue_configuration_t configuration,
-                                      receive_flow_config_failure_sink_t failure_sink = {}) :
-        _state (std::make_shared<state_t> (std::move (configuration), std::move (failure_sink)))
+                                      receive_flow_config_failure_sink_t failure_sink = {},
+                                      local_backlog_sink_t local_backlog_sink = {}) :
+        _state (std::make_shared<state_t> (
+          std::move (configuration), std::move (failure_sink), std::move (local_backlog_sink)))
     {
     }
 
@@ -388,16 +399,17 @@ class application_job_queue_t
         return permit;
     }
 
-    waiter_t wait_for_supply (supply_callback_t callback)
+    waiter_t wait_for_supply (supply_callback_t callback, origin_t origin)
     {
         if (!callback)
             throw std::invalid_argument ("Application Job Queue waiter callback is required");
 
-        auto waiter = std::make_shared<waiter_state_t> ();
+        auto waiter = std::make_shared<waiter_state_t> (origin);
         waiter->callback = std::move (callback);
         std::optional<permit_t> immediate;
         std::optional<pressure_transition_t> transition;
         bool stopped = false;
+        std::optional<std::uint64_t> warning;
         {
             std::lock_guard lock (_state->mutex);
             if (_state->stopped) {
@@ -414,9 +426,13 @@ class application_job_queue_t
                 _state->waiters.push_back (waiter);
                 ++_state->capacity_waiters;
                 ++_state->capacity_wait_count;
+                warning = update_local_waiters_locked (*_state, origin, 1);
             }
         }
         dispatch_pressure_transition (_state, std::move (transition));
+        if (warning && _state->local_backlog_sink)
+            _state->local_backlog_sink (
+              *warning, _state->configuration.effective_max_queued_application_jobs);
         if (immediate)
             waiter->callback (std::move (immediate));
         else if (stopped)
@@ -425,11 +441,11 @@ class application_job_queue_t
     }
 
     // For a caller whose own call is the wait (a synchronous public submit).
-    std::optional<permit_t> wait_for_supply_blocking ()
+    std::optional<permit_t> wait_for_supply_blocking (origin_t origin)
     {
         supply_request_t request;
         for (;;) {
-            if (auto supply = request.take (*this, std::chrono::hours (1)))
+            if (auto supply = request.take (*this, std::chrono::hours (1), {}, origin))
                 return std::move (*supply);
         }
     }
@@ -552,6 +568,7 @@ class application_job_queue_t
                 if (!waiter || waiter->terminal)
                     continue;
                 waiter->terminal = true;
+                update_local_waiters_locked (*_state, waiter->origin, -1);
                 callbacks.push_back (std::move (waiter->callback));
             }
             _state->waiters.clear ();
@@ -574,6 +591,8 @@ class application_job_queue_t
   private:
     struct waiter_state_t
     {
+        explicit waiter_state_t (origin_t value) : origin (value) {}
+        const origin_t origin;
         supply_callback_t callback;
         std::chrono::steady_clock::time_point started_at{};
         std::uint64_t measurement_epoch = 0;
@@ -583,9 +602,11 @@ class application_job_queue_t
     struct state_t
     {
         explicit state_t (application_job_queue_configuration_t configured,
-                          receive_flow_config_failure_sink_t configured_failure_sink) :
+                          receive_flow_config_failure_sink_t configured_failure_sink,
+                          local_backlog_sink_t configured_local_backlog_sink) :
             configuration (std::move (configured)),
-            flow_state_config_failure_sink (std::move (configured_failure_sink))
+            flow_state_config_failure_sink (std::move (configured_failure_sink)),
+            local_backlog_sink (std::move (configured_local_backlog_sink))
         {
             if (configuration.effective_processor_count == 0
                 || configuration.effective_max_queued_application_jobs == 0
@@ -617,6 +638,8 @@ class application_job_queue_t
         std::uint32_t permits_in_use = 0;
         std::uint32_t peak_permits_in_use = 0;
         std::uint32_t capacity_waiters = 0;
+        std::int64_t local_waiters = 0;
+        bool local_backlog_logged = false;
         std::uint64_t capacity_wait_count = 0;
         std::uint64_t capacity_wait_duration_ns = 0;
         std::uint64_t measurement_epoch = 0;
@@ -632,6 +655,7 @@ class application_job_queue_t
         std::uint64_t cumulative_pause_duration_ns = 0;
         std::uint64_t flow_state_config_failure_count = 0;
         receive_flow_config_failure_sink_t flow_state_config_failure_sink;
+        local_backlog_sink_t local_backlog_sink;
         std::map<std::uint64_t, std::shared_ptr<receive_flow_socket_entry_t>> receive_flow_sockets;
         std::uint64_t next_receive_flow_registration_id = 1;
         bool stopped = false;
@@ -724,8 +748,26 @@ class application_job_queue_t
         return permit_t (std::move (permit));
     }
 
+    static std::optional<std::uint64_t>
+    update_local_waiters_locked (state_t &owner, origin_t origin, int delta) noexcept
+    {
+        if (origin != origin_t::local)
+            return std::nullopt;
+        owner.local_waiters += delta;
+        if (owner.local_waiters == 0)
+            owner.local_backlog_logged = false;
+        if (!owner.local_backlog_logged
+            && static_cast<std::uint64_t> (owner.local_waiters)
+                 > owner.configuration.effective_max_queued_application_jobs) {
+            owner.local_backlog_logged = true;
+            return static_cast<std::uint64_t> (owner.local_waiters);
+        }
+        return std::nullopt;
+    }
+
     static void account_wait_locked (state_t &owner, const waiter_state_t &waiter) noexcept
     {
+        update_local_waiters_locked (owner, waiter.origin, -1);
         if (waiter.measurement_epoch != owner.measurement_epoch)
             return;
         const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds> (
@@ -938,7 +980,8 @@ class application_supply_slot_t final
               state->permit = std::move (permit);
               if (state->wake)
                   state->wake ();
-          });
+          },
+          application_job_queue_t::origin_t::remote);
         {
             std::lock_guard lock (_state->mutex);
             if (_state->waiting && !_state->closed)

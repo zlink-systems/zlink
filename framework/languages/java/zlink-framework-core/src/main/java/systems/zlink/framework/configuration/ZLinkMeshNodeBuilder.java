@@ -33,8 +33,6 @@ public interface ZLinkMeshNodeBuilder {
 
     ZLinkMeshNodeSocketConfig configureRouterSocket();
 
-    ZLinkSpotPublisherConfig configureSpotPublisher();
-
     ZLinkMeshPeerConnections peerConnections();
 
     ZLinkMeshNodeBuilder setDefaultRequestTimeout(Duration timeout);

@@ -11,15 +11,7 @@ public final class ZLinkChannelAdmissionTimeout {
     private ZLinkChannelAdmissionTimeout() {}
 
     public static Duration normalize(Duration timeout) {
-        if (timeout == null) {
-            return DEFAULT_SEND_TIMEOUT;
-        }
         return Duration.ofMillis(normalizedMillis(timeout));
-    }
-
-    public static Duration requireValid(Duration timeout) {
-        normalizedMillis(timeout);
-        return timeout;
     }
 
     public static int normalizedMillis(Duration timeout) {

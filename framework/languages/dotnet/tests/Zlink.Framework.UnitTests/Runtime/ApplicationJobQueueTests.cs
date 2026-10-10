@@ -100,15 +100,21 @@ public sealed class ApplicationJobQueueTests
             new(ZLinkApplicationJobQueueProfile.Balanced, 4, 1, 4)
         );
         var leases = new ZLinkApplicationJobQueueLease?[4];
-        Assert.Equal(4, queue.TryAcquireBatch(leases, 0, 4));
+        Assert.Equal(4, queue.TryAcquireBatch(leases, 0, 4, ZLinkApplicationJobOrigin.Remote));
         queue.MarkQueuedBatch(leases, 3);
         Assert.Equal(3UL, queue.GetStatus().QueuedApplicationJobs);
         Assert.Equal(1UL, queue.GetStatus().ReservedSupplyPermits);
 
         using var cancellation = new CancellationTokenSource();
-        var first = queue.AcquireAsync(CancellationToken.None).AsTask();
-        var cancelled = queue.AcquireAsync(cancellation.Token).AsTask();
-        var last = queue.AcquireAsync(CancellationToken.None).AsTask();
+        var first = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
+        var cancelled = queue
+            .AcquireAsync(cancellation.Token, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
+        var last = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
         queue.ReleaseBatch(leases);
@@ -134,18 +140,31 @@ public sealed class ApplicationJobQueueTests
             new(ZLinkApplicationJobQueueProfile.Balanced, 3, 1, 3)
         );
         var leases = new ZLinkApplicationJobQueueLease?[64];
-        Assert.Equal(3, queue.TryAcquireBatch(leases, 0, leases.Length));
+        Assert.Equal(
+            3,
+            queue.TryAcquireBatch(leases, 0, leases.Length, ZLinkApplicationJobOrigin.Remote)
+        );
         Assert.Equal(3UL, queue.GetStatus().PermitsInUse);
-        Assert.Equal(0, queue.TryAcquireBatch(new ZLinkApplicationJobQueueLease?[64], 0, 64));
-        var waiting = queue.AcquireAsync(CancellationToken.None).AsTask();
+        Assert.Equal(
+            0,
+            queue.TryAcquireBatch(
+                new ZLinkApplicationJobQueueLease?[64],
+                0,
+                64,
+                ZLinkApplicationJobOrigin.Remote
+            )
+        );
+        var waiting = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
         Assert.False(waiting.IsCompleted);
         leases[0]!.Dispose();
         leases[0] = null;
         using var oldest = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(0, queue.TryAcquireBatch(leases, 0, 1));
+        Assert.Equal(0, queue.TryAcquireBatch(leases, 0, 1, ZLinkApplicationJobOrigin.Remote));
         leases[1]!.Dispose();
         leases[1] = null;
-        Assert.Equal(1, queue.TryAcquireBatch(leases, 0, 1));
+        Assert.Equal(1, queue.TryAcquireBatch(leases, 0, 1, ZLinkApplicationJobOrigin.Remote));
         foreach (var lease in leases)
             lease?.Dispose();
         oldest.Dispose();
@@ -262,9 +281,16 @@ public sealed class ApplicationJobQueueTests
     public async Task Saturation_waits_fifo_and_never_oversubscribes()
     {
         using var queue = CreateQueue(limit: 1);
-        using var first = await queue.AcquireAsync(CancellationToken.None);
-        var secondTask = queue.AcquireAsync(CancellationToken.None).AsTask();
-        var thirdTask = queue.AcquireAsync(CancellationToken.None).AsTask();
+        using var first = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        var secondTask = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
+        var thirdTask = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
 
         Assert.False(secondTask.IsCompleted);
         Assert.False(thirdTask.IsCompleted);
@@ -289,7 +315,9 @@ public sealed class ApplicationJobQueueTests
         await using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
         var leases = new List<ZLinkApplicationJobQueueLease>();
         for (var index = 0; index < 8; index++)
-            leases.Add(await queue.AcquireAsync(CancellationToken.None));
+            leases.Add(
+                await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            );
 
         Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
         Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, queue.GetStatus().PressureState);
@@ -321,9 +349,14 @@ public sealed class ApplicationJobQueueTests
         using var queue = CreateQueue(limit: 1);
         var applied = new List<ReceiveFlowState>();
         await using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
-        using var holder = await queue.AcquireAsync(CancellationToken.None);
+        using var holder = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         holder.MarkQueued();
-        var waiting = queue.AcquireAsync(CancellationToken.None).AsTask();
+        var waiting = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
 
         Assert.False(waiting.IsCompleted);
         Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
@@ -341,7 +374,10 @@ public sealed class ApplicationJobQueueTests
     public async Task Paused_registration_is_absolute_and_duplicate_identity_is_applied_once()
     {
         using var queue = CreateQueue(limit: 1);
-        using var lease = await queue.AcquireAsync(CancellationToken.None);
+        using var lease = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         var identity = new object();
         var applied = new List<ReceiveFlowState>();
         await using var first = queue.RegisterReceiveFlowSocket(identity, applied.Add);
@@ -358,7 +394,10 @@ public sealed class ApplicationJobQueueTests
         await lease.ReleaseForHandlerStartAsync();
         Assert.Equal([ReceiveFlowState.Paused, ReceiveFlowState.Running], applied);
         await duplicate.DisposeAsync();
-        using var unregisteredLease = await queue.AcquireAsync(CancellationToken.None);
+        using var unregisteredLease = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         Assert.Equal(2, applied.Count);
     }
 
@@ -382,9 +421,14 @@ public sealed class ApplicationJobQueueTests
                 releasePause.Wait(TimeSpan.FromSeconds(2));
             }
         );
-        using var first = await queue.AcquireAsync(CancellationToken.None);
+        using var first = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         blockPause = true;
-        var secondTask = Task.Run(async () => await queue.AcquireAsync(CancellationToken.None));
+        var secondTask = Task.Run(async () =>
+            await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+        );
 
         Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
         var releaseTask = Task.Run(async () => await first.ReleaseForHandlerStartAsync());
@@ -424,7 +468,10 @@ public sealed class ApplicationJobQueueTests
             }
         );
 
-        using var lease = await queue.AcquireAsync(CancellationToken.None);
+        using var lease = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         if (closingDisposal is not null)
             await closingDisposal;
         Assert.Equal(0UL, queue.GetPressureMetrics().FlowStateConfigFailures);
@@ -446,7 +493,10 @@ public sealed class ApplicationJobQueueTests
         var queue = CreateQueue(limit: 1);
         var applied = new List<ReceiveFlowState>();
         await using var registration = queue.RegisterReceiveFlowSocket(new object(), applied.Add);
-        using var lease = await queue.AcquireAsync(CancellationToken.None);
+        using var lease = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         Assert.Equal([ReceiveFlowState.Running, ReceiveFlowState.Paused], applied);
 
         queue.Dispose();
@@ -495,7 +545,9 @@ public sealed class ApplicationJobQueueTests
                 releasePause.Wait();
             }
         );
-        var acquire = Task.Run(async () => await queue.AcquireAsync(CancellationToken.None));
+        var acquire = Task.Run(async () =>
+            await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+        );
         Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
 
         var dispose = Task.Run(queue.Dispose);
@@ -534,7 +586,9 @@ public sealed class ApplicationJobQueueTests
                 releasePause.Wait();
             }
         );
-        var acquire = Task.Run(async () => await queue.AcquireAsync(CancellationToken.None));
+        var acquire = Task.Run(async () =>
+            await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+        );
         try
         {
             Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
@@ -556,8 +610,14 @@ public sealed class ApplicationJobQueueTests
     {
         var time = new ManualTimeProvider();
         using var queue = CreateQueue(limit: 2, timeProvider: time);
-        using var first = await queue.AcquireAsync(CancellationToken.None);
-        using var second = await queue.AcquireAsync(CancellationToken.None);
+        using var first = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        using var second = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         time.Advance(TimeSpan.FromSeconds(5));
 
         Assert.Equal(TimeSpan.FromSeconds(5), queue.GetStatus().CurrentPauseDuration);
@@ -584,10 +644,17 @@ public sealed class ApplicationJobQueueTests
     public async Task Cancelling_the_oldest_waiter_removes_it_without_leaking_capacity()
     {
         using var queue = CreateQueue(limit: 1);
-        using var holder = await queue.AcquireAsync(CancellationToken.None);
+        using var holder = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         using var oldestCancellation = new CancellationTokenSource();
-        var oldest = queue.AcquireAsync(oldestCancellation.Token).AsTask();
-        var next = queue.AcquireAsync(CancellationToken.None).AsTask();
+        var oldest = queue
+            .AcquireAsync(oldestCancellation.Token, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
+        var next = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
 
         oldestCancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => oldest);
@@ -604,7 +671,10 @@ public sealed class ApplicationJobQueueTests
     public async Task Permit_is_released_at_the_handler_first_instruction_not_async_completion()
     {
         using var queue = CreateQueue(limit: 1);
-        using var lease = await queue.AcquireAsync(CancellationToken.None);
+        using var lease = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         lease.MarkQueued();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -638,9 +708,14 @@ public sealed class ApplicationJobQueueTests
         using var resume = new ManualResetEventSlim();
         var time = new BlockingTimeProvider(entered, resume);
         using var queue = CreateQueue(limit: 1, time);
-        using var lease = await queue.AcquireAsync(CancellationToken.None);
+        using var lease = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         time.Arm();
-        var waiting = Task.Run(async () => await queue.AcquireAsync(CancellationToken.None));
+        var waiting = Task.Run(async () =>
+            await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+        );
 
         try
         {
@@ -666,7 +741,10 @@ public sealed class ApplicationJobQueueTests
         var leases = new ZLinkApplicationJobQueueLease[100];
         for (var index = 0; index < leases.Length; index++)
         {
-            leases[index] = await queue.AcquireAsync(CancellationToken.None);
+            leases[index] = await queue.AcquireAsync(
+                CancellationToken.None,
+                ZLinkApplicationJobOrigin.Remote
+            );
             leases[index].MarkQueued();
         }
 
@@ -704,7 +782,10 @@ public sealed class ApplicationJobQueueTests
     public async Task Sequential_one_to_many_handlers_reacquire_one_per_handler()
     {
         using var queue = CreateQueue(limit: 1);
-        using var lease = await queue.AcquireAsync(CancellationToken.None);
+        using var lease = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         using var scope = ZLinkApplicationJobQueueInvocation.Enter(lease);
 
         await ZLinkApplicationJobQueueInvocation.EnsureQueuedPermitAsync(CancellationToken.None);
@@ -737,7 +818,10 @@ public sealed class ApplicationJobQueueTests
 
         async Task ParentCallAsync()
         {
-            var lease = await queue.AcquireAsync(CancellationToken.None);
+            var lease = await queue.AcquireAsync(
+                CancellationToken.None,
+                ZLinkApplicationJobOrigin.Remote
+            );
             lease.MarkQueued();
             //  The record-carried bundle the runtime attaches to inbound
             //  records: binding envelope ownership + application job admission.
@@ -761,7 +845,9 @@ public sealed class ApplicationJobQueueTests
         Assert.Equal(1UL, held.QueuedApplicationJobs);
         Assert.Equal(1UL, held.PermitsInUse);
         Assert.Equal(0, payloadOwner.DisposeCount);
-        var waiter = queue.AcquireAsync(CancellationToken.None).AsTask();
+        var waiter = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
         Assert.False(waiter.IsCompleted);
         Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
 
@@ -788,9 +874,17 @@ public sealed class ApplicationJobQueueTests
     public async Task Reset_preserves_current_and_rebases_peak_while_clearing_wait_totals()
     {
         using var queue = CreateQueue(limit: 2);
-        using var first = await queue.AcquireAsync(CancellationToken.None);
-        using var second = await queue.AcquireAsync(CancellationToken.None);
-        var waiting = queue.AcquireAsync(CancellationToken.None).AsTask();
+        using var first = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        using var second = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        var waiting = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
         await first.ReleaseForHandlerStartAsync();
         using var admitted = await waiting.WaitAsync(TimeSpan.FromSeconds(1));
         await second.ReleaseForHandlerStartAsync();
@@ -811,8 +905,13 @@ public sealed class ApplicationJobQueueTests
     {
         var time = new ManualTimeProvider();
         using var queue = CreateQueue(limit: 1, timeProvider: time);
-        using var holder = await queue.AcquireAsync(CancellationToken.None);
-        var oldEpochWaiter = queue.AcquireAsync(CancellationToken.None).AsTask();
+        using var holder = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        var oldEpochWaiter = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
         time.Advance(TimeSpan.FromSeconds(5));
 
         queue.ResetMetrics();
@@ -824,7 +923,9 @@ public sealed class ApplicationJobQueueTests
         Assert.Equal(0UL, afterOldEpochCompletion.CapacityWaitCount);
         Assert.Equal(TimeSpan.Zero, afterOldEpochCompletion.CapacityWaitDuration);
 
-        var currentEpochWaiter = queue.AcquireAsync(CancellationToken.None).AsTask();
+        var currentEpochWaiter = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
         time.Advance(TimeSpan.FromSeconds(2));
         await admitted.ReleaseForHandlerStartAsync();
         using var current = await currentEpochWaiter.WaitAsync(TimeSpan.FromSeconds(1));

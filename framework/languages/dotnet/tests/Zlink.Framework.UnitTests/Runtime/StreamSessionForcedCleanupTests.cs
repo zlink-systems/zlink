@@ -1076,7 +1076,10 @@ public sealed class StreamSessionForcedCleanupTests
                 1
             )
         );
-        using var heldPermit = await applicationJobQueue.AcquireAsync(CancellationToken.None);
+        using var heldPermit = await applicationJobQueue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
         var firstPoll = new TaskCompletionSource<(int ThreadId, bool Pool)>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );

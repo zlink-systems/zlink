@@ -82,36 +82,3 @@ internal sealed class ZLinkOutboundRouteConfig : IZLinkOutboundRouteConfig
 
     public bool ProbeRouterOnConnect { get; set; }
 }
-
-internal sealed class ZLinkSpotPublisherConfig : IZLinkSpotPublisherConfig
-{
-    internal static TimeSpan? NormalizeSendTimeout(TimeSpan? value)
-    {
-        if (value is not { } timeout)
-            return null;
-        if (timeout <= TimeSpan.Zero)
-            throw new ZLinkConfigurationException("SendTimeout must be greater than zero.");
-
-        var wholeMilliseconds = timeout.Ticks / TimeSpan.TicksPerMillisecond;
-        if (timeout.Ticks % TimeSpan.TicksPerMillisecond != 0)
-            wholeMilliseconds++;
-        if (wholeMilliseconds > int.MaxValue)
-            throw new ZLinkConfigurationException(
-                $"SendTimeout must not exceed {int.MaxValue} milliseconds."
-            );
-
-        return TimeSpan.FromMilliseconds(wholeMilliseconds);
-    }
-
-    private TimeSpan? _sendTimeout;
-
-    public ulong SendHighWaterMark { get; set; }
-
-    public TimeSpan? SendTimeout
-    {
-        get => _sendTimeout;
-        set { _sendTimeout = NormalizeSendTimeout(value); }
-    }
-
-    public TimeSpan? Linger { get; set; }
-}

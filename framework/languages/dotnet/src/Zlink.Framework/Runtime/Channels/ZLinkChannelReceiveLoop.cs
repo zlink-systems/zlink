@@ -45,7 +45,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     if (!IsReadable(receivePoller.Wait(ReceivePollInterval)))
                         continue;
                     admission = await applicationJobQueue
-                        .AcquireAsync(cancellationToken)
+                        .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
                         .ConfigureAwait(false);
                     received = receiveStoragePool.Rent();
                     if (!router.Recv(received, RecvFlags.DontWait))
@@ -322,7 +322,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     if (!IsReadable(receivePoller.Wait(ReceivePollInterval)))
                         continue;
                     admission = await applicationJobQueue
-                        .AcquireAsync(cancellationToken)
+                        .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
                         .ConfigureAwait(false);
                     if (!subscriber.Subscribe(topicMessage!, RecvFlags.DontWait))
                         continue;
@@ -415,7 +415,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     if (!IsReadable(receivePoller.Wait(ReceivePollInterval)))
                         continue;
                     admission = await applicationJobQueue
-                        .AcquireAsync(cancellationToken)
+                        .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
                         .ConfigureAwait(false);
                     if (!subscriber.Subscribe(topicMessage!, RecvFlags.DontWait))
                         continue;

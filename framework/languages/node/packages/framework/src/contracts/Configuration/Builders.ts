@@ -7,7 +7,6 @@ import type { ZLinkDispatchOptionsBuilder, ZLinkInboundDispatchOptions } from '.
 import type { ZLinkLocationOptions, ZLinkLocationStore, ZLinkRelocationStore } from '../Locations';
 import type { RoutingId, Type } from '../Common';
 import type { ZLinkWorkerOptions } from './RegistrationTypes';
-import type { ZLinkSpotPublisherConfig } from './Configs';
 import type {
   ZLinkActorFactoryBuilder,
   ZLinkInstanceSpotFactoryBuilder,
@@ -120,7 +119,6 @@ export interface ZLinkMeshNodeBuilder {
   setActivationConcurrency(limit: number): this;
   setInstanceSpotIdleTimeout(timeoutMs: number): this;
   configureRouterSocket(): ZLinkMeshNodeSocketConfig;
-  configureSpotPublisher(): ZLinkSpotPublisherConfig;
   peerConnections(): ZLinkMeshPeerConnections;
   setDefaultRequestTimeout(timeoutMs: number): this;
   objects(): ZLinkMeshObjectRoleBuilder;
@@ -180,6 +178,7 @@ export interface ZLinkFanoutChannelBuilder {
   routingId(routingId: string): this;
   setRoutingIdPrefix(prefix: string): this;
   setNoDrop(noDrop?: boolean): this;
+  setSendTimeout(timeoutMs: number): this;
   enableSubscriber(): this;
   subscribe(topic: string): this;
   connect(endpoint: string): this;

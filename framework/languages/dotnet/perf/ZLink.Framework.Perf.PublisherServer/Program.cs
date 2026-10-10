@@ -12,6 +12,7 @@ var builder = ServerApplication.Builder(
             .AddFanoutChannel(config.channelName!)
             .EnablePublisher(config.transportEndpoints["fanout"])
             .SetNoDrop()
+            .SetSendTimeout(TimeSpan.FromMilliseconds(config.workload.socketSendTimeoutMs))
 );
 builder.Services.AddSingleton(new ObjectsReadiness(false, "The Publisher host is not Ready yet."));
 

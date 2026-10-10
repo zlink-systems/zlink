@@ -303,6 +303,7 @@ export class ZLinkActorPacketRelay {
         const dispatch =
           state?.spotId === undefined
             ? this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+                'remote',
                 relay.actorId,
                 [header, body],
                 false,
@@ -310,6 +311,7 @@ export class ZLinkActorPacketRelay {
                 fallbackActorRef
               )
             : this.requireSpotManager().dispatchRoutedActorPacket(
+                'remote',
                 state.spotId,
                 relay.actorId,
                 [header, body],
@@ -356,6 +358,7 @@ export class ZLinkActorPacketRelay {
         const dispatch =
           state?.spotId === undefined
             ? this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+                'remote',
                 relay.actorId,
                 [header, body],
                 false,
@@ -363,6 +366,7 @@ export class ZLinkActorPacketRelay {
                 fallbackActorRef
               )
             : this.requireSpotManager().dispatchRoutedActorPacket(
+                'remote',
                 state.spotId,
                 relay.actorId,
                 [header, body],
@@ -423,6 +427,7 @@ export class ZLinkActorPacketRelay {
       const response =
         state?.spotId === undefined
           ? await this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+              'remote',
               relay.actorId,
               [header, body],
               relay.returnResponse === true,
@@ -430,6 +435,7 @@ export class ZLinkActorPacketRelay {
               fallbackActorRef
             )
           : await this.requireSpotManager().dispatchRoutedActorPacket(
+              'remote',
               state.spotId,
               relay.actorId,
               [header, body],
@@ -892,6 +898,7 @@ export class ZLinkActorPacketRelay {
       this.options.detachedTaskRunner.runDetached('local actor packet relay', async () => {
         try {
           const response = await this.requireSpotManager().dispatchRoutedActorPacket(
+            'local',
             spotId,
             actor.actorId,
             [header, body],

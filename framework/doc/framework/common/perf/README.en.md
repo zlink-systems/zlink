@@ -138,8 +138,8 @@ A trigger carries only `runId`, `cellId`, `resetSeq` and phase; it cannot alter 
 A phase starts once; duplicate triggers return the same start acknowledgement.
 
 For cells measuring an outbound call inside a Spot handler, an application driver in the same
-process invokes the handler through public Spot request/send. Driver calls are also submitted
-continuously by the §4.3 request rule. Local driver calls are not
+process invokes the handler through public Spot request/send. Driver calls follow the §4.3
+same-process call rule. Local driver calls are not
 additional KOPS. The driver call deadline is `drainTimeoutMs` later than the §5.2 measured-call
 deadline. The driver call wraps the measured remote call, so it must be able to receive that call's
 result even when the remote call ends at its own deadline.
@@ -155,8 +155,8 @@ A local driver request arriving after measured end starts no outbound call, retu
 ### 4.3 Load principle
 
 Framework perf loads the system by the same principle as binding perf. **Server-driven cells set no
-in-flight cap and submit continuously up to the backpressure boundary; the only exception is the CS
-connector below.** An in-flight cap measures the concurrency the harness chose instead of the
+in-flight cap and submit continuously up to the backpressure boundary; the only exception is a call
+that does not pass Core HWM admission.** An in-flight cap measures the concurrency the harness chose instead of the
 library's capacity, and keeps load off the Framework and Core backpressure paths ([binding perf policy §7.2][perf-inflight]).
 
 - **A server-driven stream starts the next call without waiting for a request reply or send/send echo.**
@@ -169,9 +169,15 @@ library's capacity, and keeps load off the Framework and Core backpressure paths
     ends with public `Unavailable`, record that failure as is (§13).
   - The continuous-submission loop runs on the language's public asynchronous execution model and
     does not monopolize the execution context.
-- **A CS connector keeps one unresolved echo per connection.** A CS client is a STREAM client that
-  does not pass Core HWM admission, so it uses the same condition as binding perf's
-  [STREAM client exception][perf-stream]. This value is not a configurable option.
+- **A call that does not pass Core HWM admission keeps one outstanding call per connection or
+  stream.** Such a call has no backpressure boundary, so continuous submission only lengthens the
+  wait queue without limit. Two kinds of call qualify.
+  - CS connector: a STREAM client, so it keeps one unresolved echo per connection under the same
+    condition as binding perf's [STREAM client exception][perf-stream].
+  - Same-process Spot call: the §4.2 local driver and the §10.7 and §10.8 local public calls pass
+    through neither the network nor a Core queue, so each stream keeps one outstanding call.
+
+  This value is not a configurable option.
 - **A Classic fanout publisher enables [`NoDrop`][nodrop].** By default the publisher drops events
   at the HWM and completes publish successfully, so no backpressure arises. With `NoDrop`, publish
   waits at admission until every matching subscriber can accept.

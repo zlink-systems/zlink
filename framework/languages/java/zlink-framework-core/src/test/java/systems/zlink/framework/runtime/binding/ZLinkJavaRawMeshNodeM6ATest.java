@@ -1829,7 +1829,12 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             var owner =
                     (systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry)
                             ownerField.get(requester);
-            try (var held = queue.acquire().toCompletableFuture().get(2, TimeUnit.SECONDS);
+            try (var held =
+                            queue.acquire(
+                                            systems.zlink.framework.runtime.internal.dispatch
+                                                    .ZLinkApplicationJobQueue.Origin.REMOTE)
+                                    .toCompletableFuture()
+                                    .get(2, TimeUnit.SECONDS);
                     Message packet = Message.from("request");
                     Message payload = Message.from(new byte[] {1})) {
                 assertEquals(

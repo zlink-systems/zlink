@@ -100,10 +100,21 @@ internal static class ZLinkSubmitFailureMapper
         ZlinkSubmitException error,
         string operationName,
         bool completionFailure = false
-    ) =>
-        ZLinkRequestFailureMapper.CreateCompletionException(
+    )
+    {
+        // A failed binding terminal has no admission wait left to observe.
+        // Submit section 5 ends capacity refusal without a wait token immediately.
+        if (error.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+            return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"{operationName} failed because submission capacity is unavailable.",
+                ZLinkRetryAdvice.RetryAfterBackoff,
+                error
+            );
+        return ZLinkRequestFailureMapper.CreateCompletionException(
             ToRequestResult((SubmitResult)(int)error.Result, completionFailure),
             operationName,
             error
         );
+    }
 }

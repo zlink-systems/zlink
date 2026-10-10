@@ -14,8 +14,6 @@ internal sealed class ZLinkFrameworkRegistration
     public TimeSpan SessionReplacementCallbackTimeout { get; set; } =
         TimeSpan.FromMilliseconds(30_000);
 
-    public TimeSpan DefaultSocketSendTimeout { get; set; } = TimeSpan.FromMilliseconds(1000);
-
     public long ApplicationVersion { get; set; }
 
     public string? MaintenanceWave { get; set; }
@@ -239,6 +237,8 @@ internal sealed class ZLinkChannelRegistration
 
     public bool? PublisherNoDrop { get; set; }
 
+    public TimeSpan? PublisherSendTimeout { get; set; }
+
     public ZLinkChannelSubscriberCapabilityRegistration? Subscriber { get; set; }
 
     public RoutingId RoutingId { get; set; }
@@ -293,8 +293,6 @@ internal sealed class ZLinkChannelPublisherCapabilityRegistration
     public RoutingId FixedRoutingId { get; set; }
 
     public string? RoutingIdPrefix { get; set; }
-
-    public ZLinkSocketConfig SocketConfig { get; } = new();
 }
 
 internal sealed class ZLinkChannelSubscriberCapabilityRegistration
@@ -400,10 +398,6 @@ internal sealed class ZLinkSpotNodeRegistration
     // (spec 05-route-mesh §2 IZLinkMeshNodeBuilder.SetDefaultRequestTimeout). Null
     // falls back to the framework-wide DefaultRequestTimeout.
     public TimeSpan? DefaultRequestTimeout { get; set; }
-
-    // Logical Multicast publisher transport settings for this MeshNode
-    // (spec §5 IZLinkSpotPublisherConfig, ConfigureSpotPublisher).
-    public ZLinkSpotPublisherConfig SpotPublisherConfig { get; } = new();
 
     // Immutable logical channel memberships added via ChannelName(...) (spec §4).
     // Each carries its build-time weight and channel-scoped handler namespace.

@@ -277,9 +277,8 @@ submission, so it waits for admission up to the publisher socket send timeout an
 - `0`, negative values, infinity, and values above the upper bound are rejected no later than
   host startup, and are never silently substituted with a valid default.
 - If no value is specified, the 1-second default is chosen.
-- An existing public root fallback, if present, applies with the same meaning, but that does
-  not mean every language must add the same root option.
-- If a runtime setter exists, an invalid value is rejected immediately at the setter call.
+- [Channel messaging §7](../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic)
+  defines where it is set, and an invalid value is rejected immediately at the setter call.
 
 ## 8. STREAM Reply Token
 

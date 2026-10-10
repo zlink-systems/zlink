@@ -195,11 +195,10 @@ timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되�
 
 | 옵션 | 무엇을 정하나 | 설정 자리 |
 | --- | --- | --- |
-| `DefaultSocketSendTimeout` | Classic fanout publisher가 보낼 자리를 기다리는 상한(기본 1초) | .NET 루트 옵션 |
+| Classic fanout publisher의 send timeout | admission을 기다리는 상한 | channel의 fanout builder. 설정 계약은 [Channel messaging §7](../../../common/spec/server/02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)을 따른다. |
 | — | 실제로 적용되는 값은 **보내는 경로마다 다르다**(아래) | — |
 | `SendHighWaterMark` | 상대별로 **보내려고** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
 | `ReceiveHighWaterMark` | 상대별로 **받아서** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
-| `SendHighWaterMark` · `linger` | pub/sub 발행 소켓의 상한과 종료 시 잔여 발행 대기 | `ConfigureSpotPublisher()` |
 | `core_hwm_memory_limit_bytes` · `core_hwm_budget_bytes` · `CoreHwmProfile` | Core context의 ordinary queue byte budget | root inbound-dispatch 설정 |
 | `ApplicationJobQueueProfile` · `max_queued_application_jobs` · pause/resume threshold | host instance의 queued application job 상한과 flow 전이 경계 | root inbound-dispatch 설정 |
 
@@ -345,7 +344,7 @@ gauge를 유지하고 peak를 current로 재기준화하며 현재 epoch의 coun
 | `MaxQueuedApplicationJobs = 0`을 주었더니 시작이 실패한다 | `0`은 unlimited가 아니다. Auto 값을 사용하려면 manual 값을 지정하지 않는다. |
 | 두 profile을 같은 값으로 바꿨는데 byte와 job 상한이 같은 비율로 움직이지 않는다 | `CoreHwmProfile`과 `ApplicationJobQueueProfile`은 label만 같고 계산과 단위가 다르다. |
 | Application job queue가 포화됐는데 reply는 완료된다 | receive 전에 식별할 수 있는 최종 reply·error는 shared 처리 자리와 일반 Core HWM을 우회하므로 정상이다. |
-| 상한을 올렸더니 증상이 늦게 나타난다 | 혼잡이 memory로 흡수되면 실패가 늦게 드러난다. 혼잡을 줄이려면 상한과 수신 처리량을 함께 검토한다. Classic fanout publisher의 대기 상한은 `DefaultSocketSendTimeout`으로 정한다. |
+| 상한을 올렸더니 증상이 늦게 나타난다 | 혼잡이 memory로 흡수되면 실패가 늦게 드러난다. 혼잡을 줄이려면 상한과 수신 처리량을 함께 검토한다. Classic fanout publisher의 대기 상한은 channel의 fanout builder에서 설정한다([Channel messaging §7](../../../common/spec/server/02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)). |
 | `publish`는 정상 완료했는데 구독자가 받지 못했다 | publish의 완료는 보낼 준비가 끝나 runtime이 제출을 받아들였다는 뜻까지다. 전달·재전송·ack는 제공하지 않는다([Channel 메시징](30-channel-patterns.ko.md#7-호출이-끝났다는-것의-의미)). |
 | handler 안의 request가 오래 멈춘다 | 양쪽 처리가 동시에 지연되면 유한한 timeout이 회복의 시작점이다. nested request에 `timeout(...)`을 지정한다. |
 | 한 node가 느린데 다른 호출까지 늦다 | 송신 queue는 상대별로 따로 있지만, 같은 handler 안에서 기다리면 그 handler의 실행 자리도 함께 점유된다. 응답이 느린 대상으로 보내는 호출은 같은 handler에 함께 두지 않는다. |

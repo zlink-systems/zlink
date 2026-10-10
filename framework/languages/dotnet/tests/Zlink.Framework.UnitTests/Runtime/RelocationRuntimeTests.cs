@@ -531,6 +531,7 @@ public sealed class RelocationRuntimeTests
         );
         var sourceActor = new ZLinkBackendActorRef(RoutingId.From("source"), "actor-1", 42);
         var frame = new ZLinkActorHandoffFrame(
+            Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
             [],
             0,
             requestSource.NodeRid.ToBytes().ToArray(),
