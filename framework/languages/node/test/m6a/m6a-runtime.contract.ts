@@ -743,13 +743,12 @@ test('raw runtime admits a discovered same-RID replacement only after its exact 
   };
   assert.equal(runtime.topology.admit(old, oldConnection), 'admitted');
   runtime.liveness.admit(old.nodeRoutingId, oldConnection, 1);
-  assert.equal(runtime.liveness.requestProbe(old.nodeRoutingId, oldConnection, 1), true);
   const oldProbe = runtime.liveness.tick(1).probes[0]!;
   assert.equal(
     runtime.liveness.acknowledge(old.nodeRoutingId, oldConnection, oldProbe.probeId, 1),
     true
   );
-  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
+  assert.equal(runtime.isPeerRouteReady(old.nodeRoutingId, old.lifecycleGeneration), true);
 
   internal.expectedPeers.set(old.nodeRoutingId, {
     meshName: replacement.meshName,
@@ -761,7 +760,7 @@ test('raw runtime admits a discovered same-RID replacement only after its exact 
   runtime.disconnectPeer(old.advertisedEndpoint, old.nodeRoutingId, old.lifecycleGeneration);
   assert.deepEqual(disconnectedRids, []);
   assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, oldConnection);
-  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
+  assert.equal(runtime.isPeerRouteReady(old.nodeRoutingId, old.lifecycleGeneration), true);
 
   const expected = internal.expectedPeers.get(old.nodeRoutingId)!;
   assert.equal(internal.admitPeer(replacement, replacementConnection, 2, expected), 'admitted');
@@ -770,8 +769,8 @@ test('raw runtime admits a discovered same-RID replacement only after its exact 
     replacement.lifecycleGeneration
   );
   assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, replacementConnection);
-  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, replacementConnection), false);
-  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), false);
+  assert.equal(runtime.isPeerRouteReady(old.nodeRoutingId, replacement.lifecycleGeneration), true);
+  assert.equal(runtime.isPeerRouteReady(old.nodeRoutingId, old.lifecycleGeneration), false);
   // Core owns physical replacement. Framework keeps the replacement intent
   // while applying the descriptor fence.
   assert.deepEqual(disconnectedEndpoints, []);
@@ -1304,16 +1303,15 @@ test('unsequenced canonical actorJoin(28) drops with ProtocolError observation a
   runtime.close();
 });
 
+// 05-transport-liveness.ko.md:228 (§5): admission readiness has no ACK condition.
 test('liveness uses 5s/15s defaults, reuses outstanding probes, and fences old connections', () => {
   const liveness = new ServiceLivenessRegistry();
   liveness.admit('peer', 'connection-a', 0);
-  assert.equal(liveness.isReady('peer', 'connection-a'), false);
   const first = liveness.tick(5_000);
   assert.equal(first.probes.length, 1);
   const probeId = first.probes[0]!.probeId;
   assert.equal(liveness.tick(10_000).probes[0]!.probeId, probeId);
   assert.equal(liveness.acknowledge('peer', 'connection-a', probeId, 10_001), true);
-  assert.equal(liveness.isReady('peer', 'connection-a'), true);
 
   liveness.admit('peer', 'connection-b', 10_002);
   assert.equal(liveness.disconnect('peer', 'connection-a'), false);
@@ -1673,6 +1671,7 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
       payload: Buffer.from('parked')
     });
 
+    const submittedAt = performance.now();
     //  The terminal reply completion still progresses.
     const pending = left.requestToNode(
       'm6a-r6-right',
@@ -1698,6 +1697,12 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
     );
     assert.equal(result.terminalResult, 0);
     assert.equal(Buffer.from(result.payload!.payload).toString(), 'reply');
+    const livenessPeers = (
+      left.liveness as unknown as {
+        peers: Map<string, { deadlineMs: number }>;
+      }
+    ).peers;
+    assert.ok(livenessPeers.get('m6a-r6-right')!.deadlineMs >= submittedAt + 15_000);
     //  The ordinary job flow stayed saturated the whole time: the reply
     //  terminal did not consume (or wait for) an application permit.
     assert.equal(leftJobs.snapshot().capacityWaiters, 1n);
@@ -1898,14 +1903,20 @@ test('bilateral endpoint requests keep liveness progressing after re-admission',
   await verifyBilateralEndpointRequests((left, right) => {
     const rid = left.topology.localDescriptor().nodeRoutingId;
     const peer = right.topology.peer(rid)!;
-    // Replay the liveness state captured when a late Hello upgrades the
-    // provisional connection after the first request. The next probe/ACK
-    // needs both ordinary receive pumps before the reverse request can start.
-    assert.equal(right.liveness.disconnect(rid, peer.connectionId), true);
+    // End and re-admit the Framework lifetime on the same selected Core route.
+    assert.notEqual(peer.liveness, undefined);
+    const connectionId = peer.liveness!.connectionId;
+    assert.equal(right.liveness.disconnect(rid, connectionId), true);
+    assert.equal(right.topology.disconnect(rid, peer.connectionId), true);
     const now = performance.now();
-    right.liveness.admit(rid, peer.connectionId, now);
-    assert.equal(right.liveness.requestProbe(rid, peer.connectionId, now), true);
-    assert.equal(right.isPeerRouteReady(rid), false);
+    assert.equal(
+      right.topology.admit(peer.descriptor, peer.connectionId, undefined, () =>
+        right.liveness.admit(rid, connectionId, now)
+      ),
+      'admitted'
+    );
+    // 05-transport-liveness.ko.md:228 (§5): the completed handshake stays Ready without ACK.
+    assert.equal(right.isPeerRouteReady(rid), true);
   });
 });
 

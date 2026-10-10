@@ -990,7 +990,6 @@ test('RouteMesh ready remote weight-zero channel reports Unavailable for send an
       objectRole: 'server', channels: [{ name: 'zero-channel', weight: 0 }]
     }, connectionId), 'admitted');
     runtime.liveness.admit(remoteRid, connectionId, 0);
-    assert.equal(runtime.liveness.requestProbe(remoteRid, connectionId, 0), true);
     const [probe] = runtime.liveness.tick(0).probes;
     assert.equal(runtime.liveness.acknowledge(remoteRid, connectionId, probe.probeId, 0), true);
     assert.equal(runtime.isPeerRouteReady(remoteRid), true);

@@ -1012,7 +1012,22 @@ for (const transport of ['inproc', 'tcp']) {
         if (received !== undefined) {
           try {
             assert.equal(received.parts.length, 1);
-            assert.equal(clientServerWire.decodeClientServerControl(received.parts[0].data()).kind, 'hello');
+            const control = clientServerWire.decodeClientServerControl(received.parts[0].data());
+            // Transport liveness §3: admission makes the first probe due immediately.
+            // This raw Server must answer probes as well as the Hello exchange.
+            if (control.kind === 'livenessProbe') {
+              assert.ok(control.probeId > 0n);
+              const ack = zlink.Message.from(
+                clientServerWire.encodeClientServerLivenessAck(control.probeId)
+              );
+              try {
+                router.reply(received.routingId, received.replyToken, ack);
+              } finally {
+                ack.close();
+              }
+              continue;
+            }
+            assert.equal(control.kind, 'hello');
             clientRid = received.routingId;
             helloCount += 1;
             const reply = zlink.Message.from(clientServerWire.encodeClientServerAdmit(

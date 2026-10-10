@@ -41,6 +41,7 @@ import { ZLinkListenerRecords } from '../foundation/listener-records';
 import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
 import { ServiceDiscoveryRegistry } from '../foundation/service-discovery-registry';
 import {
+  ServiceLivenessConnection,
   DEFAULT_SERVICE_PEER_TIMEOUT_MS,
   DEFAULT_SERVICE_PROBE_INTERVAL_MS
 } from '../foundation/service-liveness-registry';
@@ -101,9 +102,7 @@ interface ClientServerPhysicalConnection {
   physicalConnectionId: symbol;
   readyConnectionId?: string;
   admittedDescriptor?: ClientServerDiscoveryDescriptor;
-  nextProbeAt?: number;
-  deadlineAt?: number;
-  outstandingProbeId?: bigint;
+  liveness?: ServiceLivenessConnection;
   admissionAttempt?: symbol;
 }
 
@@ -623,9 +622,8 @@ export class ZLinkChannelSocketRegistry {
     const admitted = this.clientServerDiscovery.admitClientServer(descriptor, connectionId);
     if (admitted) {
       const now = performance.now();
-      connection.nextProbeAt = now + CLIENT_SERVER_PROBE_INTERVAL_MS;
-      connection.deadlineAt = now + CLIENT_SERVER_PEER_DEADLINE_MS;
-      connection.outstandingProbeId = undefined;
+      connection.liveness = new ServiceLivenessConnection(connectionId, now);
+      connection.dealer.receiveAdmission = connection.liveness;
       this.clientServerReadyIdentities.set(connectionId, {
         channelName: descriptor.channelName,
         serverRoutingId: descriptor.serverRoutingId,
@@ -653,9 +651,8 @@ export class ZLinkChannelSocketRegistry {
       const connection = this.clientServerConnections.get(connectionId);
       if (connection?.readyConnectionId === connectionId) {
         connection.readyConnectionId = undefined;
-        connection.deadlineAt = undefined;
-        connection.nextProbeAt = undefined;
-        connection.outstandingProbeId = undefined;
+        connection.liveness = undefined;
+        connection.dealer.receiveAdmission = undefined;
       }
     }
     this.notifyClientServerTopology(channelName);
@@ -987,15 +984,15 @@ export class ZLinkChannelSocketRegistry {
         (connection.aliases.values().next().value as string | undefined);
       if (connectionId === undefined) continue;
       this.drainClientServerControl(connectionId, connection);
-      if (connection.deadlineAt === undefined) continue;
-      if (nowMs >= connection.deadlineAt) {
+      if (connection.liveness === undefined) continue;
+      if (connection.liveness.isExpired(nowMs)) {
         this.restartClientServerAdmission(connectionId, connection);
         continue;
       }
-      if (connection.nextProbeAt === undefined || nowMs < connection.nextProbeAt) continue;
-      connection.nextProbeAt = nowMs + CLIENT_SERVER_PROBE_INTERVAL_MS;
-      const probeId = connection.outstandingProbeId ?? this.allocateClientServerProbeId();
-      connection.outstandingProbeId = probeId;
+      const probeId = connection.liveness.tryGetProbe(nowMs, () =>
+        this.allocateClientServerProbeId()
+      );
+      if (probeId === undefined) continue;
       this.requestClientServerLiveness(connectionId, connection, probeId);
     }
 
@@ -1376,6 +1373,7 @@ export class ZLinkChannelSocketRegistry {
     connectionId: string,
     connection: ClientServerPhysicalConnection
   ): void {
+    const admission = connection.liveness;
     for (;;) {
       if (connection.readablePoller === undefined || !connection.readablePoller.wait(0)) return;
       const received = connection.dealer.recv(1);
@@ -1383,6 +1381,7 @@ export class ZLinkChannelSocketRegistry {
         connection.readablePoller.markDrained();
         return;
       }
+      admission?.recordReceived();
       try {
         if (received.parts.length !== 1 || !isClientServerControlFrame(received.parts[0]!.data())) {
           throw new ZLinkConfigurationException(
@@ -1534,24 +1533,18 @@ export class ZLinkChannelSocketRegistry {
       if (connection.readyConnectionId === connectionId) {
         connection.readyConnectionId = undefined;
       }
-      connection.deadlineAt = undefined;
-      connection.nextProbeAt = undefined;
-      connection.outstandingProbeId = undefined;
+      connection.liveness = undefined;
+      connection.dealer.receiveAdmission = undefined;
     }
     this.notifyClientServerTopology(identity.channelName);
   }
 
   private requestClientServerLiveness(
     connectionId: string,
-    connection: {
-      readonly channelName: string;
-      readonly dealer: ZLinkBackendDealerSocket;
-      readonly physicalConnectionId: symbol;
-      outstandingProbeId?: bigint;
-      deadlineAt?: number;
-    },
+    connection: ClientServerPhysicalConnection,
     probeId: bigint
   ): void {
+    const admission = connection.liveness;
     const message = RuntimeMessage.from(encodeClientServerLivenessProbe(probeId));
     void connection.dealer
       .request(message, CLIENT_SERVER_PEER_DEADLINE_MS)
@@ -1561,12 +1554,16 @@ export class ZLinkChannelSocketRegistry {
           if (
             current === undefined ||
             current.physicalConnectionId !== connection.physicalConnectionId ||
+            current.liveness !== admission ||
             parts.length !== 1
           )
             return;
           const record = decodeClientServerControl(parts[0]!.data());
           if (record.kind !== 'livenessAck') return;
-          if (current.outstandingProbeId !== probeId || record.probeId !== probeId) {
+          if (
+            admission === undefined ||
+            !admission.acknowledge(record.probeId, performance.now())
+          ) {
             this.reportStaleClientServerLivenessAck(
               connection.channelName,
               connectionId,
@@ -1574,8 +1571,6 @@ export class ZLinkChannelSocketRegistry {
             );
             return;
           }
-          current.outstandingProbeId = undefined;
-          current.deadlineAt = performance.now() + CLIENT_SERVER_PEER_DEADLINE_MS;
         } finally {
           closeMessages(parts);
         }

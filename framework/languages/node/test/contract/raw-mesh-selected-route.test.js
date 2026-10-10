@@ -136,7 +136,8 @@ test('a direct RID request selects only the logical target and leaves route acce
     // ACK; Core's REQUEST result is the terminal, not a Framework copy.
     assert.equal(runtime.topology.admit(peer, 'route:21'), 'admitted');
     runtime.liveness.admit('peer', 'route:21', performance.now());
-    assert.equal(runtime.isPeerRouteReady('peer'), false);
+    // 05-transport-liveness.ko.md:228 (§5): handshake readiness does not wait for ACK.
+    assert.equal(runtime.isPeerRouteReady('peer'), true);
     await assert.rejects(runtime.requestToNode('peer', payload, 1_000).promise, error =>
       error instanceof ZLinkBackendResultError
       && error.operation === 'request'

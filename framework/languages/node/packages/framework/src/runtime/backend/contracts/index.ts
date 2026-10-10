@@ -486,6 +486,7 @@ export interface ZLinkBackendConnectableSocket extends ZLinkBackendSocket {
 }
 
 export interface ZLinkBackendDealerSocket extends ZLinkBackendConnectableSocket {
+  receiveAdmission?: import('../../foundation/service-liveness-registry').ServiceLivenessConnection;
   setReceiveFlowState(state: 0 | 1): void;
   setRoutingId(routingId: RoutingId): void;
   peerWeight: number;
