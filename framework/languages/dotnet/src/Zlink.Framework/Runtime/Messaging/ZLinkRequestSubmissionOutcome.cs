@@ -5,7 +5,8 @@ internal static class ZLinkRequestSubmissionOutcome
     internal static Task<IReadOnlyList<Message>> SubmitAndAwaitReplyAsync(
         RequestSubmitOperation operation,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Service.ZLinkServiceLiveness? receiveAdmission = null
     )
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -22,7 +23,8 @@ internal static class ZLinkRequestSubmissionOutcome
                 AwaitReplyAsync(submission.Result, submission.Admitted, submission.Reply),
                 deadline,
                 cancellationToken,
-                CancelAtDeadlineAsync(deadline, timeout, started)
+                CancelAtDeadlineAsync(deadline, timeout, started),
+                receiveAdmission
             );
         }
         catch
@@ -41,7 +43,8 @@ internal static class ZLinkRequestSubmissionOutcome
         Task<IReadOnlyList<Message>> completion,
         CancellationTokenSource deadline,
         CancellationToken cancellationToken,
-        Task deadlineTimer
+        Task deadlineTimer,
+        Service.ZLinkServiceLiveness? receiveAdmission
     )
     {
         using (deadline)
@@ -50,7 +53,8 @@ internal static class ZLinkRequestSubmissionOutcome
             // prevents cancellation callbacks from re-entering a state lane.
             using var callerCompletion = new ZLinkRequestCompletion<IReadOnlyList<Message>>(
                 deadline.Token,
-                discardResult: ZLinkMessageParts.DisposeAll
+                discardResult: ZLinkMessageParts.DisposeAll,
+                receiveAdmission: receiveAdmission
             );
             _ = ObserveCompletionAsync(completion, callerCompletion);
             try

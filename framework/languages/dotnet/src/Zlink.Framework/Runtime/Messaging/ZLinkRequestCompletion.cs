@@ -9,6 +9,7 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
 {
     private readonly CancellationTokenRegistration _callerCancellationRegistration;
     private readonly Action<TResult>? _discardResult;
+    private readonly Service.ZLinkServiceLiveness? _receiveAdmission;
     private readonly Action? _onCanceled;
     private readonly CancellationTokenRegistration _stopCancellationRegistration;
     private readonly TaskCompletionSource<TResult> _completion = new(
@@ -21,10 +22,12 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
         CancellationToken callerCancellation,
         CancellationToken stopCancellation = default,
         Action<TResult>? discardResult = null,
-        Action? onCanceled = null
+        Action? onCanceled = null,
+        Service.ZLinkServiceLiveness? receiveAdmission = null
     )
     {
         _discardResult = discardResult;
+        _receiveAdmission = receiveAdmission;
         _onCanceled = onCanceled;
         _callerCancellationRegistration = RegisterCancellation(callerCancellation);
         _stopCancellationRegistration = RegisterShutdown(stopCancellation);
@@ -69,7 +72,10 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
     internal void Complete(TResult result)
     {
         if (!_completion.TrySetResult(result))
+        {
+            _receiveAdmission?.RecordReceived();
             _discardResult?.Invoke(result);
+        }
     }
 
     internal void Cancel(CancellationToken cancellationToken)
