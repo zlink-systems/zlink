@@ -373,7 +373,7 @@ STREAM reply isn't given the client request timeout.
 Only the [Classic fanout](../../../00-foundation/02-glossary.en.md#classic-fanout) publisher uses
 `setSendTimeout(timeoutMs)`. Its value rules and default follow
 [Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). The Node setting takes integer
-milliseconds and reports a rejection with `ZLinkConfigurationError`.
+milliseconds and reports a rejection with `ZLinkConfigurationException`.
 
 [Interaction model §5](../../../00-foundation/04-interaction-model.en.md#5-spot-logical-multicast)
 and [Cancellation and shutdown §4](../../../01-execution/03-cancellation-and-shutdown.en.md#4-logical-multicast-cancellation)
