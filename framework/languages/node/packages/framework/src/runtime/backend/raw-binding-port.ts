@@ -66,7 +66,8 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
   request(
     targetRid: string,
     parts: readonly Uint8Array[],
-    timeoutMs: number
+    timeoutMs: number,
+    recordReceived?: () => void
   ): Promise<readonly Buffer[]>;
   receive(dontWait?: boolean): ZLinkRawReceivedRecord | undefined;
   /** The selected route of every RID. The socket's one route observer calls it. */

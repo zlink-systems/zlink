@@ -396,21 +396,28 @@ not-ready within the common observation budget?
   and the other target keeps processing requests.
 - Detailed behavior: verifies [Transport Liveness §5](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
-#### RL-E2 Judge A Half-Open Connection Independently Of Application Traffic
+#### RL-E2 Judge No Receipt On The Current Connection Independently Of Other Connections' Traffic
 
 Priority: `P0`
 
-Even if one-direction traffic keeps showing, if the Framework's liveness round trip fails, the
-connection must become not-ready.
+The side that receives no record on the current admitted connection must close that
+connection under the deadline rule in Transport liveness §3, and receipts on other connections
+must not change that result.
 
-**Verification question:** After a packet blackhole, does only the affected connection become
-not-ready at the 15-second deadline?
+**Verification question:** When no record is received on the current admitted connection, does
+it close under the deadline rule in §3, without receipts on other connections changing that
+result?
 
-- Starting condition: Two targets are ready, and a fault proxy can block one connection direction.
-- Procedure: A→B packets are blocked, keeping B→A application traffic going. The fixed liveness
-  deadline plus tolerance is waited for public status to change.
-- Verification: Only the blocked connection is not-ready, and reverse application traffic does not
-  extend the deadline. The other target's requests succeed.
+- Starting condition: Two targets are ready, and a fault proxy can block each direction of one
+  connection.
+- Procedure: (a) Block every receive path of the target connection while traffic with the other
+  target continues. (b) Block only A→B packets while B→A traffic continues. In each case, wait the
+  fixed liveness deadline plus tolerance for public status to change.
+- Verification: (a) Only the target connection becomes not-ready, and the other target's requests
+  succeed. (b) Run with B→A records and transport termination forwarded to A and with A
+  continuing to process receives. Check B's no-receipt deadline close separately from A's
+  actual disconnect observation, and check that A's deadline keeps refreshing while B→A
+  receipts continue. The detection scope follows Transport liveness §3.
 - Detailed behavior: verifies [Transport Liveness §3](../spec/server/02-channel-transport/05-transport-liveness.en.md).
 
 #### RL-E3 An Old Reply Before Reconnect Does Not Complete A New Request

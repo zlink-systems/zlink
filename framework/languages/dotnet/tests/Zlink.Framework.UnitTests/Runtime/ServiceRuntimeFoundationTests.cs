@@ -1029,18 +1029,128 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public void Liveness_RetransmitsOutstandingProbeAndExtendsOnlyOnExactAck()
+    public void Liveness_AdmissionImmediatelyMakesFirstProbeDue_PerTransportLivenessSection3()
+    {
+        var liveness = new ZLinkServiceLiveness(0);
+        Assert.True(liveness.TryGetProbe(0, out var first));
+        Assert.NotEqual(0UL, first);
+        Assert.False(liveness.TryGetProbe(5 * Stopwatch.Frequency - 1, out _));
+        Assert.True(liveness.TryGetProbe(5 * Stopwatch.Frequency, out var periodic));
+        Assert.Equal(first, periodic);
+    }
+
+    [Fact]
+    public void Liveness_PreviousAckIsReceiveEvidenceWithoutClearingOutstandingProbe()
+    {
+        var frequency = Stopwatch.Frequency;
+        var liveness = new ZLinkServiceLiveness(0);
+        Assert.True(liveness.TryGetProbe(5 * frequency, out var probe));
+        Assert.False(liveness.Acknowledge(probe + 1, 14 * frequency));
+        Assert.False(liveness.IsExpired(15 * frequency));
+        Assert.Equal(probe, liveness.OutstandingProbeId);
+        Assert.True(liveness.TryGetProbe(20 * frequency, out var repeated));
+        Assert.Equal(probe, repeated);
+        Assert.True(liveness.IsExpired(29 * frequency));
+    }
+
+    [Fact]
+    public void Liveness_NextActivityKeepsAnEarlyTimerWakeAtTheSameProbeDeadline()
+    {
+        var liveness = new ZLinkServiceLiveness(0);
+        Assert.True(liveness.TryGetProbe(5 * Stopwatch.Frequency, out _));
+        Assert.Equal(
+            TimeSpan.FromSeconds(5),
+            liveness.TimeUntilNextActivity(5 * Stopwatch.Frequency)
+        );
+        Assert.False(liveness.TryGetProbe(10 * Stopwatch.Frequency - 1, out _));
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(1),
+            liveness.TimeUntilNextActivity(10 * Stopwatch.Frequency - 1)
+        );
+        Assert.True(liveness.TryGetProbe(10 * Stopwatch.Frequency, out _));
+        liveness.RecordReceived(14 * Stopwatch.Frequency);
+        Assert.Equal(
+            TimeSpan.FromSeconds(1),
+            liveness.TimeUntilNextActivity(14 * Stopwatch.Frequency)
+        );
+    }
+
+    [Fact]
+    public async Task Liveness_LateSuccessfulReplyIsRecordedByExistingDiscardOwner()
+    {
+        var time = new ControllableTimeProvider();
+        var admission = new ZLinkServiceLiveness(time.GetTimestamp(), time);
+        using var stop = new CancellationTokenSource();
+        var discarded = false;
+        using var completion = new ZLinkRequestCompletion<IReadOnlyList<Message>>(
+            stop.Token,
+            discardResult: parts =>
+            {
+                discarded = true;
+                ZLinkMessageParts.DisposeAll(parts);
+            },
+            receiveAdmission: admission
+        );
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await completion.Task);
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(14));
+        completion.Complete(Array.Empty<Message>());
+        Assert.True(discarded);
+        Assert.False(admission.IsExpired(15 * time.TimestampFrequency));
+        Assert.True(admission.IsExpired(29 * time.TimestampFrequency));
+    }
+
+    [Fact]
+    public void Liveness_AnyRecordMatchesSharedFourLanguageContract()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        const string relative = "framework/test/fixtures/liveness-any-record.tsv";
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, relative)))
+            directory = directory.Parent;
+        Assert.NotNull(directory);
+        var rows = File.ReadLines(Path.Combine(directory!.FullName, relative))
+            .Where(row => row.Length != 0 && !row.StartsWith('#'))
+            .ToArray();
+        Assert.Equal(9, rows.Length);
+        foreach (var row in rows)
+        {
+            var fields = row.Split('\t');
+            var current = new ZLinkServiceLiveness(0);
+            Assert.True(current.TryGetProbe(5 * Stopwatch.Frequency, out _));
+            var receipt = current;
+            if (fields[0] == "retired_connection")
+                current = new ZLinkServiceLiveness(6 * Stopwatch.Frequency);
+            else if (fields[0] == "other_connection")
+                receipt = new ZLinkServiceLiveness(0);
+            var received = long.Parse(fields[1]) * Stopwatch.Frequency / 1000;
+            if (fields[0] == "previous_ack")
+                Assert.False(current.Acknowledge(2, received));
+            else
+                receipt.RecordReceived(received);
+            var alive = long.Parse(fields[2]) * Stopwatch.Frequency / 1000;
+            Assert.False(current.IsExpired(alive));
+            Assert.True(current.TryGetProbe(alive, out _));
+            Assert.True(current.IsExpired(long.Parse(fields[3]) * Stopwatch.Frequency / 1000));
+        }
+    }
+
+    [Fact]
+    public void Liveness_RetransmitsOutstandingProbeAndClearsOnlyOnExactAck()
     {
         var frequency = Stopwatch.Frequency;
         var liveness = new ZLinkServiceLiveness(0);
 
+        // Transport liveness §3: first probe is due immediately after admission.
+        Assert.True(liveness.TryGetProbe(0, out var firstProbe));
         Assert.False(liveness.TryGetProbe(5 * frequency - 1, out _));
-        Assert.True(liveness.TryGetProbe(5 * frequency, out var firstProbe));
+        Assert.True(liveness.TryGetProbe(5 * frequency, out var periodic));
+        Assert.Equal(firstProbe, periodic);
         Assert.NotEqual(0UL, firstProbe);
         Assert.True(liveness.TryGetProbe(10 * frequency, out var retransmit));
         Assert.Equal(firstProbe, retransmit);
         Assert.False(liveness.Acknowledge(firstProbe + 1, 11 * frequency));
-        Assert.Equal(15 * frequency, liveness.DeadlineTimestamp);
+        // Transport liveness §3: a previous-ID ACK is still a received record.
+        Assert.Equal(26 * frequency, liveness.DeadlineTimestamp);
         Assert.True(liveness.Acknowledge(firstProbe, 11 * frequency));
         Assert.Equal(26 * frequency, liveness.DeadlineTimestamp);
         Assert.False(liveness.IsExpired(26 * frequency - 1));
@@ -2742,6 +2852,18 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
         Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
 
+        var peers =
+            (Dictionary<RoutingId, ZLinkMeshPeer>)
+                typeof(ZLinkManagedMeshNode)
+                    .GetField(
+                        "_peersByRid",
+                        System.Reflection.BindingFlags.Instance
+                            | System.Reflection.BindingFlags.NonPublic
+                    )!
+                    .GetValue(requester)!;
+        var admittedLiveness = peers[replierRid].Liveness!;
+        var submittedAt = Stopwatch.GetTimestamp();
+
         //  The saturated requester issues a request; the replier answers.
         using var requestPart = Message.From(new byte[] { 4, 5, 6 });
         Assert.Equal(
@@ -2796,6 +2918,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(MeshRecordKind.Completion, completion.Kind);
         Assert.Equal(operationId, completion.OperationId);
         Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
+        Assert.True(admittedLiveness.DeadlineTimestamp >= submittedAt + 15 * Stopwatch.Frequency);
 
         //  Closing removes the receive-flow target and its outstanding
         //  pre-receive waiter before the external permit is returned.

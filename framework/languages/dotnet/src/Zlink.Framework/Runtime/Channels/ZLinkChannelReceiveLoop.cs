@@ -57,6 +57,15 @@ internal sealed class ZLinkChannelReceiveLoop(
                         && received.Parts[0].Size == 0
                     )
                         continue;
+                    if (received.RoutingId is not { } applicationSource)
+                        continue;
+                    var admitted = await identity
+                        .ObserveReceivedRecordAsync(
+                            applicationSource,
+                            received.RouteGeneration,
+                            System.Diagnostics.Stopwatch.GetTimestamp()
+                        )
+                        .ConfigureAwait(false);
                     if (ZLinkClientServerControlProtocol.IsControl(received.Parts))
                     {
                         await ReplyClientServerControlAsync(
@@ -68,11 +77,6 @@ internal sealed class ZLinkChannelReceiveLoop(
                             .ConfigureAwait(false);
                         continue;
                     }
-                    if (received.RoutingId is not { } applicationSource)
-                        continue;
-                    var admitted = await identity
-                        .GetAdmittedMaximumMessageBytesAsync(applicationSource)
-                        .ConfigureAwait(false);
                     if (!admitted.Found)
                         continue;
                     var admittedMaximumMessageBytes = admitted.MaximumMessageBytes;
@@ -193,7 +197,9 @@ internal sealed class ZLinkChannelReceiveLoop(
             return;
         if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(received.Parts, out var ackId))
         {
-            await identity.AcceptLivenessAckAsync(sourceRid, ackId).ConfigureAwait(false);
+            await identity
+                .AcceptLivenessAckAsync(sourceRid, received.RouteGeneration, ackId)
+                .ConfigureAwait(false);
             return;
         }
         if (
@@ -235,7 +241,7 @@ internal sealed class ZLinkChannelReceiveLoop(
             : ZLinkClientServerControlProtocol.EncodeReject(reason: 1);
         if (ReplyOwned(router, sourceRid, received.ReplyToken, reply) && accepted)
             await identity
-                .AdmitPeerAsync(sourceRid, negotiatedMaximumMessageBytes)
+                .AdmitPeerAsync(sourceRid, negotiatedMaximumMessageBytes, received.RouteGeneration)
                 .ConfigureAwait(false);
     }
 

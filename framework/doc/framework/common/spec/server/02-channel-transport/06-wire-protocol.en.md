@@ -373,7 +373,7 @@ owns physical pipe selection and replacement.
 
 Probe timing and ACK judgment are defined by [Transport liveness §3](05-transport-liveness.en.md#3-routemesh-and-clientserver).
 The probe, ACK, and timer are handled by the infrastructure reserve and are not delivered to the application queue or a handler.
-- **Probe and ACK ride the admitted physical connection's current epoch, and that epoch is stable for the connection's lifetime.** A `livenessProbe` and its `livenessAck` are addressed to the peer identity and connection generation that admission established (`scope: admitted-physical-connection-lifetime`). A redundant re-dial or a repeated `hello`/`admit` for a peer that is already admitted on a live physical connection is idempotent: it neither supersedes the admitted connection nor rotates its connection generation. Emitting a probe or ACK stamped with a superseded or not-yet-delivered generation — one the peer's live pipe does not recognize — is a defect; the peer silently drops it as "an ACK from a different connection," and neither side's deadline is refreshed. A new connection generation is minted only when Core's selected route changes to a new route generation ([Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination)), not on every inbound admission record for an already-admitted, unchanged descriptor.
+- **Probe and ACK ride the admitted physical connection's current epoch, and that epoch is stable for the connection's lifetime.** A `livenessProbe` and its `livenessAck` are addressed to the peer identity and connection generation that admission established (`scope: admitted-physical-connection-lifetime`). A redundant re-dial or a repeated `hello`/`admit` for a peer that is already admitted on a live physical connection is idempotent: it neither supersedes the admitted connection nor rotates its connection generation. Emitting a probe or ACK stamped with a superseded or not-yet-delivered generation — one the peer's live pipe does not recognize — is a defect; the peer silently discards it without recognizing it as a record of the current admitted connection. [Transport liveness §3](05-transport-liveness.en.md#3-routemesh-and-clientserver) defines its effect on the peer deadline. A new connection generation is minted only when Core's selected route changes to a new route generation ([Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination)), not on every inbound admission record for an already-admitted, unchanged descriptor.
 
 ### Classic Fanout Beacon
 
@@ -852,7 +852,7 @@ checked-in codec tables alone confirm the following.
 **Decode and Admission**
 - A record with an incomplete length, item count, UTF-8 validity, enum/flag value, or topology direction is rejected as a protocol error before application dispatch and never reaches the application.
 - An `update` with a lower `DescriptorRevision` within the same lifecycle, or with different bytes at the same revision, is rejected as a protocol error; resending the same revision with the same bytes leaves state unchanged (idempotent).
-- Inbound traffic other than probe/ACK does not extend the probe round-trip deadline.
+- [Transport liveness §3](05-transport-liveness.en.md#3-routemesh-and-clientserver) owns how the peer deadline is refreshed.
 
 **Relocation Transfer and CAS**
 - Connection-bound accepted work never ends up in a relocation envelope.

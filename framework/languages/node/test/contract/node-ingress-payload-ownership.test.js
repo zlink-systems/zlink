@@ -102,7 +102,6 @@ test('generic channel send writes one valid multipart application frame before s
   const target = descriptor('target-node', [{ name: 'orders', weight: 100 }]);
   raw.topology.admit(target, 'connection');
   raw.liveness.admit(target.nodeRoutingId, 'connection', 0);
-  raw.liveness.requestProbe(target.nodeRoutingId, 'connection', 0);
   const probe = raw.liveness.tick(0).probes[0];
   raw.liveness.acknowledge(target.nodeRoutingId, 'connection', probe.probeId, 0);
   const backend = new ZLinkNodeRawMeshBackend('payload-ownership', 'source-node', {});

@@ -628,6 +628,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
         using var admission = await ReceiveAsync(source);
+        await ReceiveAdmissionProbeAsync(source);
 
         var acceptedRequest = CreateRequest(
             correlation: 41,
@@ -1515,6 +1516,27 @@ public sealed class CanonicalActorJoinIngressReplyTests
         throw new TimeoutException("Route admission reply was not received.");
     }
 
+    // Transport liveness §3: a newly admitted raw peer answers its initial probe.
+    private static async Task ReceiveAdmissionProbeAsync(IDealerSocket source)
+    {
+        using var probe = await ReceiveAsync(source);
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeLiveness(
+                Assert.Single(probe.Parts).AsReadOnlyMemory().Span,
+                out var liveness,
+                out _
+            )
+        );
+        Assert.Equal(ServiceWireConstants.Command.LivenessProbe, liveness.Command);
+        using var ack = Message.From(
+            ZLinkServiceWireCodec.EncodeLiveness(
+                ServiceWireConstants.Command.LivenessAck,
+                liveness.ProbeId
+            )
+        );
+        await source.Send().Message(ack).Async(CancellationToken.None).Admitted;
+    }
+
     private static async Task<MonitorEvent> ReceiveMonitorEventAsync(
         ISocketMonitor monitor,
         MonitorEventType expected
@@ -1646,6 +1668,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             Source = replacement;
             await SendHelloAsync(replacement, SourceEndpoint);
             using var admission = await ReceiveAsync(replacement);
+            await ReceiveAdmissionProbeAsync(replacement);
         }
 
         internal async Task HandoverAsync(
@@ -1664,10 +1687,12 @@ public sealed class CanonicalActorJoinIngressReplyTests
             {
                 await SendHelloAsync(replacement, SourceEndpoint);
                 using var admission = await ReceiveAsync(replacement);
+                await ReceiveAdmissionProbeAsync(replacement);
             }
             else
             {
                 using var admission = await admitReplacement(replacement, SourceEndpoint);
+                await ReceiveAdmissionProbeAsync(replacement);
             }
             PriorSource = Source;
             Source = replacement;
@@ -1741,6 +1766,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
             await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
             using var admission = await ReceiveAsync(source);
+            await ReceiveAdmissionProbeAsync(source);
             return new ConnectedRuntime(
                 context,
                 target,

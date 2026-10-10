@@ -72,8 +72,10 @@ task_t<zlink::submit_result_t> raw_dealer_port_t::send_result (const raw_message
     }
 }
 
-task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t &parts,
-                                                             std::chrono::milliseconds timeout)
+task_t<raw_request_completion_t>
+raw_dealer_port_t::request (const raw_message_t &parts,
+                            std::chrono::milliseconds timeout,
+                            runtime::mesh::service_liveness_registry_t::connection_t admission)
 {
     if (parts.empty () || timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("raw dealer request requires parts and timeout");
@@ -104,7 +106,7 @@ task_t<raw_request_completion_t> raw_dealer_port_t::request (const raw_message_t
                                 error.internal_errno ()}};
     }
     const auto caller_deadline = stages->caller_deadline;
-    observe_request_completion (std::move (*stages), source);
+    observe_request_completion (std::move (*stages), source, std::move (admission));
     co_return co_await runtime::messaging::with_request_deadline (source->task (), caller_deadline);
 }
 

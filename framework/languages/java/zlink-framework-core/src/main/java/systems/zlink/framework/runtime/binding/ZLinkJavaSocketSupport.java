@@ -70,6 +70,11 @@ final class ZLinkJavaSocketSupport {
     }
 
     static CompletionStage<List<Message>> reply(RequestSubmission submission, long deadlineNanos) {
+        return reply(submission, deadlineNanos, null);
+    }
+
+    static CompletionStage<List<Message>> reply(
+            RequestSubmission submission, long deadlineNanos, Runnable admission) {
         SubmitResult submitResult = submission.result();
         CompletionStage<Void> admitted = admission(submitResult, submission::admitted);
         CompletionStage<List<Message>> bindingReply = submission.reply();
@@ -81,7 +86,10 @@ final class ZLinkJavaSocketSupport {
         bindingReply.whenComplete(
                 (parts, failure) -> {
                     if (failure != null) result.completeExceptionally(failure);
-                    else ZLinkCompletionBridge.completeOrDiscard(result, parts, Message::closeAll);
+                    else {
+                        if (admission != null) admission.run();
+                        ZLinkCompletionBridge.completeOrDiscard(result, parts, Message::closeAll);
+                    }
                 });
         ZLinkCompletionBridge.forwardCancellation(result, admitted, bindingReply);
         if (submitResult == SubmitResult.BACKPRESSURED && !result.isDone()) {
@@ -136,13 +144,19 @@ final class ZLinkJavaSocketSupport {
 
     static CompletionStage<ZLinkBackendReceived> submitRequest(
             RequestOperation operation, List<Message> parts, Duration timeout) {
+        return submitRequest(operation, parts, timeout, null);
+    }
+
+    static CompletionStage<ZLinkBackendReceived> submitRequest(
+            RequestOperation operation, List<Message> parts, Duration timeout, Runnable admission) {
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
         var submit = operation.message(parts.get(0)).timeout(timeout);
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
         try {
-            CompletionStage<List<Message>> bindingReply = reply(submit.submit(), deadlineNanos);
+            CompletionStage<List<Message>> bindingReply =
+                    reply(submit.submit(), deadlineNanos, admission);
             CompletableFuture<ZLinkBackendReceived> result = new CompletableFuture<>();
             bindingReply.whenComplete(
                     (replyParts, failure) -> {

@@ -68,11 +68,8 @@ final time an operation must finish is called a [deadline](../00-foundation/02-g
 - **The framework builder doesn't expose these two values, and different values can't be
   specified per channel, handler, or peer.** Making the value adjustable at all is itself a
   violation of the contract that all three connection methods use the same standard.
-- **Receiving a business message isn't used as a liveness signal.** The reason is
-  directional asymmetry — receiving messages from a peer doesn't show whether messages from
-  this node reach that peer. Using receive traffic alone for liveness would treat a
-  connection broken in one direction as normal. This is why a regular application message
-  doesn't extend a connection's deadline (§3).
+- **[§3](#3-routemesh-and-clientserver) owns what counts as evidence that a connection is alive
+  and the scope of break detection.**
 - **Elapsed time, deadlines, and retention are measured with the language runtime's
   single monotonic clock.** The wall clock is used only to render timestamps. Every judgment
   that asks "how much time has passed" — the connection check interval, the peer deadline,
@@ -120,21 +117,43 @@ applies.
 3. If the next cycle arrives while waiting for a response, resends the same ID instead of
    building a new one.
 4. The peer returns the received ID as-is in a `livenessAck`.
-5. Only the first ACK matching the ID the current connection is waiting for resets the
-   deadline to 15 seconds.
+5. The first ACK matching the ID the current connection is waiting for removes that ID.
 
-One connection keeps at most one ID still awaiting a response.
+In this section, the current admitted connection means the Application/Completion pair
+admitted on Core's current selected route for RouteMesh, or the current admitted single
+connection for ClientServer. Each such unit keeps one awaited probe ID and one peer deadline,
+with at most one ID still awaiting a response. Probes are still sent every 5 seconds while
+application traffic flows.
+
+**Every record received on the current admitted connection resets the deadline to 15
+seconds.** A record is a probe or ACK, a request, reply, or error reply, or a regular
+application message, and in RouteMesh a record received on either lane of the pair counts.
+The framework resets the deadline when it actually receives the record; a record left unread
+under receive-flow `PAUSED` doesn't reset it. So while application backpressure keeps one
+lane unread, other receipts that keep arriving prevent closing a healthy peer.
 
 | Input received | Effect on the current connection |
 |---|---|
 | The first ACK matching the awaited ID | Removes that ID and resets the deadline to 15 seconds. |
-| A duplicate receipt of the same ACK | Doesn't change state. |
-| An ACK for a previous probe ID | Doesn't change state. |
-| ACK from another physical connection | Not used as evidence for the current connection. |
-| A regular application message | Only updates the last-receive time for diagnostics — doesn't extend the deadline. |
+| A duplicate receipt of the same ACK, or an ACK for a previous probe ID | Leaves the awaited ID unchanged and resets the deadline to 15 seconds. |
+| A record from another admitted pair or single connection, or from a previous connection lifetime | Not used as evidence for the current connection. |
+| A request, reply, error reply, or regular application message | Resets the deadline to 15 seconds. |
 
-If a valid ACK isn't received within 15 seconds, that connection is switched to not-ready and
-closed.
+If no record is received on the current admitted connection for 15 seconds, that connection
+is switched to not-ready and closed. The detection scope is as follows.
+
+- If one direction fails and its receiving side receives no record through any other path
+  of the same admitted connection, that side closes the connection 15 seconds after its last
+  actual receipt. The peer changes state through the existing disconnect handling after Core
+  actually observes the transport termination, and that observation isn't guaranteed to
+  complete within the same 15 seconds.
+- In RouteMesh, a record received on either lane of the pair refreshes the deadline, so a
+  silent failure of one physical lane isn't guaranteed to be detected within 15 seconds while
+  records keep arriving on the other lane. A lane disconnect that Core detects follows the
+  pair termination rule in [ZMP §4.1](../../../../../../../core/doc/spec/core/protocol/01-zmp.en.md#41-request-reply-lane).
+- ClientServer has no separate Completion connection. If a `PAUSED` server actually receives
+  no record, the server closes the connection 15 seconds after its last receipt even if the
+  client is operating normally.
 
 Probe and ACK are internal signals the framework uses only to check connection status. They
 don't include business payload or metadata. They aren't put on the application queue or run
@@ -147,10 +166,10 @@ sequenceDiagram
 
     Note over A,B: Every 5 seconds, a new ID is built only when no ID is pending
     A->>B: livenessProbe(id)
-    alt First matching ACK within 15 seconds
-        B-->>A: livenessAck(id)
+    alt A record from B within 15 seconds (ACK, reply, or message)
+        B-->>A: livenessAck(id) or another record
         A->>A: [local] reset deadline to 15 seconds
-    else No matching ACK within 15 seconds
+    else No record from B within 15 seconds
         A->>A: [local] switch to not-ready, close connection
     end
 ```
@@ -398,14 +417,24 @@ contract test.
 
 **Bidirectional check**
 
-- RouteMesh/ClientServer sends a probe every 5 seconds with no application traffic. One
+- RouteMesh/ClientServer sends a probe every 5 seconds. One
   pending ID per connection — only the same ID is resent before an ACK.
-- Only the first ACK matching the current connection's current ID refreshes the deadline. A
-  duplicate/previous ID/an ACK from a different connection doesn't change state.
-- A half-open connection becomes not-ready within 15 seconds. Orderly close and transport
+- Only the first ACK matching the current connection's current ID removes the awaited ID.
+  Every record received on the current connection refreshes the deadline; a record from a
+  different connection doesn't. Probes are sent every 5 seconds even while application
+  traffic flows.
+- When every receive path of the current admitted connection is blocked, the connection
+  becomes not-ready and closes 15 seconds after the last receipt. Orderly close and transport
   error take effect immediately.
-- Probe and ACK aren't delivered to an application handler. Other inbound service frames
-  don't extend the peer deadline.
+- A duplicate or previous-ID ACK on the current connection refreshes the deadline and leaves
+  the awaited ID unchanged. A record from another peer or pair, or from a previous lifetime,
+  doesn't refresh the target deadline.
+- If a ClientServer server is `PAUSED` and actually receives no record, the server closes the
+  connection 15 seconds after its last receipt.
+- Probe and ACK aren't delivered to an application handler.
+- In RouteMesh, even while one node's Application connection is `PAUSED`, both nodes keep
+  the connection as long as that node receives replies on the pair's Completion connection,
+  the peer receives that node's requests, and each receive interval stays under 15 seconds.
 - RouteMesh uses two physical ROUTER-ROUTER lanes and ClientServer uses one
   physical DEALER-ROUTER lane, but probes and ACKs are observed as application
   records in both topologies and aren't delivered to handlers.

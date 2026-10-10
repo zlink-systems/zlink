@@ -289,20 +289,23 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         ServerRid: target.SelectionServerRid.ToString()
                     )
                 );
-            return await ZLinkRawRequestSubmitter
+            var reply = await ZLinkRawRequestSubmitter
                 .SubmitAsync(
                     parts,
                     (pending, nativeTimeout, token) =>
                         ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
                             target.Socket.Request().Messages(pending).Timeout(nativeTimeout),
                             nativeTimeout,
-                            token
+                            token,
+                            target.Liveness
                         ),
                     timeout - _time.GetElapsedTime(started),
                     $"ClientServer request failed for '{_channelName}': {{0}}.",
                     cancellationToken
                 )
                 .ConfigureAwait(false);
+            target.Liveness.RecordReceived(_time.GetTimestamp());
+            return reply;
         }
         catch (TimeoutException)
         {
@@ -703,7 +706,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         IDealerSocket Socket,
         uint AdmittedMaximumMessageBytes,
         RoutingId SelectionServerRid,
-        int Weight
+        int Weight,
+        ZLinkServiceLiveness Liveness
     );
 
     private IEnumerable<Connection> DistinctConnections() =>
@@ -839,9 +843,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private readonly Action<Connection, string> _onAdmitted;
         private readonly Action<bool> _onStateChanged;
         private ReadyTarget? _readyTarget;
-        private ulong _nextProbeId = 1;
-        private ulong? _outstandingProbeId;
-        private long _lastPeerActivity;
+        private ZLinkServiceLiveness? _liveness;
         private readonly TimeProvider _time;
         private readonly IZLinkRuntimeFailureReporter _errorSink;
         private long _livenessAckCount;
@@ -1428,7 +1430,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             admission.LifecycleGeneration
                         );
                         _admittedDescriptor = admission;
-                        _lastPeerActivity = _time.GetTimestamp();
+                        _liveness = new ZLinkServiceLiveness(_time.GetTimestamp(), _time);
+                        ProgressLivenessUnderState(_admissionStop.Token, out _);
                         _diagnostics = "ready";
                         using (ExecutionContext.SuppressFlow())
                         {
@@ -1489,6 +1492,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         continue;
                     if (!Socket.Recv(received, RecvFlags.DontWait))
                         continue;
+                    _liveness?.RecordReceived(_time.GetTimestamp());
                     if (
                         ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
                             received.Parts,
@@ -1551,39 +1555,58 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
         private async Task RunLivenessLoopAsync(CancellationToken cancellationToken)
         {
+            var delay = ZLinkServiceLiveness.ProbeInterval;
             while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(ZLinkServiceLiveness.ProbeInterval, _time, cancellationToken)
-                    .ConfigureAwait(false);
+                await Task.Delay(delay, _time, cancellationToken).ConfigureAwait(false);
                 var timedOut = RunState(() =>
-                {
-                    if (IsDisposing || CurrentAdmission is null)
-                        return false;
-                    if (_time.GetElapsedTime(_lastPeerActivity) >= ZLinkServiceLiveness.PeerTimeout)
-                        return true;
-
-                    _outstandingProbeId ??= AllocateProbeId();
-                    Task requestTask;
-                    using (ExecutionContext.SuppressFlow())
-                        requestTask = RequestLivenessProbeAsync(
-                            _outstandingProbeId.Value,
-                            _physicalGeneration,
-                            cancellationToken
-                        );
-                    _requestTasks.RemoveAll(static candidate =>
-                        candidate.IsCompletedSuccessfully || candidate.IsCanceled
-                    );
-                    _requestTasks.Add(requestTask);
-                    return false;
-                });
+                    ProgressLivenessUnderState(cancellationToken, out delay)
+                );
                 if (timedOut)
                     RestartAdmission("liveness:timeout");
             }
         }
 
+        private bool ProgressLivenessUnderState(
+            CancellationToken cancellationToken,
+            out TimeSpan delay
+        )
+        {
+            delay = ZLinkServiceLiveness.ProbeInterval;
+            if (IsDisposing || CurrentAdmission is null)
+            {
+                return false;
+            }
+            if (_liveness?.IsExpired(_time.GetTimestamp()) == true)
+                return true;
+
+            if (_liveness is null || !_liveness.TryGetProbe(_time.GetTimestamp(), out var probeId))
+            {
+                delay =
+                    _liveness?.TimeUntilNextActivity(_time.GetTimestamp())
+                    ?? ZLinkServiceLiveness.ProbeInterval;
+                return false;
+            }
+            Task requestTask;
+            using (ExecutionContext.SuppressFlow())
+                requestTask = RequestLivenessProbeAsync(
+                    probeId,
+                    _physicalGeneration,
+                    _liveness,
+                    cancellationToken
+                );
+            _requestTasks.RemoveAll(static candidate =>
+                candidate.IsCompletedSuccessfully || candidate.IsCanceled
+            );
+            _requestTasks.Add(requestTask);
+            delay = _liveness.TimeUntilNextActivity(_time.GetTimestamp());
+            return false;
+        }
+
         private async Task RequestLivenessProbeAsync(
             ulong probeId,
             ulong physicalGeneration,
+            ZLinkServiceLiveness admission,
             CancellationToken cancellationToken
         )
         {
@@ -1596,10 +1619,12 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 var request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
                     Socket.Request().Message(probe).Timeout(ZLinkServiceLiveness.PeerTimeout),
                     ZLinkServiceLiveness.PeerTimeout,
-                    cancellationToken
+                    cancellationToken,
+                    admission
                 );
                 Interlocked.Increment(ref _sentLivenessProbeCount);
                 reply = await request.ConfigureAwait(false);
+                admission.RecordReceived(_time.GetTimestamp());
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -1613,8 +1638,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             or ZlinkRequestException.ErrorCode.Terminated
                 )
             {
-                // Only a matching ACK supplies liveness evidence. The single
-                // periodic loop owns expiry when no evidence arrives.
+                // A failed native request supplies no received record.
                 return;
             }
             try
@@ -1635,11 +1659,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 if (
                     IsDisposing
                     || physicalGeneration is { } generation && _physicalGeneration != generation
-                    || _outstandingProbeId != ackId
+                    || _liveness?.Acknowledge(ackId, _time.GetTimestamp()) != true
                 )
                     return false;
-                _outstandingProbeId = null;
-                _lastPeerActivity = _time.GetTimestamp();
                 if (CurrentAdmission is { State: ZLinkFrameworkRuntimeState.Serving })
                     _ready = true;
                 PublishReadyTargetUnderLock();
@@ -1677,6 +1699,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             if (
                 current is not null
                 && ReferenceEquals(current.Socket, Socket)
+                && ReferenceEquals(current.Liveness, _liveness)
                 && current.AdmittedMaximumMessageBytes == maximumMessageBytes
                 && current.SelectionServerRid == serverRid
                 && current.Weight == _weight
@@ -1688,7 +1711,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
             Volatile.Write(
                 ref _readyTarget,
-                new ReadyTarget(Socket, maximumMessageBytes, serverRid, _weight)
+                new ReadyTarget(Socket, maximumMessageBytes, serverRid, _weight, _liveness!)
             );
             _onStateChanged(true);
         }
@@ -1706,7 +1729,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _admissionCompleted = false;
             _rejected = false;
             _ready = false;
-            _outstandingProbeId = null;
+            _liveness = null;
             _diagnostics = diagnostics;
             PublishReadyTargetUnderLock();
         }
@@ -1799,13 +1822,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             {
                 message.Dispose();
             }
-        }
-
-        private ulong AllocateProbeId()
-        {
-            var result = _nextProbeId;
-            _nextProbeId = result == long.MaxValue ? 1 : result + 1;
-            return result;
         }
 
         private T RunState<T>(Func<T> work) => AwaitStateLane(_lane.RunAsync(work));

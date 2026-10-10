@@ -336,8 +336,8 @@ configuration error다. Location과 Relocation capability를 함께 등록하는
 제공하지 않는다.
 
 `ApplicationVersion`은 `0..Long.MAX_VALUE` 범위의 배포 순번이다. 음수는 startup validation에서 거부한다.
-Application traffic과 무관한 5초 periodic probe와 같은 current connection의 matching ACK 15초 deadline은
-JVM service runtime의 고정 liveness profile이다. 다른 inbound frame은 [deadline](../../../00-foundation/02-glossary.ko.md#deadline)을 충족하지 않는다. 이 값을
+5초 periodic probe와 15초 peer [deadline](../../../00-foundation/02-glossary.ko.md#deadline)은 JVM service runtime의 고정 liveness
+profile이다. Deadline 갱신 규칙은 [Transport liveness §3](../../../02-channel-transport/05-transport-liveness.ko.md#3-routemesh와-clientserver)이 정한다. 이 값을
 Channel·handler·peer별 public option으로 노출하지 않는다. Location owner lease option은 별도 store 계약이며
 transport liveness를 대신하지 않는다.
 

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/mesh/service_liveness_registry.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include <zlink/framework/contracts/errors/result.hpp>
 
@@ -101,6 +102,7 @@ struct admitted_peer_t
     // use it only as an operation-local availability epoch; it is not a wire
     // generation or an ordering token.
     std::uint64_t admission_epoch = 0;
+    service_liveness_registry_t::connection_t liveness;
 };
 
 bool route_mesh_connection_not_required (const service_node_descriptor_t &local,
@@ -110,7 +112,8 @@ class service_topology_registry_t
 {
   public:
     explicit service_topology_registry_t (service_node_descriptor_t local,
-                                          std::vector<std::string> metric_channel_names = {});
+                                          std::vector<std::string> metric_channel_names = {},
+                                          service_liveness_registry_t *liveness_owner = nullptr);
 
     void publish_local (service_node_descriptor_t descriptor);
     std::vector<admitted_peer_t> publish_local_snapshot (service_node_descriptor_t descriptor);
@@ -123,17 +126,23 @@ class service_topology_registry_t
     void set_change_handler (std::function<void ()> handler);
 
     peer_admission_result_t admit (service_node_descriptor_t descriptor,
-                                   std::vector<std::uint8_t> connection_id);
+                                   std::vector<std::uint8_t> connection_id,
+                                   service_liveness_registry_t::clock_t::time_point now =
+                                     service_liveness_registry_t::clock_t::now ());
     peer_admission_result_t admit (service_node_descriptor_t descriptor,
                                    std::vector<std::uint8_t> connection_id,
-                                   const service_node_descriptor_t &expected_descriptor);
+                                   const service_node_descriptor_t &expected_descriptor,
+                                   service_liveness_registry_t::clock_t::time_point now =
+                                     service_liveness_registry_t::clock_t::now ());
     bool disconnect (const std::vector<std::uint8_t> &node_routing_id,
                      const std::vector<std::uint8_t> &connection_id);
 
     std::vector<admitted_peer_t> peers () const;
     std::vector<service_node_descriptor_t> not_required_peers () const;
     std::optional<admitted_peer_t> peer (const std::vector<std::uint8_t> &node_routing_id) const;
-    result_t<std::vector<std::uint8_t>> select (const std::string &channel_name);
+    result_t<std::vector<std::uint8_t>>
+    select (const std::string &channel_name,
+            service_liveness_registry_t::connection_t *admission = nullptr);
     std::vector<admitted_peer_t> multicast_targets (const std::string &channel_name) const;
     void observe_channel_metrics (opentelemetry::metrics::ObserverResult result, bool closed) const;
 
@@ -152,11 +161,13 @@ class service_topology_registry_t
                             const std::string &channel_name);
     peer_admission_result_t admit_impl (service_node_descriptor_t descriptor,
                                         std::vector<std::uint8_t> connection_id,
-                                        const service_node_descriptor_t *expected_descriptor);
+                                        const service_node_descriptor_t *expected_descriptor,
+                                        service_liveness_registry_t::clock_t::time_point now);
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
     service_node_descriptor_t _local;
+    service_liveness_registry_t *const _liveness_owner;
     std::map<std::vector<std::uint8_t>, admitted_peer_t, byte_vector_less_t> _peers;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, byte_vector_less_t>
       _not_required_peers;
@@ -166,7 +177,8 @@ class service_topology_registry_t
         std::uint64_t total_weight = 0;
         std::map<std::vector<std::uint8_t>, std::uint64_t, byte_vector_less_t> weights;
         std::map<std::vector<std::uint8_t>, std::int64_t, byte_vector_less_t> cumulative;
-        std::vector<std::vector<std::uint8_t>> ordered_node_ids;
+        std::vector<std::pair<std::vector<std::uint8_t>, service_liveness_registry_t::connection_t>>
+          ordered_node_ids;
         std::vector<std::uint64_t> ordered_weights;
         std::vector<std::int64_t> precomputed_initial_cumulative;
         std::vector<std::size_t> precomputed_schedule;

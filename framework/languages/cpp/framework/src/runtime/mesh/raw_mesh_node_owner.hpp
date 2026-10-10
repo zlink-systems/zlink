@@ -384,7 +384,8 @@ class raw_mesh_node_owner_t
                                     const std::optional<std::string> &channel_name,
                                     std::optional<std::uint64_t> correlation,
                                     bool target_claimed,
-                                    mesh_request_metric_t request_metric);
+                                    mesh_request_metric_t request_metric,
+                                    service_liveness_registry_t::connection_t admission = {});
     task_t<bool> send_with_header (const std::vector<std::uint8_t> &target_routing_id,
                                    std::vector<std::uint8_t> header,
                                    const protocol::application_payload_t &application_payload);
@@ -432,7 +433,8 @@ class raw_mesh_node_owner_t
                          foundation::operation_registry_t::callback_t callback,
                          std::optional<std::uint64_t> correlation = std::nullopt,
                          bool target_claimed = false,
-                         mesh_request_metric_t request_metric = {});
+                         mesh_request_metric_t request_metric = {},
+                         service_liveness_registry_t::connection_t admission = {});
     task_t<bool> request_infrastructure (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
@@ -473,8 +475,8 @@ class raw_mesh_node_owner_t
     application_job_queue_t::receive_flow_registration_t _receive_flow_registration;
     std::unique_ptr<zlink::poller_t> _ingress_poller;
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
-    service_topology_registry_t _topology;
     service_liveness_registry_t _liveness;
+    service_topology_registry_t _topology;
     service_mailbox_t _mailbox;
     std::shared_ptr<mesh_request_metrics_t> _request_metrics;
     struct peer_metric_registration_t

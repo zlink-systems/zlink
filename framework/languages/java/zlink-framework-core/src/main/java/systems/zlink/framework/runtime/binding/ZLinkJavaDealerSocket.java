@@ -14,6 +14,18 @@ import java.util.List;
 import java.util.concurrent.CompletionStage;
 
 final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJavaSocketBacked {
+    private volatile Runnable receiveAdmission;
+
+    @Override
+    public Runnable receiveAdmission() {
+        return receiveAdmission;
+    }
+
+    @Override
+    public void setReceiveAdmission(Runnable admission) {
+        receiveAdmission = admission;
+    }
+
     private final DealerSocket socket;
     private final ZLinkJavaSocketReceivePoller receivePoller;
 
@@ -70,9 +82,15 @@ final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJava
     }
 
     @Override
+    public CompletionStage<ZLinkBackendReceived> request(List<Message> parts, Duration timeout) {
+        return request(parts, timeout, receiveAdmission);
+    }
+
+    @Override
     public synchronized CompletionStage<ZLinkBackendReceived> request(
-            List<Message> parts, Duration timeout) {
-        return ZLinkJavaSocketSupport.submitRequest(socket.request(), parts, timeout);
+            List<Message> parts, Duration timeout, Runnable admission) {
+        return ZLinkJavaSocketSupport.submitRequest(
+                socket.request(), parts, timeout, receiveAdmission);
     }
 
     @Override

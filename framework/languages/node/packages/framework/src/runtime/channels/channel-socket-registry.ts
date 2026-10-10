@@ -41,6 +41,7 @@ import { ZLinkListenerRecords } from '../foundation/listener-records';
 import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
 import { ServiceDiscoveryRegistry } from '../foundation/service-discovery-registry';
 import {
+  ServiceLivenessConnection,
   DEFAULT_SERVICE_PEER_TIMEOUT_MS,
   DEFAULT_SERVICE_PROBE_INTERVAL_MS
 } from '../foundation/service-liveness-registry';
@@ -101,15 +102,20 @@ interface ClientServerPhysicalConnection {
   physicalConnectionId: symbol;
   readyConnectionId?: string;
   admittedDescriptor?: ClientServerDiscoveryDescriptor;
-  nextProbeAt?: number;
-  deadlineAt?: number;
-  outstandingProbeId?: bigint;
+  liveness?: ServiceLivenessConnection;
   admissionAttempt?: symbol;
 }
 
 export interface ZLinkFanoutConnectionCallbacks {
   readonly onReady: () => void;
   readonly onTerminated: (reason: 'disconnect' | 'deadline' | 'protocol') => void;
+}
+
+interface ClientServerServerPeer {
+  readonly channelName: string;
+  readonly routingId: RoutingId;
+  readonly normalizedEffectiveMaxMessageBytes: number;
+  readonly liveness: ServiceLivenessConnection;
 }
 
 interface FanoutPublisherConnection {
@@ -155,18 +161,9 @@ export class ZLinkChannelSocketRegistry {
   >();
   private readonly clientServerPublicWeights = new Map<string, number>();
   private readonly routeMeshPublicWeights = new Map<string, number>();
-  private readonly clientServerAdmittedClients = new Map<string, Set<RoutingId>>();
   private readonly clientServerServerPeers = new Map<
     string,
-    {
-      readonly channelName: string;
-      readonly routingId: RoutingId;
-      readonly physicalConnectionId: symbol;
-      readonly normalizedEffectiveMaxMessageBytes: number;
-      nextProbeAt: number;
-      deadlineAt: number;
-      outstandingProbeId?: bigint;
-    }
+    Map<RoutingId, ClientServerServerPeer>
   >();
   private readonly disposal = new RuntimeDisposal();
   private readonly ownedResources = new Set<
@@ -237,7 +234,7 @@ export class ZLinkChannelSocketRegistry {
     this.clientServerServerDescriptors.clear();
     this.clientServerPublicWeights.clear();
     this.routeMeshPublicWeights.clear();
-    this.clientServerAdmittedClients.clear();
+    for (const peers of this.clientServerServerPeers.values()) peers.clear();
     this.clientServerServerPeers.clear();
     this.clientServerMonitorHandlers.clear();
     this.fanoutMonitorHandlers.clear();
@@ -350,8 +347,7 @@ export class ZLinkChannelSocketRegistry {
         )
           return;
         const routingId = String(event.routingId);
-        this.clientServerServerPeers.delete(clientServerServerPeerKey(channelName, routingId));
-        this.clientServerAdmittedClients.get(channelName)?.delete(routingId);
+        this.clientServerServerPeers.get(channelName)?.delete(routingId);
       });
     }
     const endpoint = advertisedEndpoint(
@@ -623,9 +619,8 @@ export class ZLinkChannelSocketRegistry {
     const admitted = this.clientServerDiscovery.admitClientServer(descriptor, connectionId);
     if (admitted) {
       const now = performance.now();
-      connection.nextProbeAt = now + CLIENT_SERVER_PROBE_INTERVAL_MS;
-      connection.deadlineAt = now + CLIENT_SERVER_PEER_DEADLINE_MS;
-      connection.outstandingProbeId = undefined;
+      connection.liveness = new ServiceLivenessConnection(connectionId, now);
+      connection.dealer.receiveAdmission = connection.liveness;
       this.clientServerReadyIdentities.set(connectionId, {
         channelName: descriptor.channelName,
         serverRoutingId: descriptor.serverRoutingId,
@@ -653,9 +648,8 @@ export class ZLinkChannelSocketRegistry {
       const connection = this.clientServerConnections.get(connectionId);
       if (connection?.readyConnectionId === connectionId) {
         connection.readyConnectionId = undefined;
-        connection.deadlineAt = undefined;
-        connection.nextProbeAt = undefined;
-        connection.outstandingProbeId = undefined;
+        connection.liveness = undefined;
+        connection.dealer.receiveAdmission = undefined;
       }
     }
     this.notifyClientServerTopology(channelName);
@@ -898,6 +892,15 @@ export class ZLinkChannelSocketRegistry {
     for (const handler of this.clientServerMonitorHandlers.get(channelName) ?? []) handler();
   }
 
+  clientServerServerPeersForChannel(channelName: string): Map<RoutingId, ClientServerServerPeer> {
+    let peers = this.clientServerServerPeers.get(channelName);
+    if (peers === undefined) {
+      peers = new Map();
+      this.clientServerServerPeers.set(channelName, peers);
+    }
+    return peers;
+  }
+
   tryHandleClientServerControl(
     channelName: string,
     received: {
@@ -905,8 +908,11 @@ export class ZLinkChannelSocketRegistry {
       readonly replyToken: unknown | null;
       readonly routingId: unknown;
     },
-    router: ZLinkBackendRouterSocket
+    router: ZLinkBackendRouterSocket,
+    peers = this.clientServerServerPeersForChannel(channelName)
   ): boolean {
+    const peer = peers.get(received.routingId as RoutingId);
+    peer?.liveness.recordReceived();
     if (received.parts.length === 0) return false;
     const first = received.parts[0];
     if (!isClientServerControlFrame(first.data())) return false;
@@ -924,13 +930,7 @@ export class ZLinkChannelSocketRegistry {
         received.parts.length === 1 &&
         received.replyToken === null
       ) {
-        if (
-          !this.acceptClientServerServerLivenessAck(
-            channelName,
-            String(received.routingId),
-            record.probeId
-          )
-        ) {
+        if (!this.acceptClientServerServerLivenessAck(peer, record.probeId)) {
           this.reportStaleClientServerLivenessAck(
             channelName,
             String(received.routingId),
@@ -987,34 +987,32 @@ export class ZLinkChannelSocketRegistry {
         (connection.aliases.values().next().value as string | undefined);
       if (connectionId === undefined) continue;
       this.drainClientServerControl(connectionId, connection);
-      if (connection.deadlineAt === undefined) continue;
-      if (nowMs >= connection.deadlineAt) {
+      if (connection.liveness === undefined) continue;
+      if (connection.liveness.isExpired(nowMs)) {
         this.restartClientServerAdmission(connectionId, connection);
         continue;
       }
-      if (connection.nextProbeAt === undefined || nowMs < connection.nextProbeAt) continue;
-      connection.nextProbeAt = nowMs + CLIENT_SERVER_PROBE_INTERVAL_MS;
-      const probeId = connection.outstandingProbeId ?? this.allocateClientServerProbeId();
-      connection.outstandingProbeId = probeId;
+      const probeId = connection.liveness.tryGetProbe(nowMs, () =>
+        this.allocateClientServerProbeId()
+      );
+      if (probeId === undefined) continue;
       this.requestClientServerLiveness(connectionId, connection, probeId);
     }
 
-    for (const [key, peer] of [...this.clientServerServerPeers]) {
-      if (nowMs >= peer.deadlineAt) {
-        this.clientServerServerPeers.delete(key);
-        this.clientServerAdmittedClients.get(peer.channelName)?.delete(peer.routingId);
-        try {
-          this.channelRouters.get(peer.channelName)?.disconnectPeer(peer.routingId);
-        } catch (error) {
-          this.oneWayFailureSink?.(error);
+    for (const peers of this.clientServerServerPeers.values()) {
+      for (const [routingId, peer] of peers) {
+        if (peer.liveness.isExpired(nowMs)) {
+          peers.delete(routingId);
+          try {
+            this.channelRouters.get(peer.channelName)?.disconnectPeer(peer.routingId);
+          } catch (error) {
+            this.oneWayFailureSink?.(error);
+          }
+          continue;
         }
-        continue;
+        const probeId = peer.liveness.tryGetProbe(nowMs, () => this.allocateClientServerProbeId());
+        if (probeId !== undefined) this.requestClientServerServerLiveness(peer, probeId);
       }
-      if (nowMs < peer.nextProbeAt) continue;
-      peer.nextProbeAt = nowMs + CLIENT_SERVER_PROBE_INTERVAL_MS;
-      const probeId = peer.outstandingProbeId ?? this.allocateClientServerProbeId();
-      peer.outstandingProbeId = probeId;
-      this.requestClientServerServerLiveness(peer, probeId);
     }
     this.tickFanoutLiveness(nowMs);
   }
@@ -1376,6 +1374,7 @@ export class ZLinkChannelSocketRegistry {
     connectionId: string,
     connection: ClientServerPhysicalConnection
   ): void {
+    const admission = connection.liveness;
     for (;;) {
       if (connection.readablePoller === undefined || !connection.readablePoller.wait(0)) return;
       const received = connection.dealer.recv(1);
@@ -1383,6 +1382,7 @@ export class ZLinkChannelSocketRegistry {
         connection.readablePoller.markDrained();
         return;
       }
+      admission?.recordReceived();
       try {
         if (received.parts.length !== 1 || !isClientServerControlFrame(received.parts[0]!.data())) {
           throw new ZLinkConfigurationException(
@@ -1534,24 +1534,18 @@ export class ZLinkChannelSocketRegistry {
       if (connection.readyConnectionId === connectionId) {
         connection.readyConnectionId = undefined;
       }
-      connection.deadlineAt = undefined;
-      connection.nextProbeAt = undefined;
-      connection.outstandingProbeId = undefined;
+      connection.liveness = undefined;
+      connection.dealer.receiveAdmission = undefined;
     }
     this.notifyClientServerTopology(identity.channelName);
   }
 
   private requestClientServerLiveness(
     connectionId: string,
-    connection: {
-      readonly channelName: string;
-      readonly dealer: ZLinkBackendDealerSocket;
-      readonly physicalConnectionId: symbol;
-      outstandingProbeId?: bigint;
-      deadlineAt?: number;
-    },
+    connection: ClientServerPhysicalConnection,
     probeId: bigint
   ): void {
+    const admission = connection.liveness;
     const message = RuntimeMessage.from(encodeClientServerLivenessProbe(probeId));
     void connection.dealer
       .request(message, CLIENT_SERVER_PEER_DEADLINE_MS)
@@ -1561,12 +1555,16 @@ export class ZLinkChannelSocketRegistry {
           if (
             current === undefined ||
             current.physicalConnectionId !== connection.physicalConnectionId ||
+            current.liveness !== admission ||
             parts.length !== 1
           )
             return;
           const record = decodeClientServerControl(parts[0]!.data());
           if (record.kind !== 'livenessAck') return;
-          if (current.outstandingProbeId !== probeId || record.probeId !== probeId) {
+          if (
+            admission === undefined ||
+            !admission.acknowledge(record.probeId, performance.now())
+          ) {
             this.reportStaleClientServerLivenessAck(
               connection.channelName,
               connectionId,
@@ -1574,8 +1572,6 @@ export class ZLinkChannelSocketRegistry {
             );
             return;
           }
-          current.outstandingProbeId = undefined;
-          current.deadlineAt = performance.now() + CLIENT_SERVER_PEER_DEADLINE_MS;
         } finally {
           closeMessages(parts);
         }
@@ -1589,36 +1585,20 @@ export class ZLinkChannelSocketRegistry {
     routingId: RoutingId,
     normalizedEffectiveMaxMessageBytes: number
   ): void {
-    const key = clientServerServerPeerKey(channelName, routingId);
-    const now = performance.now();
-    const peer = {
+    const peer: ClientServerServerPeer = {
       channelName,
       routingId,
-      physicalConnectionId: Symbol(key),
       normalizedEffectiveMaxMessageBytes,
-      nextProbeAt: now + CLIENT_SERVER_PROBE_INTERVAL_MS,
-      deadlineAt: now + CLIENT_SERVER_PEER_DEADLINE_MS
+      liveness: new ServiceLivenessConnection(
+        clientServerServerPeerKey(channelName, routingId),
+        performance.now()
+      )
     };
-    this.clientServerServerPeers.set(key, peer);
-    let clients = this.clientServerAdmittedClients.get(channelName);
-    if (clients === undefined) {
-      clients = new Set();
-      this.clientServerAdmittedClients.set(channelName, clients);
-    }
-    clients.add(routingId);
+    this.clientServerServerPeersForChannel(channelName).set(routingId, peer);
     this.ensureClientServerLivenessTimer();
   }
 
-  private requestClientServerServerLiveness(
-    peer: {
-      readonly channelName: string;
-      readonly routingId: RoutingId;
-      readonly physicalConnectionId: symbol;
-      outstandingProbeId?: bigint;
-      deadlineAt: number;
-    },
-    probeId: bigint
-  ): void {
+  private requestClientServerServerLiveness(peer: ClientServerServerPeer, probeId: bigint): void {
     const router = this.channelRouters.get(peer.channelName);
     if (router === undefined) return;
     const message = RuntimeMessage.from(encodeClientServerLivenessProbe(probeId));
@@ -1629,17 +1609,10 @@ export class ZLinkChannelSocketRegistry {
   }
 
   private acceptClientServerServerLivenessAck(
-    channelName: string,
-    routingId: RoutingId,
+    peer: ClientServerServerPeer | undefined,
     probeId: bigint
   ): boolean {
-    const peer = this.clientServerServerPeers.get(
-      clientServerServerPeerKey(channelName, routingId)
-    );
-    if (peer === undefined || peer.outstandingProbeId !== probeId) return false;
-    peer.outstandingProbeId = undefined;
-    peer.deadlineAt = performance.now() + CLIENT_SERVER_PEER_DEADLINE_MS;
-    return true;
+    return peer?.liveness.acknowledge(probeId, performance.now()) ?? false;
   }
 
   private reportStaleClientServerLivenessAck(
@@ -1661,23 +1634,15 @@ export class ZLinkChannelSocketRegistry {
     descriptor: ZLinkClientServerServerDescriptor
   ): void {
     const router = this.channelRouters.get(channelName);
-    const clients = this.clientServerAdmittedClients.get(channelName);
-    if (router === undefined || clients === undefined) return;
-    for (const routingId of [...clients]) {
-      const peer = this.clientServerServerPeers.get(
-        clientServerServerPeerKey(channelName, routingId)
-      );
-      if (peer === undefined) {
-        clients.delete(routingId);
-        continue;
-      }
+    const peers = this.clientServerServerPeers.get(channelName);
+    if (router === undefined || peers === undefined) return;
+    for (const [routingId, peer] of peers) {
       const message = RuntimeMessage.from(
         encodeClientServerUpdate(descriptor, peer.normalizedEffectiveMaxMessageBytes)
       );
       void router
         .send(routingId, message)
         .catch((error) => {
-          clients.delete(routingId);
           this.oneWayFailureSink?.(error);
         })
         .finally(() => message.close());

@@ -362,20 +362,24 @@ FIN, RST와 정상 close는 15초 liveness deadline을 기다리지 않고 ready
   처리한다.
 - 세부 동작: [Transport liveness §5](../spec/server/02-channel-transport/05-transport-liveness.ko.md)을 검증한다.
 
-#### RL-E2 Half-open connection을 application traffic과 독립적으로 판정한다
+#### RL-E2 현재 connection의 무수신을 다른 connection의 traffic과 독립적으로 판정한다
 
 우선순위: `P0`
 
-한 방향 traffic이 계속 보여도 Framework의 liveness round trip이 실패하면 connection은 not-ready가 되어야
-한다.
+현재 admitted connection에서 record를 받지 못하는 쪽은 Transport liveness §3의 deadline 판정대로 그
+connection을 닫아야 하고, 다른 connection의 수신은 이 판정을 바꾸지 않아야 한다.
 
-**검증 질문:** Packet blackhole 뒤 15초 deadline에서 affected connection만 not-ready가 되는가.
+**검증 질문:** 현재 admitted connection에서 record를 받지 못하면 §3의 deadline 판정대로 해당 connection이
+종료되고, 다른 connection의 수신은 이 판정을 바꾸지 않는가.
 
-- 시작 조건: Two targets가 ready이고 fault proxy가 한 connection 방향을 차단할 수 있다.
-- 절차: A→B packet을 차단하고 B→A application traffic은 유지한다. Public status가 변할 때까지 fixed
-  liveness deadline과 tolerance로 기다린다.
-- 검증: Blocked connection만 not-ready이며 reverse application traffic이 deadline을 연장하지 않는다. 다른
-  target requests는 성공한다.
+- 시작 조건: Two targets가 ready이고 fault proxy가 한 connection의 방향별로 packet을 차단할 수 있다.
+- 절차: (a) 대상 connection의 모든 수신 경로를 차단하고 다른 target과의 traffic은 유지한다. (b) A→B
+  packet만 차단하고 B→A traffic은 유지한다. 각 경우 public status가 변할 때까지 fixed liveness deadline과
+  tolerance로 기다린다.
+- 검증: (a) 대상 connection만 not-ready가 되고 다른 target requests는 성공한다. (b)는 B→A 방향의 record와
+  transport 종료가 A까지 전달되고 A의 수신 처리가 계속되는 조건에서 시험한다. B의 무수신 deadline 종료와
+  A의 실제 disconnect 관찰을 구분해 확인하고, B→A 수신이 이어지는 동안 A의 deadline이 갱신되는지 본다.
+  판정 범위는 Transport liveness §3을 따른다.
 - 세부 동작: [Transport liveness §3](../spec/server/02-channel-transport/05-transport-liveness.ko.md)를
   검증한다.
 

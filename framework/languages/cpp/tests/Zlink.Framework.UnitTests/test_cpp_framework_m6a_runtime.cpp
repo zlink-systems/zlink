@@ -26,6 +26,9 @@
 #include <cerrno>
 #include <cstdint>
 #include <future>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -1121,8 +1124,131 @@ void verify_independent_mailbox_domains_and_claim_fence ()
     assert (saturated.release (*second));
 }
 
+void verify_liveness_shared_record_contract ()
+{
+    auto root = std::filesystem::path (__FILE__).parent_path ();
+    for (int depth = 0; depth < 4; ++depth)
+        root = root.parent_path ();
+    std::ifstream fixture (root / "test/fixtures/liveness-any-record.tsv");
+    assert (fixture.is_open ());
+    std::string row;
+    std::size_t count = 0;
+    while (std::getline (fixture, row)) {
+        if (row.empty () || row.front () == '#')
+            continue;
+        ++count;
+        std::string kind;
+        std::int64_t received_ms, alive_ms, expires_ms;
+        std::size_t expected_probes;
+        std::istringstream fields (row);
+        assert (fields >> kind >> received_ms >> alive_ms >> expires_ms >> expected_probes);
+        mesh::service_liveness_registry_t owner;
+        const auto start = mesh::service_liveness_registry_t::clock_t::time_point{};
+        const auto peer = bytes ("peer");
+        auto receipt = owner.admit (peer, bytes ("current"), start);
+        (void) owner.tick (start + 5s);
+        if (kind == "retired_connection")
+            owner.admit (peer, bytes ("replacement"), start + 6s);
+        else if (kind == "other_connection")
+            receipt = owner.admit (bytes ("other"), bytes ("other"), start);
+        if (kind == "previous_ack")
+            assert (!owner.acknowledge (peer, bytes ("current"), 2,
+                                        start + std::chrono::milliseconds (received_ms)));
+        else
+            receipt->record_received (start + std::chrono::milliseconds (received_ms));
+        const auto alive = owner.tick (start + std::chrono::milliseconds (alive_ms));
+        assert (std::find (alive.timed_out_nodes.begin (), alive.timed_out_nodes.end (), peer)
+                == alive.timed_out_nodes.end ());
+        assert (static_cast<std::size_t> (std::count_if (
+                  alive.probes.begin (), alive.probes.end (),
+                  [&peer] (const auto &probe) { return probe.node_routing_id == peer; }))
+                == expected_probes);
+        const auto expired = owner.tick (start + std::chrono::milliseconds (expires_ms));
+        assert (std::find (expired.timed_out_nodes.begin (), expired.timed_out_nodes.end (), peer)
+                != expired.timed_out_nodes.end ());
+    }
+    assert (count == 9);
+}
+
+void verify_completion_receipt_without_application_receive ()
+{
+    const auto context = std::make_shared<zlink::context_t> ();
+    mesh::raw_mesh_node_owner_t requester ({descriptor ("receipt-requester")}, context);
+    mesh::raw_mesh_node_owner_t replier ({descriptor ("receipt-replier")}, context);
+    requester.start ();
+    replier.start ();
+    const auto source = requester.topology ().local_descriptor ();
+    const auto target = replier.topology ().local_descriptor ();
+    replier.expect_peer (source);
+    assert (requester.connect_peer (replier.endpoint (), target));
+    const auto admission_deadline = std::chrono::steady_clock::now () + 5s;
+    while ((!requester.topology ().peer (target.node_routing_id)
+            || !replier.topology ().peer (source.node_routing_id))
+           && std::chrono::steady_clock::now () < admission_deadline) {
+        (void) requester.observe_routes ();
+        (void) replier.observe_routes ();
+        (void) await_task (requester.pump_one (std::chrono::steady_clock::now ()));
+        (void) await_task (replier.pump_one (std::chrono::steady_clock::now ()));
+        std::this_thread::yield ();
+    }
+    assert (requester.topology ().peer (target.node_routing_id));
+    assert (replier.topology ().peer (source.node_routing_id));
+    std::promise<foundation::operation_terminal_t> completion;
+    auto terminal = completion.get_future ();
+    const auto submitted_at = std::chrono::steady_clock::now ();
+    assert (await_task (requester.request_to_node (
+      target.node_routing_id, {"Question", "application/json", bytes ("request")}, 2s,
+      [&completion] (auto result, auto) { completion.set_value (result); })));
+    const auto reply_deadline = submitted_at + 2s;
+    while (terminal.wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < reply_deadline) {
+        (void) await_task (replier.pump_one (std::chrono::steady_clock::now ()));
+        auto claim =
+          replier.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
+        if (claim) {
+            assert (replier.reply (claim->records.front (),
+                                   {"Answer", "application/json", bytes ("reply")}));
+            assert (replier.mailbox ().release (*claim));
+        }
+        // No Application Job Queue permit: receive on this lane stays blocked.
+        assert (await_task (requester.pump_one (std::chrono::steady_clock::now (), false))
+                == mesh::raw_mesh_pump_result_t::no_data);
+        std::this_thread::yield ();
+    }
+    assert (terminal.wait_for (0ms) == std::future_status::ready);
+    assert (terminal.get () == foundation::operation_terminal_t::completed);
+    const auto received_by = std::chrono::steady_clock::now ();
+    assert (requester.liveness ().tick (submitted_at + 15s).timed_out_nodes.empty ());
+    assert (requester.liveness ().tick (received_by + 15s).timed_out_nodes
+            == std::vector<std::vector<std::uint8_t>>{target.node_routing_id});
+    requester.close ();
+    replier.close ();
+}
+
 void verify_liveness_reuses_probe_and_fences_reconnect ()
 {
+    {
+        // Transport liveness §3: admission immediately makes the first probe due.
+        mesh::service_liveness_registry_t owner;
+        const auto admitted = mesh::service_liveness_registry_t::clock_t::time_point{};
+        owner.admit (bytes ("initial-peer"), bytes ("initial-pair"), admitted);
+        assert (owner.tick (admitted).probes.size () == 1);
+        assert (owner.tick (admitted + 5s - 1ns).probes.empty ());
+        assert (owner.tick (admitted + 5s).probes.size () == 1);
+    }
+    {
+        mesh::service_liveness_registry_t owner;
+        const auto start = mesh::service_liveness_registry_t::clock_t::time_point{};
+        const auto peer = bytes ("peer");
+        const auto connection = bytes ("pair");
+        owner.admit (peer, connection, start);
+        const auto probe = owner.tick (start + 5s).probes.front ().probe_id;
+        assert (!owner.acknowledge (peer, connection, probe + 1, start + 14s));
+        assert (owner.tick (start + 15s).timed_out_nodes.empty ());
+        assert (owner.tick (start + 20s).probes.front ().probe_id == probe);
+        assert (owner.tick (start + 29s).timed_out_nodes
+                == std::vector<std::vector<std::uint8_t>>{peer});
+    }
     mesh::service_liveness_registry_t liveness (10ms, 30ms);
     const auto node = bytes ("peer");
     const auto first_connection = bytes ("connection-a");
@@ -3196,6 +3322,8 @@ int main (int argc, char **argv)
     verify_application_owner_drain_transitions ();
     verify_independent_mailbox_domains_and_claim_fence ();
     verify_liveness_reuses_probe_and_fences_reconnect ();
+    verify_liveness_shared_record_contract ();
+    verify_completion_receipt_without_application_receive ();
     verify_location_descriptor_cas_snapshot_and_watch ();
     verify_manual_and_automatic_classic_fanout ();
     verify_client_server_stale_admission_reply_is_discarded ();

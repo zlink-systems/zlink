@@ -1,4 +1,5 @@
 import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
+import type { ServiceLivenessConnection } from './service-liveness-registry';
 import {
   ZLINK_MAX_PUBLIC_WEIGHT,
   isValidCapacity,
@@ -43,7 +44,8 @@ export interface AdmittedServicePeer {
   readonly descriptor: ServiceNodeDescriptor;
   // The Core selected-route generation this admission belongs to (Core ROUTER
   // §10.1), as an opaque token compared only for equality.
-  readonly connectionId: string;
+  readonly connectionId: string | bigint;
+  readonly liveness?: ServiceLivenessConnection;
 }
 
 export interface ServicePeerAdmissionExpectation {
@@ -103,12 +105,14 @@ export class ServiceTopologyRegistry {
 
   admit(
     descriptor: ServiceNodeDescriptor,
-    connectionId: string,
-    expected?: ServicePeerAdmissionExpectation
+    connectionId: string | bigint,
+    expected?: ServicePeerAdmissionExpectation,
+    admitLiveness?: () => ServiceLivenessConnection
   ): PeerAdmissionResult {
     try {
       validateDescriptor(descriptor);
-      requireText(connectionId, 'connectionId');
+      if (typeof connectionId === 'string') requireText(connectionId, 'connectionId');
+      else if (connectionId === 0n) throw new TypeError('connectionId must be nonzero.');
     } catch (error) {
       return 'invalidDescriptor';
     }
@@ -154,14 +158,15 @@ export class ServiceTopologyRegistry {
     // that route replaces the admission of a route it replaced.
     this.peersByRid.set(descriptor.nodeRoutingId, {
       descriptor: cloneDescriptor(descriptor),
-      connectionId
+      connectionId,
+      liveness: admitLiveness?.() ?? current?.liveness
     });
     this.remember(descriptor);
     this.rebuildSelections();
     return 'admitted';
   }
 
-  disconnect(nodeRoutingId: string, connectionId: string): boolean {
+  disconnect(nodeRoutingId: string, connectionId: string | bigint): boolean {
     const current = this.peersByRid.get(nodeRoutingId);
     if (current === undefined || current.connectionId !== connectionId) return false;
     this.peersByRid.delete(nodeRoutingId);
@@ -525,7 +530,8 @@ function cloneDescriptor(descriptor: ServiceNodeDescriptor): ServiceNodeDescript
 function clonePeer(peer: AdmittedServicePeer): AdmittedServicePeer {
   return {
     descriptor: cloneDescriptor(peer.descriptor),
-    connectionId: peer.connectionId
+    connectionId: peer.connectionId,
+    liveness: peer.liveness
   };
 }
 

@@ -366,6 +366,23 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                 await SendHelloAsync(source, MeshName, $"inproc://{sourceOwner}");
                 await WaitUntilAsync(() => targetNode.MeshStatus().AdmittedPeerCount == 1);
                 using var admission = await ReceiveAsync(source);
+                // Transport liveness §3: a raw admitted peer answers the first probe.
+                using var probe = await ReceiveAsync(source);
+                Assert.True(
+                    ZLinkServiceWireCodec.TryDecodeLiveness(
+                        Assert.Single(probe.Parts).AsReadOnlyMemory().Span,
+                        out var liveness,
+                        out _
+                    )
+                );
+                Assert.Equal(ServiceWireConstants.Command.LivenessProbe, liveness.Command);
+                using var ack = Message.From(
+                    ZLinkServiceWireCodec.EncodeLiveness(
+                        ServiceWireConstants.Command.LivenessAck,
+                        liveness.ProbeId
+                    )
+                );
+                await source.Send().Message(ack).Async(CancellationToken.None).Admitted;
                 return new WireAdmissionFixture(
                     sourceContext,
                     source,

@@ -148,9 +148,8 @@ MeshName으로 node placement weight를, ChannelName으로 local Server의 `Weig
 서로 다른 selection에 적용한다. 각 topology가 제공하는 transport option은 startup 전에만 설정하며 runtime
 setter를 제공하지 않는다. RouteMesh SS에는 Framework-level `MaxMessageSize` option이 없다.
 
-Framework service liveness는 application traffic과 무관하게 5초마다 probe를 보내고 같은 current connection의
-matching ACK를 15초 안에 받아야 하는 profile로 고정한다. 다른 inbound frame은 ACK deadline을 충족하지
-않는다. 이 값을 바꾸는 C# public option은 제공하지 않으며 owner lease renew interval과 같은 설정으로
+Framework service liveness의 5초 probe와 15초 peer deadline은 고정값이다. Deadline 갱신 규칙은
+[Transport liveness §3](../../../02-channel-transport/05-transport-liveness.ko.md#3-routemesh와-clientserver)이 정한다. 이 값을 바꾸는 C# public option은 제공하지 않으며 owner lease renew interval과 같은 설정으로
 취급하지 않는다.
 
 [Logical Multicast](../../../00-foundation/02-glossary.ko.md#logical-multicast) publisher는 publish 전용 전달 정책 option을 제공하지 않는다. 각 remote target은

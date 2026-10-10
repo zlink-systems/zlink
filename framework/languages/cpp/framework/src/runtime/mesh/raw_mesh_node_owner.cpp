@@ -8,6 +8,8 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+
+#include <array>
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/dispatch/application_job_receive_flow.hpp"
 #include "runtime/dispatch/blocking_task.hpp"
@@ -127,15 +129,7 @@ std::string trace_owner_key (const void *owner)
 
 // Admission records keep the Core selected-route generation as their opaque
 // connection identity (Core ROUTER §10.1); only equality is meaningful.
-std::vector<std::uint8_t> route_connection_id (std::uint64_t value)
-{
-    std::vector<std::uint8_t> result (sizeof (value));
-    for (std::size_t index = 0; index < result.size (); ++index) {
-        const auto shift = static_cast<unsigned int> ((result.size () - index - 1) * 8);
-        result[index] = static_cast<std::uint8_t> ((value >> shift) & 0xffu);
-    }
-    return result;
-}
+using detail::backend::route_connection_id;
 
 bool application_command (protocol::command kind) noexcept
 {
@@ -442,7 +436,7 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
                                               std::shared_ptr<zlink::context_t> context) :
     _options (std::move (options)),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
-    _topology (_options.descriptor, _options.metric_channel_names),
+    _topology (_options.descriptor, _options.metric_channel_names, &_liveness),
     _mailbox (),
     _request_metrics (std::make_shared<mesh_request_metrics_t> (_options.descriptor.mesh_name)),
     _operations (std::make_shared<foundation::operation_registry_t> ())
@@ -527,6 +521,8 @@ void raw_mesh_node_owner_t::start ()
             *router, _socket_mutex,
             zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollroute,
             ingress_poller.get (), 1);
+          _port->set_request_receive_source (
+            [this] (const auto &target) { return _liveness.connection (target); });
           _ingress_poller = std::move (ingress_poller);
           _router = std::move (router);
           _receive_flow_registration = std::move (receive_flow_registration);
@@ -879,19 +875,11 @@ raw_mesh_node_owner_t::admit_peer (service_node_descriptor_t descriptor,
     return _lane
       .run ([this, descriptor = std::move (descriptor), connection_id = std::move (connection_id),
              now] () mutable {
-          peer_admission_result_t admitted;
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           if (!_router) {
               return peer_admission_result_t::invalid_descriptor;
           }
-          auto node_routing_id = descriptor.node_routing_id;
-          auto liveness_connection_id = connection_id;
-          admitted = _topology.admit (std::move (descriptor), std::move (connection_id));
-          if (admitted != peer_admission_result_t::admitted) {
-              return admitted;
-          }
-          _liveness.admit (std::move (node_routing_id), std::move (liveness_connection_id), now);
-          return admitted;
+          return _topology.admit (std::move (descriptor), std::move (connection_id), now);
       })
       .get ();
 }
@@ -932,13 +920,14 @@ task_t<bool> raw_mesh_node_owner_t::request_to_channel (
   std::optional<std::uint64_t> correlation)
 {
     mesh_request_metric_t request_metric (_request_metrics, mesh_request_surface_t::channel);
-    auto selected = _topology.select (channel_name);
+    service_liveness_registry_t::connection_t admission;
+    auto selected = _topology.select (channel_name, &admission);
     if (!selected) {
         throw *selected.error ();
     }
     co_return co_await request_to_target (std::move (selected.value ()), application_payload,
                                           timeout, std::move (callback), channel_name, correlation,
-                                          true, std::move (request_metric));
+                                          true, std::move (request_metric), std::move (admission));
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_to_target (
@@ -949,7 +938,8 @@ task_t<bool> raw_mesh_node_owner_t::request_to_target (
   const std::optional<std::string> &channel_name,
   std::optional<std::uint64_t> correlation,
   bool target_claimed,
-  mesh_request_metric_t request_metric)
+  mesh_request_metric_t request_metric,
+  service_liveness_registry_t::connection_t admission)
 {
     co_return co_await request_with_header (
       std::move (target_routing_id),
@@ -958,7 +948,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_target (
                               : protocol::encode_node_request_header (correlation);
       },
       application_payload, timeout, std::move (callback), correlation, target_claimed,
-      std::move (request_metric));
+      std::move (request_metric), std::move (admission));
 }
 
 task_t<bool> raw_mesh_node_owner_t::observe_request (
@@ -1084,13 +1074,18 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
   foundation::operation_registry_t::callback_t callback,
   std::optional<std::uint64_t> requested_correlation,
   bool target_claimed,
-  mesh_request_metric_t request_metric)
+  mesh_request_metric_t request_metric,
+  service_liveness_registry_t::connection_t admission)
 {
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("raw mesh request timeout must be positive");
     }
-    if (!target_claimed && !_topology.peer (target_routing_id))
-        co_return false;
+    if (!target_claimed) {
+        const auto peer = _topology.peer (target_routing_id);
+        if (!peer)
+            co_return false;
+        admission = peer->liveness;
+    }
     auto encoded_payload = protocol::encode_application_payload (application_payload);
     struct request_start_t
     {
@@ -1103,7 +1098,8 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
       _lane
         .run ([this, &header, &request_metric, requested_correlation, timeout,
                callback = std::move (callback), target_routing_id = std::move (target_routing_id),
-               encoded_payload = std::move (encoded_payload)] () mutable {
+               encoded_payload = std::move (encoded_payload),
+               admission = std::move (admission)] () mutable {
             std::shared_ptr<detail::backend::raw_route_port_t> port;
             {
                 std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -1128,7 +1124,8 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
                                 + " targetBytes=" + std::to_string (target_routing_id.size ()));
                     value.running =
                       std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-                        port->request (target_routing_id, std::move (wire), timeout));
+                        port->request (target_routing_id, std::move (wire), timeout,
+                                       std::move (admission)));
                 }
                 catch (...) {
                     (void) _operations->unregister (value.operation);
@@ -2706,14 +2703,11 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                         std::lock_guard lifecycle_lock (_lifecycle_mutex);
                         result = expectation.expected_descriptor
                                    ? _topology.admit (descriptor, connection_id,
-                                                      *expectation.expected_descriptor)
-                                   : _topology.admit (descriptor, connection_id);
+                                                      *expectation.expected_descriptor, now)
+                                   : _topology.admit (descriptor, connection_id, now);
                         trace_admission_phase (received->source_routing_id,
                                                descriptor.lifecycle_generation, header.kind,
                                                result);
-                        if (result == peer_admission_result_t::admitted) {
-                            _liveness.admit (descriptor.node_routing_id, connection_id, now);
-                        }
                     }
                     // The ADMIT carries the local descriptor read in this owner
                     // turn, ordered with every descriptor publication.
@@ -2779,6 +2773,10 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             co_return raw_mesh_pump_result_t::infrastructure;
         }
         const auto admitted = _topology.peer (received->source_routing_id);
+        if (admitted && admitted->liveness
+            && detail::backend::is_route_connection (admitted->connection_id,
+                                                     received->route_generation))
+            admitted->liveness->record_received (now);
         if (!admitted) {
             if (application_command (header.kind) && header.flags == 0
                 && received->parts.size () == 2) {
@@ -2818,12 +2816,14 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
             const auto record = protocol::decode_liveness (received->parts.front ());
+            std::array<std::uint8_t, sizeof (received->route_generation)> connection_id;
+            detail::backend::encode_route_connection_id (received->route_generation, connection_id);
             if (record.kind == protocol::command::livenessProbe) {
                 const auto ack =
                   _lane
-                    .run ([this, &received, &admitted, &record] {
-                        return _liveness.acknowledge_probe (
-                          received->source_routing_id, admitted->connection_id, record.probe_id);
+                    .run ([this, &received, &connection_id, &record] {
+                        return _liveness.acknowledge_probe (received->source_routing_id,
+                                                            connection_id, record.probe_id);
                     })
                     .get ();
                 if (!ack)
@@ -2835,9 +2835,9 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                     co_return raw_mesh_pump_result_t::protocol_error;
             } else {
                 (void) _lane
-                  .run ([this, &received, &admitted, &record, now] {
-                      return _liveness.acknowledge (received->source_routing_id,
-                                                    admitted->connection_id, record.probe_id, now);
+                  .run ([this, &received, &connection_id, &record, now] {
+                      return _liveness.acknowledge (received->source_routing_id, connection_id,
+                                                    record.probe_id, now);
                   })
                   .get ();
             }

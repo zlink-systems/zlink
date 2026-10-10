@@ -292,6 +292,7 @@ final class ZLinkJavaRawMeshNode
                         : MAX_INGRESS_WAIT_TIMEOUT;
         this.liveness =
                 new ZLinkServiceLivenessRegistry(livenessProbeInterval, livenessPeerTimeout);
+        this.port.setReceiveSource(liveness::connection);
     }
 
     @Override
@@ -1594,15 +1595,7 @@ final class ZLinkJavaRawMeshNode
         if (current == null) {
             return false;
         }
-        return current.peer(peerRoutingId)
-                .filter(
-                        peer ->
-                                peer.connectionId()
-                                        .equals(
-                                                admissionControlReadyConnections.get(
-                                                        peerRoutingId)))
-                .map(peer -> liveness.isReady(peerRoutingId, peer.connectionId()))
-                .orElse(false);
+        return current.peer(peerRoutingId).filter(this::isReadyPeer).isPresent();
     }
 
     private boolean isReadyPeer(PeerIntent intent) {
@@ -1624,8 +1617,7 @@ final class ZLinkJavaRawMeshNode
 
     private boolean isReadyPeer(ZLinkServiceTopologyRegistry.Peer peer) {
         RoutingId peerRoutingId = peer.descriptor().nodeRoutingId();
-        return peer.connectionId().equals(admissionControlReadyConnections.get(peerRoutingId))
-                && liveness.isReady(peerRoutingId, peer.connectionId());
+        return peer.connectionId().equals(admissionControlReadyConnections.get(peerRoutingId));
     }
 
     private void refreshChannelReadiness(RoutingId peerRoutingId) {
@@ -1851,16 +1843,14 @@ final class ZLinkJavaRawMeshNode
                         wire.encodeChannelSendHeader(selectedChannel, flags), metadata, parts);
         try {
             ZLinkServiceTopologyRegistry currentTopology = topology;
-            Optional<RoutingId> target =
+            Optional<ZLinkServiceTopologyRegistry.Peer> target =
                     currentTopology == null
                             ? Optional.empty()
-                            : currentTopology
-                                    .selectReadyChannel(
-                                            selectedChannel,
-                                            ZLinkRuntimeMetrics.enabled()
-                                                    ? selectionFailureObserver
-                                                    : null)
-                                    .map(peer -> peer.descriptor().nodeRoutingId());
+                            : currentTopology.selectReadyChannel(
+                                    selectedChannel,
+                                    ZLinkRuntimeMetrics.enabled()
+                                            ? selectionFailureObserver
+                                            : null);
             if (target.isEmpty()) {
                 if (currentTopology == null) {
                     recordChannelSelectionFailure(
@@ -1871,7 +1861,8 @@ final class ZLinkJavaRawMeshNode
                         ZLinkOneWayCalls.failureForStatus(
                                 unavailableChannelStatus(selectedChannel)));
             }
-            return port.sendMessages(router, target.orElseThrow(), frames);
+            return port.sendMessages(
+                    router, target.orElseThrow().descriptor().nodeRoutingId(), frames);
         } finally {
             Message.closeAll(frames);
         }
@@ -2061,16 +2052,14 @@ final class ZLinkJavaRawMeshNode
                         parts);
         try {
             ZLinkServiceTopologyRegistry currentTopology = topology;
-            Optional<RoutingId> target =
+            Optional<ZLinkServiceTopologyRegistry.Peer> target =
                     currentTopology == null
                             ? Optional.empty()
-                            : currentTopology
-                                    .selectReadyChannel(
-                                            selectedChannel,
-                                            ZLinkRuntimeMetrics.enabled()
-                                                    ? selectionFailureObserver
-                                                    : null)
-                                    .map(peer -> peer.descriptor().nodeRoutingId());
+                            : currentTopology.selectReadyChannel(
+                                    selectedChannel,
+                                    ZLinkRuntimeMetrics.enabled()
+                                            ? selectionFailureObserver
+                                            : null);
             if (target.isEmpty()) {
                 if (currentTopology == null) {
                     recordChannelSelectionFailure(
@@ -2083,12 +2072,13 @@ final class ZLinkJavaRawMeshNode
             }
             return request(
                     router,
-                    target.orElseThrow(),
+                    target.orElseThrow().descriptor().nodeRoutingId(),
                     frames,
                     timeout,
                     correlation,
                     operationOwner,
-                    operationId);
+                    operationId,
+                    target.orElseThrow().liveness());
         } finally {
             Message.closeAll(frames);
         }
@@ -2272,7 +2262,8 @@ final class ZLinkJavaRawMeshNode
                                                                 correlation,
                                                                 RequestResult.OK,
                                                                 replyFrames),
-                                                ZLinkBackendReceived::close),
+                                                ZLinkBackendReceived::close,
+                                                peer.orElseThrow().liveness()),
                                         failure ->
                                                 completeSpotRequest(
                                                         targetNodeRid,
@@ -4245,8 +4236,7 @@ final class ZLinkJavaRawMeshNode
             return new BoundSessionRouteStateSnapshot(null, null, false);
         }
         String admissionConnectionId = admissionControlReadyConnections.get(target);
-        return new BoundSessionRouteStateSnapshot(
-                peer, admissionConnectionId, liveness.isReady(target, peer.connectionId()));
+        return new BoundSessionRouteStateSnapshot(peer, admissionConnectionId, isReadyPeer(peer));
     }
 
     private void completeActorRequest(
@@ -4343,6 +4333,19 @@ final class ZLinkJavaRawMeshNode
             long correlation,
             ZLinkServiceOperationRegistry operationOwner,
             UUID operationId) {
+        return request(
+                router, target, frames, timeout, correlation, operationOwner, operationId, null);
+    }
+
+    private CompletionStage<ZLinkBackendReceived> request(
+            RouterSocket router,
+            RoutingId target,
+            List<Message> frames,
+            Duration timeout,
+            long correlation,
+            ZLinkServiceOperationRegistry operationOwner,
+            UUID operationId,
+            ZLinkServiceLivenessRegistry.PeerState admission) {
         return operationOwner.submit(
                 operationId,
                 timeout,
@@ -4359,7 +4362,8 @@ final class ZLinkJavaRawMeshNode
                                                         correlation,
                                                         RequestResult.OK,
                                                         replyFrames),
-                                        ZLinkBackendReceived::close),
+                                        ZLinkBackendReceived::close,
+                                        admission),
                                 failure ->
                                         decodeRequestReply(
                                                 target,
@@ -4603,19 +4607,15 @@ final class ZLinkJavaRawMeshNode
         return MAX_INGRESS_BATCH;
     }
 
-    private boolean hasCurrentInfrastructureControlSource(RoutingId source, int command) {
+    private boolean hasCurrentInfrastructureControlSource(
+            Optional<ZLinkServiceTopologyRegistry.Peer> source, int command) {
         if (command == ServiceWireConstants.COMMAND_HELLO
                 || command == ServiceWireConstants.COMMAND_ADMIT
                 || command == ServiceWireConstants.COMMAND_REJECT
                 || command == ServiceWireConstants.COMMAND_UPDATE) {
             return true;
         }
-        ZLinkServiceTopologyRegistry current = topology;
-        if (current == null) {
-            return false;
-        }
-        return current.peer(source)
-                .filter(
+        return source.filter(
                         peer ->
                                 // lifecycleGeneration is a non-zero opaque equality token
                                 // (spec 01-glossary "Lifecycle generation": ".NET 표기: ulong
@@ -4706,6 +4706,13 @@ final class ZLinkJavaRawMeshNode
     }
 
     private void dispatch(ZLinkJavaRawServicePort.Inbound inbound) {
+        var source = topology.peer(inbound.source());
+        if (source.isPresent()) {
+            var peer = source.get();
+            if (peer.liveness() != null
+                    && Long.parseUnsignedLong(peer.connectionId(), 16) == inbound.routeGeneration())
+                peer.liveness().recordReceived(System.nanoTime());
+        }
         boolean handedOff = false;
         try {
             List<byte[]> frames = inbound.frames();
@@ -4717,7 +4724,7 @@ final class ZLinkJavaRawMeshNode
             if (infrastructureCommand >= 0
                     && (allowedInfrastructureControlCommand(frames) != infrastructureCommand
                             || !hasCurrentInfrastructureControlSource(
-                                    inbound.source(), infrastructureCommand))) {
+                                    source, infrastructureCommand))) {
                 return;
             }
             ZLinkServiceM6AWireCodec.Header header;
@@ -4745,10 +4752,10 @@ final class ZLinkJavaRawMeshNode
             }
             if (command == ServiceWireConstants.COMMAND_LIVENESS_PROBE
                     || command == ServiceWireConstants.COMMAND_LIVENESS_ACK) {
-                dispatchLiveness(inbound, command);
+                dispatchLiveness(inbound, command, source.orElseThrow());
                 return;
             }
-            if (topology.peer(inbound.source()).isEmpty()) {
+            if (source.isEmpty()) {
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_MESSAGE_FOLLOW) {
@@ -6864,11 +6871,11 @@ final class ZLinkJavaRawMeshNode
                                     Collectors.toUnmodifiableMap(
                                             ZLinkServiceNodeDescriptor.Channel::name,
                                             ZLinkServiceNodeDescriptor.Channel::weight)));
-            liveness.admit(inbound.source(), connectionId, System.nanoTime());
-            liveness.requestProbe(inbound.source(), connectionId, System.nanoTime());
+            var receipt = liveness.admit(inbound.source(), connectionId, System.nanoTime());
+            topology.bindLiveness(inbound.source(), receipt);
+            receipt.recordReceived(System.nanoTime());
             if (command == ServiceWireConstants.COMMAND_ADMIT) {
-                admissionControlReadyConnections.put(inbound.source(), connectionId);
-                refreshChannelReadiness(inbound.source());
+                markAdmissionControlReady(inbound.source(), connectionId, command);
                 // HELLO and the host's SERVING transition can cross. In that
                 // race the peer admits the PREPARING descriptor carried by
                 // HELLO after markServiceReady already broadcast its update
@@ -6943,8 +6950,11 @@ final class ZLinkJavaRawMeshNode
                 || !connectionId.equals(admittedConnectionId(target))) {
             return;
         }
-        admissionControlReadyConnections.put(target, connectionId);
+        String previous = admissionControlReadyConnections.put(target, connectionId);
         refreshChannelReadiness(target);
+        if (!connectionId.equals(previous)) {
+            LOGGER.info("ZLINK_FRAMEWORK_PEER_READY mesh=" + meshName + " peer=" + target);
+        }
     }
 
     /** The route the peer is currently admitted on, or an empty string. */
@@ -6957,13 +6967,18 @@ final class ZLinkJavaRawMeshNode
                         .orElse("");
     }
 
-    private void dispatchLiveness(ZLinkJavaRawServicePort.Inbound inbound, int command) {
+    private void dispatchLiveness(
+            ZLinkJavaRawServicePort.Inbound inbound,
+            int command,
+            ZLinkServiceTopologyRegistry.Peer peer) {
         try {
             ZLinkServiceWireFrame record = new ZLinkServiceWireCodec().decode(inbound.frames());
             long probeId = ByteBuffer.wrap(record.frames().getFirst()).getLong();
-            ZLinkServiceTopologyRegistry.Peer peer = topology.peer(inbound.source()).orElseThrow();
             if (command == ServiceWireConstants.COMMAND_LIVENESS_PROBE) {
-                if (liveness.acknowledgeProbe(inbound.source(), peer.connectionId(), probeId)
+                if (liveness.acknowledgeProbe(
+                                inbound.source(),
+                                routeConnectionId(inbound.routeGeneration()),
+                                probeId)
                         .isPresent()) {
                     List<byte[]> acknowledgement =
                             encodeLiveness(ServiceWireConstants.COMMAND_LIVENESS_ACK, probeId);
@@ -6981,22 +6996,11 @@ final class ZLinkJavaRawMeshNode
                     }
                 }
             } else {
-                boolean wasReady = liveness.isReady(inbound.source(), peer.connectionId());
-                boolean acknowledged =
-                        liveness.acknowledge(
-                                inbound.source(), peer.connectionId(), probeId, System.nanoTime());
-                if (acknowledged) {
-                    refreshChannelReadiness(inbound.source());
-                }
-                if (acknowledged
-                        && !wasReady
-                        && liveness.isReady(inbound.source(), peer.connectionId())) {
-                    LOGGER.info(
-                            "ZLINK_FRAMEWORK_PEER_READY mesh="
-                                    + meshName
-                                    + " peer="
-                                    + inbound.source());
-                }
+                liveness.acknowledge(
+                        inbound.source(),
+                        routeConnectionId(inbound.routeGeneration()),
+                        probeId,
+                        System.nanoTime());
             }
         } catch (RuntimeException failure) {
         }

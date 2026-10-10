@@ -50,6 +50,8 @@ export function wrapSocket<T extends { close(): void }>(
       : new ZLinkNodeEventLoopPoller(nativeInstance as unknown as Socket, pollCompletion, () => {});
   const adapter = {
     nativeInstance,
+    receiveAdmission: undefined as
+      import('../../foundation/service-liveness-registry').ServiceLivenessConnection | undefined,
     async dispose(): Promise<void> {
       eventLoopPoller?.dispose();
       disableSocketLinger(nativeInstance);
@@ -219,7 +221,8 @@ export function wrapSocket<T extends { close(): void }>(
         return submitBindingRequest(
           (nativeInstance as T & { request(): ZLinkBindingRequestOperation }).request(),
           payload,
-          timeoutMs
+          timeoutMs,
+          adapter.receiveAdmission?.recordReceived
         );
       }
       throw new TypeError('Backend request requires a DEALER or ROUTER socket.');

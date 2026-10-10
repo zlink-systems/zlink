@@ -469,6 +469,17 @@ void verify_invalid_metadata_never_dispatches (const std::string &endpoint)
               bytes (admitted.value ().front ().to_string ()), protocol::command::admit)
               .channel_name
             == "metadata");
+    // Transport liveness §3: the admitted raw peer answers the initial probe.
+    source.options ().recv_timeout (5s);
+    zlink::received_t probe;
+    assert (source.recv (probe) == 0);
+    assert (probe.parts ().size () == 1);
+    const auto liveness = protocol::decode_liveness (bytes (probe.parts ().front ().to_string ()));
+    assert (liveness.kind == protocol::command::livenessProbe && liveness.probe_id != 0);
+    (void) source.send ()
+      .message (zlink::message_t::from (
+        protocol::encode_liveness (protocol::command::livenessAck, liveness.probe_id)))
+      .async ();
     const std::string valid =
       R"({"formatMarker":242,"kind":3,"channelName":"metadata","messageName":"metadata.send","contentType":"application/json","metadata":{"tenant-id":"tenant-42"}})";
     for (const auto &bad : invalid_metadata_headers ()) {

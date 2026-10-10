@@ -26,8 +26,10 @@ class raw_dealer_port_t
 
     task_t<bool> send (const raw_message_t &parts);
     task_t<zlink::submit_result_t> send_result (const raw_message_t &parts);
-    task_t<raw_request_completion_t> request (const raw_message_t &parts,
-                                              std::chrono::milliseconds timeout);
+    task_t<raw_request_completion_t>
+    request (const raw_message_t &parts,
+             std::chrono::milliseconds timeout,
+             runtime::mesh::service_liveness_registry_t::connection_t admission = {});
     std::optional<raw_message_t> try_receive ();
     void close ();
 

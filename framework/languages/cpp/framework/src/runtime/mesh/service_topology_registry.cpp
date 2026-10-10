@@ -101,8 +101,12 @@ bool discovery_expectation_matches (const service_node_descriptor_t &expected,
 } // namespace
 
 service_topology_registry_t::service_topology_registry_t (
-  service_node_descriptor_t local, std::vector<std::string> metric_channel_names) :
-    _local (std::move (local)), _metric_channel_names (std::move (metric_channel_names))
+  service_node_descriptor_t local,
+  std::vector<std::string> metric_channel_names,
+  service_liveness_registry_t *liveness_owner) :
+    _local (std::move (local)),
+    _liveness_owner (liveness_owner),
+    _metric_channel_names (std::move (metric_channel_names))
 {
     if (!valid_descriptor (_local)) {
         throw std::invalid_argument ("local service descriptor is invalid");
@@ -257,24 +261,29 @@ service_topology_registry_t::monitoring_snapshot_async () const
       [this] { return std::tuple{_local, peers_on_lane (), not_required_peers_on_lane ()}; });
 }
 
-peer_admission_result_t service_topology_registry_t::admit (service_node_descriptor_t descriptor,
-                                                            std::vector<std::uint8_t> connection_id)
+peer_admission_result_t
+service_topology_registry_t::admit (service_node_descriptor_t descriptor,
+                                    std::vector<std::uint8_t> connection_id,
+                                    service_liveness_registry_t::clock_t::time_point now)
 {
-    return admit_impl (std::move (descriptor), std::move (connection_id), nullptr);
+    return admit_impl (std::move (descriptor), std::move (connection_id), nullptr, now);
 }
 
 peer_admission_result_t
 service_topology_registry_t::admit (service_node_descriptor_t descriptor,
                                     std::vector<std::uint8_t> connection_id,
-                                    const service_node_descriptor_t &expected_descriptor)
+                                    const service_node_descriptor_t &expected_descriptor,
+                                    service_liveness_registry_t::clock_t::time_point now)
 {
-    return admit_impl (std::move (descriptor), std::move (connection_id), &expected_descriptor);
+    return admit_impl (std::move (descriptor), std::move (connection_id), &expected_descriptor,
+                       now);
 }
 
 peer_admission_result_t
 service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                                          std::vector<std::uint8_t> connection_id,
-                                         const service_node_descriptor_t *expected_descriptor)
+                                         const service_node_descriptor_t *expected_descriptor,
+                                         service_liveness_registry_t::clock_t::time_point now)
 {
     if (!valid_descriptor (descriptor) || connection_id.empty ()) {
         return peer_admission_result_t::invalid_descriptor;
@@ -330,6 +339,16 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                 return std::pair{peer_admission_result_t::not_required, _change_handler};
             }
 
+            service_liveness_registry_t::connection_t connection =
+              admitted != _peers.end () && admitted->second.connection_id == connection_id
+                ? admitted->second.liveness
+                : nullptr;
+            if (_liveness_owner) {
+                if (!connection)
+                    connection =
+                      _liveness_owner->admit (descriptor.node_routing_id, connection_id, now);
+                connection->record_received (now);
+            }
             if (admitted != _peers.end () && admitted->second.connection_id == connection_id
                 && admitted->second.descriptor == descriptor) {
                 return std::pair{peer_admission_result_t::duplicate_connection,
@@ -340,8 +359,8 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
             auto key = descriptor.node_routing_id;
             const auto admission_epoch = ++_topology_version;
             _peers.insert_or_assign (
-              std::move (key),
-              admitted_peer_t{std::move (descriptor), std::move (connection_id), admission_epoch});
+              std::move (key), admitted_peer_t{std::move (descriptor), std::move (connection_id),
+                                               admission_epoch, std::move (connection)});
             rebuild_channel_selections ();
             return std::pair{peer_admission_result_t::admitted, _change_handler};
         })
@@ -427,7 +446,7 @@ void service_topology_registry_t::materialize_selection_state (selection_state_t
     const auto total_selections = static_cast<std::int64_t> (state.precomputed_cursor);
     for (std::size_t index = 0; index < state.ordered_node_ids.size (); ++index) {
         const auto weight = static_cast<std::int64_t> (state.ordered_weights[index]);
-        state.cumulative[state.ordered_node_ids[index]] =
+        state.cumulative[state.ordered_node_ids[index].first] =
           state.precomputed_initial_cumulative[index] + total_selections * weight
           - static_cast<std::int64_t> (selected_counts[index])
               * static_cast<std::int64_t> (state.total_weight);
@@ -454,7 +473,7 @@ void service_topology_registry_t::rebuild_selection_schedule (selection_state_t 
     std::vector<std::int64_t> initial;
     initial.reserve (state.ordered_node_ids.size ());
     for (const auto &node_id : state.ordered_node_ids)
-        initial.push_back (state.cumulative[node_id]);
+        initial.push_back (state.cumulative[node_id.first]);
     const auto select_index = [&] (const std::vector<std::int64_t> &credits) {
         std::optional<std::size_t> selected;
         for (std::size_t index = 0; index < credits.size (); ++index) {
@@ -467,7 +486,8 @@ void service_topology_registry_t::rebuild_selection_schedule (selection_state_t 
                 || (candidate_credit
                       == credits[*selected]
                            + static_cast<std::int64_t> (state.ordered_weights[*selected])
-                    && state.ordered_node_ids[index] < state.ordered_node_ids[*selected])) {
+                    && state.ordered_node_ids[index].first
+                         < state.ordered_node_ids[*selected].first)) {
                 selected = index;
             }
         }
@@ -541,7 +561,7 @@ void service_topology_registry_t::rebuild_channel_selections ()
         state.ordered_node_ids.reserve (state.weights.size ());
         state.ordered_weights.reserve (state.weights.size ());
         for (const auto &[node_id, weight] : state.weights) {
-            state.ordered_node_ids.push_back (node_id);
+            state.ordered_node_ids.emplace_back (node_id, _peers.at (node_id).liveness);
             state.ordered_weights.push_back (weight);
         }
         rebuild_selection_schedule (state);
@@ -549,7 +569,8 @@ void service_topology_registry_t::rebuild_channel_selections ()
 }
 
 result_t<std::vector<std::uint8_t>>
-service_topology_registry_t::select (const std::string &channel_name)
+service_topology_registry_t::select (const std::string &channel_name,
+                                     service_liveness_registry_t::connection_t *admission)
 {
     if (channel_name.empty ()) {
         return result_t<std::vector<std::uint8_t>>::failure (
@@ -570,8 +591,10 @@ service_topology_registry_t::select (const std::string &channel_name)
               const auto selected_index = state.precomputed_schedule[state.precomputed_cursor++];
               if (state.precomputed_cursor == state.precomputed_schedule.size ())
                   state.precomputed_cursor = state.precomputed_cycle_start;
-              return result_t<std::vector<std::uint8_t>>::success (
-                state.ordered_node_ids[selected_index]);
+              const auto &target = state.ordered_node_ids[selected_index];
+              if (admission)
+                  *admission = target.second;
+              return result_t<std::vector<std::uint8_t>>::success (target.first);
           }
 
           const admitted_peer_t *selected = nullptr;
@@ -615,6 +638,8 @@ service_topology_registry_t::select (const std::string &channel_name)
 
           auto &selected_value = state.cumulative[selected->descriptor.node_routing_id];
           selected_value -= static_cast<std::int64_t> (state.total_weight);
+          if (admission)
+              *admission = selected->liveness;
           return result_t<std::vector<std::uint8_t>>::success (
             selected->descriptor.node_routing_id);
       })

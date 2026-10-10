@@ -373,10 +373,10 @@ helper, aren't provided.
 
 `ApplicationVersion` is a deployment sequence number in range
 `0..Long.MAX_VALUE`. A negative value is rejected in startup validation.
-The 5-second periodic probe independent of application traffic, and the
-15-second matching-ACK deadline on the same current connection, are the
-JVM service runtime's fixed liveness profile. A different inbound frame
-doesn't satisfy the [deadline](../../../00-foundation/02-glossary.en.md#deadline).
+The 5-second periodic probe and the 15-second peer
+[deadline](../../../00-foundation/02-glossary.en.md#deadline) are the JVM service runtime's
+fixed liveness profile. [Transport liveness §3](../../../02-channel-transport/05-transport-liveness.en.md#3-routemesh-and-clientserver) owns how the
+deadline is refreshed.
 This value isn't exposed as a public option per Channel/handler/peer.
 The Location owner lease option is a separate store contract and doesn't
 substitute for transport liveness.

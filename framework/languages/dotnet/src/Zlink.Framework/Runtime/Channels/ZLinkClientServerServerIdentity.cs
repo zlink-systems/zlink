@@ -20,7 +20,6 @@ internal sealed class ZLinkClientServerServerIdentity(
     private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<RoutingId, Peer> _peers = [];
     private ulong _revision = 1;
-    private ulong _nextProbeId = 1;
     private int _weight = weight;
     private int _servingWeight = weight;
     private ZLinkFrameworkRuntimeState _state = ZLinkFrameworkRuntimeState.Serving;
@@ -95,36 +94,57 @@ internal sealed class ZLinkClientServerServerIdentity(
             _peers.Clear();
         });
 
-    internal ValueTask AdmitPeerAsync(RoutingId routingId, uint normalizedEffectiveMaxMessageBytes)
+    internal ValueTask AdmitPeerAsync(
+        RoutingId routingId,
+        uint normalizedEffectiveMaxMessageBytes,
+        ulong connectionId
+    )
     {
-        var now = Stopwatch.GetElapsedTime(0);
+        var now = Stopwatch.GetTimestamp();
         return _lane.RunAsync(() =>
         {
+            var liveness =
+                _peers.TryGetValue(routingId, out var current)
+                && current.ConnectionId == connectionId
+                    ? current.Liveness
+                    : new ZLinkServiceLiveness(now);
+            liveness.RecordReceived(now);
             _peers[routingId] = new Peer(
                 routingId,
                 normalizedEffectiveMaxMessageBytes,
-                now + ZLinkServiceLiveness.ProbeInterval,
-                now + ZLinkServiceLiveness.PeerTimeout
+                liveness,
+                connectionId
             );
         });
     }
 
-    internal ValueTask<(bool Found, uint MaximumMessageBytes)> GetAdmittedMaximumMessageBytesAsync(
-        RoutingId routingId
+    internal ValueTask<(bool Found, uint MaximumMessageBytes)> ObserveReceivedRecordAsync(
+        RoutingId routingId,
+        ulong connectionId,
+        long receivedTimestamp
     ) =>
         _lane.RunAsync(() =>
-            _peers.TryGetValue(routingId, out var peer)
-                ? (true, peer.NormalizedEffectiveMaxMessageBytes)
-                : (false, 0u)
-        );
+        {
+            if (!_peers.TryGetValue(routingId, out var peer))
+                return (false, 0u);
+            if (peer.ConnectionId == connectionId)
+                peer.Liveness.RecordReceived(receivedTimestamp);
+            return (true, peer.NormalizedEffectiveMaxMessageBytes);
+        });
 
-    internal ValueTask AcceptLivenessAckAsync(RoutingId routingId, ulong probeId) =>
+    internal ValueTask AcceptLivenessAckAsync(
+        RoutingId routingId,
+        ulong connectionId,
+        ulong probeId
+    ) =>
         _lane.RunAsync(() =>
         {
-            if (!_peers.TryGetValue(routingId, out var peer) || peer.OutstandingProbeId != probeId)
+            if (
+                !_peers.TryGetValue(routingId, out var peer)
+                || peer.ConnectionId != connectionId
+                || !peer.Liveness.Acknowledge(probeId, Stopwatch.GetTimestamp())
+            )
                 return;
-            peer.OutstandingProbeId = null;
-            peer.Deadline = Stopwatch.GetElapsedTime(0) + ZLinkServiceLiveness.PeerTimeout;
             Interlocked.Increment(ref _livenessAckCount);
         });
 
@@ -139,7 +159,7 @@ internal sealed class ZLinkClientServerServerIdentity(
         CancellationToken cancellationToken
     )
     {
-        var now = Stopwatch.GetElapsedTime(0);
+        var now = Stopwatch.GetTimestamp();
         var (probes, expired) = await _lane
             .RunAsync(() => PrepareLivenessTick(now))
             .ConfigureAwait(false);
@@ -219,23 +239,20 @@ internal sealed class ZLinkClientServerServerIdentity(
     private (
         (RoutingId RoutingId, ulong ProbeId)[] Probes,
         RoutingId[] Expired
-    ) PrepareLivenessTick(TimeSpan now)
+    ) PrepareLivenessTick(long now)
     {
         List<(RoutingId RoutingId, ulong ProbeId)> probes = [];
         List<RoutingId> expired = [];
         foreach (var (key, peer) in _peers.ToArray())
         {
-            if (now >= peer.Deadline)
+            if (peer.Liveness.IsExpired(now))
             {
                 _peers.Remove(key);
                 expired.Add(peer.RoutingId);
                 continue;
             }
-            if (now < peer.NextProbe)
-                continue;
-            peer.NextProbe = now + ZLinkServiceLiveness.ProbeInterval;
-            peer.OutstandingProbeId ??= AllocateProbeId();
-            probes.Add((peer.RoutingId, peer.OutstandingProbeId.Value));
+            if (peer.Liveness.TryGetProbe(now, out var probeId))
+                probes.Add((peer.RoutingId, probeId));
         }
         return ([.. probes], [.. expired]);
     }
@@ -265,13 +282,6 @@ internal sealed class ZLinkClientServerServerIdentity(
             NormalizedEffectiveMaxMessageBytes,
             snapshot.AdvertisedEndpoint
         );
-
-    private ulong AllocateProbeId()
-    {
-        var result = _nextProbeId;
-        _nextProbeId = result == long.MaxValue ? 1 : result + 1;
-        return result;
-    }
 
     private static async ValueTask SendOwnedAsync(
         IRouterSocket router,
@@ -305,15 +315,14 @@ internal sealed class ZLinkClientServerServerIdentity(
     private sealed class Peer(
         RoutingId routingId,
         uint normalizedEffectiveMaxMessageBytes,
-        TimeSpan nextProbe,
-        TimeSpan deadline
+        ZLinkServiceLiveness liveness,
+        ulong connectionId
     )
     {
         internal RoutingId RoutingId { get; } = routingId;
         internal uint NormalizedEffectiveMaxMessageBytes { get; } =
             normalizedEffectiveMaxMessageBytes;
-        internal TimeSpan NextProbe { get; set; } = nextProbe;
-        internal TimeSpan Deadline { get; set; } = deadline;
-        internal ulong? OutstandingProbeId { get; set; }
+        internal ZLinkServiceLiveness Liveness { get; } = liveness;
+        internal ulong ConnectionId { get; } = connectionId;
     }
 }

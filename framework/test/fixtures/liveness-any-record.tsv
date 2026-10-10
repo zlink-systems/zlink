@@ -1,0 +1,10 @@
+# kind received_ms check_alive_ms expires_ms probe_count
+request	14000	15000	29000	1
+reply	14000	15000	29000	1
+error_reply	14000	15000	29000	1
+message	14000	15000	29000	1
+probe	14000	15000	29000	1
+previous_ack	14000	15000	29000	1
+completion_reply_application_paused	14000	15000	29000	1
+other_connection	14000	14999	15000	1
+retired_connection	20000	20999	21000	1

@@ -236,6 +236,9 @@ final class ZLinkChannelCallRuntimeTest {
                                     getClass().getClassLoader(),
                                     new Class<?>[] {ZLinkBackendDealerSocket.class},
                                     (proxy, method, args) -> {
+                                        // This unmanaged backend has no ClientServer admission.
+                                        if (method.getName().equals("receiveAdmission"))
+                                            return null;
                                         assertEquals("request", method.getName());
                                         assertSame(timeout, args[1]);
                                         attempts.incrementAndGet();

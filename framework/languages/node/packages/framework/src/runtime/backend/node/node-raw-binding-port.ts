@@ -283,7 +283,8 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
   async request(
     targetRid: string,
     parts: readonly Uint8Array[],
-    timeoutMs: number
+    timeoutMs: number,
+    recordReceived?: () => void
   ): Promise<readonly Buffer[]> {
     this.requireOpen();
     const deadlineMs = performance.now() + timeoutMs;
@@ -296,7 +297,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
       throw translateBindingResultError(error, 'submit');
     }
     try {
-      const replies = await bindingRequestReply(submission, deadlineMs);
+      const replies = await bindingRequestReply(submission, deadlineMs, recordReceived);
       return copyAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');

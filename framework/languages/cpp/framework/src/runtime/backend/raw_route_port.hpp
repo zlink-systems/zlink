@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
+#include <span>
+
 #include "runtime/messaging/submit_result_mapper.hpp"
+#include "runtime/mesh/service_liveness_registry.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -31,6 +34,31 @@ namespace zlink::framework::detail::backend
 using raw_bytes_t = std::vector<std::uint8_t>;
 using raw_message_t = std::vector<raw_bytes_t>;
 using raw_send_stage_trace_t = std::function<void (std::string_view, std::string_view)>;
+
+inline void encode_route_connection_id (std::uint64_t value, std::span<std::uint8_t> result)
+{
+    for (std::size_t index = 0; index < result.size (); ++index) {
+        const auto shift = static_cast<unsigned int> ((result.size () - index - 1) * 8);
+        result[index] = static_cast<std::uint8_t> ((value >> shift) & 0xffu);
+    }
+}
+
+inline raw_bytes_t route_connection_id (std::uint64_t value)
+{
+    raw_bytes_t result (sizeof (value));
+    encode_route_connection_id (value, result);
+    return result;
+}
+
+inline bool is_route_connection (const raw_bytes_t &identity, std::uint64_t generation) noexcept
+{
+    if (identity.size () != sizeof (generation))
+        return false;
+    std::uint64_t value = 0;
+    for (const auto byte : identity)
+        value = (value << 8) | byte;
+    return value == generation;
+}
 
 struct raw_received_t
 {
@@ -95,9 +123,17 @@ class raw_route_port_t
                                                 raw_message_t parts,
                                                 raw_send_stage_trace_t trace = {});
     task_t<bool> send (const raw_bytes_t &target_routing_id, raw_message_t parts);
-    task_t<raw_request_completion_t> request (const raw_bytes_t &target_routing_id,
-                                              raw_message_t parts,
-                                              std::chrono::milliseconds timeout);
+    void set_request_receive_source (
+      std::function<runtime::mesh::service_liveness_registry_t::connection_t (const raw_bytes_t &)>
+        source)
+    {
+        _request_receive_source = std::move (source);
+    }
+    task_t<raw_request_completion_t>
+    request (const raw_bytes_t &target_routing_id,
+             raw_message_t parts,
+             std::chrono::milliseconds timeout,
+             runtime::mesh::service_liveness_registry_t::connection_t admission = {});
     zlink::poll_event_flag_t poll (std::chrono::milliseconds timeout,
                                    bool accept_application_receive = true);
     void signal_activity () noexcept;
@@ -107,6 +143,8 @@ class raw_route_port_t
     void close ();
 
   private:
+    std::function<runtime::mesh::service_liveness_registry_t::connection_t (const raw_bytes_t &)>
+      _request_receive_source;
     std::unique_ptr<zlink::poller_t> _owned_poller;
     zlink::poller_t *_poller;
     std::uintptr_t _poller_slot;

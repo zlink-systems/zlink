@@ -427,8 +427,7 @@ export class RawServiceMeshRuntime {
     return (
       peer !== undefined &&
       (lifecycleGeneration === undefined ||
-        peer.descriptor.lifecycleGeneration === lifecycleGeneration) &&
-      this.liveness.isReady(nodeRoutingId, peer.connectionId)
+        peer.descriptor.lifecycleGeneration === lifecycleGeneration)
     );
   }
 
@@ -588,7 +587,13 @@ export class RawServiceMeshRuntime {
     parts: readonly Uint8Array[],
     timeoutMs: number
   ): Promise<readonly Buffer[]> {
-    return this.requireStarted().request(targetNodeRoutingId, parts, timeoutMs);
+    const admission = this.topology.peer(targetNodeRoutingId)?.liveness;
+    return this.requireStarted().request(
+      targetNodeRoutingId,
+      parts,
+      timeoutMs,
+      admission?.recordReceived
+    );
   }
 
   replyService(
@@ -845,12 +850,7 @@ export class RawServiceMeshRuntime {
           ]);
           return 'infrastructure';
         }
-        const result = this.admitPeer(
-          descriptor,
-          routeConnectionId(received.routeGeneration),
-          nowMs,
-          expected
-        );
+        const result = this.admitPeer(descriptor, received.routeGeneration, nowMs, expected);
         if (result !== 'admitted' && result !== 'notRequired') {
           const detail =
             result === 'invalidDescriptor'
@@ -887,6 +887,8 @@ export class RawServiceMeshRuntime {
       }
       const peer = this.topology.peer(received.sourceRid);
       if (peer === undefined) return 'protocolError';
+      if (peer.liveness !== undefined && peer.liveness.connectionId === received.routeGeneration)
+        this.liveness.recordReceived(peer.liveness, nowMs);
       if (
         header.command === M6aServiceWireCommand.livenessProbe ||
         header.command === M6aServiceWireCommand.livenessAck
@@ -896,7 +898,7 @@ export class RawServiceMeshRuntime {
         if (record.command === M6aServiceWireCommand.livenessProbe) {
           const ack = this.liveness.acknowledgeProbe(
             received.sourceRid,
-            peer.connectionId,
+            received.routeGeneration,
             record.probeId
           );
           if (ack === undefined) return 'protocolError';
@@ -908,7 +910,12 @@ export class RawServiceMeshRuntime {
           ]);
           if (!sent) return 'dropped';
         } else {
-          this.liveness.acknowledge(received.sourceRid, peer.connectionId, record.probeId, nowMs);
+          this.liveness.acknowledge(
+            received.sourceRid,
+            received.routeGeneration,
+            record.probeId,
+            nowMs
+          );
         }
         return 'infrastructure';
       }
@@ -1061,7 +1068,7 @@ export class RawServiceMeshRuntime {
       const expected = this.expectedPeers.get(nodeRoutingId);
       if (expected !== undefined) delete expected.helloSubmittedGeneration;
       const peer = this.topology.peer(nodeRoutingId);
-      if (peer !== undefined && peer.connectionId === routeConnectionId(generation)) {
+      if (peer?.liveness?.connectionId === generation) {
         this.removePeer(peer);
       }
     }
@@ -1181,7 +1188,8 @@ export class RawServiceMeshRuntime {
       })().catch((error) => this.operations.fail(pending.id, error));
       return pending;
     }
-    if (this.topology.peer(selectedTargetNodeRoutingId) === undefined) {
+    const selectedPeer = this.topology.peer(selectedTargetNodeRoutingId);
+    if (selectedPeer === undefined) {
       // Logical target selection is the requester's decision: an RID that is
       // not an admitted peer is not a target. Whether an admitted target's
       // route can carry the request is Core's REQUEST result.
@@ -1192,11 +1200,14 @@ export class RawServiceMeshRuntime {
       return pending;
     }
     const parts = [header, encodedPayload];
-    let router: ZLinkRawRouterPort;
     let request: Promise<readonly Uint8Array[]>;
     try {
-      router = this.requireStarted();
-      request = router.request(selectedTargetNodeRoutingId, parts, timeoutMs);
+      request = this.requireStarted().request(
+        selectedTargetNodeRoutingId,
+        parts,
+        timeoutMs,
+        selectedPeer.liveness?.recordReceived
+      );
     } catch (error) {
       this.operations.fail(pending.id, error);
       return pending;
@@ -1256,7 +1267,7 @@ export class RawServiceMeshRuntime {
 
   private admitPeer(
     descriptor: ServiceNodeDescriptor,
-    connectionId: string,
+    connectionId: string | bigint,
     nowMs: number,
     expected?: {
       readonly endpoint?: string;
@@ -1276,12 +1287,18 @@ export class RawServiceMeshRuntime {
         `RouteMesh peer '${descriptor.nodeRoutingId}' descriptor revision is stale or conflicting.`
       );
     }
-    const result = this.topology.admit(descriptor, connectionId, expected);
-    if (result === 'admitted') {
-      this.liveness.admit(descriptor.nodeRoutingId, connectionId, nowMs);
-      this.liveness.requestProbe(descriptor.nodeRoutingId, connectionId, nowMs);
-    } else if (result === 'notRequired' && previous !== undefined) {
-      this.liveness.disconnect(descriptor.nodeRoutingId, previous.connectionId);
+    const topologyConnectionId =
+      typeof connectionId === 'bigint' ? `route:${connectionId}` : connectionId;
+    const result = this.topology.admit(descriptor, topologyConnectionId, expected, () => {
+      const admission = this.liveness.admit(descriptor.nodeRoutingId, connectionId, nowMs);
+      this.liveness.recordReceived(admission, nowMs);
+      return admission;
+    });
+    if (result === 'notRequired' && previous !== undefined) {
+      this.liveness.disconnect(
+        descriptor.nodeRoutingId,
+        previous.liveness?.connectionId ?? previous.connectionId
+      );
     }
     return result;
   }
@@ -1318,7 +1335,10 @@ export class RawServiceMeshRuntime {
 
   private removePeer(peer: AdmittedServicePeer): void {
     this.topology.disconnect(peer.descriptor.nodeRoutingId, peer.connectionId);
-    this.liveness.disconnect(peer.descriptor.nodeRoutingId, peer.connectionId);
+    this.liveness.disconnect(
+      peer.descriptor.nodeRoutingId,
+      peer.liveness?.connectionId ?? peer.connectionId
+    );
     this.onPeerDisconnected?.(
       peer.descriptor.nodeRoutingId,
       peer.descriptor.advertisedEndpoint,
@@ -1492,14 +1512,6 @@ function isAlreadyDisconnectedError(error: unknown): boolean {
     return false;
   }
   return (error as { readonly nativeErrno?: unknown }).nativeErrno === nativeErrnoValues.ENOENT;
-}
-
-/**
- * An admission belongs to one Core selected route. Its connection identity is
- * that route's generation, an opaque token compared only for equality.
- */
-function routeConnectionId(routeGeneration: bigint): string {
-  return `route:${routeGeneration.toString()}`;
 }
 
 function describeInvalidAdmissionDescriptor(

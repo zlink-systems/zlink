@@ -72,6 +72,8 @@ struct received_application_record_t
 {
     mesh::service_mailbox_record_t record;
     std::shared_ptr<application_job_queue_t::permit_t> permit;
+    mesh::service_liveness_registry_t::clock_t::time_point received_at;
+    std::uint64_t route_generation = 0;
 };
 
 struct raw_client_server_server_options_t
@@ -128,7 +130,8 @@ class raw_client_server_server_t
       detail::backend::raw_received_t received,
       messaging::envelope_header_t envelope,
       std::shared_ptr<application_job_queue_t::permit_t> application_permit,
-      std::vector<received_application_record_t> *application_records);
+      std::vector<received_application_record_t> *application_records,
+      mesh::service_liveness_registry_t::clock_t::time_point received_at);
 
   public:
   private:
@@ -154,7 +157,10 @@ class raw_client_server_server_t
     mesh::service_liveness_registry_t _liveness;
     // The route id is the stable identity available from the public monitor
     // surface; monitor event values are ready counts or disconnect reasons.
-    std::map<std::vector<std::uint8_t>, std::vector<std::uint8_t>, byte_vector_less_t> _connections;
+    std::map<std::vector<std::uint8_t>,
+             mesh::service_liveness_registry_t::connection_t,
+             byte_vector_less_t>
+      _connections;
     bool _closed = false;
     bool _descriptor_update_pending = false;
 };
@@ -239,6 +245,7 @@ class raw_client_server_client_t
     std::atomic_size_t _pending_requests{0};
     mesh::service_liveness_registry_t _liveness;
     std::vector<std::uint8_t> _connection_id;
+    mesh::service_liveness_registry_t::connection_t _liveness_connection;
     /* Bumped on every physical connection ready/terminate; fences parked
      * control-reply completions from a previous physical pair. */
     std::uint64_t _connection_generation = 0;

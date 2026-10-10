@@ -327,6 +327,18 @@ final class ZLinkChannelSubmissionContractTest {
     }
 
     private static class NoReplyDealer implements ZLinkBackendDealerSocket {
+        private volatile Runnable receiveAdmission;
+
+        @Override
+        public Runnable receiveAdmission() {
+            return receiveAdmission;
+        }
+
+        @Override
+        public void setReceiveAdmission(Runnable admission) {
+            receiveAdmission = admission;
+        }
+
         @Override
         public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
 
