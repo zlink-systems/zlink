@@ -3447,246 +3447,362 @@ assert.equal(spotClose.fixture, 'zlink.framework.spot-close');
 assert.equal(spotClose.version, 1);
 function validateSpotCloseBranches(fixture) {
   assert.deepEqual(fixture.closeSteps, [
-    'closeItemStarted', 'closingCommitted', 'onClosing', 'localResourcesReleased'
+    'closeItemStarted',
+    'closingCommitted',
+    'onClosing',
+    'localResourcesReleased'
   ]);
   assert.equal(fixture.invariants.unexecutedTimersCancelled, true);
   assert.equal(fixture.invariants.oldIncarnationPendingHandlerCalls, 0);
   assert.equal(fixture.invariants.messageTerminalsPerRequest, 1);
-  const expectedBranches = [
+  // Spot address messaging §7 owns Close; §9 owns the Closing refusal.
+  // Validate closed inputs, then derive outcomes without a second expected-result table.
+  for (const scenario of [
+    ...fixture.closeBranches,
+    ...fixture.readyRouteCases
+  ]) {
+    assert.deepEqual(Object.keys(scenario).sort(), ['expect', 'given', 'name']);
+  }
+  const closeInputs = [
     {
-      "name": "reincarnate-pending-intent",
-      "given": {
-        "host": "Serving",
-        "pendingIntent": true
-      },
-      "expect": {
-        "order": [
-          "authorityReincarnated",
-          "newIncarnationInitialized",
-          "storedStateRestored",
-          "pendingIntentMessagesExecuted"
-        ],
-        "authority": "Ready",
-        "objectGeneration": "storeIssuedDifferent",
-        "authorityOwnerGeneration": "storeIssuedDifferent",
-        "owner": "unchanged",
-        "lease": "unchanged",
-        "capacity": "unchanged",
-        "oldHandlerCalls": 0,
-        "newHandlerCalls": 1,
-        "messageTerminal": "reply",
-        "messageTerminalCount": 1
+      name: 'reincarnate-pending-intent',
+      given: {
+        host: 'Serving',
+        pendingIntent: true
       }
     },
     {
-      "name": "release-without-pending-intent",
-      "given": {
-        "host": "Serving",
-        "pendingIntent": false
-      },
-      "expect": {
-        "order": [
-          "authorityReleased"
-        ],
-        "authority": "Missing",
-        "oldHandlerCalls": 0,
-        "newHandlerCalls": 0,
-        "factoryCalls": 0
+      name: 'release-without-pending-intent',
+      given: {
+        host: 'Serving',
+        pendingIntent: false
       }
     },
     {
-      "name": "release-during-host-drain-or-relocation",
-      "given": {
-        "host": [
-          "Draining",
-          "Relocating"
-        ],
-        "pendingIntent": true,
-        "relocationSeal": [
-          "before",
-          "after"
-        ]
-      },
-      "expect": {
-        "order": [
-          "authorityReleased",
-          "pendingMessagesTerminated"
-        ],
-        "authority": "Missing",
-        "oldHandlerCalls": 0,
-        "thisHostFactoryCalls": 0,
-        "messageTerminalCount": 1,
-        "missingPlacementCalls": 0,
-        "messageTerminalByHost": {
-          "Draining": "ShuttingDown",
-          "Relocating": "Unavailable"
+      name: 'release-during-host-drain-or-relocation',
+      given: {
+        host: ['Draining', 'Relocating'],
+        pendingIntent: true,
+        relocationSeal: ['before', 'after']
+      }
+    },
+    {
+      name: 'reincarnate-initialization-fails',
+      given: {
+        host: 'Serving',
+        pendingIntent: true,
+        initialization: 'fails'
+      }
+    },
+    {
+      name: 'closing-message-without-intent',
+      given: {
+        authority: 'Closing',
+        messageIntent: false
+      }
+    },
+    {
+      name: 'intent-after-release-decision-refused-before-admission',
+      given: {
+        host: 'Serving',
+        pendingIntent: false,
+        lateIntent: 'afterReleaseDecision'
+      }
+    }
+  ];
+  assert.deepEqual(
+    fixture.closeBranches.map(({ name, given }) => ({ name, given })),
+    closeInputs
+  );
+  for (const { name, given, expect } of fixture.closeBranches) {
+    const calls = { oldHandlerCalls: 0, newHandlerCalls: 0 };
+    let outcome;
+    if (given.authority === 'Closing') {
+      outcome = {
+        order: [],
+        ...calls,
+        factoryCalls: 0,
+        messageTerminal: 'NotFound',
+        messageTerminalCount: 1
+      };
+    } else if (given.host === 'Serving' && given.pendingIntent) {
+      outcome =
+        given.initialization === 'fails'
+          ? {
+              order: [
+                'authorityReincarnated',
+                'newGenerationDeleted',
+                'pendingMessagesTypedFailure'
+              ],
+              authority: 'Missing',
+              objectGeneration: 'storeIssuedDifferent',
+              ...calls,
+              messageTerminal: 'typedFailure',
+              messageTerminalCount: 1
+            }
+          : {
+              order: [
+                'authorityReincarnated',
+                'newIncarnationInitialized',
+                'storedStateRestored',
+                'pendingIntentMessagesExecuted'
+              ],
+              authority: 'Ready',
+              objectGeneration: 'storeIssuedDifferent',
+              authorityOwnerGeneration: 'storeIssuedDifferent',
+              owner: 'unchanged',
+              lease: 'unchanged',
+              capacity: 'unchanged',
+              ...calls,
+              newHandlerCalls: 1,
+              messageTerminal: 'reply',
+              messageTerminalCount: 1
+            };
+    } else if (given.host === 'Serving') {
+      outcome = {
+        order: ['authorityReleased'],
+        authority: 'Missing',
+        ...calls,
+        factoryCalls: 0
+      };
+      if (given.lateIntent === 'afterReleaseDecision')
+        Object.assign(outcome, {
+          messageTerminal: 'Unavailable',
+          messageFailureCode: 'spotMoving',
+          messageTerminalCount: 1
+        });
+    } else {
+      outcome = {
+        order: ['authorityReleased', 'pendingMessagesTerminated'],
+        authority: 'Missing',
+        oldHandlerCalls: 0,
+        thisHostFactoryCalls: 0,
+        messageTerminalCount: 1,
+        missingPlacementCalls: 0,
+        messageTerminalByHost: {
+          Draining: 'ShuttingDown',
+          Relocating: 'Unavailable'
         },
-        "sendDiagnosticsByHost": {
-          "Draining": { "kind": "ShuttingDown", "surface": "instance_spot", "reason": "shutdown" },
-          "Relocating": { "kind": "Unavailable", "surface": "instance_spot", "reason": "stale_target" }
+        sendDiagnosticsByHost: {
+          Draining: {
+            kind: 'ShuttingDown',
+            surface: 'instance_spot',
+            reason: 'shutdown'
+          },
+          Relocating: {
+            kind: 'Unavailable',
+            surface: 'instance_spot',
+            reason: 'stale_target'
+          }
         }
+      };
+    }
+    assert.deepEqual(expect, outcome, name);
+  }
+  const readyInputs = [
+    {
+      name: 'stale-ready-owner-fence-request',
+      given: {
+        authority: 'Ready',
+        ownerFence: 'mismatch',
+        instanceIntent: [false, true],
+        messageKind: 'request'
       }
     },
     {
-      "name": "reincarnate-initialization-fails",
-      "given": {
-        "host": "Serving",
-        "pendingIntent": true,
-        "initialization": "fails"
-      },
-      "expect": {
-        "order": [
-          "authorityReincarnated",
-          "newGenerationDeleted",
-          "pendingMessagesTypedFailure"
-        ],
-        "authority": "Missing",
-        "objectGeneration": "storeIssuedDifferent",
-        "oldHandlerCalls": 0,
-        "newHandlerCalls": 0,
-        "messageTerminal": "typedFailure",
-        "messageTerminalCount": 1
+      name: 'stale-ready-owner-fence-send',
+      given: {
+        authority: 'Ready',
+        ownerFence: 'mismatch',
+        instanceIntent: [false, true],
+        messageKind: 'send'
       }
     },
     {
-      "name": "closing-message-without-intent",
-      "given": {
-        "authority": "Closing",
-        "messageIntent": false
-      },
-      "expect": {
-        "order": [],
-        "oldHandlerCalls": 0,
-        "newHandlerCalls": 0,
-        "factoryCalls": 0,
-        "messageTerminal": "NotFound",
-        "messageTerminalCount": 1
+      name: 'stale-released-ready-owner-fence-request',
+      given: {
+        authority: 'Missing',
+        ownerFence: 'mismatch',
+        instanceIntent: [false],
+        messageKind: 'request',
+        routeKind: 'ready'
+      }
+    },
+    {
+      name: 'stale-released-ready-owner-fence-instance-intent-request',
+      given: {
+        authority: 'Missing',
+        ownerFence: 'mismatch',
+        instanceIntent: [true],
+        messageKind: 'request',
+        routeKind: 'ready'
+      }
+    },
+    {
+      name: 'stale-released-ready-owner-fence-send',
+      given: {
+        authority: 'Missing',
+        ownerFence: 'mismatch',
+        instanceIntent: [false, true],
+        messageKind: 'send',
+        routeKind: 'ready'
       }
     }
   ];
-  assert.deepEqual(fixture.closeBranches, expectedBranches);
-  const expectedReadyRouteCases = [
-    {
-      "name": "stale-ready-owner-fence-request",
-      "given": {
-        "authority": "Ready",
-        "ownerFence": "mismatch",
-        "instanceIntent": [
-          false,
-          true
-        ],
-        "messageKind": "request"
-      },
-      "expect": {
-        "messageTerminal": "Unavailable",
-        "messageTerminalCount": 1,
-        "handlerCalls": 0,
-        "factoryCalls": 0,
-        "missingPlacementCalls": 0
-      }
-    },
-    {
-      "name": "stale-ready-owner-fence-send",
-      "given": {
-        "authority": "Ready",
-        "ownerFence": "mismatch",
-        "instanceIntent": [
-          false,
-          true
-        ],
-        "messageKind": "send"
-      },
-      "expect": {
-        "diagnostics": [
-          "Unavailable"
-        ],
-        "surface": "instance_spot",
-        "reason": "stale_target",
-        "handlerCalls": 0,
-        "factoryCalls": 0,
-        "missingPlacementCalls": 0
-      }
-    },
-    {
-      "name": "stale-released-ready-owner-fence-request",
-      "given": {
-        "authority": "Missing",
-        "ownerFence": "mismatch",
-        "instanceIntent": [
-          false,
-          true
-        ],
-        "messageKind": "request",
-        "routeKind": "ready"
-      },
-      "expect": {
-        "messageTerminal": "Unavailable",
-        "messageTerminalCount": 1,
-        "handlerCalls": 0,
-        "factoryCalls": 0,
-        "missingPlacementCalls": 0
-      }
-    },
-    {
-      "name": "stale-released-ready-owner-fence-send",
-      "given": {
-        "authority": "Missing",
-        "ownerFence": "mismatch",
-        "instanceIntent": [
-          false,
-          true
-        ],
-        "messageKind": "send",
-        "routeKind": "ready"
-      },
-      "expect": {
-        "diagnostics": [
-          "Unavailable"
-        ],
-        "surface": "instance_spot",
-        "reason": "stale_target",
-        "handlerCalls": 0,
-        "factoryCalls": 0,
-        "missingPlacementCalls": 0
-      }
+  assert.deepEqual(
+    fixture.readyRouteCases.map(({ name, given }) => ({ name, given })),
+    readyInputs
+  );
+  // Failover §4.4 and §8 allow cold activation after refusal only for a Missing Instance request.
+  for (const { name, given, expect } of fixture.readyRouteCases) {
+    for (const instanceIntent of given.instanceIntent) {
+      const activates =
+        given.messageKind === 'request' &&
+        given.authority === 'Missing' &&
+        instanceIntent;
+      const calls = {
+        handlerCalls: Number(activates),
+        factoryCalls: Number(activates),
+        missingPlacementCalls: Number(activates)
+      };
+      const outcome =
+        given.messageKind === 'request'
+          ? {
+              messageTerminal: activates ? 'reply' : 'Unavailable',
+              messageTerminalCount: 1,
+              ...calls
+            }
+          : {
+              diagnostics: ['Unavailable'],
+              ...calls,
+              surface: 'instance_spot',
+              reason: 'stale_target'
+            };
+      assert.deepEqual(
+        expect,
+        outcome,
+        `${name}: instanceIntent=${instanceIntent}`
+      );
     }
-  ];
-  assert.deepEqual(fixture.readyRouteCases, expectedReadyRouteCases);
+  }
 }
 validateSpotCloseBranches(spotClose);
 // The validator must reject old Close observations and contradictory results.
 for (const corrupt of [
   (fixture) => fixture.closeSteps.splice(1, 0, 'admissionSealed'),
   (fixture) => fixture.closeSteps.splice(1, 0, 'acceptedTurnsDrained'),
-  (fixture) => { fixture.closeBranches[0].expect.oldHandlerCalls = 1; },
-  (fixture) => { fixture.closeBranches[0].expect.messageTerminalCount = 2; },
-  (fixture) => { fixture.closeBranches[0].expect.objectGeneration = 'unchanged'; },
-  (fixture) => { fixture.closeBranches[0].expect.authorityOwnerGeneration = 'unchanged'; },
-  (fixture) => { delete fixture.closeBranches[0].expect.authority; },
-  (fixture) => { delete fixture.closeBranches[0].expect.newHandlerCalls; },
-  (fixture) => { delete fixture.closeBranches[4].expect.factoryCalls; },
-  (fixture) => { delete fixture.closeBranches[4].expect.messageTerminalCount; },
-  (fixture) => { fixture.closeBranches[0].given.host = 'Draining'; },
-  (fixture) => { fixture.closeBranches[0].given.pendingIntent = false; },
-  (fixture) => { fixture.closeBranches[3].given.initialization = 'succeeds'; },
-  (fixture) => { fixture.closeBranches[2].expect.order.push('missingPlacement'); },
-  (fixture) => { fixture.closeBranches[2].expect.missingPlacementCalls = 1; },
-  (fixture) => { fixture.closeBranches[2].expect.messageTerminalByHost.Draining = 'Unavailable'; },
-  (fixture) => { fixture.closeBranches[2].expect.messageTerminalByHost.Relocating = 'ShuttingDown'; },
-  (fixture) => { delete fixture.closeBranches[2].expect.sendDiagnosticsByHost; },
-  (fixture) => { fixture.closeBranches[2].expect.sendDiagnosticsByHost.Draining.reason = 'stale_target'; },
-  (fixture) => { fixture.closeBranches[2].expect.sendDiagnosticsByHost.Relocating.surface = 'spot_route'; },
-  (fixture) => { delete fixture.readyRouteCases[1].expect.surface; },
-  (fixture) => { fixture.readyRouteCases[3].expect.reason = 'location_unavailable'; },
-  (fixture) => { fixture.closeBranches[2].given.relocationSeal = ['after']; },
-  (fixture) => { fixture.readyRouteCases[0].expect.messageTerminal = 'NotFound'; },
-  (fixture) => { fixture.readyRouteCases[0].expect.missingPlacementCalls = 1; },
-  (fixture) => { delete fixture.readyRouteCases[1].expect.diagnostics; },
-  (fixture) => { fixture.readyRouteCases[1].given.instanceIntent = [false]; },
-  (fixture) => { fixture.readyRouteCases[2].given.authority = 'Ready'; },
-  (fixture) => { fixture.readyRouteCases[2].expect.messageTerminal = 'NotFound'; },
-  (fixture) => { delete fixture.readyRouteCases[3].expect.diagnostics; },
-  (fixture) => { fixture.closeBranches[2].expect.order.reverse(); }
+  (fixture) => {
+    fixture.closeBranches[0].expect.oldHandlerCalls = 1;
+  },
+  (fixture) => {
+    fixture.closeBranches[0].expect.messageTerminalCount = 2;
+  },
+  (fixture) => {
+    fixture.closeBranches[0].expect.objectGeneration = 'unchanged';
+  },
+  (fixture) => {
+    fixture.closeBranches[0].expect.authorityOwnerGeneration = 'unchanged';
+  },
+  (fixture) => {
+    delete fixture.closeBranches[0].expect.authority;
+  },
+  (fixture) => {
+    delete fixture.closeBranches[0].expect.newHandlerCalls;
+  },
+  (fixture) => {
+    delete fixture.closeBranches[4].expect.factoryCalls;
+  },
+  (fixture) => {
+    delete fixture.closeBranches[4].expect.messageTerminalCount;
+  },
+  (fixture) => {
+    fixture.closeBranches[0].given.host = 'Draining';
+  },
+  (fixture) => {
+    fixture.closeBranches[0].given.pendingIntent = false;
+  },
+  (fixture) => {
+    fixture.closeBranches[3].given.initialization = 'succeeds';
+  },
+  (fixture) => {
+    fixture.closeBranches[2].expect.order.push('missingPlacement');
+  },
+  (fixture) => {
+    fixture.closeBranches[2].expect.missingPlacementCalls = 1;
+  },
+  (fixture) => {
+    fixture.closeBranches[2].expect.messageTerminalByHost.Draining =
+      'Unavailable';
+  },
+  (fixture) => {
+    fixture.closeBranches[2].expect.messageTerminalByHost.Relocating =
+      'ShuttingDown';
+  },
+  (fixture) => {
+    delete fixture.closeBranches[2].expect.sendDiagnosticsByHost;
+  },
+  (fixture) => {
+    fixture.closeBranches[2].expect.sendDiagnosticsByHost.Draining.reason =
+      'stale_target';
+  },
+  (fixture) => {
+    fixture.closeBranches[2].expect.sendDiagnosticsByHost.Relocating.surface =
+      'spot_route';
+  },
+  (fixture) => {
+    delete fixture.readyRouteCases[1].expect.surface;
+  },
+  (fixture) => {
+    fixture.readyRouteCases[4].expect.reason = 'location_unavailable';
+  },
+  (fixture) => {
+    fixture.closeBranches[2].given.relocationSeal = ['after'];
+  },
+  (fixture) => {
+    fixture.readyRouteCases[0].expect.messageTerminal = 'NotFound';
+  },
+  (fixture) => {
+    fixture.readyRouteCases[0].expect.missingPlacementCalls = 1;
+  },
+  (fixture) => {
+    delete fixture.readyRouteCases[1].expect.diagnostics;
+  },
+  (fixture) => {
+    fixture.readyRouteCases[1].given.instanceIntent = [false];
+  },
+  (fixture) => {
+    fixture.readyRouteCases[2].given.authority = 'Ready';
+  },
+  (fixture) => {
+    fixture.readyRouteCases[2].expect.messageTerminal = 'NotFound';
+  },
+  (fixture) => {
+    delete fixture.readyRouteCases[4].expect.diagnostics;
+  },
+  (fixture) => {
+    fixture.closeBranches[2].expect.order.reverse();
+  },
+  (fixture) => {
+    fixture.closeBranches[5].expect.messageTerminal = 'NotFound';
+  },
+  (fixture) => {
+    fixture.closeBranches[5].expect.messageFailureCode = 'routeNotConnected';
+  },
+  (fixture) => {
+    delete fixture.closeBranches[5].given.lateIntent;
+  },
+  (fixture) => {
+    fixture.readyRouteCases[3].expect.messageTerminal = 'Unavailable';
+  },
+  (fixture) => {
+    fixture.readyRouteCases[3].expect.factoryCalls = 0;
+  },
+  (fixture) => {
+    fixture.readyRouteCases[3].expect.missingPlacementCalls = 0;
+  },
+  (fixture) => {
+    fixture.readyRouteCases[3].given.instanceIntent = [false];
+  }
 ]) {
   const invalid = structuredClone(spotClose);
   corrupt(invalid);
