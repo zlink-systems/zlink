@@ -39,10 +39,9 @@ void apply_weighted_channel_socket_options (SocketT &socket,
 }
 
 template <typename SocketT>
-void apply_fanout_publisher_socket_options (
-  SocketT &socket,
-  bool no_drop,
-  std::optional<std::chrono::milliseconds> send_timeout = std::nullopt)
+void apply_fanout_publisher_socket_options (SocketT &socket,
+                                            bool no_drop,
+                                            std::optional<std::chrono::milliseconds> send_timeout)
 {
     socket.options ().linger (std::chrono::milliseconds::zero ());
     apply_channel_send_timeout (socket, send_timeout);

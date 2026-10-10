@@ -40,6 +40,7 @@ export function wrapSocket<T extends { close(): void }>(
       lastEndpoint?: string;
     };
   };
+  if (socket.options !== undefined) socket.options.linger = 0;
   const hasRequest = typeof (nativeInstance as { request?: unknown }).request === 'function';
   const hasRoutedPeer =
     hasRequest && typeof (nativeInstance as { reply?: unknown }).reply === 'function';

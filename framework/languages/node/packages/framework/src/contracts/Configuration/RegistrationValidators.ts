@@ -222,7 +222,7 @@ function validateChannelCapabilities(
       channel.publisher === undefined
     ) {
       throw new ZLinkConfigurationException(
-        `Channel '${channelName}' NoDrop requires a publisher role; send timeout also requires it.`
+        `Channel '${channelName}': NoDrop and send timeout require the publisher role.`
       );
     }
     if (channel.server !== undefined) {

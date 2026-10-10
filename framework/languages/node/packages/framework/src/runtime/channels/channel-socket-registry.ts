@@ -1923,7 +1923,6 @@ function applyFanoutPublisherSocketOptions(
   publisher: ZLinkBackendPublisherSocket,
   channel: ZLinkChannelOptions
 ): void {
-  publisher.lingerMs = 0;
   publisher.noDrop = channel.noDrop ?? false;
   publisher.sendTimeoutMs = channel.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
 }

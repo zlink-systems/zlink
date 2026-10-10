@@ -59,6 +59,7 @@ test('public fanout builders apply independent publisher settings without HWM wr
     createPublisherSocket() {
       const socket = {
         nativeInstance: {},
+        lingerMs: 0,
         set sendHighWaterMark(value) {
           assert.fail(`Unexpected Framework HWM write: ${value}`);
         },
@@ -127,25 +128,53 @@ test('close and dispose preserve the linger selected when each socket was create
   for (const method of ['close', 'dispose']) {
     for (const linger of [0, 30000]) {
       let writes = 0;
+      let selectedLinger = -1;
       let closed = false;
       const socket = wrapSocket({
         options: {
           get linger() {
-            return linger;
+            return selectedLinger;
           },
           set linger(value) {
             writes++;
-            assert.fail(`Shutdown changed linger to ${value}`);
+            selectedLinger = value;
           }
         },
         close() {
           closed = true;
         }
       });
+      assert.equal(selectedLinger, 0);
+      assert.equal(writes, 1);
+      selectedLinger = linger;
       await socket[method]();
       assert.equal(closed, true);
-      assert.equal(writes, 0);
+      assert.equal(selectedLinger, linger);
+      assert.equal(writes, 1);
     }
+  }
+});
+
+test('all native socket roles receive zero linger at creation', async () => {
+  const factory = new backend.ZLinkNodeBackendAdapterFactory();
+  const adapter = factory.createChannelAdapter();
+  const context = adapter.createContext();
+  const sockets = [];
+  try {
+    for (const create of [
+      () => adapter.createRouterSocket(context),
+      () => adapter.createDealerSocket(context),
+      () => adapter.createSubscriberSocket(context),
+      () => adapter.createPublisherSocket(context),
+      () => factory.createStreamAdapter().createStreamSocket(context)
+    ]) {
+      const socket = create();
+      sockets.push(socket);
+      assert.equal(socket.nativeInstance.options.linger, 0);
+    }
+  } finally {
+    for (const socket of sockets) await socket.dispose();
+    await context.dispose();
   }
 });
 

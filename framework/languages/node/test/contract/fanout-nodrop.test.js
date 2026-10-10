@@ -89,7 +89,7 @@ test('NoDrop configured without a fanout publisher role fails registration start
   assert.throws(
     () => framework.createFrameworkRegistration(options),
     (error) => error instanceof framework.ZLinkConfigurationException
-      && /NoDrop requires a publisher role/.test(error.message)
+      && /NoDrop and send timeout require the publisher role/.test(error.message)
   );
 });
 

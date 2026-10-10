@@ -57,7 +57,8 @@ class binding_fanout_pair_t
         slow = std::make_unique<zlink::sub_socket_t> (context);
 
         if (no_drop) {
-            zlink::framework::detail::apply_fanout_publisher_socket_options (*publisher, true);
+            zlink::framework::detail::apply_fanout_publisher_socket_options (*publisher, true,
+                                                                             std::nullopt);
         }
         publisher->options ().linger (0ms);
         publisher->options ().send_hwm (zlink::byte_count_t::bytes (record_hwm));

@@ -125,7 +125,9 @@ final class ZLinkFanoutNoDropTest {
 
         ZLinkConfigurationException failure =
                 assertThrows(ZLinkConfigurationException.class, options::validate);
-        assertTrue(failure.getMessage().contains("NoDrop requires the publisher role"));
+        assertTrue(
+                failure.getMessage()
+                        .contains("NoDrop and send timeout require the publisher role"));
     }
 
     @Test

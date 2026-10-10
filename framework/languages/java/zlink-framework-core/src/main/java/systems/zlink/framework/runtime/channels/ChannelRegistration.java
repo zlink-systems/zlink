@@ -517,8 +517,7 @@ public final class ChannelRegistration {
         }
         if ((fanout.noDropConfigured || publisherSendTimeout != null) && !fanout.publisherEnabled) {
             throw new ZLinkConfigurationException(
-                    "fanout channel NoDrop requires the publisher role; send timeout also requires it: "
-                            + name);
+                    "NoDrop and send timeout require the publisher role: " + name);
         }
         if (fanout.publisherEnabled && fanout.publisherBinds.isEmpty()) {
             throw new ZLinkConfigurationException(
