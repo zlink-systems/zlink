@@ -125,7 +125,9 @@ final class ZLinkFanoutNoDropTest {
 
         ZLinkConfigurationException failure =
                 assertThrows(ZLinkConfigurationException.class, options::validate);
-        assertTrue(failure.getMessage().contains("NoDrop requires the publisher role"));
+        assertTrue(
+                failure.getMessage()
+                        .contains("NoDrop and send timeout require the publisher role"));
     }
 
     @Test
@@ -141,6 +143,44 @@ final class ZLinkFanoutNoDropTest {
                 ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
             assertTrue(backend.publisher().options().noDrop());
         }
+    }
+
+    @Test
+    void publisherOptionsAreIndependentForEachPublicFanoutBuilder() {
+        LowHwmBackendProvider backend = new LowHwmBackendProvider();
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addFanoutChannel("default").enablePublisher("inproc://publisher-default");
+        options.addFanoutChannel("first")
+                .setSendTimeout(Duration.ofMillis(75))
+                .setNoDrop(true)
+                .enablePublisher("inproc://publisher-first");
+        options.addFanoutChannel("second")
+                .enablePublisher("inproc://publisher-second")
+                .setSendTimeout(Duration.ofMillis(625))
+                .setNoDrop(false);
+        try (ZLinkFrameworkRuntime ignored =
+                ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
+            assertEquals(3, backend.channels.publishers.size());
+            Duration[] timeouts = {
+                Duration.ofSeconds(1), Duration.ofMillis(75), Duration.ofMillis(625)
+            };
+            for (int index = 0; index < timeouts.length; index++) {
+                var socket = backend.channels.publishers.get(index);
+                assertEquals(timeouts[index], socket.options().sendTimeout());
+                assertEquals(index == 1, socket.options().noDrop());
+                assertEquals(Duration.ZERO, socket.options().linger());
+                assertEquals(HWM_BYTES, socket.options().sendHwm());
+            }
+        }
+    }
+
+    @Test
+    void sendTimeoutWithoutPublisherRoleFailsStartupValidation() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addFanoutChannel("subscriber")
+                .setSendTimeout(Duration.ofMillis(75))
+                .connect("inproc://subscriber-timeout");
+        assertThrows(ZLinkConfigurationException.class, options::validate);
     }
 
     private static void fillToBackpressure(Scenario scenario) throws Exception {
@@ -361,6 +401,7 @@ final class ZLinkFanoutNoDropTest {
     private static final class LowHwmChannelAdapter implements ZLinkChannelBackendAdapter {
         private Context context;
         private PubSocket publisher;
+        private final java.util.List<PubSocket> publishers = new java.util.ArrayList<>();
 
         @Override
         public ZLinkBackendContext createContext() {
@@ -381,10 +422,13 @@ final class ZLinkFanoutNoDropTest {
         @Override
         public ZLinkBackendPublisherSocket createPublisherSocket(
                 ZLinkBackendContext ignored, Duration sendTimeout) {
-            publisher = ZLinkJavaSocketOptions.configureFrameworkSocket(context.createPubSocket());
+            var configured =
+                    new ZLinkJavaChannelBackendAdapter()
+                            .createPublisherSocket(new ZLinkJavaContext(context), sendTimeout);
+            publisher = (PubSocket) ((ZLinkJavaSocketBacked) configured).nativeSocket();
+            publishers.add(publisher);
             publisher.options().sendHwm(HWM_BYTES);
-            publisher.options().sendTimeout(sendTimeout);
-            return new ZLinkJavaPublisherSocket(publisher);
+            return configured;
         }
 
         @Override

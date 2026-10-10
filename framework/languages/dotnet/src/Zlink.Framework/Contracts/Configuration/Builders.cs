@@ -59,6 +59,8 @@ public interface IZLinkFanoutChannelBuilder
 
     IZLinkFanoutChannelBuilder SetNoDrop(bool noDrop = true);
 
+    IZLinkFanoutChannelBuilder SetSendTimeout(TimeSpan timeout);
+
     IZLinkFanoutChannelBuilder EnableSubscriber();
 
     IZLinkFanoutChannelBuilder Subscribe(string topic);
@@ -118,11 +120,6 @@ public interface IZLinkFrameworkOptions
     ///     may run before Framework force-closes the retired session.
     /// </summary>
     TimeSpan SessionReplacementCallbackTimeout { get; set; }
-
-    /// <summary>
-    ///     Gets or sets the default send timeout for Classic fanout publishers.
-    /// </summary>
-    TimeSpan DefaultSocketSendTimeout { get; set; }
 
     long ApplicationVersion { get; set; }
 

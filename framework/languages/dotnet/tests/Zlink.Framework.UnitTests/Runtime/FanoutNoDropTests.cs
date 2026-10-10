@@ -120,14 +120,13 @@ public sealed class FanoutNoDropTests
     public void PublisherSendTimeout_UsesFrameworkDefaultWhenUnconfigured()
     {
         var registration = CreateRegistration(noDrop: false);
-        var defaultSendTimeout = TimeSpan.FromMilliseconds(700);
+        var defaultSendTimeout = TimeSpan.FromSeconds(1);
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var publisher = context.CreatePubSocket();
 
         ZLinkChannelBundleFactory.ApplyPublisherSocketConfig(
             publisher.Options,
-            registration.Channels["events"],
-            defaultSendTimeout
+            registration.Channels["events"]
         );
 
         Assert.Equal(defaultSendTimeout, publisher.Options.SendTimeout);
@@ -143,7 +142,10 @@ public sealed class FanoutNoDropTests
         Assert.Equal(nativeDefault, dealer.Options.SendTimeout);
     }
 
-    private static ZLinkFrameworkRegistration CreateRegistration(bool? noDrop)
+    private static ZLinkFrameworkRegistration CreateRegistration(
+        bool? noDrop,
+        TimeSpan? timeout = null
+    )
     {
         var registration = new ZLinkFrameworkRegistration();
         var fanout = new ZLinkFrameworkOptionsBuilder(registration)
@@ -151,6 +153,8 @@ public sealed class FanoutNoDropTests
             .EnablePublisher("inproc://fanout-nodrop-unused");
         if (noDrop.HasValue)
             fanout.SetNoDrop(noDrop.Value);
+        if (timeout is { } sendTimeout)
+            fanout.SetSendTimeout(sendTimeout);
         ZLinkFrameworkRegistrationValidator.Validate(registration);
         return registration;
     }
@@ -191,11 +195,10 @@ public sealed class FanoutNoDropTests
             FastSubscriber = _context.CreateSubSocket();
             SlowSubscriber = _context.CreateSubSocket();
 
-            var registration = CreateRegistration(noDrop);
+            var registration = CreateRegistration(noDrop, sendTimeout);
             ZLinkChannelBundleFactory.ApplyPublisherSocketConfig(
                 Publisher.Options,
-                registration.Channels["events"],
-                sendTimeout
+                registration.Channels["events"]
             );
             Assert.Equal(sendTimeout, Publisher.Options.SendTimeout);
             Assert.Equal(noDrop ?? false, Publisher.Options.NoDrop);

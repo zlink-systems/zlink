@@ -30,10 +30,11 @@ test('send, reply and relay declarations have no caller cancellation or timeout'
 
 test('only Classic fanout publisher configuration exposes send timeout', () => {
   assert.doesNotMatch(body(read('Configuration/Configs.ts'), 'ZLinkSocketConfig'), /sendTimeout/);
-  assert.match(body(read('Configuration/Configs.ts'), 'ZLinkSpotPublisherConfig'), /sendTimeoutMs/);
+  assert.match(body(read('Configuration/Builders.ts'), 'ZLinkFanoutChannelBuilder'), /setSendTimeout\(timeoutMs: number\)/);
+  assert.doesNotMatch(read('Configuration/Configs.ts'), /ZLinkSpotPublisherConfig/);
   const source = read('Configuration/RegistrationTypes.ts');
   for (const name of ['ZLinkClientCapabilityOptions', 'ZLinkRouteMeshChannelOptions', 'ZLinkRouteChannelOptions']) {
     assert.doesNotMatch(body(source, name), /sendTimeout/);
   }
-  assert.match(body(source, 'ZLinkPublisherCapabilityOptions'), /sendTimeoutMs/);
+  assert.match(body(source, 'ZLinkChannelOptions'), /sendTimeoutMs/);
 });

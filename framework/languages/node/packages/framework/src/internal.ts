@@ -1,5 +1,6 @@
 /** Test and companion-package integration surface. It is not exported by package.json. */
 export * from './index';
+export { requireValidSendTimeoutMs } from './contracts/Configuration/SendTimeoutValidation';
 export * from './runtime/diagnostics';
 export * from './runtime/host';
 export * from './runtime/admission';

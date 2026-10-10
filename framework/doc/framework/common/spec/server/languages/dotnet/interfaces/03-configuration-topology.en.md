@@ -17,7 +17,6 @@ handler, Spot/Actor registration, and runtime weight change.
 public interface IZLinkFrameworkOptions
 {
  TimeSpan DefaultRequestTimeout { get; set; }
- TimeSpan DefaultSocketSendTimeout { get; set; }
  TimeSpan SessionReplacementCallbackTimeout { get; set; }
  long ApplicationVersion { get; set; }
  string? MaintenanceWave { get; set; }
@@ -82,7 +81,6 @@ public interface IZLinkMeshNodeBuilder
  IZLinkMeshNodeBuilder SetInstanceSpotIdleTimeout(TimeSpan timeout);
  IZLinkMeshObjectRoleBuilder Objects();
  IZLinkMeshNodeSocketConfig ConfigureRouterSocket();
- IZLinkSpotPublisherConfig ConfigureSpotPublisher();
  IZLinkMeshPeerConnections PeerConnections { get; }
 
  IZLinkMeshNodeBuilder SetDefaultRequestTimeout(TimeSpan timeout);
@@ -246,6 +244,7 @@ public interface IZLinkFanoutChannelBuilder
  IZLinkFanoutChannelBuilder SetAdvertiseHost(string advertiseHost);
  IZLinkFanoutChannelBuilder SetRoutingId(RoutingId publisherRoutingId);
  IZLinkFanoutChannelBuilder SetRoutingIdPrefix(string prefix);
+ IZLinkFanoutChannelBuilder SetSendTimeout(TimeSpan timeout);
  IZLinkFanoutChannelBuilder SetNoDrop(bool noDrop = true);
  IZLinkFanoutChannelBuilder EnableSubscriber();
  IZLinkFanoutChannelBuilder Subscribe(string topic);
@@ -379,8 +378,7 @@ or `Server`, and no Location Store, startup fails. Since the global
 ActorId determines the current Mesh and owner route, this setting doesn't
 take a MeshName.
 
-`DefaultRequestTimeout`'s default is 30 seconds, and
-`DefaultSocketSendTimeout`'s default is 1 second. `DefaultSocketSendTimeout` applies only to the Classic fanout publisher's send timeout ([Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)).
+`DefaultRequestTimeout`'s default is 30 seconds. Publisher configuration on the fanout builder follows [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic).
 `SessionReplacementCallbackTimeout` is the maximum time an actor-binding replacement callback may
 run before Framework force-closes the retired session; its default is 30 seconds. `Worker` sets the
 worker's minimum/maximum thread count and idle timeout before host
@@ -544,20 +542,6 @@ direct route, other membership, or an already-submitted operation.
 ## 5. Publisher And Runtime Option
 
 ```csharp
-public interface IZLinkSpotPublisherConfig
-{
- ulong SendHighWaterMark { get; set; }
- TimeSpan? SendTimeout { get; set; }
- TimeSpan? Linger { get; set; }
-}
-
-public interface IZLinkSpotSubscriberConfig
-{
- ulong ReceiveHighWaterMark { get; set; }
- TimeSpan? ReceiveTimeout { get; set; }
- TimeSpan? Linger { get; set; }
-}
-
 public interface IZLinkSocketConfig
 {
  long MaxMessageSize { get; set; }
@@ -631,7 +615,6 @@ public interface IZLinkMeshNodeSocketConfig
 
 `IPv6`, `TcpNoDelay`, and `Immediate` are applied to the socket only when a value is set. A `null` value isn't applied, so the Core default stays in effect.
 
-`ConfigureSpotPublisher()` has no publish-only delivery policy option.
 [Submit and completion §6](../../../01-execution/01-submit-and-completion.en.md)
 defines Logical Multicast completion.
 

@@ -505,6 +505,9 @@ public:
  fanout_channel_builder_t &set_automatic_routing_id_prefix(
  std::string prefix);
  fanout_channel_builder_t &set_no_drop(bool no_drop = true);
+ template <typename Rep, typename Period>
+ fanout_channel_builder_t &set_send_timeout(
+ std::chrono::duration<Rep, Period> timeout);
  fanout_channel_builder_t &enable_subscriber();
  fanout_channel_builder_t &subscribe(std::string topic);
  fanout_channel_builder_t &connect(std::string endpoint);

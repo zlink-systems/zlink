@@ -23,6 +23,9 @@ final class ZLinkJavaChannelSendTimeoutTest {
             assertEquals(
                     Duration.ofSeconds(1),
                     ((ZLinkJavaSocketBacked) publisher).nativeSocket().options().sendTimeout());
+            assertEquals(
+                    Duration.ZERO,
+                    ((ZLinkJavaSocketBacked) publisher).nativeSocket().options().linger());
         }
     }
 

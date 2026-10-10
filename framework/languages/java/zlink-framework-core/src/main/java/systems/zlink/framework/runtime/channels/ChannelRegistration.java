@@ -35,7 +35,7 @@ public final class ChannelRegistration {
     private boolean routingIdPrefixConfigured;
     private RoutingId routeRoutingId;
     private Duration defaultRequestTimeout;
-    private Duration publisherSendTimeout = ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT;
+    private Duration publisherSendTimeout;
 
     public ChannelRegistration(String name, ChannelKind kind) {
         this.name = name;
@@ -177,11 +177,14 @@ public final class ChannelRegistration {
     }
 
     Duration publisherSendTimeout() {
-        return publisherSendTimeout;
+        return publisherSendTimeout == null
+                ? ZLinkChannelAdmissionTimeout.DEFAULT_SEND_TIMEOUT
+                : publisherSendTimeout;
     }
 
     void setPublisherSendTimeout(Duration timeout) {
-        publisherSendTimeout = ZLinkChannelAdmissionTimeout.normalize(timeout);
+        publisherSendTimeout =
+                timeout == null ? null : ZLinkChannelAdmissionTimeout.normalize(timeout);
     }
 
     void setDefaultRequestTimeout(Duration timeout) {
@@ -512,9 +515,9 @@ public final class ChannelRegistration {
             throw new ZLinkConfigurationException(
                     "fanout channel subscriptions require subscriber capability: " + name);
         }
-        if (fanout.noDropConfigured && !fanout.publisherEnabled) {
+        if ((fanout.noDropConfigured || publisherSendTimeout != null) && !fanout.publisherEnabled) {
             throw new ZLinkConfigurationException(
-                    "fanout channel NoDrop requires the publisher role: " + name);
+                    "NoDrop and send timeout require the publisher role: " + name);
         }
         if (fanout.publisherEnabled && fanout.publisherBinds.isEmpty()) {
             throw new ZLinkConfigurationException(

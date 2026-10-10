@@ -63,6 +63,8 @@ enum class channel_capability_t
 
 namespace detail
 {
+inline constexpr std::chrono::milliseconds default_fanout_send_timeout{1000};
+
 template <typename Rep, typename Period>
 std::chrono::milliseconds
 normalize_channel_send_timeout (std::chrono::duration<Rep, Period> timeout)

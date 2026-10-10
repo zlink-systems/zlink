@@ -410,21 +410,31 @@ endpoint나 내부 route frame을 직접 만들지 않는다.
 [Classic fanout](../00-foundation/02-glossary.ko.md#classic-fanout)의 전달 대상·완료·연결 전후
 보장은 [Interaction model §6](../00-foundation/04-interaction-model.ko.md#6-classic-fanout)이
 정한다. Classic fanout은 RouteMesh ChannelName select-one이나 Spot Logical Multicast와 대상
-집합을 공유하지 않는다. 이 절은 HWM admission과 `NoDrop` 설정의 경계, subscriber의 topic
-등록, liveness beacon topic 예약만 정의한다.
+집합을 공유하지 않는다. 이 절은 publisher 설정, HWM admission과 `NoDrop`의 경계, subscriber의
+topic 등록, liveness beacon topic 예약만 정의한다.
+
+**Publisher 설정은 channel의 fanout builder 한 곳이 정한다.** Fanout builder는 send timeout과
+`NoDrop`을 host startup 전에 확정하며, runtime 중에는 바꾸지 않는다. Root나 MeshNode 설정으로
+보충하거나 덮어쓰지 않는다. Publisher role이 없는 channel에 설정하면 startup이 실패한다. 그 밖의 publisher socket 설정은 다음과 같다.
+
+- Send HWM은 Framework가 설정하지 않는다. Core의 값이 그대로 적용된다.
+- Linger는 모든 publisher socket에서 0이다. Publish의 완료는 admission까지이므로 종료가 남은 송신을
+  기다리지 않는다. 생성할 때 적용하고 종료할 때 다른 값으로 바꾸지 않는다.
+
+자동 discovery로 만든 publisher와 수동으로 연결한 publisher는 같은 설정을 쓴다. Send timeout의 값
+규칙과 완료 결과는 [Submit과 완료 §7](../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이, 정확한 public 타입과 member
+이름은 언어별 interface가 정한다.
 
 Classic fanout의 기본 동작은 손실을 허용하는 전달이다. Subscriber의 수신이 늦어 publisher의
 송신 queue가 HWM에 도달하면 그 subscriber에게 보내는 message를 버리고 publish는 성공으로
 끝난다. 나머지 subscriber에 대한 전달은 영향을 받지 않는다. Publisher는 느린 subscriber 하나
 때문에 멈추지 않는다.
 
-`NoDrop`은 Classic fanout channel의 publisher role에 channel별로 적용하는 시작 시점 설정이며,
-이 HWM admission 하나만 바꾼다. Subscriber role이나 개별 publish call에는 적용하지 않는다.
+`NoDrop`은 이 HWM admission 하나만 바꾼다. Subscriber role이나 개별 publish call에는 적용하지 않는다.
 `true`이면, topic과 일치하는 subscriber pipe 가운데 하나라도 한 publish record를 받을 준비가
 되지 않았을 때 publisher transport는 그 record를 어느 일치 pipe에도 제출하지 않는다. 모든
 일치 pipe가 받을 수 있을 때만 record 전체를 제출한다. 따라서 느린 subscriber 하나가 publish
-call의 완료를 늦출 수 있다. 이 설정을 생략하면 `false`다. Publisher role이 없는 channel에
-설정하면 startup이 실패한다. 정확한 public 타입과 member 이름은 언어별 interface가 정의한다.
+call의 완료를 늦출 수 있다. 이 설정을 생략하면 `false`다.
 
 Publish의 대기·완료 계약과 연결 전·단절 중 event 처리 규칙은
 [Interaction model §6](../00-foundation/04-interaction-model.ko.md#6-classic-fanout)을 따르고,

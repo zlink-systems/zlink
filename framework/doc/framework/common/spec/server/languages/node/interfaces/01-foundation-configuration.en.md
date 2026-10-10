@@ -180,12 +180,6 @@ export interface ZLinkMeshNodeSocketConfig {
  receiveTimeoutMs?: number;
 }
 
-export interface ZLinkSpotPublisherConfig {
- sendHighWaterMark: bigint;
- sendTimeoutMs?: number;
- lingerMs?: number;
-}
-
 export interface ZLinkMeshNodeBuilder {
  channel(channelName: string): ZLinkMeshChannelBuilder;
  listen(endpoint: string): this;
@@ -201,7 +195,6 @@ export interface ZLinkMeshNodeBuilder {
  setInstanceSpotIdleTimeout(timeoutMs: number): this;
  objects(): ZLinkMeshObjectRoleBuilder;
  configureRouterSocket(): ZLinkMeshNodeSocketConfig;
- configureSpotPublisher(): ZLinkSpotPublisherConfig;
  peerConnections(): ZLinkMeshPeerConnections;
  setDefaultRequestTimeout(timeoutMs: number): this;
  addRouteSendHandler<TMessage>(handlerType: Type<ZLinkRouteSendHandler<TMessage>>): this;

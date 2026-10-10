@@ -253,9 +253,8 @@ publisher socket send timeout까지 admission을 기다리고, 그때까지 수�
 - `0`, 음수, 무한대와 상한 초과는 늦어도 host startup에서 거부하며 유효한 기본값으로
   바꾸지 않는다.
 - 값이 지정되지 않으면 1초 기본값을 선택한다.
-- 기존 public root fallback이 있으면 같은 의미로 적용하지만, 다른 언어에 같은 root
-  option을 새로 추가해야 한다는 뜻은 아니다.
-- Runtime setter가 있는 경우 잘못된 값은 setter 호출에서 즉시 거부한다.
+- 설정 위치는 [Channel messaging §7](../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)이 정하며,
+  잘못된 값은 setter 호출에서 즉시 거부한다.
 
 ## 8. STREAM reply token
 

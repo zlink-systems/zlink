@@ -217,9 +217,12 @@ function validateChannelCapabilities(
     if (channel.noDrop !== undefined && typeof channel.noDrop !== 'boolean') {
       throw new ZLinkConfigurationException(`Channel '${channelName}' NoDrop must be a boolean.`);
     }
-    if (channel.noDrop !== undefined && channel.publisher === undefined) {
+    if (
+      (channel.noDrop !== undefined || channel.sendTimeoutMs !== undefined) &&
+      channel.publisher === undefined
+    ) {
       throw new ZLinkConfigurationException(
-        `Channel '${channelName}' NoDrop requires a publisher role.`
+        `Channel '${channelName}': NoDrop and send timeout require the publisher role.`
       );
     }
     if (channel.server !== undefined) {
@@ -235,11 +238,11 @@ function validateChannelCapabilities(
       requirePeerWeight(`channel '${channelName}' server weight`, channel.server.weight);
       requireSocketOptions(`channel '${channelName}' server`, channel.server);
     }
+    requireValidSendTimeoutMs(
+      `channel '${channelName}' publisher sendTimeoutMs`,
+      channel.sendTimeoutMs
+    );
     if (channel.publisher !== undefined) {
-      requireValidSendTimeoutMs(
-        `channel '${channelName}' publisher sendTimeoutMs`,
-        channel.publisher.sendTimeoutMs
-      );
       requireEndpoint(`channel '${channelName}' publisher`, channel.publisher.bind);
       validateListenerNetworkIdentity(
         `channel '${channelName}' publisher`,
@@ -344,10 +347,6 @@ function validateSpotNodes(registration: ZLinkFrameworkRegistration): void {
     requireNonNegativeSafeInteger(
       `SpotNode '${spotNodeName}' instanceSpotIdleTimeoutMs`,
       spotNode.instanceSpotIdleTimeoutMs
-    );
-    requireValidSendTimeoutMs(
-      `SpotNode '${spotNodeName}' publisher sendTimeoutMs`,
-      spotNode.publisherConfig?.sendTimeoutMs
     );
     validateSpotNodeFactories(spotNodeName, spotNode);
     validateSpotNodeTimers(spotNode);

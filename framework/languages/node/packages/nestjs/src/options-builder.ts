@@ -24,7 +24,6 @@ import {
   type ZLinkSession,
   type ZLinkSessionFactory,
   type ZLinkSpot,
-  type ZLinkSpotPublisherConfig,
   type ZLinkSpotRelocationAdapter,
   type ZLinkStreamCompressionBuilder,
   type ZLinkUserSpotFactoryBuilder,
@@ -433,8 +432,14 @@ class DefaultZLinkNestFanoutChannelBuilder
     return this;
   }
 
-  setNoDrop(noDrop?: boolean): this {
+  setNoDrop(noDrop = true): this {
     this.channelOptions.noDrop = noDrop;
+    return this;
+  }
+
+  setSendTimeout(timeoutMs: number): this {
+    framework.requireValidSendTimeoutMs(`Fanout channel '${this.name}' send timeout`, timeoutMs);
+    this.channelOptions.sendTimeoutMs = timeoutMs;
     return this;
   }
 
@@ -857,11 +862,6 @@ class DefaultZLinkNestMeshNodeBuilder
   configureRouterSocket(): ZLinkMeshNodeSocketConfig {
     this.spotOptions.router ??= {};
     return this.spotOptions.router as ZLinkMeshNodeSocketConfig;
-  }
-
-  configureSpotPublisher(): ZLinkSpotPublisherConfig {
-    this.spotOptions.publisherConfig ??= {};
-    return this.spotOptions.publisherConfig as ZLinkSpotPublisherConfig;
   }
 
   peerConnections(): ZLinkMeshPeerConnections {

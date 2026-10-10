@@ -70,9 +70,7 @@ void raw_fanout_publisher_t::start ()
         throw std::logic_error ("fanout publisher cannot restart after close");
     }
     auto socket = std::make_unique<zlink::pub_socket_t> (*_context);
-    socket->options ().linger (std::chrono::milliseconds (0));
-    detail::apply_fanout_publisher_socket_options (*socket, _no_drop);
-    detail::apply_channel_send_timeout (*socket, _send_timeout);
+    detail::apply_fanout_publisher_socket_options (*socket, _no_drop, _send_timeout);
     socket->bind (_configured_endpoint);
     _endpoint = socket->options ().last_endpoint ();
     _next_beacon = std::chrono::steady_clock::now () + fanout_beacon_interval;

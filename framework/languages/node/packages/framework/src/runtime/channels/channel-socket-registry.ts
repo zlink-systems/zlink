@@ -1924,7 +1924,7 @@ function applyFanoutPublisherSocketOptions(
   channel: ZLinkChannelOptions
 ): void {
   publisher.noDrop = channel.noDrop ?? false;
-  publisher.sendTimeoutMs = configuredSendTimeoutMs(channel.publisher?.sendTimeoutMs);
+  publisher.sendTimeoutMs = channel.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
 }
 
 function fanoutDiscoveryConnectionId(connectionId: string): string {
@@ -1983,8 +1983,4 @@ function applySocketConfig(
   if (config.maxMessageSize !== undefined) {
     socket.maxMessageSize = config.maxMessageSize;
   }
-}
-
-function configuredSendTimeoutMs(value: number | undefined): number {
-  return value ?? DEFAULT_SEND_TIMEOUT_MS;
 }

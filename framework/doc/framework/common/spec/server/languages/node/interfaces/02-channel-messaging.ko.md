@@ -89,6 +89,7 @@ export interface ZLinkFanoutChannelBuilder {
  routingId(publisherRoutingId: RoutingId): this;
  setRoutingIdPrefix(prefix: string): this;
  setNoDrop(noDrop?: boolean): this;
+ setSendTimeout(timeoutMs: number): this;
  enableSubscriber(): this;
  subscribe(topic: string): this;
  connect(endpoint: string): this;
@@ -326,9 +327,9 @@ exceptional completion으로 끝난다. Token을 소비한 call이 실패로 끝
 다시 사용할 수 없다. 이미 사용한 token도 exceptional completion으로 처리한다. STREAM reply는 client request
 timeout을 전달받지 않는다.
 
-[Classic fanout](../../../00-foundation/02-glossary.ko.md#classic-fanout) publisher만 `sendTimeoutMs`를 사용한다. 값 규칙과
+[Classic fanout](../../../00-foundation/02-glossary.ko.md#classic-fanout) publisher만 `setSendTimeout(timeoutMs)`를 사용한다. 값 규칙과
 기본값은 [Submit과 완료 §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다. Node 설정은 정수 milliseconds를 받고, 거부는
-`ZLinkConfigurationError`로 알린다.
+`ZLinkConfigurationException`로 알린다.
 
 Logical Multicast의 worker 수락, commit, terminal과 재시도 규칙은 [Interaction model §5](../../../00-foundation/04-interaction-model.ko.md#5-spot-logical-multicast)와 [Cancellation과 shutdown §4](../../../01-execution/03-cancellation-and-shutdown.ko.md#4-logical-multicast-cancellation)가 정한다.
 Node.js는 `ZLinkPublishCall.submit(...)`으로 호출한다.

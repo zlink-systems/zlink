@@ -408,6 +408,7 @@ export function createRegistrationOptions(
       routingId: channel.routingId,
       routingIdPrefix: channel.routingIdPrefix,
       noDrop: channel.noDrop,
+      sendTimeoutMs: channel.sendTimeoutMs,
       publishHandlers: channel.publishHandlers,
       publisher: channel.publisher,
       subscriber: channel.subscriber,

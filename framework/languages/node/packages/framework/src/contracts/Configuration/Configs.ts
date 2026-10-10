@@ -19,9 +19,3 @@ export interface ZLinkOutboundRouteConfig {
   targetNodeRid: RoutingId;
   endpoint: string;
 }
-
-export interface ZLinkSpotPublisherConfig {
-  sendHighWaterMark: number;
-  sendTimeoutMs?: number;
-  lingerMs?: number;
-}

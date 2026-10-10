@@ -608,8 +608,7 @@ class channel_native_publisher_t
         _socket (*_context)
     {
         apply_common_channel_socket_options (_socket, publisher);
-        apply_channel_send_timeout (_socket, publisher.send_timeout);
-        apply_fanout_publisher_socket_options (_socket, publisher.no_drop);
+        apply_fanout_publisher_socket_options (_socket, publisher.no_drop, publisher.send_timeout);
         std::string listener_endpoint;
         for (const auto &endpoint : publisher.bind_endpoints) {
             _socket.bind (endpoint);

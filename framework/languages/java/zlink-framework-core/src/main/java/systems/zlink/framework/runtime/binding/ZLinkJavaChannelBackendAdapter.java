@@ -35,9 +35,8 @@ final class ZLinkJavaChannelBackendAdapter implements ZLinkChannelBackendAdapter
     @Override
     public ZLinkBackendPublisherSocket createPublisherSocket(
             ZLinkBackendContext context, Duration sendTimeout) {
-        var socket =
-                ZLinkJavaSocketOptions.configureFrameworkSocket(
-                        nativeContext(context).createPubSocket());
+        var socket = nativeContext(context).createPubSocket();
+        socket.options().linger(Duration.ZERO);
         socket.options().sendTimeout(sendTimeout);
         return new ZLinkJavaPublisherSocket(socket);
     }

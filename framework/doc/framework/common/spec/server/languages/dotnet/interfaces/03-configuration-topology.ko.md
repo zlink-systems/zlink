@@ -15,7 +15,6 @@ Spot·Actor 등록과 실행 중 weight 변경의 정확한 C# signature를 이 
 public interface IZLinkFrameworkOptions
 {
     TimeSpan DefaultRequestTimeout { get; set; }
-    TimeSpan DefaultSocketSendTimeout { get; set; }
     TimeSpan SessionReplacementCallbackTimeout { get; set; }
     long ApplicationVersion { get; set; }
     string? MaintenanceWave { get; set; }
@@ -80,7 +79,6 @@ public interface IZLinkMeshNodeBuilder
     IZLinkMeshNodeBuilder SetInstanceSpotIdleTimeout(TimeSpan timeout);
     IZLinkMeshObjectRoleBuilder Objects();
     IZLinkMeshNodeSocketConfig ConfigureRouterSocket();
-    IZLinkSpotPublisherConfig ConfigureSpotPublisher();
     IZLinkMeshPeerConnections PeerConnections { get; }
 
     IZLinkMeshNodeBuilder SetDefaultRequestTimeout(TimeSpan timeout);
@@ -244,6 +242,7 @@ public interface IZLinkFanoutChannelBuilder
     IZLinkFanoutChannelBuilder SetAdvertiseHost(string advertiseHost);
     IZLinkFanoutChannelBuilder SetRoutingId(RoutingId publisherRoutingId);
     IZLinkFanoutChannelBuilder SetRoutingIdPrefix(string prefix);
+    IZLinkFanoutChannelBuilder SetSendTimeout(TimeSpan timeout);
     IZLinkFanoutChannelBuilder SetNoDrop(bool noDrop = true);
     IZLinkFanoutChannelBuilder EnableSubscriber();
     IZLinkFanoutChannelBuilder Subscribe(string topic);
@@ -351,7 +350,7 @@ discovery 결과는 이 handle로 변경하지 않는다.
 `Client` 또는 `Server`인 Mesh와 Location Store가 없으면 startup이 실패한다. Global ActorId가 current Mesh와
 owner route를 결정하므로 이 설정은 MeshName을 받지 않는다.
 
-`DefaultRequestTimeout`의 기본값은 30초, `DefaultSocketSendTimeout`의 기본값은 1초다. `DefaultSocketSendTimeout`은 Classic fanout publisher의 send timeout에만 적용한다([Submit과 completion §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)).
+`DefaultRequestTimeout`의 기본값은 30초다. Fanout builder의 publisher 설정은 [Channel messaging §7](../../../02-channel-transport/02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)을 따른다.
 `SessionReplacementCallbackTimeout`은 actor binding 교체 callback이 실행될 수 있는 최대 시간이며 기본값은
 30초다. 이 시간을 넘기면 Framework가 물러난 session을 강제로 닫는다. `Worker`는 worker의
 최소·최대 thread 수와 idle timeout을 host startup 전에 설정한다.
@@ -482,20 +481,6 @@ Node placement를 포함한 weighted selection은 후보 weight 합계를 최소
 ## 5. Publisher와 runtime option
 
 ```csharp
-public interface IZLinkSpotPublisherConfig
-{
-    ulong SendHighWaterMark { get; set; }
-    TimeSpan? SendTimeout { get; set; }
-    TimeSpan? Linger { get; set; }
-}
-
-public interface IZLinkSpotSubscriberConfig
-{
-    ulong ReceiveHighWaterMark { get; set; }
-    TimeSpan? ReceiveTimeout { get; set; }
-    TimeSpan? Linger { get; set; }
-}
-
 public interface IZLinkSocketConfig
 {
     long MaxMessageSize { get; set; }
@@ -569,7 +554,6 @@ public interface IZLinkMeshNodeSocketConfig
 
 `IPv6`, `TcpNoDelay`, `Immediate`는 값을 지정한 경우에만 socket에 적용한다. `null`이면 적용하지 않아 Core 기본값이 남는다.
 
-`ConfigureSpotPublisher()`는 publish 전용 전달 정책 option을 제공하지 않는다.
 Logical Multicast의 완료 경계는 [Submit과 completion §6](../../../01-execution/01-submit-and-completion.ko.md)이 정한다.
 
 `IZLinkRouteMeshRuntimeOptions`는 public DI singleton이다. 등록되지 않은 membership을 조회하면

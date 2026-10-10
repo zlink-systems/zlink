@@ -46,7 +46,7 @@ public sealed class OneWaySendContracts
     [Fact]
     public void ClassicFanoutPublisher_KeepsSendTimeout()
     {
-        Assert.NotNull(typeof(IZLinkSpotPublisherConfig).GetProperty("SendTimeout"));
-        Assert.NotNull(typeof(IZLinkFrameworkOptions).GetProperty("DefaultSocketSendTimeout"));
+        Assert.NotNull(typeof(IZLinkFanoutChannelBuilder).GetMethod("SetSendTimeout"));
+        Assert.Null(typeof(IZLinkFrameworkOptions).GetProperty("DefaultSocketSendTimeout"));
     }
 }

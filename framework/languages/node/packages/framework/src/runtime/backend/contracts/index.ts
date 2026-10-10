@@ -552,6 +552,7 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
 }
 
 export interface ZLinkBackendPublisherSocket extends ZLinkBackendSocket {
+  lingerMs: number;
   sendTimeoutMs: number;
   sendHighWaterMark: number;
   noDrop: boolean;
