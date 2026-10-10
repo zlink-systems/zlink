@@ -17,11 +17,12 @@ import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locations.redis.*;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.*;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -43,7 +44,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                         "LEASE_TTL_MS=" + options.configureLocations().ownerLeaseTtl().toMillis());
                 options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 var node = options.addRouteMesh("probe");
-                node.listen("tcp://127.0.0.1:" + System.getProperty("probe.port"))
+                node.listen("tcp://127.0.0.1:0")
                         .setRoutingId(RoutingId.from(System.getProperty("probe.node")));
                 node.objects()
                         .server()
@@ -110,10 +111,6 @@ public class ZLinkEndedActorOwnerIntegrationTest {
         var logs = Files.createTempDirectory("zlink-1570-public-");
         System.out.println("Actor crash logs: " + logs);
         String prefix = "actor-reclaim-" + UUID.randomUUID() + ":";
-        int port;
-        try (var listener = new ServerSocket(0)) {
-            port = listener.getLocalPort();
-        }
         try (var store =
                 new ZLinkRedisLocationStore(
                         new ZLinkRedisLocationOptions()
@@ -132,7 +129,6 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                                         "-Dprobe.redis=" + redis,
                                         "-Dprobe.prefix=" + prefix,
                                         "-Dprobe.node=restarted-node",
-                                        "-Dprobe.port=" + port,
                                         "-cp",
                                         System.getProperty("zlink.test.classpath"),
                                         getClass().getName(),
@@ -161,6 +157,11 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                         Thread.sleep(10);
                     }
                     long generation = Long.parseLong(created.group(1));
+                    Matcher listener =
+                            Pattern.compile("LISTEN_ENDPOINT=tcp://127\\.0\\.0\\.1:(\\d+)")
+                                    .matcher(content);
+                    Assertions.assertTrue(listener.find(), content);
+                    Assertions.assertTrue(Integer.parseInt(listener.group(1)) > 0);
                     Assertions.assertTrue(generation > previous);
                     Assertions.assertTrue(content.contains("FACTORY_INIT pid=" + child.pid()));
                     previous = generation;
@@ -216,6 +217,11 @@ public class ZLinkEndedActorOwnerIntegrationTest {
     public static void main(String[] args) throws Exception {
         try (var app =
                 new SpringApplicationBuilder(Config.class).web(WebApplicationType.NONE).run()) {
+            System.out.println(
+                    "LISTEN_ENDPOINT="
+                            + app.getBean(ZLinkFrameworkRuntime.class)
+                                    .listenerStatus(ZLinkListenerKind.ROUTE_MESH, "probe")
+                                    .endpoint());
             var actors = app.getBean(ZLinkActorManager.class);
             var result =
                     args[0].equals("create")
