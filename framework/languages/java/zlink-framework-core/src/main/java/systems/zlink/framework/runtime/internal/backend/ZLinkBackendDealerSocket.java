@@ -15,6 +15,19 @@ public interface ZLinkBackendDealerSocket
 
     CompletionStage<ZLinkBackendReceived> request(List<Message> parts, Duration timeout);
 
+    Runnable receiveAdmission();
+
+    void setReceiveAdmission(Runnable admission);
+
+    default CompletionStage<ZLinkBackendReceived> request(
+            List<Message> parts, Duration timeout, Runnable admission) {
+        return request(parts, timeout)
+                .whenComplete(
+                        (reply, failure) -> {
+                            if (failure == null && admission != null) admission.run();
+                        });
+    }
+
     ZLinkBackendReceived recv(ZLinkBackendRecvMode mode);
 
     /** Applies the host's absolute paired-socket receive-flow state. */

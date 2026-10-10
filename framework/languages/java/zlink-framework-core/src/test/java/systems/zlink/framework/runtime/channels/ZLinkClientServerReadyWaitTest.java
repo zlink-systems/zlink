@@ -376,6 +376,7 @@ final class ZLinkClientServerReadyWaitTest {
     private record Reply(String value) {}
 
     private static final class Fixture implements AutoCloseable {
+        private Runnable receiveAdmission;
         private final ManualTime time = new ManualTime();
         private final CountDownLatch admissionListening = new CountDownLatch(1);
         private final CompletableFuture<ZLinkBackendReceived> admission =
@@ -480,6 +481,11 @@ final class ZLinkClientServerReadyWaitTest {
                                                 }
                                                 case "disconnect" -> {
                                                     disconnects.incrementAndGet();
+                                                    yield null;
+                                                }
+                                                case "receiveAdmission" -> receiveAdmission;
+                                                case "setReceiveAdmission" -> {
+                                                    receiveAdmission = (Runnable) args[0];
                                                     yield null;
                                                 }
                                                 case "setReceiveFlowState", "setChannelName" ->

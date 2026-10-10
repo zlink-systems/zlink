@@ -305,7 +305,61 @@ final class ZLinkM6ARuntimeContractTest {
     }
 
     @Test
-    void livenessResendsOneProbeAndOnlyMatchingAckRenewsDeadline() {
+    void previousAckIsReceiveEvidenceAndDoesNotClearTheOutstandingProbe() {
+        var liveness = new ZLinkServiceLivenessRegistry();
+        RoutingId peer = RoutingId.from("peer");
+        liveness.admit(peer, "pipe", 0);
+        long probe = liveness.tick(Duration.ofSeconds(5).toNanos()).probes().getFirst().probeId();
+        assertFalse(
+                liveness.acknowledge(peer, "pipe", probe + 1, Duration.ofSeconds(14).toNanos()));
+        assertTrue(liveness.tick(Duration.ofSeconds(15).toNanos()).timedOutNodes().isEmpty());
+        assertEquals(
+                probe,
+                liveness.tick(Duration.ofSeconds(20).toNanos()).probes().getFirst().probeId());
+        assertEquals(
+                List.of(peer), liveness.tick(Duration.ofSeconds(29).toNanos()).timedOutNodes());
+    }
+
+    @Test
+    void anyRecordOwnerMatchesSharedFourLanguageContract() throws java.io.IOException {
+        var fixture = java.nio.file.Path.of("../../../test/fixtures/liveness-any-record.tsv");
+        var rows =
+                java.nio.file.Files.readAllLines(fixture).stream()
+                        .filter(row -> !row.isEmpty() && !row.startsWith("#"))
+                        .toList();
+        assertEquals(9, rows.size());
+        for (String row : rows) {
+            String[] fields = row.split("\t");
+            var owner = new ZLinkServiceLivenessRegistry();
+            var peer = RoutingId.from("peer");
+            var receipt = owner.admit(peer, "current", 0);
+            owner.tick(Duration.ofSeconds(5).toNanos());
+            if (fields[0].equals("retired_connection"))
+                owner.admit(peer, "replacement", Duration.ofSeconds(6).toNanos());
+            else if (fields[0].equals("other_connection"))
+                receipt = owner.admit(RoutingId.from("other"), "other", 0);
+            long received = Duration.ofMillis(Long.parseLong(fields[1])).toNanos();
+            if (fields[0].equals("previous_ack"))
+                assertFalse(owner.acknowledge(peer, "current", 2, received));
+            else receipt.recordReceived(received);
+            var tick = owner.tick(Duration.ofMillis(Long.parseLong(fields[2])).toNanos());
+            assertFalse(tick.timedOutNodes().contains(peer), fields[0]);
+            assertEquals(
+                    Long.parseLong(fields[4]),
+                    tick.probes().stream()
+                            .filter(probe -> probe.nodeRoutingId().equals(peer))
+                            .count(),
+                    fields[0]);
+            assertTrue(
+                    owner.tick(Duration.ofMillis(Long.parseLong(fields[3])).toNanos())
+                            .timedOutNodes()
+                            .contains(peer),
+                    fields[0]);
+        }
+    }
+
+    @Test
+    void livenessResendsOneProbeAndOnlyMatchingAckClearsItsId() {
         var liveness =
                 new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer");
@@ -333,7 +387,6 @@ final class ZLinkM6ARuntimeContractTest {
         var liveness = new ZLinkServiceLivenessRegistry(probeInterval, Duration.ofSeconds(6));
         RoutingId peer = RoutingId.from("peer-first-ack");
         liveness.admit(peer, "pipe", 0);
-        assertTrue(liveness.requestProbe(peer, "pipe", 0));
 
         var first = liveness.tick(0);
         assertEquals(1, first.probes().size());
@@ -344,57 +397,56 @@ final class ZLinkM6ARuntimeContractTest {
 
         long ackNanos = probeInterval.toNanos() + 1;
         assertTrue(liveness.acknowledge(peer, "pipe", probe, ackNanos));
-        assertTrue(liveness.tick(ackNanos + probeInterval.toNanos() - 1).probes().isEmpty());
-        assertEquals(1, liveness.tick(ackNanos + probeInterval.toNanos()).probes().size());
+        // Transport liveness §3: receive traffic does not move the probe schedule.
+        assertTrue(liveness.tick(2 * probeInterval.toNanos() - 1).probes().isEmpty());
+        assertEquals(1, liveness.tick(2 * probeInterval.toNanos()).probes().size());
     }
 
     @Test
-    void livenessRequiresAProbeAckBeforeAConnectionCanBeSelected() {
+    void livenessAdmissionImmediatelyMakesFirstProbeDue_PerTransportLivenessSection3() {
+        var owner = new ZLinkServiceLivenessRegistry();
+        owner.admit(RoutingId.from("initial-peer"), "initial-pair", 100);
+        assertEquals(1, owner.tick(100).probes().size());
+        assertTrue(owner.tick(100 + Duration.ofSeconds(5).toNanos() - 1).probes().isEmpty());
+        assertEquals(1, owner.tick(100 + Duration.ofSeconds(5).toNanos()).probes().size());
+    }
+
+    @Test
+    void livenessAckOnlyClearsOutstandingId_PerTransportLivenessSection5() {
         var liveness =
                 new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-ready");
         long now = 100;
 
+        // 05-transport-liveness.ko.md:228 (§5): Ready is decided by the handshake, not ACK.
         liveness.admit(peer, "pipe", now);
-        assertFalse(liveness.isReady(peer, "pipe"));
-        assertTrue(liveness.requestProbe(peer, "pipe", now));
-        assertFalse(liveness.requestProbe(peer, "pipe", now));
-
         var probe = liveness.tick(now).probes().getFirst();
         assertTrue(liveness.acknowledgeProbe(peer, "pipe", probe.probeId()).isPresent());
-        assertFalse(liveness.isReady(peer, "pipe"));
         assertTrue(liveness.acknowledge(peer, "pipe", probe.probeId(), now + 1));
-        assertTrue(liveness.isReady(peer, "pipe"));
-        assertFalse(liveness.requestProbe(peer, "pipe", now + 1));
     }
 
     @Test
-    void livenessAcceptsPeriodicAckWithoutAnotherReadyTransition() {
+    void livenessAcceptsPeriodicAckWithoutOwningReady_PerTransportLivenessSection5() {
         var liveness =
                 new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-periodic-ack");
         long now = 100;
 
         liveness.admit(peer, "pipe", now);
-        assertTrue(liveness.requestProbe(peer, "pipe", now));
         var first = liveness.tick(now).probes().getFirst();
-        assertFalse(liveness.isReady(peer, "pipe"));
         assertTrue(liveness.acknowledge(peer, "pipe", first.probeId(), now + 1));
-        assertTrue(liveness.isReady(peer, "pipe"));
 
         var periodic = liveness.tick(now + 1 + Duration.ofSeconds(5).toNanos()).probes().getFirst();
-        assertTrue(liveness.isReady(peer, "pipe"));
         assertTrue(
                 liveness.acknowledge(
                         peer,
                         "pipe",
                         periodic.probeId(),
                         now + 2 + Duration.ofSeconds(5).toNanos()));
-        assertTrue(liveness.isReady(peer, "pipe"));
     }
 
     @Test
-    void oldConnectionAckCannotReadyOrRenewAReplacementConnection() {
+    void oldConnectionAckCannotRenewAReplacementConnection() {
         var liveness =
                 new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-replaced");
@@ -406,7 +458,6 @@ final class ZLinkM6ARuntimeContractTest {
         liveness.admit(peer, "new-pipe", Duration.ofSeconds(6).toNanos());
         assertFalse(
                 liveness.acknowledge(peer, "old-pipe", oldProbe, Duration.ofSeconds(7).toNanos()));
-        assertFalse(liveness.isReady(peer, "new-pipe"));
         assertEquals(
                 List.of(peer), liveness.tick(Duration.ofSeconds(22).toNanos()).timedOutNodes());
     }

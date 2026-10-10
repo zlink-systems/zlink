@@ -2288,6 +2288,18 @@ final class ZLinkChannelRuntimeTest {
     }
 
     private static final class ManagedAdmissionDealer implements ZLinkBackendDealerSocket {
+        private volatile Runnable receiveAdmission;
+
+        @Override
+        public Runnable receiveAdmission() {
+            return receiveAdmission;
+        }
+
+        @Override
+        public void setReceiveAdmission(Runnable admission) {
+            receiveAdmission = admission;
+        }
+
         private final java.util.Queue<ZLinkBackendReceived> inbound =
                 new java.util.concurrent.ConcurrentLinkedQueue<>();
         private final String endpoint;
@@ -2484,6 +2496,18 @@ final class ZLinkChannelRuntimeTest {
 
     private static final class FakeDealerSocket
             implements ZLinkBackendDealerSocket, ZLinkTestAdmissionFactory.Backend {
+        private volatile Runnable receiveAdmission;
+
+        @Override
+        public Runnable receiveAdmission() {
+            return receiveAdmission;
+        }
+
+        @Override
+        public void setReceiveAdmission(Runnable admission) {
+            receiveAdmission = admission;
+        }
+
         final List<String> connected = new ArrayList<>();
         final List<String> disconnected = new ArrayList<>();
         List<Message> lastSendParts = List.of();

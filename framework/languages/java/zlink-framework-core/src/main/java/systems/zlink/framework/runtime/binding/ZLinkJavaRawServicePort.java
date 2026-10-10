@@ -47,6 +47,21 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private CompletableFuture<Void> closeCompletion;
 
+    private Function<
+                    RoutingId,
+                    systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry
+                            .PeerState>
+            receiveSource;
+
+    void setReceiveSource(
+            Function<
+                            RoutingId,
+                            systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceLivenessRegistry.PeerState>
+                    source) {
+        receiveSource = source;
+    }
+
     ZLinkJavaRawServicePort() {
         this(Zlink.createContext(), true);
     }
@@ -207,6 +222,18 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             Duration timeout,
             Function<List<Message>, T> decodeReply,
             Consumer<T> discardReply) {
+        return requestMessages(router, target, messages, timeout, decodeReply, discardReply, null);
+    }
+
+    <T> CompletionStage<T> requestMessages(
+            RouterSocket router,
+            RoutingId target,
+            List<Message> messages,
+            Duration timeout,
+            Function<List<Message>, T> decodeReply,
+            Consumer<T> discardReply,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
+                    receivedAdmission) {
         long startedAt = System.nanoTime();
         List<Message> ownedMessages = claimMessages(messages);
         boolean completionOwns = false;
@@ -220,13 +247,18 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             if (ownedMessages.isEmpty()) {
                 throw new IllegalArgumentException("service request must not be empty");
             }
+            var admission =
+                    receivedAdmission != null
+                            ? receivedAdmission
+                            : receiveSource == null ? null : receiveSource.apply(target);
             var request = router.request(target);
             RequestSubmitOperation submit = request.message(ownedMessages.getFirst());
             for (int index = 1; index < ownedMessages.size(); index++) {
                 submit.message(ownedMessages.get(index));
             }
             CompletionStage<List<Message>> bindingReply =
-                    ZLinkJavaSocketSupport.reply(submit.timeout(timeout).submit(), deadlineNanos);
+                    ZLinkJavaSocketSupport.reply(
+                            submit.timeout(timeout).submit(), deadlineNanos, admission);
             CompletableFuture<T> completion = new CompletableFuture<>();
             bindingReply.whenComplete(
                     (reply, failure) -> {

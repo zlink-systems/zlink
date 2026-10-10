@@ -11,11 +11,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
-/**
- * Tracks probe round trips on a monotonic clock. Application traffic never extends a peer deadline.
- */
+/** Tracks received records and independent periodic probes on a monotonic clock. */
 public final class ZLinkServiceLivenessRegistry {
     public static final Duration DEFAULT_PROBE_INTERVAL = Duration.ofSeconds(5);
     public static final Duration DEFAULT_PEER_TIMEOUT = Duration.ofSeconds(15);
@@ -46,44 +46,24 @@ public final class ZLinkServiceLivenessRegistry {
         return ZLinkCompletionBridge.await(stateLane.runNowOrQueue(work));
     }
 
-    public void admit(RoutingId nodeRoutingId, String connectionId, long nowNanos) {
-        inStateLane(
-                () -> {
-                    admitCore(nodeRoutingId, connectionId, nowNanos);
-                    return null;
-                });
+    public PeerState admit(RoutingId nodeRoutingId, String connectionId, long nowNanos) {
+        return inStateLane(() -> admitCore(nodeRoutingId, connectionId, nowNanos));
     }
 
-    private void admitCore(RoutingId nodeRoutingId, String connectionId, long nowNanos) {
+    private PeerState admitCore(RoutingId nodeRoutingId, String connectionId, long nowNanos) {
         requireConnection(nodeRoutingId, connectionId);
         PeerState current = peers.get(nodeRoutingId);
         if (current != null && current.connectionId.equals(connectionId)) {
-            return;
+            return current;
         }
-        peers.put(
-                nodeRoutingId,
-                new PeerState(
-                        connectionId,
-                        addExact(nowNanos, peerTimeoutNanos),
-                        addExact(nowNanos, probeIntervalNanos)));
+        PeerState admitted =
+                new PeerState(connectionId, nowNanos, probeIntervalNanos, peerTimeoutNanos);
+        peers.put(nodeRoutingId, admitted);
+        return admitted;
     }
 
-    /** Requests the first probe immediately after a new connection is admitted. */
-    public boolean requestProbe(RoutingId nodeRoutingId, String connectionId, long nowNanos) {
-        return inStateLane(() -> requestProbeCore(nodeRoutingId, connectionId, nowNanos));
-    }
-
-    private boolean requestProbeCore(RoutingId nodeRoutingId, String connectionId, long nowNanos) {
-        PeerState state = peers.get(nodeRoutingId);
-        if (state == null
-                || !state.connectionId.equals(connectionId)
-                || state.ready
-                || state.outstandingProbe != 0
-                || state.nextProbeNanos <= nowNanos) {
-            return false;
-        }
-        state.nextProbeNanos = Math.min(state.nextProbeNanos, nowNanos);
-        return true;
+    public PeerState connection(RoutingId nodeRoutingId) {
+        return inStateLane(() -> peers.get(nodeRoutingId));
     }
 
     public boolean disconnect(RoutingId nodeRoutingId, String connectionId) {
@@ -121,26 +101,8 @@ public final class ZLinkServiceLivenessRegistry {
     private boolean acknowledgeCore(
             RoutingId nodeRoutingId, String connectionId, long probeId, long nowNanos) {
         PeerState state = peers.get(nodeRoutingId);
-        if (state == null
-                || !state.connectionId.equals(connectionId)
-                || state.outstandingProbe != probeId
-                || probeId == 0) {
-            return false;
-        }
-        state.outstandingProbe = 0;
-        state.deadlineNanos = addExact(nowNanos, peerTimeoutNanos);
-        state.nextProbeNanos = addExact(nowNanos, probeIntervalNanos);
-        state.ready = true;
-        return true;
-    }
-
-    public boolean isReady(RoutingId nodeRoutingId, String connectionId) {
-        return inStateLane(() -> isReadyCore(nodeRoutingId, connectionId));
-    }
-
-    private boolean isReadyCore(RoutingId nodeRoutingId, String connectionId) {
-        PeerState state = peers.get(nodeRoutingId);
-        return state != null && state.connectionId.equals(connectionId) && state.ready;
+        if (state == null || !state.connectionId.equals(connectionId)) return false;
+        return state.acknowledge(probeId, nowNanos);
     }
 
     public Tick tick(long nowNanos) {
@@ -152,18 +114,12 @@ public final class ZLinkServiceLivenessRegistry {
         List<RoutingId> timedOut = new ArrayList<>();
         for (Map.Entry<RoutingId, PeerState> entry : peers.entrySet()) {
             PeerState state = entry.getValue();
-            if (nowNanos >= state.deadlineNanos) {
+            if (state.isExpired(nowNanos)) {
                 timedOut.add(entry.getKey());
                 continue;
             }
-            if (nowNanos < state.nextProbeNanos) {
-                continue;
-            }
-            if (state.outstandingProbe == 0) {
-                state.outstandingProbe = allocateProbeId();
-            }
-            state.nextProbeNanos = addExact(nowNanos, probeIntervalNanos);
-            probes.add(new Probe(entry.getKey(), state.connectionId, state.outstandingProbe));
+            long probeId = state.tryGetProbe(nowNanos, this::allocateProbeId);
+            if (probeId != 0) probes.add(new Probe(entry.getKey(), state.connectionId, probeId));
         }
         timedOut.forEach(peers::remove);
         return new Tick(List.copyOf(probes), List.copyOf(timedOut));
@@ -199,17 +155,59 @@ public final class ZLinkServiceLivenessRegistry {
 
     public record Tick(List<Probe> probes, List<RoutingId> timedOutNodes) {}
 
-    private static final class PeerState {
+    public static final class PeerState implements Runnable {
         private final String connectionId;
-        private long deadlineNanos;
+        private final AtomicLong deadlineNanos;
+        private final long probeIntervalNanos;
+        private final long peerTimeoutNanos;
         private long nextProbeNanos;
         private long outstandingProbe;
-        private boolean ready;
 
-        private PeerState(String connectionId, long deadlineNanos, long nextProbeNanos) {
+        public PeerState(String connectionId, long admittedNanos) {
+            this(
+                    connectionId,
+                    admittedNanos,
+                    DEFAULT_PROBE_INTERVAL.toNanos(),
+                    DEFAULT_PEER_TIMEOUT.toNanos());
+        }
+
+        private PeerState(
+                String connectionId,
+                long admittedNanos,
+                long probeIntervalNanos,
+                long peerTimeoutNanos) {
             this.connectionId = connectionId;
-            this.deadlineNanos = deadlineNanos;
-            this.nextProbeNanos = nextProbeNanos;
+            this.probeIntervalNanos = probeIntervalNanos;
+            this.peerTimeoutNanos = peerTimeoutNanos;
+            this.deadlineNanos = new AtomicLong(addExact(admittedNanos, peerTimeoutNanos));
+            this.nextProbeNanos = admittedNanos;
+        }
+
+        public void recordReceived(long nowNanos) {
+            deadlineNanos.accumulateAndGet(addExact(nowNanos, peerTimeoutNanos), Math::max);
+        }
+
+        @Override
+        public void run() {
+            recordReceived(System.nanoTime());
+        }
+
+        public boolean isExpired(long nowNanos) {
+            return nowNanos >= deadlineNanos.get();
+        }
+
+        public long tryGetProbe(long nowNanos, LongSupplier allocateProbeId) {
+            if (nowNanos < nextProbeNanos) return 0;
+            if (outstandingProbe == 0) outstandingProbe = allocateProbeId.getAsLong();
+            nextProbeNanos = addExact(nowNanos, probeIntervalNanos);
+            return outstandingProbe;
+        }
+
+        public boolean acknowledge(long probeId, long nowNanos) {
+            recordReceived(nowNanos);
+            if (probeId == 0 || outstandingProbe != probeId) return false;
+            outstandingProbe = 0;
+            return true;
         }
     }
 }

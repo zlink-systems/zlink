@@ -724,6 +724,18 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
     private static final class FakeDealerSocket extends FakeConnectableSocket
             implements ZLinkBackendDealerSocket {
+        private volatile Runnable receiveAdmission;
+
+        @Override
+        public Runnable receiveAdmission() {
+            return receiveAdmission;
+        }
+
+        @Override
+        public void setReceiveAdmission(Runnable admission) {
+            receiveAdmission = admission;
+        }
+
         FakeDealerSocket(List<String> calls, String name) {
             super(calls, name);
         }

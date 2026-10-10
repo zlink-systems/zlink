@@ -300,6 +300,26 @@ final class ZLinkClientServerM6ARuntimeTest {
     }
 
     @Test
+    void clientReceivedProbeKeepsAdmissionAliveWithoutMatchingAck() {
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        ControlledDealer dealer = new ControlledDealer();
+        var value =
+                descriptor("orders", RoutingId.from("server"), 7, 1, "tcp://127.0.0.1:7001", 100);
+        sockets.addClientServerConnection("receipt", value, dealer);
+        assertTrue(
+                sockets.admitClientServerConnection(
+                        "receipt", value, sockets.clientServerTransportReady("receipt")));
+        long lastAdmission = System.nanoTime();
+        dealer.inbound.add(received(ZLinkClientServerServiceWire.encodeLivenessProbe(91)));
+        sockets.receiveClientServerControls("receipt");
+        sockets.tickClientServerLiveness(lastAdmission + TimeUnit.SECONDS.toNanos(15));
+        assertSame(dealer, sockets.clientForOutbound("orders"));
+        sockets.tickClientServerLiveness(System.nanoTime() + TimeUnit.SECONDS.toNanos(15));
+        assertNull(sockets.clientForOutbound("orders"));
+        sockets.closeAll();
+    }
+
+    @Test
     void clientLivenessAndPushedUpdateAreConnectionFenced() {
         ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
         ControlledDealer dealer = new ControlledDealer();
@@ -955,6 +975,7 @@ final class ZLinkClientServerM6ARuntimeTest {
     }
 
     private static ZLinkBackendDealerSocket dealer(String name) {
+        var receiveAdmission = new java.util.concurrent.atomic.AtomicReference<Runnable>();
         return (ZLinkBackendDealerSocket)
                 Proxy.newProxyInstance(
                         ZLinkBackendDealerSocket.class.getClassLoader(),
@@ -962,6 +983,11 @@ final class ZLinkClientServerM6ARuntimeTest {
                         (proxy, method, arguments) ->
                                 switch (method.getName()) {
                                     case "name" -> name;
+                                    case "receiveAdmission" -> receiveAdmission.get();
+                                    case "setReceiveAdmission" -> {
+                                        receiveAdmission.set((Runnable) arguments[0]);
+                                        yield null;
+                                    }
                                     case "equals" -> proxy == arguments[0];
                                     case "hashCode" -> System.identityHashCode(proxy);
                                     case "close",
@@ -981,6 +1007,7 @@ final class ZLinkClientServerM6ARuntimeTest {
 
     private static ZLinkBackendDealerSocket admittingDealer(
             String name, ZLinkClientServerServerDescriptor descriptor) {
+        var receiveAdmission = new java.util.concurrent.atomic.AtomicReference<Runnable>();
         return (ZLinkBackendDealerSocket)
                 Proxy.newProxyInstance(
                         ZLinkBackendDealerSocket.class.getClassLoader(),
@@ -988,6 +1015,11 @@ final class ZLinkClientServerM6ARuntimeTest {
                         (proxy, method, arguments) ->
                                 switch (method.getName()) {
                                     case "name" -> name;
+                                    case "receiveAdmission" -> receiveAdmission.get();
+                                    case "setReceiveAdmission" -> {
+                                        receiveAdmission.set((Runnable) arguments[0]);
+                                        yield null;
+                                    }
                                     case "equals" -> proxy == arguments[0];
                                     case "hashCode" -> System.identityHashCode(proxy);
                                     case "close",
@@ -1166,6 +1198,18 @@ final class ZLinkClientServerM6ARuntimeTest {
     }
 
     private static final class ControlledDealer implements ZLinkBackendDealerSocket {
+        private volatile Runnable receiveAdmission;
+
+        @Override
+        public Runnable receiveAdmission() {
+            return receiveAdmission;
+        }
+
+        @Override
+        public void setReceiveAdmission(Runnable admission) {
+            receiveAdmission = admission;
+        }
+
         private final Deque<ZLinkBackendReceived> inbound = new ArrayDeque<>();
         private systems.zlink.contracts.errors.ZlinkRecvException receiveFailure;
         private final List<byte[]> sent = new ArrayList<>();
@@ -1235,6 +1279,18 @@ final class ZLinkClientServerM6ARuntimeTest {
 
     /** A DEALER whose poller wait blocks for its timeout and records a close during a wait. */
     private static final class WaitingDealer implements ZLinkBackendDealerSocket {
+        private volatile Runnable receiveAdmission;
+
+        @Override
+        public Runnable receiveAdmission() {
+            return receiveAdmission;
+        }
+
+        @Override
+        public void setReceiveAdmission(Runnable admission) {
+            receiveAdmission = admission;
+        }
+
         private final AtomicInteger waits = new AtomicInteger();
         private final AtomicInteger closes = new AtomicInteger();
         private final AtomicInteger closedWhileWaiting = new AtomicInteger();

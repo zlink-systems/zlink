@@ -31,6 +31,7 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState;
 import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
 
 import java.time.Duration;
@@ -730,7 +731,8 @@ final class ZLinkChannelSocketRegistry {
         current.physicalGeneration++;
         current.admissionGeneration++;
         current.ready = false;
-        current.outstandingProbeId = 0;
+        current.liveness = null;
+        current.dealer.setReceiveAdmission(null);
         return new AdmissionFence(
                 current.physicalGeneration, current.admissionGeneration, current.dealer);
     }
@@ -793,7 +795,8 @@ final class ZLinkChannelSocketRegistry {
         current.physicalGeneration++;
         current.admissionGeneration++;
         current.ready = false;
-        current.outstandingProbeId = 0;
+        current.liveness = null;
+        current.dealer.setReceiveAdmission(null);
     }
 
     void restartClientServerAdmission(String connectionId, AdmissionFence expectedFence) {
@@ -846,11 +849,11 @@ final class ZLinkChannelSocketRegistry {
                             }
                             current.descriptor = descriptor;
                             current.ready = true;
-                            current.nextProbeAtNanos =
-                                    System.nanoTime() + CLIENT_SERVER_PROBE_INTERVAL_NANOS;
-                            current.deadlineAtNanos =
-                                    System.nanoTime() + CLIENT_SERVER_DEADLINE_NANOS;
-                            current.outstandingProbeId = 0;
+                            if (current.liveness == null) {
+                                current.liveness =
+                                        new PeerState(current.connectionId, System.nanoTime());
+                            }
+                            current.dealer.setReceiveAdmission(current.liveness);
                             ClientServerConnection shared =
                                     clientServerConnections.values().stream()
                                             .filter(
@@ -1255,19 +1258,14 @@ final class ZLinkChannelSocketRegistry {
                                         || !connection.ready) {
                                     return ClientLivenessAction.NONE;
                                 }
-                                if (nowNanos >= connection.deadlineAtNanos) {
+                                if (connection.liveness.isExpired(nowNanos)) {
                                     return new ClientLivenessAction(
                                             invalidateClientServerAdmissionCore(connection), 0);
-                                } else if (nowNanos >= connection.nextProbeAtNanos) {
-                                    connection.nextProbeAtNanos =
-                                            nowNanos + CLIENT_SERVER_PROBE_INTERVAL_NANOS;
-                                    long probeId =
-                                            connection.outstandingProbeId == 0
-                                                    ? allocateProbeIdCore()
-                                                    : connection.outstandingProbeId;
-                                    connection.outstandingProbeId = probeId;
-                                    return new ClientLivenessAction(null, probeId);
                                 }
+                                long probeId =
+                                        connection.liveness.tryGetProbe(
+                                                nowNanos, this::allocateProbeIdCore);
+                                if (probeId != 0) return new ClientLivenessAction(null, probeId);
                                 return ClientLivenessAction.NONE;
                             });
             if (action.restartFence() != null) {
@@ -1401,6 +1399,7 @@ final class ZLinkChannelSocketRegistry {
     }
 
     private void drainClientServerControls(ClientServerConnection connection) {
+        PeerState admission = connection.liveness;
         ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
         while (batch.canReceiveNext()) {
             if (!connection.dealer.waitForReadable(Duration.ZERO)) {
@@ -1410,6 +1409,7 @@ final class ZLinkChannelSocketRegistry {
             if (received == null) {
                 return;
             }
+            if (admission != null) admission.recordReceived(System.nanoTime());
             batch.record(ZLinkReceiveBatchBudget.bytesOf(received.parts()));
             try (received) {
                 if (received.parts().size() != 1) {
@@ -1506,11 +1506,10 @@ final class ZLinkChannelSocketRegistry {
                                             alias ->
                                                     clientServerConnections.get(alias)
                                                             == connection)
-                            || connection.outstandingProbeId != probeId) {
+                            || connection.liveness == null) {
                         return null;
                     }
-                    connection.outstandingProbeId = 0;
-                    connection.deadlineAtNanos = System.nanoTime() + CLIENT_SERVER_DEADLINE_NANOS;
+                    connection.liveness.acknowledge(probeId, System.nanoTime());
                     return null;
                 });
     }
@@ -1642,7 +1641,8 @@ final class ZLinkChannelSocketRegistry {
         }
         connection.admissionGeneration++;
         connection.ready = false;
-        connection.outstandingProbeId = 0;
+        connection.liveness = null;
+        connection.dealer.setReceiveAdmission(null);
         connection.pendingLivenessAckId = 0;
         return new AdmissionFence(
                 connection.physicalGeneration, connection.admissionGeneration, connection.dealer);
@@ -2152,9 +2152,7 @@ final class ZLinkChannelSocketRegistry {
         private long pendingLivenessAckId;
         private long physicalGeneration = 1;
         private long admissionGeneration = 1;
-        private long nextProbeAtNanos;
-        private long deadlineAtNanos;
-        private long outstandingProbeId;
+        private volatile PeerState liveness;
 
         private ClientServerConnection(
                 String connectionId,

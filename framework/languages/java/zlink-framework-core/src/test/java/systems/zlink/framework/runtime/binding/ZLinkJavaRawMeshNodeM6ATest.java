@@ -139,6 +139,29 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void handshakeAdmissionIsReadyBeforeAnyAck_PerTransportLivenessSection5() throws Exception {
+        // 05-transport-liveness.ko.md:228: Ready has no probe-ACK prerequisite.
+        RoutingId peerRid = RoutingId.from("handshake-ready-peer");
+        try (var context = Zlink.createContext();
+                var node = meshNode(context)) {
+            var topology = new ZLinkServiceTopologyRegistry(descriptor(RoutingId.from("local")));
+            topology.admit(descriptor(peerRid), "pair");
+            var topologyField = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
+            topologyField.setAccessible(true);
+            topologyField.set(node, topology);
+            var readyField =
+                    ZLinkJavaRawMeshNode.class.getDeclaredField("admissionControlReadyConnections");
+            readyField.setAccessible(true);
+            ((java.util.Map<RoutingId, String>) readyField.get(node)).put(peerRid, "pair");
+            Method isReady =
+                    ZLinkJavaRawMeshNode.class.getDeclaredMethod("isReadyPeer", RoutingId.class);
+            isReady.setAccessible(true);
+            assertEquals(true, isReady.invoke(node, peerRid));
+        }
+    }
+
+    @Test
     void sourceWideAdmissionReadySelectsOnlyReadyPeers() {
         RoutingId readyRid = RoutingId.from("ready-peer");
         RoutingId pendingRid = RoutingId.from("pending-peer");
@@ -1768,6 +1791,71 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             assertEquals(
                     RequestResult.NOT_FOUND,
                     ((ZlinkRequestException) failure.getCause().getCause()).getResult());
+        }
+    }
+
+    @Test
+    void nodeReplyRefreshesLivenessWhileApplicationReceiveIsPaused() throws Exception {
+        String suffix = Long.toString(System.nanoTime());
+        RoutingId requesterRid = RoutingId.from("receipt-requester");
+        RoutingId replierRid = RoutingId.from("receipt-replier");
+        try (var context = Zlink.createContext();
+                var queue =
+                        new ZLinkApplicationJobQueue(
+                                ZLinkApplicationJobQueueProfile.BALANCED,
+                                OptionalLong.of(1),
+                                new ZLinkApplicationJobQueue.ProcessorCandidates(
+                                        1, null, null, null));
+                var requester = meshNode(context);
+                var replier = meshNode(context)) {
+            requester.setApplicationJobQueue(queue);
+            requester.setRoutingId(requesterRid);
+            requester.setBind("inproc://receipt-requester-" + suffix);
+            replier.setRoutingId(replierRid);
+            replier.setBind("inproc://receipt-replier-" + suffix);
+            requester.start();
+            replier.start();
+            requester.connectPeer("inproc://receipt-replier-" + suffix, replierRid);
+            awaitAdmitted(requester);
+            replier.startDispatch(
+                    record -> {
+                        try (record;
+                                Message reply = Message.from("reply")) {
+                            record.reply(List.of(reply));
+                        }
+                    });
+            var ownerField = ZLinkJavaRawMeshNode.class.getDeclaredField("liveness");
+            ownerField.setAccessible(true);
+            var owner =
+                    (systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry)
+                            ownerField.get(requester);
+            try (var held = queue.acquire().toCompletableFuture().get(2, TimeUnit.SECONDS);
+                    Message packet = Message.from("request");
+                    Message payload = Message.from(new byte[] {1})) {
+                assertEquals(
+                        systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState
+                                .PAUSED,
+                        queue.snapshot().pressureState());
+                long submittedAt = System.nanoTime();
+                try (var reply =
+                        requester
+                                .spotNode()
+                                .requestToNode(
+                                        replierRid, List.of(packet, payload), Duration.ofSeconds(2))
+                                .toCompletableFuture()
+                                .get(2, TimeUnit.SECONDS)) {
+                    assertEquals(ZLinkBackendRequestResult.OK, reply.result());
+                    assertEquals("reply", reply.parts().getFirst().toUtf8String());
+                    assertEquals(
+                            systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState
+                                    .PAUSED,
+                            queue.snapshot().pressureState());
+                    assertTrue(
+                            owner.tick(submittedAt + Duration.ofSeconds(15).toNanos())
+                                    .timedOutNodes()
+                                    .isEmpty());
+                }
+            }
         }
     }
 

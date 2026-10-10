@@ -121,7 +121,9 @@ public final class ZLinkServiceTopologyRegistry {
         if (!immutableFieldsMatch(current.descriptor(), descriptor)) {
             return AdmissionResult.INVALID_DESCRIPTOR;
         }
-        peers.put(descriptor.nodeRoutingId(), new Peer(descriptor, current.connectionId()));
+        peers.put(
+                descriptor.nodeRoutingId(),
+                new Peer(descriptor, current.connectionId(), current.liveness()));
         rebuildChannelPlansOnLane();
         return AdmissionResult.ADMITTED;
     }
@@ -165,6 +167,19 @@ public final class ZLinkServiceTopologyRegistry {
         readyConnections.remove(nodeRoutingId);
         rebuildChannelPlansOnLane();
         return true;
+    }
+
+    public void bindLiveness(
+            RoutingId nodeRoutingId, ZLinkServiceLivenessRegistry.PeerState liveness) {
+        inStateLane(
+                () -> {
+                    Peer peer = peers.get(nodeRoutingId);
+                    if (peer != null)
+                        peers.put(
+                                nodeRoutingId,
+                                new Peer(peer.descriptor(), peer.connectionId(), liveness));
+                    return null;
+                });
     }
 
     public Optional<Peer> peer(RoutingId nodeRoutingId) {
@@ -495,7 +510,14 @@ public final class ZLinkServiceTopologyRegistry {
     }
 
     /** An admitted peer and the identity of the Core-selected route it was admitted on. */
-    public record Peer(ZLinkServiceNodeDescriptor descriptor, String connectionId) {
+    public record Peer(
+            ZLinkServiceNodeDescriptor descriptor,
+            String connectionId,
+            ZLinkServiceLivenessRegistry.PeerState liveness) {
+        public Peer(ZLinkServiceNodeDescriptor descriptor, String connectionId) {
+            this(descriptor, connectionId, null);
+        }
+
         public Peer {
             Objects.requireNonNull(descriptor, "descriptor");
             if (connectionId == null || connectionId.isBlank()) {
