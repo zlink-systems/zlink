@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Reflection;
 using System.Security.Cryptography;
+using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Locations;
@@ -11,6 +12,157 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class InstanceSpotActivationJournalTests
 {
+    [Theory]
+    [InlineData("mesh", false)]
+    [InlineData("type", false)]
+    [InlineData("descriptor", false)]
+    [InlineData("deadline", false)]
+    [InlineData("operation", false)]
+    [InlineData("metadata", false)]
+    [InlineData("metadataBytes", false)]
+    [InlineData("mesh", true)]
+    [InlineData("type", true)]
+    [InlineData("descriptor", true)]
+    [InlineData("deadline", true)]
+    [InlineData("operation", true)]
+    [InlineData("metadata", true)]
+    [InlineData("metadataBytes", true)]
+    [InlineData("match", false)]
+    public async Task StoredActivationMismatchDoesNotChangeReservation(string field, bool ready)
+    {
+        var (store, reservation, _) = await ReserveCreatingAsync("spot");
+        var operation = Operation(new MeshOperationId(101, 103)) with
+        {
+            Target = Operation(new MeshOperationId(101, 103)).Target with
+            {
+                TargetNodeRid = reservation.TargetDescriptor.Rid,
+            },
+            SourceNodeRid = reservation.TargetDescriptor.Rid,
+            SourceNodeGeneration = 3,
+        };
+        var stored = field switch
+        {
+            "descriptor" => operation with
+            {
+                Target = operation.Target with { DescriptorVersion = "other" },
+            },
+            "deadline" => operation with { DeadlineUnixMs = operation.DeadlineUnixMs + 1 },
+            "mesh" => operation with { Target = operation.Target with { MeshName = "other" } },
+            "type" => operation with { Target = operation.Target with { StableType = "other" } },
+            "metadata" or "metadataBytes" or "match" => operation,
+            "operation" => operation with
+            {
+                OperationId = new MeshOperationId(101, 104),
+                DeadlineUnixMs = operation.DeadlineUnixMs + 1,
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(field)),
+        };
+        var relocations = new InMemoryRelocationStore();
+        var root = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
+            stored,
+            field is "metadata" or "metadataBytes" ? new byte[] { 1, 0 } : null,
+            [new byte[] { 1 }]
+        );
+        relocations.Payloads["activation-root"] = root;
+        var registration = new Zlink.Framework.Runtime.Configuration.ZLinkSpotNodeRegistration
+        {
+            SpotNodeName = "mesh",
+        };
+        registration.InstanceSpotFactories.Add(
+            "sample",
+            new Zlink.Framework.Runtime.Configuration.ZLinkInstanceSpotFactoryRegistration(
+                typeof(object),
+                new()
+            )
+        );
+        var node = RecoverySpotNode.Create(reservation.TargetDescriptor.Rid, 3);
+        using var services = new ServiceCollection().BuildServiceProvider();
+        await using var catalog = new ZLinkSpotNodeCatalog(
+            services,
+            null!,
+            new Zlink.Framework.Runtime.Configuration.ZLinkFrameworkRegistration(),
+            registration,
+            node,
+            "mesh",
+            null,
+            null!
+        );
+        var target = new ZLinkInstanceSpotActivationTarget(
+            store,
+            relocations,
+            catalog,
+            node,
+            registration,
+            reservation.TargetOwner
+        );
+        if (ready)
+        {
+            var creating = Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await store.ReadAuthorityAsync(reservation.Key)
+                )
+                .Snapshot;
+            Assert.True(
+                ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                    creating.Payload.Span,
+                    out var authority
+                )
+            );
+            Assert.IsType<ZLinkObjectCommitResult.Committed>(
+                await store.CommitAsync(
+                    reservation,
+                    ZLinkInstanceSpotAuthorityPayloadCodec.Encode(
+                        authority with
+                        {
+                            State = ZLinkInstanceSpotAuthorityState.Ready,
+                            ActivationRecovery = Recovery(root),
+                        }
+                    )
+                )
+            );
+        }
+        var descriptorsBefore = await store.ListMeshNodesAsync("mesh", new ZLinkPageRequest(10));
+        var before = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(reservation.Key))
+            .Snapshot;
+        var method = typeof(ZLinkInstanceSpotActivationTarget).GetMethod(
+            "ActivateCoreAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        )!;
+        var task =
+            (Task<Task<InstanceSpotActivationTerminal>>)
+                method.Invoke(
+                    target,
+                    [
+                        operation,
+                        field == "metadataBytes"
+                            ? (ReadOnlyMemory<byte>?)new byte[] { 1, 1, 1, 107, 0, 1, 118 }
+                            : null,
+                        new ReadOnlyMemory<byte>[] { new byte[] { 1 } },
+                        CancellationToken.None,
+                    ]
+                )!;
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () => await task);
+        Assert.Equal(
+            field is "match" or "operation"
+                ? ZLinkFrameworkErrorKind.Unavailable
+                : ZLinkFrameworkErrorKind.ProtocolError,
+            failure.Kind
+        );
+        var after = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(reservation.Key))
+            .Snapshot;
+        Assert.Equal(before.StoreVersion, after.StoreVersion);
+        Assert.Equal(before.Payload.ToArray(), after.Payload.ToArray());
+        Assert.Equal(root, relocations.Payloads["activation-root"]);
+        Assert.Single(relocations.Payloads);
+        var descriptorsAfter = await store.ListMeshNodesAsync("mesh", new ZLinkPageRequest(10));
+        Assert.Equal(
+            descriptorsBefore.Items.Single().Capacity.Spots,
+            descriptorsAfter.Items.Single().Capacity.Spots
+        );
+    }
+
     [Fact]
     public async Task RestartReleasesEndedCreatingReservationBeforeDeletingRoot()
     {

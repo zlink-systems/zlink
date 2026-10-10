@@ -4593,19 +4593,18 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         reject_activation ();
         co_return true;
     };
+    authority_read_result_t current;
     if (previous_admission) {
         const auto admitted = co_await previous_admission->task ();
         if (const auto *failure = std::get_if<instance_spot_activation_result_t> (&admitted)) {
             reject_activation (*failure);
             co_return;
         }
-        if (!(co_await join_existing (
-              authority_read_result_t{std::get<authority_snapshot_t> (admitted)})))
-            reject_activation ();
-        co_return;
+        current = std::get<authority_snapshot_t> (admitted);
+    } else {
+        current = co_await run_blocking_step<authority_read_result_t> (
+          [store, authority_key] { return store->read_authority (authority_key); });
     }
-    auto current = co_await run_blocking_step<authority_read_result_t> (
-      [store, authority_key] { return store->read_authority (authority_key); });
     if (request.target.authority_owner_generation == 0) {
         if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current)) {
             const auto ready = decode_instance_spot_authority_payload (snapshot->payload);
@@ -4638,22 +4637,20 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                                                      error.what ());
                     }
                     const auto &prior = stored.activation;
-                    if (prior.target.mesh_name != request.target.mesh_name
-                        || prior.target.stable_type != request.target.stable_type
-                        || prior.target.descriptor_version != request.target.descriptor_version
-                        || prior.target.deadline_unix_ms != request.target.deadline_unix_ms
-                        || prior.operation != request.operation
-                        || prior.source_node_generation != request.source_node_generation
-                        || prior.source_node_routing_id != request.source_node_routing_id
-                        || prior.source_spot_id != request.source_spot_id
-                        || prior.has_metadata != request.has_metadata
-                        || stored.metadata != owned_command->metadata)
+                    if (prior.operation == request.operation
+                        && (prior.target.mesh_name != request.target.mesh_name
+                            || prior.target.stable_type != request.target.stable_type
+                            || prior.target.descriptor_version != request.target.descriptor_version
+                            || prior.target.deadline_unix_ms != request.target.deadline_unix_ms
+                            || prior.has_metadata != request.has_metadata
+                            || stored.metadata != owned_command->metadata))
                         throw framework_exception_t (
                           framework_error_kind_t::protocol_error,
                           "Instance route does not match the stored activation");
                 }
             }
-            if (snapshot->allocation.state == placement_allocation_state_t::active && ready
+            if (!previous_admission
+                && snapshot->allocation.state == placement_allocation_state_t::active && ready
                 && ready->state == instance_spot_authority_state_t::ready) {
                 object_reserve_request_t release;
                 release.key = {placement_object_kind_t::instance_spot, request.target.spot_id};
@@ -4671,6 +4668,10 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         }
     }
     if (co_await join_existing (current)) {
+        co_return;
+    }
+    if (previous_admission) {
+        reject_activation ();
         co_return;
     }
     if (std::holds_alternative<authority_missing_t> (current)

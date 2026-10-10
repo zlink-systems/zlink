@@ -74,7 +74,8 @@ struct event_t
     int value{};
 };
 
-static void verify_same_target_activation_order (bool ready_request)
+static void verify_same_target_activation_order (bool ready_request,
+                                                 bool retransmission_mismatch = false)
 {
     using namespace std::chrono_literals;
     namespace fw = zlink::framework;
@@ -201,8 +202,10 @@ static void verify_same_target_activation_order (bool ready_request)
         ASSERT_EQ (1, store->commits);
     auto request = event;
     request.request = true;
-    request.operation.low = 2;
+    request.operation.low = retransmission_mismatch ? 1 : 2;
     request.reply_route_id = 2;
+    if (retransmission_mismatch)
+        ++request.target.deadline_unix_ms;
     if (ready_request) {
         const auto authority =
           store->read_authority (rt::spot_authority_key ("room")).result ().value ();
@@ -229,14 +232,24 @@ static void verify_same_target_activation_order (bool ready_request)
            && std::chrono::steady_clock::now () < until)
         pump ();
     ASSERT_EQ (std::future_status::ready, result.wait_for (0ms));
-    EXPECT_EQ (0, result.get ().terminal_result);
-    EXPECT_EQ ((std::vector<std::uint64_t>{1, 2}), queued);
+    EXPECT_EQ (retransmission_mismatch
+                 ? static_cast<std::uint32_t> (rt::protocol::request_terminal_result::protocolError)
+                 : 0u,
+               result.get ().terminal_result);
+    EXPECT_EQ (retransmission_mismatch ? std::vector<std::uint64_t>{1}
+                                       : (std::vector<std::uint64_t>{1, 2}),
+               queued);
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation,
       SameTargetColdOperationsReserveOnceAndQueueInArrivalOrder)
 {
     verify_same_target_activation_order (false);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, SameTargetRetransmissionMismatchIsRejectedBeforeJoin)
+{
+    verify_same_target_activation_order (false, true);
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation, ReadyOperationJoinsBeforeDurableFirstRecordAdmission)
@@ -1973,6 +1986,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                         break;
                     case 4:
                         ++wrong.operation.low;
+                        ++wrong.target.deadline_unix_ms;
                         break;
                     case 5:
                         wrong.has_metadata = false;
@@ -2004,9 +2018,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                 ASSERT_EQ (std::future_status::ready, result.wait_for (0ms));
                 const auto terminal = result.get ();
                 const auto expected =
-                  input != 7 ? rt::protocol::request_terminal_result::protocolError
-                  : active   ? rt::protocol::request_terminal_result::ok
-                             : rt::protocol::request_terminal_result::internalError;
+                  input != 7 && input != 4 ? rt::protocol::request_terminal_result::protocolError
+                  : active                 ? rt::protocol::request_terminal_result::ok
+                                           : rt::protocol::request_terminal_result::internalError;
                 EXPECT_EQ (static_cast<std::uint32_t> (expected), terminal.terminal_result);
                 const auto after = std::get<fw::authority_snapshot_t> (
                   store->read_authority (rt::spot_authority_key ("stored-room"))
@@ -2032,7 +2046,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                 EXPECT_EQ (capacity_before.spot_types.front ().usage.reserved,
                            capacity_after.spot_types.front ().usage.reserved);
                 EXPECT_EQ (encoded, *relocations->get (receipt.reference));
-                EXPECT_EQ (input == 7 && active ? 1 : 0, factories);
+                EXPECT_EQ ((input == 7 || input == 4) && active ? 1 : 0, factories);
             }
         }
     }

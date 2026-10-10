@@ -41,6 +41,7 @@ import { putNewRelocationBlob, relocationBlobReference } from '../locations/relo
 
 import {
   encodeInstanceActivationRecoveryEnvelope,
+  decodeInstanceActivationRecoveryEnvelope,
   type ServiceInstanceActivationRecoveryEnvelope
 } from '../foundation/service-instance-activation-recovery-codec';
 
@@ -78,11 +79,59 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
 
   async read(
     target: ServiceInstanceActivationTarget,
-    instanceIntent?: true
+    instanceIntent?: true,
+    activation?: ServiceInstanceActivationRecoveryEnvelope
   ): Promise<ServiceInstanceAuthorityRead> {
     const key = authorityKey(target.targetSpotId);
     const current = await this.options.store.readAuthority(key);
     if (current.kind !== 'snapshot') return { kind: 'missing' };
+    if (
+      activation !== undefined &&
+      current.allocation.objectKind === 'instance_spot' &&
+      routingIdsEqual(current.allocation.descriptor.rid, target.targetNodeRid) &&
+      current.allocation.descriptorLifecycleGeneration === target.targetNodeGeneration
+    ) {
+      const ready = decodeServiceInstanceAuthorityPayload(current.payload);
+      const reference =
+        current.pendingCreation?.requestContentReference ?? ready?.activationRecovery?.reference;
+      if (reference !== undefined) {
+        const root = await this.options.relocationStore?.read(relocationBlobReference(reference));
+        if (root?.kind !== 'found') {
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.DataLost,
+            'Stored Instance activation is missing.'
+          );
+        }
+        let stored: ServiceInstanceActivationRecoveryEnvelope;
+        try {
+          stored = decodeInstanceActivationRecoveryEnvelope(root.bytes);
+        } catch (error) {
+          if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.ProtocolError,
+            'Stored Instance activation is invalid.'
+          );
+        }
+        if (
+          stored.operation.high === activation.operation.high &&
+          stored.operation.low === activation.operation.low &&
+          (stored.targetMeshName !== activation.targetMeshName ||
+            stored.target.stableType !== target.stableType ||
+            stored.target.descriptorVersion !== target.descriptorVersion ||
+            stored.deadlineUnixMs !== activation.deadlineUnixMs ||
+            (stored.metadataFrame === undefined) !== (activation.metadataFrame === undefined) ||
+            (stored.metadataFrame !== undefined &&
+              activation.metadataFrame !== undefined &&
+              Buffer.compare(stored.metadataFrame, activation.metadataFrame) !== 0))
+        ) {
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.ProtocolError,
+            'Instance route does not match the stored activation.'
+          );
+        }
+      }
+    }
+
     if (
       instanceIntent === true &&
       current.allocation.state === 'active' &&

@@ -185,6 +185,7 @@ async function fixture(
       },
       async discard() {}
     });
+    const deadlineUnixMs = BigInt(Date.now() + 5000);
     return () =>
       runtime.runMissingInstanceActivation(
         {
@@ -195,7 +196,7 @@ async function fixture(
           sourceNodeGeneration: 1n,
           operationKind: 'send',
           operation: { high: 1n, low: rid === 'node-a' ? 1n : 2n },
-          deadlineUnixMs: BigInt(Date.now() + 5000)
+          deadlineUnixMs
         },
         encodeApplicationPayload({
           packetName: 'Notice',

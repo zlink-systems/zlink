@@ -316,7 +316,8 @@ export interface ServiceInstanceActivationAuthority {
 export interface ServiceAsyncInstanceActivationAuthority {
   read(
     target: ServiceInstanceActivationTarget,
-    instanceIntent?: true
+    instanceIntent?: true,
+    activation?: ServiceInstanceActivationRecoveryEnvelope
   ): Promise<ServiceInstanceAuthorityRead>;
   reserve(
     activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>,
@@ -2965,7 +2966,15 @@ export class ServiceStatefulRuntime {
         ...activation,
         stableType: record.target.stableType
       }));
-    const operation = ready.then((value) => {
+    const operation = ready.then(async (value) => {
+      if (pending !== undefined) {
+        await this.asyncInstanceAuthority?.read(record.target, undefined, {
+          ...record,
+          targetMeshName: record.target.targetMeshName,
+          ...(metadataFrame === undefined ? {} : { metadataFrame }),
+          applicationPayloadFrame: payloadFrame
+        });
+      }
       if (value.stableType !== record.target.stableType) {
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.TypeMismatch,
@@ -3015,7 +3024,13 @@ export class ServiceStatefulRuntime {
     }
 
     const local = this.registry.spot(target.targetSpotId);
-    const current = await authority.read(target, true);
+    const activationRequest = {
+      ...record,
+      targetMeshName: record.target.targetMeshName,
+      ...(metadataFrame === undefined ? {} : { metadataFrame }),
+      applicationPayloadFrame: payloadFrame
+    };
+    const current = await authority.read(target, true, activationRequest);
     if (
       current.kind === 'creating' &&
       current.authority?.allocation.state === 'active' &&
@@ -3117,21 +3132,7 @@ export class ServiceStatefulRuntime {
     const deadline = operationDeadline(record.deadlineUnixMs);
     let reserved: ServiceInstanceAuthorityReserve;
     try {
-      reserved = await authority.reserve(
-        {
-          target,
-          sourceNodeRid: record.sourceNodeRid,
-          sourceNodeGeneration: record.sourceNodeGeneration,
-          ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
-          operationKind: record.operationKind,
-          operation: record.operation,
-          ...(record.replyRouteId === undefined ? {} : { replyRouteId: record.replyRouteId }),
-          deadlineUnixMs: record.deadlineUnixMs,
-          ...(metadataFrame === undefined ? {} : { metadataFrame }),
-          applicationPayloadFrame: payloadFrame
-        },
-        deadline.signal
-      );
+      reserved = await authority.reserve(activationRequest, deadline.signal);
     } finally {
       deadline.close();
     }

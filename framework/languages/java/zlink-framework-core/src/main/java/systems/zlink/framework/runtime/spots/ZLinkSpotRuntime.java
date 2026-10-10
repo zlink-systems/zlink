@@ -52,6 +52,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwn
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkInlineCreationContentCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
@@ -63,12 +64,15 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkObjectConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectTypeMismatch;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCreation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationFound;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
@@ -584,6 +588,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         "MeshNode runtime is missing: " + nodeRegistration.meshName());
             }
             ZLinkInternalSpotNode node = meshNode.spotNode();
+            meshNode.setInstanceSpotActivationValidator(this::readInstanceSpotActivationTarget);
             instanceSpotIdleTimeouts.put(
                     nodeRegistration.meshName(), nodeRegistration.instanceSpotIdleTimeout());
             nodeRegistration
@@ -622,8 +627,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                 .internal.service
                                                                                 .ZLinkInstanceActivationRecoveryCodec
                                                                                 .RecoveryEnvelope
-                                                                        envelope) {
-                                                    return reserveInstanceSpotTarget(envelope);
+                                                                        envelope,
+                                                                ZLinkAuthorityReadResult
+                                                                        authority) {
+                                                    return reserveInstanceSpotTarget(
+                                                            envelope, authority);
                                                 }
 
                                                 @Override
@@ -2933,6 +2941,93 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private static final int INSTANCE_TARGET_PAGE_SIZE = 1000;
     private static final Duration ACTIVATION_RECOVERY_RETENTION = Duration.ofHours(24);
 
+    private CompletionStage<ZLinkAuthorityReadResult> readInstanceSpotActivationTarget(
+            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
+        var store = requireUserSpotLocationStore();
+        String key =
+                systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                        envelope.targetSpotId());
+        return store.read(key, () -> System.currentTimeMillis() >= envelope.deadlineUnixMs())
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
+                                    || snapshot.allocation().objectKind()
+                                            != ZLinkPlacementObjectKind.INSTANCE_SPOT
+                                    || !snapshot.allocation()
+                                            .descriptor()
+                                            .rid()
+                                            .equals(envelope.targetNodeRid())
+                                    || snapshot.allocation().descriptorLifecycleGeneration()
+                                            != envelope.targetNodeGeneration())
+                                return CompletableFuture.completedFuture(read);
+                            var authority =
+                                    userSpotAuthorities.decode(snapshot.payload()).orElseThrow();
+                            String reference =
+                                    snapshot.pendingCreation()
+                                            .map(
+                                                    ZLinkPendingObjectCreation
+                                                            ::requestContentReference)
+                                            .orElseGet(
+                                                    () ->
+                                                            authority
+                                                                    .activationRecoveryState()
+                                                                    .map(value -> value.reference())
+                                                                    .orElse(null));
+                            if (reference == null) return CompletableFuture.completedFuture(read);
+                            return frameworkRegistration
+                                    .relocationStore()
+                                    .get(
+                                            reference,
+                                            () ->
+                                                    System.currentTimeMillis()
+                                                            >= envelope.deadlineUnixMs())
+                                    .thenApply(
+                                            root -> {
+                                                if (!(root instanceof ZLinkRelocationFound found))
+                                                    throw ZLinkFrameworkErrorOrigin.framework(
+                                                            ZLinkFrameworkErrorKind.DATA_LOST,
+                                                            "Stored Instance activation is missing");
+                                                ZLinkInstanceActivationRecoveryCodec
+                                                                .RecoveryEnvelope
+                                                        stored;
+                                                try {
+                                                    stored =
+                                                            new ZLinkInstanceActivationRecoveryCodec()
+                                                                    .decode(found.payload());
+                                                } catch (IllegalArgumentException failure) {
+                                                    throw ZLinkFrameworkErrorOrigin.framework(
+                                                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                                            "Stored Instance activation is invalid");
+                                                }
+                                                if (stored.operationHigh()
+                                                                == envelope.operationHigh()
+                                                        && stored.operationLow()
+                                                                == envelope.operationLow()
+                                                        && (!stored.targetMeshName()
+                                                                        .equals(
+                                                                                envelope
+                                                                                        .targetMeshName())
+                                                                || !stored.stableType()
+                                                                        .equals(
+                                                                                envelope
+                                                                                        .stableType())
+                                                                || !stored.descriptorVersion()
+                                                                        .equals(
+                                                                                envelope
+                                                                                        .descriptorVersion())
+                                                                || stored.deadlineUnixMs()
+                                                                        != envelope.deadlineUnixMs()
+                                                                || !java.util.Arrays.equals(
+                                                                        stored.metadataFrame(),
+                                                                        envelope.metadataFrame())))
+                                                    throw ZLinkFrameworkErrorOrigin.framework(
+                                                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                                            "Instance route does not match the stored activation");
+                                                return read;
+                                            });
+                        });
+    }
+
     private CompletionStage<
                     systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceRouteFence>
@@ -2940,6 +3035,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     systems.zlink.framework.runtime.internal.service
                                     .ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope
                             envelope) {
+        return readInstanceSpotActivationTarget(envelope)
+                .thenCompose(read -> reserveInstanceSpotTarget(envelope, read));
+    }
+
+    private CompletionStage<
+                    systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence>
+            reserveInstanceSpotTarget(
+                    ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
+                    ZLinkAuthorityReadResult read) {
         var store = requireUserSpotLocationStore();
         var recoveryStore = frameworkRegistration.relocationStore();
         var local = routeMeshNodesByName.get(envelope.targetMeshName());
@@ -2954,10 +3059,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         String key =
                 systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
                         envelope.targetSpotId());
-        return store.read(key, () -> System.currentTimeMillis() >= envelope.deadlineUnixMs())
+        return CompletableFuture.completedFuture(read)
                 .thenCompose(
-                        read -> {
-                            if (read instanceof ZLinkAuthoritySnapshot current) {
+                        currentRead -> {
+                            if (currentRead instanceof ZLinkAuthoritySnapshot current) {
                                 var authority =
                                         userSpotAuthorities.decode(current.payload()).orElseThrow();
                                 if (authority.instance().isEmpty()

@@ -47,6 +47,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
@@ -3964,6 +3965,16 @@ final class ZLinkJavaRawMeshNode
     public void registerInstanceIntent(
             String stableType, ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
         ((ZLinkJavaRawSpotNode) spotNode()).reconcileInstanceSpotAuthority(stableType, route);
+    }
+
+    @Override
+    public void setInstanceSpotActivationValidator(
+            java.util.function.Function<
+                            systems.zlink.framework.runtime.internal.service
+                                    .ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope,
+                            CompletionStage<ZLinkAuthorityReadResult>>
+                    validator) {
+        ((ZLinkJavaRawSpotNode) spotNode()).setInstanceSpotActivationValidator(validator);
     }
 
     @Override

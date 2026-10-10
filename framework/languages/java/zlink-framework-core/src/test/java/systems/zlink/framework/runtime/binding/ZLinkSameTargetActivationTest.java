@@ -13,6 +13,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatch
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
@@ -93,6 +94,11 @@ final class ZLinkSameTargetActivationTest {
                 var owner = new ZLinkJavaRawMeshNode(context, "fifo")) {
             owner.setRoutingId(targetRid);
             var target = (ZLinkJavaRawSpotNode) owner.spotNode();
+            var observedAuthority =
+                    new systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing(
+                            java.time.Instant.now());
+            target.setInstanceSpotActivationValidator(
+                    envelope -> CompletableFuture.completedFuture(observedAuthority));
             target.registerInstanceSpotType(
                     "room",
                     new ZLinkInternalMeshNode.InstanceSpotActivationHandler() {
@@ -116,7 +122,9 @@ final class ZLinkSameTargetActivationTest {
 
                         @Override
                         public CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
-                                ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
+                                ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
+                                ZLinkAuthorityReadResult authority) {
+                            assertSame(observedAuthority, authority);
                             return CompletableFuture.completedFuture(
                                     new ZLinkServiceM6BWireCodec.InstanceRouteFence(
                                             targetRid, 1, "spot", 1, "owner", 1, 1, "version"));

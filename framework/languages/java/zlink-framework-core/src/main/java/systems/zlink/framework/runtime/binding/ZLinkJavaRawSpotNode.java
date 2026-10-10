@@ -22,6 +22,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationRece
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -79,6 +80,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private final Map<String, RemoteStreamBinding> remoteStreamBindings = new ConcurrentHashMap<>();
     private final Map<String, Long> remoteStreamSequences = new ConcurrentHashMap<>();
     private final ZLinkJavaInstanceSpotRegistry instanceSpots;
+    private volatile java.util.function.Function<
+                    ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope,
+                    CompletionStage<ZLinkAuthorityReadResult>>
+            instanceActivationValidator = envelope -> CompletableFuture.completedFuture(null);
+
     private final Map<String, InstanceAuthority> instanceAuthorities = new ConcurrentHashMap<>();
     private volatile ZLinkJavaRawSpot entrySpot;
     private volatile ZLinkMeshApplicationReceiver applicationReceiver;
@@ -2133,6 +2139,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return true;
     }
 
+    void setInstanceSpotActivationValidator(
+            java.util.function.Function<
+                            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope,
+                            CompletionStage<ZLinkAuthorityReadResult>>
+                    validator) {
+        instanceActivationValidator = Objects.requireNonNull(validator, "validator");
+    }
+
     void registerInstanceSpotType(String stableType) {
         instanceSpots.register(stableType, this::createSpot);
     }
@@ -2206,8 +2220,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
                     @Override
                     public CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
-                            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
-                        return handler.reserve(envelope);
+                            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
+                            ZLinkAuthorityReadResult authority) {
+                        return handler.reserve(envelope, authority);
                     }
 
                     @Override
@@ -2407,28 +2422,34 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             () -> {},
                             contentType);
             received.retainActivationMessage(header);
-            instanceSpots
-                    .activate(
-                            cold.targetSpotId(),
-                            cold.stableType(),
-                            cold.deadlineUnixMs(),
-                            () ->
-                                    instanceSpots
-                                            .reserve(envelope)
-                                            .thenApply(
-                                                    route -> {
-                                                        reconcileInstanceSpotAuthority(
-                                                                cold.stableType(), route);
-                                                        return route.objectGeneration();
-                                                    }),
-                            spot ->
-                                    completeRemoteInstanceHandler(
-                                            (ZLinkJavaRawSpot) spot,
-                                            received,
+            instanceActivationValidator
+                    .apply(envelope)
+                    .thenCompose(
+                            authority ->
+                                    instanceSpots.activate(
+                                            cold.targetSpotId(),
+                                            cold.stableType(),
+                                            cold.deadlineUnixMs(),
                                             () ->
-                                                    instanceSpots.completed(
-                                                            cold.stableType(), header),
-                                            failure))
+                                                    instanceSpots
+                                                            .reserve(envelope, authority)
+                                                            .thenApply(
+                                                                    route -> {
+                                                                        reconcileInstanceSpotAuthority(
+                                                                                cold.stableType(),
+                                                                                route);
+                                                                        return route
+                                                                                .objectGeneration();
+                                                                    }),
+                                            spot ->
+                                                    completeRemoteInstanceHandler(
+                                                            (ZLinkJavaRawSpot) spot,
+                                                            received,
+                                                            () ->
+                                                                    instanceSpots.completed(
+                                                                            cold.stableType(),
+                                                                            header),
+                                                            failure)))
                     .whenComplete(
                             (activation, activationFailure) -> {
                                 if (activationFailure != null) {

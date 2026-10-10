@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.binding;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
@@ -214,12 +215,13 @@ final class ZLinkJavaInstanceSpotRegistry {
     }
 
     CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
-            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
+            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
+            ZLinkAuthorityReadResult authority) {
         ActivationHook hook = hooks.get(envelope.stableType());
         if (hook == null)
             return CompletableFuture.failedFuture(
                     new IllegalStateException("Instance type is not registered"));
-        return hook.reserve(envelope);
+        return hook.reserve(envelope, authority);
     }
 
     CompletionStage<Void> completed(
@@ -332,7 +334,8 @@ final class ZLinkJavaInstanceSpotRegistry {
         }
 
         default CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
-                ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
+                ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
+                ZLinkAuthorityReadResult authority) {
             return CompletableFuture.failedFuture(
                     new UnsupportedOperationException("Cold activation is unavailable"));
         }
