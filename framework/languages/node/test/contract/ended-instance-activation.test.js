@@ -300,6 +300,56 @@ for (const provider of [false, true]) {
       f.close();
     }
   });
+  test(`${label}: cold activation joins the same target's live Ready Spot`, async () => {
+    const f = await fixture(provider);
+    try {
+      const first = await f.activate();
+      const before = await f.store.readAuthority(f.key);
+      const second = await f.activate();
+      assert.equal(second.spot, first.spot);
+      assert.deepEqual(second.route, first.route);
+      assert.equal(f.factories, 1);
+      assert.deepEqual(await f.store.readAuthority(f.key), before);
+    } finally {
+      f.close();
+    }
+  });
+  test(`${label}: a declined release uses a fresh authority read`, async () => {
+    const f = await fixture(provider);
+    try {
+      const snapshot = await f.store.readAuthority(f.key);
+      let reads = 0;
+      const authority = new ZLinkInstanceActivationAuthority({
+        store: {
+          async readAuthority() {
+            return ++reads === 1 ? snapshot : { kind: 'missing' };
+          },
+          async releaseEndedReservation() {
+            return false;
+          }
+        },
+        meshName: 'mesh',
+        owner: () => undefined,
+        relocationPolicy: () => 'disabled'
+      });
+      assert.deepEqual(
+        await authority.read(
+          {
+            targetSpotId: 'ended-room',
+            stableType: 'room',
+            targetNodeRid: 'node-a',
+            targetNodeGeneration: 1n
+          },
+          true
+        ),
+        { kind: 'missing' }
+      );
+      assert.equal(reads, 2);
+      assert.equal(f.factories, 0);
+    } finally {
+      f.close();
+    }
+  });
   test(`${label}: expired Ready request uses cold activation under its original deadline`, async () => {
     const f = await fixture(provider);
     try {

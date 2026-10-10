@@ -108,10 +108,8 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
         }
       );
       if (released === true) return { kind: 'missing' };
-      throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.Unavailable,
-        'Instance activation authority was not released.'
-      );
+      const refreshed = await this.options.store.readAuthority(key);
+      return refreshed.kind === 'snapshot' ? readyRead(refreshed, target) : { kind: 'missing' };
     }
     return readyRead(current, target);
   }

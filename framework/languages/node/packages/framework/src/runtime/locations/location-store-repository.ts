@@ -1262,36 +1262,41 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (spot?.kind === 'user_spot') {
           // The snapshot starts only after the old owner's lease was found invalid.
           for (const prefix of [`${PREFIX}actor:`, `${AUTHORITY_PREIMAGE_PREFIX}actor\0`]) {
-            let cursor: ZLinkStoreScanCursor | undefined;
-            do {
-              const page = await this.provider.scan(
-                { prefix, cursor, limit: ZLINK_PROVIDER_MAX_PAGE_SIZE },
-                signal
-              );
-              if (page.kind === 'expired') throw new Error('Location Store scan snapshot expired.');
-              for (const item of page.value.items) {
-                if (prefix === `${PREFIX}actor:`) {
-                  const actor = normalizeActor(
-                    decodeJson<DescriptorRecord<ZLinkActorLocation>>(item.value.bytes).descriptor
-                  );
-                  unavailable ||=
-                    actor.spotKind === ZLinkSpotKind.User &&
-                    String(actor.spotId) === spot.spotId &&
-                    actor.spotGeneration === snapshot.objectGeneration;
-                } else {
-                  const authority = decodeAuthorityRecord(item.value.bytes).snapshot;
-                  if (authority.allocation.objectKind !== 'actor') continue;
-                  const actor = decodeActorAuthorityPayload(
-                    serviceRelocationAuthorityApplicationPayload(authority.payload)
-                  );
-                  unavailable ||=
-                    actor?.currentSpotKind === ZLinkSpotKind.User &&
-                    actor.currentSpotId === spot.spotId &&
-                    actor.currentSpotGeneration === snapshot.objectGeneration;
+            membershipSnapshot: for (;;) {
+              let snapshotHasMember = false;
+              let cursor: ZLinkStoreScanCursor | undefined;
+              do {
+                const page = await this.provider.scan(
+                  { prefix, cursor, limit: ZLINK_PROVIDER_MAX_PAGE_SIZE },
+                  signal
+                );
+                if (page.kind === 'expired') continue membershipSnapshot;
+                for (const item of page.value.items) {
+                  if (prefix === `${PREFIX}actor:`) {
+                    const actor = normalizeActor(
+                      decodeJson<DescriptorRecord<ZLinkActorLocation>>(item.value.bytes).descriptor
+                    );
+                    snapshotHasMember ||=
+                      actor.spotKind === ZLinkSpotKind.User &&
+                      String(actor.spotId) === spot.spotId &&
+                      actor.spotGeneration === snapshot.objectGeneration;
+                  } else {
+                    const authority = decodeAuthorityRecord(item.value.bytes).snapshot;
+                    if (authority.allocation.objectKind !== 'actor') continue;
+                    const actor = decodeActorAuthorityPayload(
+                      serviceRelocationAuthorityApplicationPayload(authority.payload)
+                    );
+                    snapshotHasMember ||=
+                      actor?.currentSpotKind === ZLinkSpotKind.User &&
+                      actor.currentSpotId === spot.spotId &&
+                      actor.currentSpotGeneration === snapshot.objectGeneration;
+                  }
                 }
-              }
-              cursor = page.value.nextCursor;
-            } while (cursor !== undefined);
+                cursor = page.value.nextCursor;
+              } while (cursor !== undefined);
+              unavailable ||= snapshotHasMember;
+              break;
+            }
           }
         }
       }

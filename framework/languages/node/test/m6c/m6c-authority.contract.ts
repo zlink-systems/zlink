@@ -89,7 +89,7 @@ for (const backend of ['provider', 'memory'] as const) {
         ? (['member', 'lateJoin', 'factory'] as const)
         : (['recovery'] as const)),
       ...(backend === 'provider' && kind === 'user_spot'
-        ? (['laterPageMember', 'scanExpired', 'storeFailure'] as const)
+        ? (['laterPageMember', 'scanExpired', 'scanExpiredClearsMember', 'storeFailure'] as const)
         : [])
     ] as const) {
       test(`ended Spot re-creation: ${backend} ${kind} ${scenario}`, async () => {
@@ -195,10 +195,23 @@ for (const backend of ['provider', 'memory'] as const) {
           leaseGeneration: old.leaseGeneration,
           updatedAt: now
         };
-        if (scenario === 'member' || scenario === 'laterPageMember') {
-          if (scenario === 'laterPageMember')
+        if (
+          scenario === 'member' ||
+          scenario === 'laterPageMember' ||
+          scenario === 'scanExpired' ||
+          scenario === 'scanExpiredClearsMember'
+        ) {
+          if (
+            scenario === 'laterPageMember' ||
+            scenario === 'scanExpired' ||
+            scenario === 'scanExpiredClearsMember'
+          )
             await store.updateActor(
-              { ...member, actorId: 'a-first', spotKind: ZLinkSpotKind.Entry },
+              {
+                ...member,
+                actorId: scenario === 'scanExpiredClearsMember' ? 'z-last' : 'a-first',
+                spotKind: ZLinkSpotKind.Entry
+              },
               ZLinkLocationWriteIntent.NewClaim
             );
           assert.equal(
@@ -270,15 +283,37 @@ for (const backend of ['provider', 'memory'] as const) {
           const scan = provider.scan.bind(provider);
           provider.scan = (scanRequest, signal) => scan({ ...scanRequest, limit: 1 }, signal);
         }
-        if (scenario === 'scanExpired' || scenario === 'storeFailure') {
+        const scanRequests: { prefix: string; continued: boolean }[] = [];
+        if (scenario === 'scanExpired' || scenario === 'scanExpiredClearsMember') {
+          const scan = provider.scan.bind(provider);
+          let expired = false;
+          let staleMemberKey: ReturnType<typeof storeKey> | undefined;
+          provider.scan = async (scanRequest, signal) => {
+            scanRequests.push({
+              prefix: scanRequest.prefix,
+              continued: scanRequest.cursor !== undefined
+            });
+            if (!expired && scanRequest.cursor !== undefined) {
+              expired = true;
+              if (scenario === 'scanExpiredClearsMember') {
+                assert.ok(staleMemberKey);
+                await provider.write({
+                  conditions: [],
+                  mutations: [{ kind: 'delete', key: staleMemberKey }]
+                });
+              }
+              return { kind: 'expired', storeNow: now };
+            }
+            const result = await scan({ ...scanRequest, limit: 1 }, signal);
+            if (!expired && result.kind === 'page') staleMemberKey = result.value.items[0]?.key;
+            return result;
+          };
+        }
+        if (scenario === 'storeFailure') {
           provider.scan = async () => {
-            if (scenario === 'scanExpired') return { kind: 'expired', storeNow: now };
             throw new Error('Store unavailable');
           };
-          await assert.rejects(
-            store.reserve(next),
-            /scan snapshot expired|Location Store provider is unavailable/
-          );
+          await assert.rejects(store.reserve(next), /Location Store provider is unavailable/);
           const retained = await store.readAuthority(
             encodeAuthorityKey(kind, request.key.globalId)
           );
@@ -345,6 +380,7 @@ for (const backend of ['provider', 'memory'] as const) {
             'snapshot',
             'member',
             'laterPageMember',
+            'scanExpired',
             'recovery'
           ].includes(scenario)
         ) {
@@ -354,6 +390,14 @@ for (const backend of ['provider', 'memory'] as const) {
               error instanceof ZLinkFrameworkException &&
               error.kind === ZLinkFrameworkErrorKind.Unavailable
           );
+          if (scenario === 'scanExpired') {
+            assert.deepEqual(scanRequests.slice(0, 3), [
+              { prefix: 'zlink:v11:actor:', continued: false },
+              { prefix: 'zlink:v11:actor:', continued: true },
+              { prefix: 'zlink:v11:actor:', continued: false }
+            ]);
+            assert.ok(scanRequests.length >= 4);
+          }
           const retained = await store.readAuthority(
             encodeAuthorityKey(kind, request.key.globalId)
           );
@@ -388,6 +432,13 @@ for (const backend of ['provider', 'memory'] as const) {
           if (winner?.kind !== 'reserved') throw new Error('winner missing');
           assert.ok(winner.creating.objectGeneration > committed.ready.objectGeneration);
           assert.deepEqual(winner.creating.payload, request.creatingPayload);
+          if (scenario === 'scanExpiredClearsMember') {
+            assert.deepEqual(scanRequests.slice(0, 3), [
+              { prefix: 'zlink:v11:actor:', continued: false },
+              { prefix: 'zlink:v11:actor:', continued: true },
+              { prefix: 'zlink:v11:actor:', continued: false }
+            ]);
+          }
           if (backend === 'provider') {
             const capacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-a'));
             if (capacity.kind !== 'found') throw new Error('capacity missing');
