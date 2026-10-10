@@ -221,6 +221,7 @@ class test_location_repository_t : public zlink::framework::location_repository_
     zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
     read_owner_lease (std::string owner_id) override
     {
+        ++owner_read_count;
         return _inner.read_owner_lease (std::move (owner_id));
     }
 
@@ -247,6 +248,7 @@ class test_location_repository_t : public zlink::framework::location_repository_
     read_authority (zlink::framework::authority_key_t key,
                     std::stop_token cancellation = {}) override
     {
+        ++authority_read_count;
         if (fail_authority_queries) {
             return zlink::framework::task_t<zlink::framework::authority_read_result_t> (
               zlink::framework::result_t<zlink::framework::authority_read_result_t>::failure (
@@ -359,6 +361,8 @@ class test_location_repository_t : public zlink::framework::location_repository_
     std::atomic_size_t abort_count{0};
     std::atomic_size_t resolve_spot_count{0};
     std::atomic_size_t resolve_actor_count{0};
+    std::atomic_size_t authority_read_count{0};
+    std::atomic_size_t owner_read_count{0};
     std::atomic_bool force_reserve_conflict{false};
 
   private:
@@ -1957,6 +1961,26 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
         EXPECT_EQ ("node-instance", reply.value ().node_rid);
     EXPECT_EQ (1, sends.load ());
     EXPECT_EQ (1, requests.load ());
+    std::vector<std::pair<std::size_t, std::size_t>> lookup_counts;
+    for (bool instance_intent : {false, true}) {
+        location_options_t options;
+        options.route_cache_max_age = std::chrono::seconds (1);
+        store_location_resolvers_t measured (store, options);
+        store.authority_read_count = 0;
+        store.owner_read_count = 0;
+        const auto ready =
+          measured.resolve_spot_address ({}, "instance-spot", instance_intent).result ().value ();
+        ASSERT_TRUE (ready);
+        EXPECT_EQ (1u, ready->authority_owner_generation);
+        lookup_counts.emplace_back (store.authority_read_count.load (),
+                                    store.owner_read_count.load ());
+        ASSERT_TRUE (
+          measured.resolve_spot_address ({}, "instance-spot", instance_intent).result ().value ());
+        EXPECT_EQ (lookup_counts.back ().first, store.authority_read_count);
+        EXPECT_EQ (lookup_counts.back ().second, store.owner_read_count);
+    }
+    EXPECT_EQ (1u, lookup_counts.front ().first);
+    EXPECT_EQ (lookup_counts.front (), lookup_counts.back ());
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnly)

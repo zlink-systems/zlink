@@ -1982,6 +1982,17 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                           result_t<result_t<protocol::instance_spot_activation_header_t>>::success (
                             result_t<protocol::instance_spot_activation_header_t>::success (
                               std::move (request))));
+                    },
+                    [registration] (const std::string &stable_type)
+                      -> std::optional<detail::factory_relocation_kind_t> {
+                        const auto &types = registration->spot_state->snapshot.instance_spot_names;
+                        if (std::find (types.begin (), types.end (), stable_type) == types.end ())
+                            return std::nullopt;
+                        const auto found =
+                          registration->spot_state->spot_factory_relocations.find (stable_type);
+                        return found == registration->spot_state->spot_factory_relocations.end ()
+                                 ? std::nullopt
+                                 : std::make_optional (found->second.kind);
                     }});
             }
         }

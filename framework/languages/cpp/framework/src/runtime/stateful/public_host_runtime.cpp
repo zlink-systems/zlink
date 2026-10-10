@@ -1347,7 +1347,9 @@ void public_host_runtime_t::configure_instance_spot_operations (
           _session_relocations = relocations;
           _instance_spot_relocations = std::move (relocations);
           _instance_spot_owner = std::move (owner);
-          _instance_spot_materializer = std::move (materializer);
+          _instance_spot_materializer =
+            std::make_shared<const instance_spot_activation_materializer_t> (
+              std::move (materializer));
       })
       .get ();
 }
@@ -2220,7 +2222,7 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
 {
     std::shared_ptr<zlink::framework::location_repository_t> store;
     std::shared_ptr<stateful::relocation_store_port_t> relocations;
-    instance_spot_activation_materializer_t materializer;
+    std::shared_ptr<const instance_spot_activation_materializer_t> materializer;
     _lifecycle_configuration_lane
       .run ([&] {
           store = _user_spot_store;
@@ -2322,7 +2324,7 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
             if (recovery_pointer.replay_cursor < recovery_pointer.inbox_sequence) {
                 bool prepared = false;
                 try {
-                    prepared = materializer.prepare (recovery.activation, entry.snapshot);
+                    prepared = materializer->prepare (recovery.activation, entry.snapshot);
                 }
                 catch (...) {
                     prepared = false;
@@ -2331,7 +2333,7 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                     continue;
                 auto dispatched =
                   materializer
-                    .dispatch (
+                    ->dispatch (
                       std::make_shared<const protocol::instance_activation_recovery_t> (recovery),
                       {}, &activation_terminal.gate)
                     .result ()
@@ -4299,7 +4301,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     auto &request = owned_command->activation;
     std::shared_ptr<location_repository_t> store;
     std::shared_ptr<stateful::relocation_store_port_t> instance_relocations;
-    instance_spot_activation_materializer_t instance_materializer;
+    std::shared_ptr<const instance_spot_activation_materializer_t> instance_materializer;
     std::function<std::optional<location_owner_token_t> ()> instance_owner_resolver;
     _lifecycle_configuration_lane
       .run ([&] {
@@ -4553,7 +4555,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             bool prepared = false;
             try {
                 prepared = ready_state->state == instance_spot_authority_state_t::closing
-                           || instance_materializer.prepare (request, *snapshot);
+                           || instance_materializer->prepare (request, *snapshot);
             }
             catch (...) {
                 prepared = false;
@@ -4566,7 +4568,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                 co_return true;
             }
             auto running = std::make_shared<task_t<instance_spot_activation_result_t>> (
-              instance_materializer.dispatch (owned_command, resume_missing, nullptr));
+              instance_materializer->dispatch (owned_command, resume_missing, nullptr));
             finish_admission (*snapshot);
             detail::observe_task_terminal (
               *running, [running, reply_terminal] (
@@ -4602,14 +4604,78 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             reject_activation ();
         co_return;
     }
-    const auto current = co_await run_blocking_step<authority_read_result_t> (
+    auto current = co_await run_blocking_step<authority_read_result_t> (
       [store, authority_key] { return store->read_authority (authority_key); });
+    if (request.target.authority_owner_generation == 0) {
+        if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current)) {
+            const auto ready = decode_instance_spot_authority_payload (snapshot->payload);
+            const auto local = status ();
+            if (snapshot->allocation.target.node_rid.value () == local.routing_id ().to_string ()
+                && snapshot->allocation.target.node_lifecycle_generation
+                     == local.lifecycle_generation ()) {
+                const auto reference =
+                  snapshot->pending_creation ? snapshot->pending_creation->request_content_reference
+                  : ready && ready->activation_recovery ? ready->activation_recovery->reference
+                                                        : std::string{};
+                if (!reference.empty ()) {
+                    const auto bytes =
+                      co_await run_blocking_step<std::optional<std::vector<std::uint8_t>>> (
+                        [instance_relocations, reference] {
+                            return task_t<std::optional<std::vector<std::uint8_t>>> (
+                              result_t<std::optional<std::vector<std::uint8_t>>>::success (
+                                instance_relocations->get (reference)));
+                        });
+                    if (!bytes)
+                        throw framework_exception_t (framework_error_kind_t::data_lost,
+                                                     "Stored Instance activation is missing");
+                    protocol::instance_activation_recovery_t stored;
+                    try {
+                        stored =
+                          protocol::decode_instance_activation_recovery (*bytes, capture_flow ());
+                    }
+                    catch (const protocol::service_wire_error_t &error) {
+                        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                                     error.what ());
+                    }
+                    const auto &prior = stored.activation;
+                    if (prior.target.mesh_name != request.target.mesh_name
+                        || prior.target.stable_type != request.target.stable_type
+                        || prior.target.descriptor_version != request.target.descriptor_version
+                        || prior.target.deadline_unix_ms != request.target.deadline_unix_ms
+                        || prior.operation != request.operation
+                        || prior.source_node_generation != request.source_node_generation
+                        || prior.source_node_routing_id != request.source_node_routing_id
+                        || prior.source_spot_id != request.source_spot_id
+                        || prior.has_metadata != request.has_metadata
+                        || stored.metadata != owned_command->metadata)
+                        throw framework_exception_t (
+                          framework_error_kind_t::protocol_error,
+                          "Instance route does not match the stored activation");
+                }
+            }
+            if (snapshot->allocation.state == placement_allocation_state_t::active && ready
+                && ready->state == instance_spot_authority_state_t::ready) {
+                object_reserve_request_t release;
+                release.key = {placement_object_kind_t::instance_spot, request.target.spot_id};
+                release.intent.stable_type = request.target.stable_type;
+                if (instance_materializer->relocation_policy)
+                    release.relocation_policy =
+                      instance_materializer->relocation_policy (request.target.stable_type);
+                const auto released = co_await store->release_ended_reservation (
+                  authority_key, snapshot->store_version, {}, std::move (release));
+                if (released)
+                    current = authority_missing_t{};
+                else
+                    current = co_await store->read_authority (authority_key);
+            }
+        }
+    }
     if (co_await join_existing (current)) {
         co_return;
     }
     if (std::holds_alternative<authority_missing_t> (current)
-        && instance_materializer.select_target) {
-        const auto selected = co_await instance_materializer.select_target (request);
+        && instance_materializer->select_target) {
+        const auto selected = co_await instance_materializer->select_target (request);
         if (!selected) {
             const auto failure =
               messaging::request_failure_mapper_t{}.target_failure_reply (*selected.error ());
@@ -4693,7 +4759,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     }
     bool prepared = false;
     try {
-        prepared = instance_materializer.prepare (request, reservation->creating);
+        prepared = instance_materializer->prepare (request, reservation->creating);
     }
     catch (...) {
         prepared = false;
@@ -4743,7 +4809,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     const auto &ready_snapshot = created->ready;
     auto activation_terminal = std::make_shared<activation_terminal_t> ();
     auto dispatched =
-      instance_materializer.dispatch (owned_command, resume_missing, &activation_terminal->gate);
+      instance_materializer->dispatch (owned_command, resume_missing, &activation_terminal->gate);
     finish_admission (ready_snapshot);
     auto result = co_await dispatched;
     activation_terminal->accepted = std::move (result.accepted_turn_terminal);
@@ -5499,11 +5565,18 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     detail::observe_task_terminal (
                       *running, [self = shared_from_this (), running,
                                  reply_record] (const result_t<void> &result) {
-                          if (!result)
+                          if (!result) {
+                              const auto failure =
+                                (result.error ()
+                                   ? messaging::request_failure_mapper_t{}.target_failure_reply (
+                                       *result.error ())
+                                   : std::optional<messaging::request_wire_failure_t>{})
+                                  .value_or (messaging::request_wire_failure_t{
+                                    105, static_cast<std::uint32_t> (
+                                           protocol::framework_error_code::requestFailed)});
                               (void) self->_transport->reply_instance_spot_activation (
-                                *reply_record, 105,
-                                static_cast<std::uint32_t> (
-                                  protocol::framework_error_code::requestFailed));
+                                *reply_record, failure.terminal_result, failure.failure_code);
+                          }
                       });
                     continue;
                 }

@@ -781,19 +781,25 @@ class in_memory_location_repository_t : public location_repository_t
           .get ();
     }
 
-    task_t<bool> release_ended_reservation (authority_key_t key,
-                                            std::string expected_store_version,
-                                            std::stop_token cancellation = {}) override
+    task_t<bool> release_ended_reservation (
+      authority_key_t key,
+      std::string expected_store_version,
+      std::stop_token cancellation = {},
+      std::optional<object_reserve_request_t> request = std::nullopt) override
     {
         if (cancellation.stop_requested ())
-            return cancelled<bool> ();
-        return _lane
+            co_return co_await cancelled<bool> ();
+        co_return co_await _lane
           .run ([&] {
               const auto current = _authorities.find (key.value);
-              return completed (
-                current != _authorities.end ()
-                && current->second.store_version == expected_store_version
-                && release_ended_reservation_on_lane (key.value, current->second, clock_t::now ()));
+              if (current == _authorities.end ()
+                  || current->second.store_version != expected_store_version)
+                  return completed (false);
+              if (request && !authority_matches_creation_type (current->second, *request))
+                  throw framework_exception_t (framework_error_kind_t::type_mismatch,
+                                               "Object type does not match the current authority");
+              return completed (release_ended_reservation_on_lane (
+                key.value, current->second, clock_t::now (), request ? &*request : nullptr));
           })
           .get ();
     }
@@ -820,9 +826,7 @@ class in_memory_location_repository_t : public location_repository_t
                   }
                   auto authority = _authorities.find (key);
                   if (authority != _authorities.end ()
-                      && (authority->second.allocation.object_kind != request.key.kind
-                          || authority->second.allocation.stable_type
-                               != request.intent.stable_type))
+                      && !authority_matches_creation_type (authority->second, request))
                       return completed (
                         object_reserve_result_t{object_type_mismatch_t{authority->second}});
                   if (authority != _authorities.end ()
@@ -942,6 +946,7 @@ class in_memory_location_repository_t : public location_repository_t
               authority->second.payload = std::move (request.ready_payload);
               authority->second.store_now = now;
               authority->second.allocation.state = placement_allocation_state_t::active;
+              authority->second.pending_creation.reset ();
               reservation->second.snapshot = authority->second;
               reservation->second.status = reservation_status_t::committed;
               release_pending (reservation->second);

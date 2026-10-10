@@ -674,6 +674,10 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
     }
     ASSERT_TRUE (std::holds_alternative<object_committed_t> (
       repository.commit ({request.key, first.fence, ready_payload}).result ().value ()));
+    const auto committed =
+      repository.read_authority (actor_authority_key (request.key.global_id)).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (committed));
+    EXPECT_FALSE (std::get<authority_snapshot_t> (committed).pending_creation);
     if (scenario == "liveDescriptorGone")
         repository.remove_mesh_node ({old_descriptor.mesh_name, old_descriptor.rid}, old_owner)
           .result ()
@@ -1048,6 +1052,37 @@ TEST_P (EndedSpotReclaimTest, NewIncarnationRequiresEndedOwnerAndDisabledRegistr
                              : placement_object_kind_t::user_spot;
     if (scenario == "kindMismatch")
         request.capacity_bundle.spot_type->object_kind = request.key.kind;
+    if (scenario == "typeMismatch" || scenario == "kindMismatch") {
+        const auto stale =
+          repository
+            .release_ended_reservation (spot_authority_key ("ended-spot"),
+                                        before.store_version + "-stale", {}, request)
+            .result ();
+        ASSERT_TRUE (stale);
+        EXPECT_FALSE (stale.value ());
+        const auto mismatched = repository
+                                  .release_ended_reservation (spot_authority_key ("ended-spot"),
+                                                              before.store_version, {}, request)
+                                  .result ();
+        ASSERT_FALSE (mismatched);
+        EXPECT_EQ (framework_error_kind_t::type_mismatch, mismatched.error_kind ());
+    } else if (scenario == "live") {
+        const auto live = repository
+                            .release_ended_reservation (spot_authority_key ("ended-spot"),
+                                                        before.store_version, {}, request)
+                            .result ();
+        ASSERT_TRUE (live);
+        EXPECT_FALSE (live.value ());
+    } else if (scenario == "aggregate" || scenario == "recreate" || scenario == "unregistered"
+               || scenario == "closing"
+               || (scenario == "recovery" && kind == placement_object_kind_t::instance_spot)) {
+        const auto denied = repository
+                              .release_ended_reservation (spot_authority_key ("ended-spot"),
+                                                          before.store_version, {}, request)
+                              .result ();
+        ASSERT_FALSE (denied);
+        EXPECT_EQ (framework_error_kind_t::unavailable, denied.error_kind ());
+    }
     const auto result = [&] {
         if (scenario != "race")
             return repository.reserve (request).result ();

@@ -731,8 +731,7 @@ class provider_location_repository_t final : public location_repository_t
         if (const auto *found = std::get_if<store_found_t> (&authority)) {
             decoded_current =
               decode_authority (found->value.bytes, found->value.version, found->value.store_now);
-            if (decoded_current->allocation.object_kind != request.key.kind
-                || decoded_current->allocation.stable_type != request.intent.stable_type)
+            if (!authority_matches_creation_type (*decoded_current, request))
                 co_return object_reserve_result_t{
                   object_type_mismatch_t{std::move (*decoded_current)}};
         }
@@ -989,22 +988,31 @@ class provider_location_repository_t final : public location_repository_t
     }
 
   public:
-    task_t<bool> release_ended_reservation (authority_key_t key,
-                                            std::string expected_store_version,
-                                            std::stop_token cancellation = {}) override
+    task_t<bool> release_ended_reservation (
+      authority_key_t key,
+      std::string expected_store_version,
+      std::stop_token cancellation = {},
+      std::optional<object_reserve_request_t> request = std::nullopt) override
     {
         if (cancellation.stop_requested ())
             co_return co_await cancelled<bool> ();
         const auto row_key = key_authority (key.value);
-        if (co_await authority_mutation_locked_async (key.value))
-            co_return false;
         const auto read = co_await _store.read (row_key);
         const auto *found = std::get_if<store_found_t> (&read);
         if (!found || found->value.version.value != expected_store_version)
             co_return false;
         const auto current =
           decode_authority (found->value.bytes, found->value.version, found->value.store_now);
-        co_return co_await try_reclaim_reserved_authority_async (row_key, *found, current)
+        if (request && !authority_matches_creation_type (current, *request))
+            throw framework_exception_t (framework_error_kind_t::type_mismatch,
+                                         "Object type does not match the current authority");
+        if (current.allocation.state != placement_allocation_state_t::active) {
+            const auto locked = co_await authority_mutation_locked_async (key.value);
+            if (locked)
+                co_return false;
+        }
+        co_return co_await try_reclaim_reserved_authority_async (
+          row_key, *found, current, request ? &*request : nullptr, cancellation)
           == stale_authority_reclaim_result_t::reclaimed;
     }
 
