@@ -492,6 +492,19 @@ class in_memory_location_repository_t : public location_repository_t
                   return completed (
                     authority_compare_exchange_result_t{authority_conflict_t{found->second}});
 
+              const auto old_member = decode_direct_actor_authority_payload (found->second.payload);
+              const auto member = std::visit (
+                [] (const auto &value) {
+                    if constexpr (requires { value.payload; })
+                        return decode_direct_actor_authority_payload (value.payload);
+                    else
+                        return std::optional<actor_authority_payload_t>{};
+                },
+                mutation);
+              if (!user_membership_can_commit (old_member, member, now))
+                  return completed (
+                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+
               if (std::holds_alternative<authority_delete_t> (mutation)) {
                   if (found->second.allocation.state != placement_allocation_state_t::active
                       || !owner_token_is_live (found->second.owner, now)
@@ -919,6 +932,12 @@ class in_memory_location_repository_t : public location_repository_t
               if (!store_revisions_available ())
                   return completed (object_commit_result_t{authority_generation_exhausted_t{}});
 
+              if (authority->second.allocation.object_kind == placement_object_kind_t::actor
+                  && !user_membership_can_commit (
+                    std::nullopt, decode_direct_actor_authority_payload (request.ready_payload),
+                    now))
+                  return completed (
+                    object_commit_result_t{object_commit_conflict_t{authority->second}});
               authority->second.store_version = next_store_version ();
               authority->second.payload = std::move (request.ready_payload);
               authority->second.store_now = now;
@@ -1299,33 +1318,87 @@ class in_memory_location_repository_t : public location_repository_t
           detail::make_cancellation_exception ("location store operation was cancelled")));
     }
 
+    bool user_membership_can_commit (const std::optional<actor_authority_payload_t> &old_member,
+                                     const std::optional<actor_authority_payload_t> &member,
+                                     clock_t::time_point now) const
+    {
+        if (member && member->current_spot_kind == actor_authority_spot_kind_t::user
+            && (!old_member || old_member->current_spot_kind != member->current_spot_kind
+                || old_member->current_spot_id != member->current_spot_id
+                || old_member->current_spot_generation != member->current_spot_generation)) {
+            const auto spot =
+              _authorities.find (spot_authority_key (member->current_spot_id).value);
+            const auto ready = spot == _authorities.end ()
+                                 ? std::optional<user_spot_authority_payload_t>{}
+                                 : decode_ready_user_spot_authority_payload (spot->second.payload);
+            if (!ready || ready->spot_id != member->current_spot_id
+                || spot->second.allocation.object_kind != placement_object_kind_t::user_spot
+                || spot->second.allocation.state != placement_allocation_state_t::active
+                || spot->second.object_generation != member->current_spot_generation
+                || !owner_token_is_live (spot->second.owner, now))
+                return false;
+        }
+        return true;
+    }
+
     bool release_ended_reservation_on_lane (const std::string &key,
                                             const authority_snapshot_t &snapshot,
                                             clock_t::time_point now,
                                             const object_reserve_request_t *request = nullptr)
     {
         const bool active = snapshot.allocation.state == placement_allocation_state_t::active;
-        if (active ? !request || request->key.kind != placement_object_kind_t::actor
-                   : !snapshot.pending_creation)
+        if (active ? !request : !snapshot.pending_creation)
+            return false;
+        const auto &target = snapshot.allocation.target;
+        const bool owner_live = owner_token_is_live (snapshot.owner, now);
+        if (active && owner_live)
             return false;
         for (const auto &[id, aggregate] : _aggregates)
             if (aggregate.status == aggregate_status_t::prepared)
                 for (const auto &participant : aggregate.request.participants)
-                    if (participant.key.value == key)
+                    if (participant.key.value == key) {
+                        if (active)
+                            throw framework_exception_t (
+                              framework_error_kind_t::unavailable,
+                              "Object authority requires aggregate recovery");
                         return false;
+                    }
         if (active) {
             const auto actor = decode_direct_actor_authority_payload (snapshot.payload);
             if (actor && actor->has_relocation_state)
-                return false;
-        }
-        const auto &target = snapshot.allocation.target;
-        const bool owner_live = owner_token_is_live (snapshot.owner, now);
-        if (active) {
-            if (owner_live)
-                return false;
-            if (request->actor_relocation_policy != detail::factory_relocation_kind_t::disabled)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Actor owner lease is unavailable");
+                                             "Object authority requires relocation recovery");
+            if (request->relocation_policy != detail::factory_relocation_kind_t::disabled)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Object owner lease is unavailable");
+            if (snapshot.allocation.object_kind == placement_object_kind_t::actor
+                && (!actor || actor->state != actor_authority_state_t::ready
+                    || actor->actor_id != request->key.global_id
+                    || actor->stable_type != request->intent.stable_type))
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Actor is not steady Ready");
+            if (snapshot.allocation.object_kind == placement_object_kind_t::user_spot) {
+                const auto spot = decode_ready_user_spot_authority_payload (snapshot.payload);
+                if (!spot || spot->spot_id != request->key.global_id
+                    || spot->stable_type != request->intent.stable_type)
+                    throw framework_exception_t (framework_error_kind_t::unavailable,
+                                                 "User Spot is not steady Ready");
+                for (const auto &[member_key, authority] : _authorities) {
+                    const auto member = decode_direct_actor_authority_payload (authority.payload);
+                    if (member && member->current_spot_kind == actor_authority_spot_kind_t::user
+                        && member->current_spot_id == spot->spot_id
+                        && member->current_spot_generation == snapshot.object_generation)
+                        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                                     "User Spot still has membership");
+                }
+            } else if (snapshot.allocation.object_kind == placement_object_kind_t::instance_spot) {
+                const auto spot = decode_instance_spot_authority_payload (snapshot.payload);
+                if (!spot || spot->state != instance_spot_authority_state_t::ready
+                    || spot->activation_recovery || spot->spot_id != request->key.global_id
+                    || spot->stable_type != request->intent.stable_type)
+                    throw framework_exception_t (framework_error_kind_t::unavailable,
+                                                 "Instance Spot is not steady Ready");
+            }
         }
         const auto descriptor = _mesh_nodes.find (
           mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));

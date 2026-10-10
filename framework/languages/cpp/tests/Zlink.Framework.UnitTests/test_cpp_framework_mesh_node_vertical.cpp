@@ -873,7 +873,18 @@ void verify_actor_route_resolver_preserves_unavailable ()
     const auto reserved = store.reserve (reservation).result ().value ();
     const auto *pending = std::get_if<object_reserved_t> (&reserved);
     assert (pending);
-    const auto payload = runtime::encode_actor_authority_payload (actor, "spot-a", 1);
+    const auto payload =
+      runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
+        .stable_type = "player",
+        .actor_id = "expired-actor",
+        .current_spot_id = detail::new_entry_spot_id ("expired-actor-target"),
+        .current_spot_generation = descriptor.lifecycle_generation,
+        .current_spot_kind = runtime::actor_authority_spot_kind_t::entry,
+        .owner_id = owner->token.owner_id,
+        .owner_lease_generation = static_cast<std::uint64_t> (owner->token.lease_generation),
+        .mesh_name = descriptor.mesh_name,
+        .node_rid = reservation.target.node_rid,
+        .node_generation = descriptor.lifecycle_generation});
     const auto committed =
       store.commit ({reservation.key, pending->fence, payload}).result ().value ();
     assert (std::get_if<object_committed_t> (&committed));

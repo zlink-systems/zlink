@@ -448,12 +448,20 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     const auto reserved = std::get<object_reserved_t> (store->reserve (reserve).result ().value ());
     const auto old_actor = detail::actor_ref_access_t::make (
       old_placement.node_rid, "route-probe", key.global_id, reserved.fence.object_generation);
+    const auto old_payload =
+      runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
+        .stable_type = "route-probe",
+        .actor_id = key.global_id,
+        .current_spot_id = old_target->native_node ().entry_spot ().spot_id (),
+        .current_spot_generation = old_status.lifecycle_generation (),
+        .current_spot_kind = runtime::actor_authority_spot_kind_t::entry,
+        .owner_id = old_owner.owner_id,
+        .owner_lease_generation = static_cast<std::uint64_t> (old_owner.lease_generation),
+        .mesh_name = old_placement.mesh_name,
+        .node_rid = old_placement.node_rid,
+        .node_generation = old_placement.node_lifecycle_generation});
     const auto committed = std::get<object_committed_t> (
-      store
-        ->commit ({key, reserved.fence,
-                   runtime::encode_actor_authority_payload (old_actor, "actor-send-spot", 1)})
-        .result ()
-        .value ());
+      store->commit ({key, reserved.fence, old_payload}).result ().value ());
 
     location_options_t location_options;
     location_options.route_cache_max_age = 20s;
@@ -508,14 +516,24 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
 
     const auto new_actor = detail::actor_ref_access_t::make (
       new_placement.node_rid, "route-probe", key.global_id, committed.ready.object_generation);
+    const auto new_payload =
+      runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
+        .stable_type = "route-probe",
+        .actor_id = key.global_id,
+        .current_spot_id = new_target->native_node ().entry_spot ().spot_id (),
+        .current_spot_generation = new_status.lifecycle_generation (),
+        .current_spot_kind = runtime::actor_authority_spot_kind_t::entry,
+        .owner_id = new_owner.owner_id,
+        .owner_lease_generation = static_cast<std::uint64_t> (new_owner.lease_generation),
+        .mesh_name = new_placement.mesh_name,
+        .node_rid = new_placement.node_rid,
+        .node_generation = new_placement.node_lifecycle_generation});
     const auto moved =
       std::get<authority_stored_t> (
         store
-          ->compare_exchange_authority (
-            runtime::actor_authority_key (key.global_id), committed.ready.store_version,
-            authority_retarget_t{
-              runtime::encode_actor_authority_payload (new_actor, "actor-send-spot", 1),
-              new_placement})
+          ->compare_exchange_authority (runtime::actor_authority_key (key.global_id),
+                                        committed.ready.store_version,
+                                        authority_retarget_t{new_payload, new_placement})
           .result ()
           .value ())
         .snapshot;
@@ -757,9 +775,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
                             store
                               ->compare_exchange_authority (
                                 runtime::actor_authority_key (key.global_id), moved.store_version,
-                                authority_retarget_t{runtime::encode_actor_authority_payload (
-                                                       old_actor, "actor-send-spot", 1),
-                                                     old_placement})
+                                authority_retarget_t{old_payload, old_placement})
                               .result ()
                               .value ())
                             .snapshot;

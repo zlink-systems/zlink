@@ -734,9 +734,8 @@ int main ()
     const auto target_finalizer_end =
       target_finalizer_begin == std::string::npos
         ? std::string::npos
-        : spot_runtime.find (
-            "result_t<actor_join_reply_t> spot_node_runtime_t::finalize_remote_actor_to_spot (",
-            target_finalizer_begin);
+        : spot_runtime.find ("spot_node_runtime_t::finalize_remote_actor_to_spot (",
+                             target_finalizer_begin);
     const auto target_finalizer =
       target_finalizer_begin == std::string::npos || target_finalizer_end == std::string::npos
         ? std::string{}
