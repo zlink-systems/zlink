@@ -107,7 +107,8 @@ inline raw_message_t copy_binding_parts (const std::vector<zlink::message_t> &pa
 
 inline binding_completion_observer_t observe_request_completion (
   request_submission_stages_t stages,
-  std::shared_ptr<task_completion_source_t<raw_request_completion_t>> source)
+  std::shared_ptr<task_completion_source_t<raw_request_completion_t>> source,
+  runtime::mesh::service_liveness_registry_t::connection_t admission = {})
 {
     try {
         std::exception_ptr admission_error;
@@ -120,6 +121,9 @@ inline binding_completion_observer_t observe_request_completion (
             }
         }
         auto reply = co_await std::move (stages.reply);
+        if (admission)
+            admission->record_received (
+              runtime::mesh::service_liveness_registry_t::clock_t::now ());
         if (admission_error)
             std::rethrow_exception (admission_error);
         source->complete (result_t<raw_request_completion_t>::success (

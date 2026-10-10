@@ -4,10 +4,12 @@
 #include "runtime/execution/state_lane.hpp"
 
 #include <chrono>
+#include <atomic>
+#include <memory>
 #include <cstdint>
 #include <map>
-#include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -36,18 +38,52 @@ class service_liveness_registry_t
       std::chrono::milliseconds probe_interval = std::chrono::seconds (5),
       std::chrono::milliseconds peer_timeout = std::chrono::seconds (15));
 
-    void admit (std::vector<std::uint8_t> node_routing_id,
-                std::vector<std::uint8_t> connection_id,
-                clock_t::time_point now);
+    struct peer_t
+    {
+        peer_t (std::vector<std::uint8_t> identity,
+                clock_t::time_point now,
+                std::chrono::milliseconds interval,
+                std::chrono::milliseconds timeout) :
+            connection_id (std::move (identity)),
+            deadline (now + timeout),
+            next_probe (now + interval),
+            _timeout (timeout)
+        {
+        }
+
+        void record_received (clock_t::time_point now) noexcept
+        {
+            const auto candidate = now + _timeout;
+            auto previous = deadline.load (std::memory_order_relaxed);
+            while (
+              previous < candidate
+              && !deadline.compare_exchange_weak (previous, candidate, std::memory_order_relaxed)) {
+            }
+        }
+
+        std::vector<std::uint8_t> connection_id;
+        std::atomic<clock_t::time_point> deadline;
+        clock_t::time_point next_probe;
+        std::optional<std::uint64_t> outstanding_probe;
+
+      private:
+        const std::chrono::milliseconds _timeout;
+    };
+    using connection_t = std::shared_ptr<peer_t>;
+
+    connection_t admit (std::vector<std::uint8_t> node_routing_id,
+                        std::vector<std::uint8_t> connection_id,
+                        clock_t::time_point now);
+    connection_t connection (const std::vector<std::uint8_t> &node_routing_id) const;
     bool disconnect (const std::vector<std::uint8_t> &node_routing_id,
                      const std::vector<std::uint8_t> &connection_id);
     bool acknowledge (const std::vector<std::uint8_t> &node_routing_id,
-                      const std::vector<std::uint8_t> &connection_id,
+                      std::span<const std::uint8_t> connection_id,
                       std::uint64_t probe_id,
                       clock_t::time_point now);
     std::optional<service_probe_t>
     acknowledge_probe (const std::vector<std::uint8_t> &node_routing_id,
-                       const std::vector<std::uint8_t> &connection_id,
+                       std::span<const std::uint8_t> connection_id,
                        std::uint64_t probe_id) const;
     service_liveness_tick_t tick (clock_t::time_point now);
     std::optional<clock_t::time_point> next_activity () const;
@@ -60,21 +96,12 @@ class service_liveness_registry_t
                          const std::vector<std::uint8_t> &right) const noexcept;
     };
 
-    struct peer_t
-    {
-        std::vector<std::uint8_t> connection_id;
-        clock_t::time_point deadline;
-        clock_t::time_point next_probe;
-        std::optional<std::uint64_t> outstanding_probe;
-    };
-
     const std::chrono::milliseconds _probe_interval;
     const std::chrono::milliseconds _peer_timeout;
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
-    std::map<std::vector<std::uint8_t>, peer_t, byte_vector_less_t> _peers;
+    std::map<std::vector<std::uint8_t>, connection_t, byte_vector_less_t> _peers;
     std::uint64_t _next_probe_id = 1;
 };
 
 } // namespace zlink::framework::runtime::mesh
-#include <mutex>

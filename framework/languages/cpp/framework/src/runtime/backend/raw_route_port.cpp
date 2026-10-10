@@ -292,9 +292,11 @@ task_t<bool> raw_route_port_t::send (const raw_bytes_t &target_routing_id, raw_m
       == zlink::submit_result_t::ok;
 }
 
-task_t<raw_request_completion_t> raw_route_port_t::request (const raw_bytes_t &target_routing_id,
-                                                            raw_message_t parts,
-                                                            std::chrono::milliseconds timeout)
+task_t<raw_request_completion_t>
+raw_route_port_t::request (const raw_bytes_t &target_routing_id,
+                           raw_message_t parts,
+                           std::chrono::milliseconds timeout,
+                           runtime::mesh::service_liveness_registry_t::connection_t admission)
 {
     auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
     auto result = source->task ();
@@ -315,6 +317,8 @@ task_t<raw_request_completion_t> raw_route_port_t::request (const raw_bytes_t &t
                   raw_request_completion_t{zlink::request_result_t::terminated, {}}));
                 return result;
             }
+            if (!admission && _request_receive_source)
+                admission = _request_receive_source (target_routing_id);
             auto operation =
               std::move (_socket->request (zlink::routing_id_t::from (target_routing_id)))
                 .message (messages[0]);
@@ -324,7 +328,7 @@ task_t<raw_request_completion_t> raw_route_port_t::request (const raw_bytes_t &t
             stages.emplace (submit_request_once (
               [&] { return std::move (operation).timeout (timeout).async (); }));
         }
-        observe_request_completion (std::move (*stages), source);
+        observe_request_completion (std::move (*stages), source, std::move (admission));
     }
     catch (const zlink::submit_error_t &error) {
         const auto phase = raw_request_failure_phase_t::initial_admission;
