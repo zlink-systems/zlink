@@ -39,6 +39,7 @@ import type {
   ServiceActorCreateRecord,
   ServiceDirectSpotRouteFence,
   ServiceInstanceRouteFence,
+  ServiceInstanceColdActivationTarget,
   ServiceUserSpotCloseRecord,
   ServiceUserSpotCreateRecord
 } from '../../foundation/service-stateful-wire-codec';
@@ -113,26 +114,14 @@ export interface ZLinkBackendMeshNode {
   selectObjectPlacement(stableType: string): ZLinkBackendObjectPlacement;
   instanceSpotPlacementTypes?(): readonly string[];
   sendToMissingInstanceSpot(
-    target: {
-      readonly targetNodeRid: string;
-      readonly targetNodeGeneration: bigint;
-      readonly targetSpotId: string;
-      readonly stableType: string;
-      readonly descriptorVersion: string;
-    },
+    target: ServiceInstanceColdActivationTarget,
     parts: ZLinkBackendMessageLike | readonly ZLinkBackendMessageLike[],
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>
   ): Promise<SubmitResult>;
   requestToMissingInstanceSpot(
-    target: {
-      readonly targetNodeRid: string;
-      readonly targetNodeGeneration: bigint;
-      readonly targetSpotId: string;
-      readonly stableType: string;
-      readonly descriptorVersion: string;
-    },
+    target: ServiceInstanceColdActivationTarget,
     parts: ZLinkBackendMessageLike | readonly ZLinkBackendMessageLike[],
     deadlineUnixMs: bigint,
     sourceSpotId?: string,

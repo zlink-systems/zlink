@@ -31,6 +31,7 @@ test('cold event and request have distinct operation identities on the same sour
     stableType: 'Room',
     targetNodeRid: 'target',
     targetNodeGeneration: 7n,
+    targetMeshName: 'mesh',
     descriptorVersion: '1'
   };
   const payload = encodeApplicationPayload({
@@ -96,6 +97,7 @@ test('same Spot ID shares activation before subsequent operations enter the appl
       stableType: type,
       targetNodeRid: 'target',
       targetNodeGeneration: 7n,
+      targetMeshName: 'mesh',
       descriptorVersion: '1'
     },
     operation: { high: 1571n, low: operation },

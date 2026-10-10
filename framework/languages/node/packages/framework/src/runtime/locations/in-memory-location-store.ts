@@ -1,4 +1,5 @@
 import type { RoutingId } from '../../contracts/Common';
+import { ZLinkSpotKind } from '../../contracts';
 import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
 import {
   isValidPublicWeight,
@@ -143,7 +144,18 @@ export class ZLinkInMemoryLocationStore
                     typeCapacity.limit)))
           );
         },
-        identityClaimed: (authorityKey) => this.entrySpotClaims.has(authorityKey)
+        identityClaimed: (authorityKey) => this.entrySpotClaims.has(authorityKey),
+        hasSpotMembers: (spotId, objectGeneration) => {
+          for (const actor of this.actors.rows.values()) {
+            if (
+              actor.spotKind === ZLinkSpotKind.User &&
+              String(actor.spotId) === spotId &&
+              actor.spotGeneration === objectGeneration
+            )
+              return true;
+          }
+          return false;
+        }
       },
       now
     );
@@ -705,6 +717,14 @@ export class ZLinkInMemoryLocationStore
     });
     const updatedAt = this.now();
     const current = this.actors.rows.get(key);
+    if (
+      actor.spotKind === ZLinkSpotKind.User &&
+      (current?.spotKind !== ZLinkSpotKind.User ||
+        String(current.spotId) !== String(actor.spotId) ||
+        current.spotGeneration !== actor.spotGeneration) &&
+      !this.authority.acceptsUserSpotMembership(String(actor.spotId), actor.spotGeneration)
+    )
+      return rejectedConflict();
     if (
       intent === ZLinkLocationWriteIntent.NewClaim &&
       current !== undefined &&

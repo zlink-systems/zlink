@@ -162,7 +162,7 @@ test('Foundation preserves Missing ingress during Active cold initialization wit
   }));
   owner.registerInstanceApplicationLifecycle({ isMaterialized: () => true, isMaterializing: () => true,
     materialize() { assert.fail('Closing owner must not materialize a Ready projection'); } });
-  const target = { targetSpotId: 'close-room', stableType: 'room', targetNodeRid: 'node', targetNodeGeneration: 1n, descriptorVersion: '1' };
+  const target = { targetSpotId: 'close-room', stableType: 'room', targetNodeRid: 'node', targetNodeGeneration: 1n, targetMeshName: 'mesh', descriptorVersion: '1' };
   const operation = { high: 1n, low: 9n };
   const deadline = BigInt(Date.now() + 10_000);
   const applicationJobOwner = ApplicationIngressRecordOwner.create(queue, await queue.acquire(), { close() {} });
