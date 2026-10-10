@@ -40,8 +40,7 @@ service_liveness_registry_t::admit (std::vector<std::uint8_t> node_routing_id,
           const auto found = _peers.find (node_routing_id);
           if (found != _peers.end () && found->second->connection_id == connection_id)
               return found->second;
-          auto peer = std::make_shared<peer_t> (std::move (connection_id), now, _probe_interval,
-                                                _peer_timeout);
+          auto peer = std::make_shared<peer_t> (std::move (connection_id), now, _peer_timeout);
           _peers.insert_or_assign (std::move (node_routing_id), peer);
           return peer;
       })

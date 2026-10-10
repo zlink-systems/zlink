@@ -42,11 +42,10 @@ class service_liveness_registry_t
     {
         peer_t (std::vector<std::uint8_t> identity,
                 clock_t::time_point now,
-                std::chrono::milliseconds interval,
                 std::chrono::milliseconds timeout) :
             connection_id (std::move (identity)),
             deadline (now + timeout),
-            next_probe (now + interval),
+            next_probe (now),
             _timeout (timeout)
         {
         }

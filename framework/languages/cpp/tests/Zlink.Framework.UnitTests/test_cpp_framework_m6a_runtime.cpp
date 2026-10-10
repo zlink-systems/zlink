@@ -1228,6 +1228,15 @@ void verify_completion_receipt_without_application_receive ()
 void verify_liveness_reuses_probe_and_fences_reconnect ()
 {
     {
+        // Transport liveness §3: admission immediately makes the first probe due.
+        mesh::service_liveness_registry_t owner;
+        const auto admitted = mesh::service_liveness_registry_t::clock_t::time_point{};
+        owner.admit (bytes ("initial-peer"), bytes ("initial-pair"), admitted);
+        assert (owner.tick (admitted).probes.size () == 1);
+        assert (owner.tick (admitted + 5s - 1ns).probes.empty ());
+        assert (owner.tick (admitted + 5s).probes.size () == 1);
+    }
+    {
         mesh::service_liveness_registry_t owner;
         const auto start = mesh::service_liveness_registry_t::clock_t::time_point{};
         const auto peer = bytes ("peer");
