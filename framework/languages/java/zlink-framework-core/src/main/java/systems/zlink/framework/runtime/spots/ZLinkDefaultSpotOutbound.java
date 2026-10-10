@@ -7,7 +7,6 @@ import systems.zlink.framework.channels.ZLinkPublishCall;
 import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
@@ -17,7 +16,6 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
-import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.spots.ZLinkSpotOutbound;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
@@ -168,26 +166,6 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
     private SpotTransportAddressResolver resolver() {
         return spotAddressResolver == null ? null : spotAddressResolver.get();
-    }
-
-    private CompletionStage<SpotTransportAddress> resolve(
-            String spotId, SpotTransportAddressResolver resolver) {
-        if (resolver == null) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException("SpotHandle resolver is not configured"));
-        }
-        return resolver.resolve(spotId)
-                .thenCompose(
-                        value ->
-                                value.map(CompletableFuture::completedFuture)
-                                        .orElseGet(
-                                                () ->
-                                                        CompletableFuture.failedFuture(
-                                                                ZLinkFrameworkErrorOrigin.framework(
-                                                                        ZLinkFrameworkErrorKind
-                                                                                .NOT_FOUND,
-                                                                        "SpotHandle route is stale"
-                                                                                + " or unavailable"))));
     }
 
     private final class DeferredSpotSendCall implements ZLinkSpotSendCall {
@@ -352,13 +330,10 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                             : 0;
             SpotTransportAddressResolver resolver = resolver();
             CompletionStage<Void> stage =
-                    resolve(target, resolver)
+                    SpotTransportAddressResolver.resolveForCall(resolver, target, instanceIntent)
                             .handle(
                                     (address, failure) -> {
-                                        if (failure != null
-                                                && (!instanceIntent
-                                                        || !SpotTransportAddressResolver
-                                                                .isStaleRoute(failure))) {
+                                        if (failure != null) {
                                             return CompletableFuture.<Void>failedFuture(
                                                     unwrap(failure));
                                         }
@@ -376,9 +351,10 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                                                         packetName,
                                                                         contentType,
                                                                         metadata.values(),
-                                                                        activationDeadline)
+                                                                        activationDeadline,
+                                                                        null)
                                                         : sendExisting(address);
-                                        return failure == null
+                                        return address != null
                                                 ? resolver.observeTerminal(target, submitted)
                                                 : submitted;
                                     })
@@ -633,13 +609,11 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             CompletionStage<TReply> stage;
             try {
                 stage =
-                        resolve(target, resolver)
+                        SpotTransportAddressResolver.resolveForCall(
+                                        resolver, target, instanceIntent)
                                 .handle(
                                         (address, failure) -> {
-                                            if (failure != null
-                                                    && (!instanceIntent
-                                                            || !SpotTransportAddressResolver
-                                                                    .isStaleRoute(failure))) {
+                                            if (failure != null) {
                                                 return CompletableFuture.<TReply>failedFuture(
                                                         unwrap(failure));
                                             }
@@ -652,7 +626,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                                                                             "Instance Spot runtime is not configured"))
                                                                     : activateRequest(replyType)
                                                             : requestExisting(address, replyType);
-                                            return failure == null
+                                            return address != null
                                                     ? resolver.observeTerminal(target, submitted)
                                                     : submitted;
                                         })
@@ -691,7 +665,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                             packetName,
                             contentType,
                             metadata.values(),
-                            timeout)
+                            timeout,
+                            null)
                     .thenApply(
                             parts -> {
                                 try {

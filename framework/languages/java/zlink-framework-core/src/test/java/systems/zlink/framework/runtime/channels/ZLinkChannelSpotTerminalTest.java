@@ -135,8 +135,9 @@ final class ZLinkChannelSpotTerminalTest {
                     request && !missing ? 1 : 0,
                     probe.operationIds.size(),
                     "no second operation ID");
-            assertEquals(1, probe.resolves);
-            assertEquals(stale && !missing ? 1 : 0, probe.invalidations);
+            assertEquals(1, probe.resolves, "Ready routes use the resolver before activation");
+            assertEquals(missing ? 1 : 0, probe.coordinatorCalls);
+            assertEquals(stale ? 1 : 0, probe.invalidations);
             assertEquals(missing ? 1 : 0, probe.activations);
         } finally {
             runtime.beginClose();

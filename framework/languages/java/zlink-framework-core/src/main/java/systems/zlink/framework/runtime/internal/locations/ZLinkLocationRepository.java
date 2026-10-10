@@ -104,6 +104,14 @@ public interface ZLinkLocationRepository {
                         "Reservation lifecycle recovery is not supported"));
     }
 
+    default CompletionStage<Boolean> releaseEndedReservation(
+            ZLinkObjectReservationRequest request,
+            String expectedStoreVersion,
+            ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Ready authority reclamation is not supported"));
+    }
+
     CompletionStage<ZLinkObjectAbortResult> abort(
             ZLinkObjectReservation reservation, ZLinkStoreCancellation cancellation);
 
