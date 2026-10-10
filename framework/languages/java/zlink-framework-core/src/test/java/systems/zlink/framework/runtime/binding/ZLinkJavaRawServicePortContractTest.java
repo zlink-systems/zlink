@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -418,6 +419,43 @@ final class ZLinkJavaRawServicePortContractTest {
         assertDoesNotThrow(port::close);
         assertThrows(
                 IllegalStateException.class, () -> port.openRouter(RoutingId.from("after-close")));
+    }
+
+    @RepeatedTest(20)
+    void closeDrainsStartedSubmissionsBeforeClosingTheirSocket() throws Exception {
+        RoutingId receiver = RoutingId.from("close-receiver");
+        try (var port = new ZLinkJavaRawServicePort();
+                var executor = Executors.newSingleThreadExecutor()) {
+            var left = port.openRouter(receiver);
+            var right = port.openRouter(RoutingId.from("close-sender"));
+            String endpoint = "inproc://close-submission-" + System.nanoTime();
+            left.bind(endpoint);
+            right.connect(endpoint);
+            port.send(right, receiver, List.of(new byte[] {0}))
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            awaitInbound(port, left, 1, System.nanoTime() + Duration.ofSeconds(2).toNanos());
+
+            var submitting = new CountDownLatch(1);
+            var sends =
+                    executor.submit(
+                            () -> {
+                                for (int index = 0; index < 16; index++) {
+                                    submitting.countDown();
+                                    try {
+                                        port.send(right, receiver, List.of(new byte[] {1}))
+                                                .toCompletableFuture()
+                                                .join();
+                                    } catch (IllegalStateException closed) {
+                                        assertEquals("service port is closed", closed.getMessage());
+                                        return;
+                                    }
+                                }
+                            });
+            assertTrue(submitting.await(2, TimeUnit.SECONDS));
+            assertDoesNotThrow(port::close);
+            sends.get(2, TimeUnit.SECONDS);
+        }
     }
 
     @Test
