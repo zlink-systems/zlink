@@ -4166,7 +4166,6 @@ public sealed partial class StatefulServiceRuntimeTests
         source.ConnectPeer(endpoint, target.RoutingId);
         var recorder = new RecordingInstanceSpotActivationTarget();
         target.SetInstanceSpotActivationTarget(recorder);
-        await using var monitor = target.OpenMonitor();
         source.Start();
         target.Start();
         await WaitUntilAsync(() =>
@@ -4193,12 +4192,58 @@ public sealed partial class StatefulServiceRuntimeTests
             new ReadOnlyMemory<byte>[] { new byte[] { 1, 2, 3 } }
         );
         if (durablePayload)
+        {
+            operation = operation with
+            {
+                IsRequest = true,
+                ReplyRouteId = operation.OperationId.Low,
+            };
             application = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
                 operation,
                 null,
                 new ReadOnlyMemory<byte>[] { new byte[] { 1, 2, 3 } }
             );
-        var protocolErrors = monitor.Status().ProtocolErrors;
+            var socket = (IRouterSocket)
+                typeof(ZLinkManagedMeshNode)
+                    .GetField(
+                        "_socket",
+                        System.Reflection.BindingFlags.Instance
+                            | System.Reflection.BindingFlags.NonPublic
+                    )!
+                    .GetValue(source)!;
+            using var head = Message.From(
+                ZLinkServiceWireCodec.EncodeInstanceSpotActivation(operation, false)
+            );
+            using var body = Message.From(application);
+            var reply = await socket
+                .Request(target.RoutingId)
+                .Message(head)
+                .Message(body)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Async()
+                .Reply;
+            try
+            {
+                Assert.True(
+                    ZLinkServiceWireCodec.TryDecodeReply(
+                        Assert.Single(reply).AsReadOnlySpan(),
+                        out var terminal,
+                        out _
+                    )
+                );
+                Assert.Equal((int)RequestResult.ProtocolError, terminal.TerminalResult);
+                Assert.Equal(
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
+                    terminal.FailureCode
+                );
+                Assert.Equal(0, recorder.Count);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(reply);
+            }
+            return;
+        }
         // Inject the canonical peer frame through the Framework's transport lane.
         // Binding internals are not accessed.
         var send = typeof(ZLinkManagedMeshNode).GetMethod(
@@ -4221,12 +4266,6 @@ public sealed partial class StatefulServiceRuntimeTests
                     }
                 )!
         );
-        if (durablePayload)
-        {
-            await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
-            Assert.Equal(0, recorder.Count);
-            return;
-        }
         await WaitUntilAsync(() => recorder.Count == 1);
         Assert.Equal(operation, recorder.LastOperation);
         Assert.Equal(new byte[] { 1, 2, 3 }, recorder.LastPayload.Single().ToArray());
