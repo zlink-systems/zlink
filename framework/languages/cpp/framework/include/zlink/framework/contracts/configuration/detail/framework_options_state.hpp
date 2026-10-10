@@ -411,7 +411,7 @@ struct framework_options_state_t
     std::map<std::string, std::function<void (channel_builder_t &)>> client_server_server_actions;
     std::set<std::string> fanout_channels_with_publisher;
     std::set<std::string> fanout_channels_with_subscriber;
-    std::set<std::string> fanout_channels_with_no_drop_configuration;
+    std::set<std::string> fanout_channels_with_publisher_configuration;
     std::set<std::string> fanout_channels_with_automatic_subscriber;
     std::set<std::string> fanout_channels_with_manual_subscriber;
     std::map<std::string, std::set<std::string>> fanout_subscription_topics;
