@@ -314,7 +314,10 @@ export interface ServiceInstanceActivationAuthority {
  * operation completes; the binding callback itself never blocks.
  */
 export interface ServiceAsyncInstanceActivationAuthority {
-  read(target: ServiceInstanceActivationTarget): Promise<ServiceInstanceAuthorityRead>;
+  read(
+    target: ServiceInstanceActivationTarget,
+    instanceIntent?: true
+  ): Promise<ServiceInstanceAuthorityRead>;
   reserve(
     activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>,
     signal?: AbortSignal
@@ -3012,7 +3015,7 @@ export class ServiceStatefulRuntime {
     }
 
     const local = this.registry.spot(target.targetSpotId);
-    const current = await authority.read(target);
+    const current = await authority.read(target, true);
     if (
       current.kind === 'creating' &&
       current.authority?.allocation.state === 'active' &&

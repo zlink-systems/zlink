@@ -59,6 +59,7 @@ import {
   type ZLinkObjectCommitResult,
   type ZLinkObjectCreationCompleteRequest,
   type ZLinkObjectCreationCompleteResult,
+  type ZLinkEndedOwnerReleaseIntent,
   type ZLinkObjectReserveRequest,
   type ZLinkObjectReserveResult,
   type ZLinkOwnerLeaseClaimResult,
@@ -217,9 +218,10 @@ export class ZLinkInMemoryLocationStore
   async releaseEndedReservation(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    request?: ZLinkEndedOwnerReleaseIntent
   ): Promise<boolean> {
-    return this.authority.releaseEndedReservation(key, expectedStoreVersion, signal);
+    return this.authority.releaseEndedReservation(key, expectedStoreVersion, signal, request);
   }
 
   async abort(

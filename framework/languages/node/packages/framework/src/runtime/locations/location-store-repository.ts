@@ -82,6 +82,7 @@ import {
   type ZLinkObjectCommitResult,
   type ZLinkObjectCreationCompleteRequest,
   type ZLinkObjectCreationCompleteResult,
+  type ZLinkEndedOwnerReleaseIntent,
   type ZLinkObjectReserveRequest,
   type ZLinkObjectReserveResult,
   type ZLinkOwnerLeaseClaimResult,
@@ -1203,10 +1204,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   override async releaseEndedReservation(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    request?: ZLinkEndedOwnerReleaseIntent
   ): Promise<boolean> {
     return (
-      (await this.tryReleaseEndedReservation(key, expectedStoreVersion, signal)) === 'reclaimed'
+      (await this.tryReleaseEndedReservation(key, expectedStoreVersion, signal, request)) ===
+      'reclaimed'
     );
   }
 
@@ -1214,7 +1217,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
     signal?: AbortSignal,
-    request?: ZLinkObjectReserveRequest
+    request?: ZLinkEndedOwnerReleaseIntent
   ): Promise<'notReclaimable' | 'conflict' | 'reclaimed'> {
     const rowKey = authorityKey(key.value);
     const current = await this.provider.read(rowKey, signal);

@@ -32,6 +32,7 @@ import type {
   ZLinkObjectCommitResult,
   ZLinkObjectCreationCompleteRequest,
   ZLinkObjectCreationCompleteResult,
+  ZLinkEndedOwnerReleaseIntent,
   ZLinkObjectReserveRequest,
   ZLinkObjectReserveResult,
   ZLinkCreationOperationIdentity,
@@ -310,10 +311,11 @@ export class ZLinkInMemoryAuthorityStore {
   async releaseEndedReservation(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    request?: ZLinkEndedOwnerReleaseIntent
   ): Promise<boolean> {
     signal?.throwIfAborted();
-    return this.tryReleaseEndedReservation(key, expectedStoreVersion);
+    return this.tryReleaseEndedReservation(key, expectedStoreVersion, request);
   }
 
   acceptsUserSpotMembership(spotId: string, objectGeneration: bigint): boolean {
@@ -331,7 +333,7 @@ export class ZLinkInMemoryAuthorityStore {
   private tryReleaseEndedReservation(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
-    request?: ZLinkObjectReserveRequest
+    request?: ZLinkEndedOwnerReleaseIntent
   ): boolean {
     const current = this.rows.get(key.value);
     if (

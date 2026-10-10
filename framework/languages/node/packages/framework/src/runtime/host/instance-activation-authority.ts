@@ -76,9 +76,44 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
 
   constructor(private readonly options: ZLinkInstanceActivationAuthorityOptions) {}
 
-  async read(target: ServiceInstanceActivationTarget): Promise<ServiceInstanceAuthorityRead> {
-    const current = await this.options.store.readAuthority(authorityKey(target.targetSpotId));
-    return current.kind === 'snapshot' ? readyRead(current, target) : { kind: 'missing' };
+  async read(
+    target: ServiceInstanceActivationTarget,
+    instanceIntent?: true
+  ): Promise<ServiceInstanceAuthorityRead> {
+    const key = authorityKey(target.targetSpotId);
+    const current = await this.options.store.readAuthority(key);
+    if (current.kind !== 'snapshot') return { kind: 'missing' };
+    if (
+      instanceIntent === true &&
+      current.allocation.state === 'active' &&
+      decodeServiceReadySpotAuthority(current.payload) !== undefined
+    ) {
+      if (
+        current.allocation.objectKind !== 'instance_spot' ||
+        current.allocation.stableType !== target.stableType
+      ) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.SpotTypeMismatch,
+          'Instance activation type does not match the current authority.'
+        );
+      }
+      const released = await this.options.store.releaseEndedReservation?.(
+        key,
+        current.storeVersion.value,
+        undefined,
+        {
+          key: { kind: 'instance_spot', globalId: target.targetSpotId },
+          intent: { stableType: target.stableType },
+          actorRelocationPolicy: this.options.relocationPolicy?.(target.stableType)
+        }
+      );
+      if (released === true) return { kind: 'missing' };
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.Unavailable,
+        'Instance activation authority was not released.'
+      );
+    }
+    return readyRead(current, target);
   }
 
   async reserve(
