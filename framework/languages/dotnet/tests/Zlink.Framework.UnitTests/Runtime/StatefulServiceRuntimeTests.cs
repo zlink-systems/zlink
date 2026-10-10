@@ -4153,6 +4153,85 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal([1, 2, 3], activationTarget.LastPayload.Single().ToArray());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InstanceSpotIngressAcceptsCanonicalApplicationPayload(bool durablePayload)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(context, "canonical-instance-source");
+        await using var target = NewNode(context, "canonical-instance-target");
+        var endpoint = $"inproc://canonical-instance-{Guid.NewGuid():N}";
+        target.SetBind(endpoint);
+        source.ConnectPeer(endpoint, target.RoutingId);
+        var recorder = new RecordingInstanceSpotActivationTarget();
+        target.SetInstanceSpotActivationTarget(recorder);
+        await using var monitor = target.OpenMonitor();
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
+        var operation = new InstanceSpotActivationOperation(
+            new InstanceSpotActivationTarget(
+                "objects",
+                target.RoutingId,
+                target.Status().LifecycleGeneration,
+                "canonical-instance",
+                "Sample.InstanceSpot",
+                "descriptor-1"
+            ),
+            source.RoutingId,
+            source.Status().LifecycleGeneration,
+            "caller-spot",
+            new MeshOperationId(1575, 3),
+            false,
+            0,
+            checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds())
+        );
+        var application = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
+            new ReadOnlyMemory<byte>[] { new byte[] { 1, 2, 3 } }
+        );
+        if (durablePayload)
+            application = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
+                operation,
+                null,
+                new ReadOnlyMemory<byte>[] { new byte[] { 1, 2, 3 } }
+            );
+        var protocolErrors = monitor.Status().ProtocolErrors;
+        // Inject the canonical peer frame through the Framework's transport lane.
+        // Binding internals are not accessed.
+        var send = typeof(ZLinkManagedMeshNode).GetMethod(
+            "TryScheduleRoutedSend",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+        )!;
+        Assert.True(
+            (bool)
+                send.Invoke(
+                    source,
+                    new object?[]
+                    {
+                        target.RoutingId,
+                        new ReadOnlyMemory<byte>[]
+                        {
+                            ZLinkServiceWireCodec.EncodeInstanceSpotActivation(operation, false),
+                            application,
+                        },
+                        null,
+                    }
+                )!
+        );
+        if (durablePayload)
+        {
+            await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
+            Assert.Equal(0, recorder.Count);
+            return;
+        }
+        await WaitUntilAsync(() => recorder.Count == 1);
+        Assert.Equal(operation, recorder.LastOperation);
+        Assert.Equal(new byte[] { 1, 2, 3 }, recorder.LastPayload.Single().ToArray());
+    }
+
     [Fact]
     public async Task InstanceSpotActivationLoserReturnsUnavailableOnceOnNativeReply()
     {

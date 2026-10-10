@@ -27,7 +27,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
     }
 
-    internal async ValueTask<ZLinkResolvedSpotHandle?> ResolveInstanceSpotHandleAsync(
+    internal async ValueTask<(
+        InstanceSpotIntentAddress Address,
+        ZLinkResolvedSpotHandle? Handle
+    )> ResolveInstanceSpotAsync(
         InstanceSpotIntentAddress address,
         CancellationToken cancellationToken,
         bool instanceIntent = false
@@ -37,7 +40,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         var rows =
             Services.GetService(typeof(ZLinkStoreLocationResolvers)) as ZLinkStoreLocationResolvers;
         if (rows is null)
-            return null;
+            return (address, null);
         var resolution = await rows.ResolveSpotRowWithStatusAsync(
                 new ZLinkSpotLocationKey(address.SpotId),
                 cancellationToken
@@ -45,38 +48,39 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
         if (resolution.Kind == ZLinkLocationResolutionKind.KnownUnavailable)
         {
-            var store = Registration.Locations.ResolveStore()!;
-            var authority = await store
-                .ReadAuthorityAsync(
-                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(address.SpotId),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
             if (
                 instanceIntent
-                && authority is ZLinkAuthorityReadResult.Found found
-                && found.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
+                && resolution.Authority is { } authority
+                && authority.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
                 && ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                    found.Snapshot.Payload.Span,
+                    authority.Payload.Span,
                     out var existing
                 )
                 && existing.State == ZLinkInstanceSpotAuthorityState.Ready
             )
-            {
-                var owner = await store
-                    .ReadOwnerLeaseAsync(found.Snapshot.OwnerId, cancellationToken)
-                    .ConfigureAwait(false);
-                if (
-                    owner is not ZLinkOwnerLeaseReadResult.Found lease
-                    || lease.Token.LeaseGeneration != found.Snapshot.OwnerLeaseGeneration
-                    || lease.LeaseExpiresAt <= lease.StoreNow
-                )
-                    return null;
-            }
+                return (
+                    address with
+                    {
+                        MeshName = existing.MeshName,
+                        InstanceSpotType = existing.StableType,
+                    },
+                    null
+                );
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Instance Spot '{address.SpotId}' is currently unavailable."
             );
+        }
+        if (instanceIntent)
+        {
+            var source = ResolveActorCreationSource(
+                string.IsNullOrEmpty(address.MeshName) ? null : address.MeshName
+            );
+            address = address with
+            {
+                MeshName =
+                    source.Registration.SpotMeshChannelName ?? source.Registration.SpotNodeName,
+            };
         }
         var row = resolution.Row;
         if (
@@ -87,23 +91,26 @@ internal sealed partial class ZLinkFrameworkRuntime
                 && !string.Equals(row.SpotType, address.InstanceSpotType, StringComparison.Ordinal)
             )
         )
-            return null;
-        return new ZLinkResolvedSpotHandle(
-            new ZLinkSpotHandleSnapshot(
-                row.MeshName,
-                row.OwnerNodeRid,
-                row.SpotId,
-                row.SpotGeneration,
-                row.SpotKind,
+            return (address, null);
+        return (
+            address,
+            new ZLinkResolvedSpotHandle(
+                new ZLinkSpotHandleSnapshot(
+                    row.MeshName,
+                    row.OwnerNodeRid,
+                    row.SpotId,
+                    row.SpotGeneration,
+                    row.SpotKind,
+                    row.AuthorityOwnerGeneration,
+                    row.OwnerNodeGeneration,
+                    checked((ulong)row.LeaseGeneration),
+                    row.OwnerId,
+                    row.StoreVersion
+                ),
                 row.AuthorityOwnerGeneration,
-                row.OwnerNodeGeneration,
-                checked((ulong)row.LeaseGeneration),
-                row.OwnerId,
-                row.StoreVersion
-            ),
-            row.AuthorityOwnerGeneration,
-            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null),
-            () => rows.InvalidateSpotRoute(new ZLinkSpotLocationKey(address.SpotId))
+                _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null),
+                () => rows.InvalidateSpotRoute(new ZLinkSpotLocationKey(address.SpotId))
+            )
         );
     }
 

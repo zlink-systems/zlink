@@ -11,62 +11,6 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class InstanceSpotActivationJournalTests
 {
-    [Theory]
-    [InlineData("none")]
-    [InlineData("mesh")]
-    [InlineData("type")]
-    [InlineData("descriptor")]
-    [InlineData("deadline")]
-    [InlineData("operation")]
-    [InlineData("metadata")]
-    [InlineData("metadataBytes")]
-    public void Kind2ActivationEnvelopeComparisonPrecedesStore(string mismatch)
-    {
-        var operation = Operation(new MeshOperationId(1575, 1));
-        var envelopeOperation = mismatch switch
-        {
-            "mesh" => operation with { Target = operation.Target with { MeshName = "other" } },
-            "type" => operation with { Target = operation.Target with { StableType = "other" } },
-            "descriptor" => operation with
-            {
-                Target = operation.Target with { DescriptorVersion = "other" },
-            },
-            "deadline" => operation with { DeadlineUnixMs = operation.DeadlineUnixMs + 1 },
-            "operation" => operation with { OperationId = new MeshOperationId(1575, 2) },
-            _ => operation,
-        };
-        var context = new ServiceWireCodec.DecodeContext(null, null, null, 4096, 4096);
-        var originalMetadata =
-            mismatch == "metadataBytes"
-                ? ServiceWireCodec.EncodeMetadataFrame(
-                    new ServiceWireCodec.MetadataFrame([new(new("test"), new("original"))]),
-                    context
-                )
-                : null;
-        var envelope = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
-            envelopeOperation,
-            originalMetadata,
-            [new byte[] { 1, 2, 3 }]
-        );
-        ReadOnlyMemory<byte>? metadata =
-            mismatch == "metadataBytes"
-                ? ServiceWireCodec.EncodeMetadataFrame(
-                    new ServiceWireCodec.MetadataFrame([new(new("test"), new("changed"))]),
-                    context
-                )
-            : mismatch == "metadata" ? new byte[] { 0, 0 }
-            : null;
-        var accepted = ZLinkServiceWireCodec.TryDecodeInstanceSpotActivationEnvelope(
-            operation,
-            metadata,
-            envelope,
-            out var parts
-        );
-        Assert.Equal(mismatch == "none", accepted);
-        foreach (var part in parts)
-            part.Dispose();
-    }
-
     [Fact]
     public async Task RestartReleasesEndedCreatingReservationBeforeDeletingRoot()
     {

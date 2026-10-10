@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Locations;
@@ -11,6 +12,87 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Fact]
+    public async Task ReadyInstanceIntentDoesNotReadStoreOutsideResolver()
+    {
+        CountingIntentStore? counter = null;
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            new JoinedActivationNode(),
+            includeInstanceSpotRoute: true,
+            locationStoreWrapper: inner => counter = new CountingIntentStore(inner)
+        );
+        try
+        {
+            var address = new InstanceSpotIntentAddress(
+                "entry",
+                "Tests.InstanceSpot",
+                "spot-ready"
+            );
+            var beforeReady = counter!.AuthorityReads;
+            Assert.NotNull(
+                (
+                    await runtime.ResolveInstanceSpotAsync(
+                        address,
+                        CancellationToken.None,
+                        instanceIntent: true
+                    )
+                ).Handle
+            );
+            Assert.Equal(beforeReady + 1, counter.AuthorityReads);
+            var before = counter.AuthorityReads;
+            Assert.NotNull(
+                (
+                    await runtime.ResolveInstanceSpotAsync(
+                        address,
+                        CancellationToken.None,
+                        instanceIntent: true
+                    )
+                ).Handle
+            );
+            Assert.Equal(before, counter.AuthorityReads);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class CountingIntentStore(
+        IZLinkLocationStore inner,
+        string spotId = "spot-ready"
+    ) : IZLinkLocationStore
+    {
+        public int AuthorityReads { get; private set; }
+        public int EndedOwnerReads { get; private set; }
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (
+                key
+                == ZLinkProviderLocationRepository.AuthorityMetaKey(
+                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId)
+                )
+            )
+                AuthorityReads++;
+            if (key == ZLinkProviderLocationRepository.OwnerKey("ended-instance-owner"))
+                EndedOwnerReads++;
+            return inner.ReadAsync(key, cancellationToken);
+        }
+
+        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.WriteAsync(request, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
+    }
+
     [Theory]
     [InlineData("disabled")]
     [InlineData("recreate")]
@@ -20,12 +102,15 @@ public sealed partial class EntrySpotActorDispatchTests
         ReclaimedColdSpot.Initializations = 0;
         var node = new JoinedActivationNode();
         var blobs = new InMemoryRelocationStore();
+        CountingIntentStore? counter = null;
         var (runtime, _) = await CreateStartedRuntimeAsync(
             node,
             includeActorFactory: false,
             includeInstanceSpotRoute: true,
             instanceSpotType: typeof(ReclaimedColdSpot),
-            relocationStore: blobs
+            relocationStore: blobs,
+            locationStoreWrapper: inner =>
+                counter = new CountingIntentStore(inner, "ended-instance")
         );
         try
         {
@@ -97,22 +182,22 @@ public sealed partial class EntrySpotActorDispatchTests
                 .Snapshot;
             await store.ReleaseOwnerLeaseAsync(oldOwner);
             var address = new InstanceSpotIntentAddress("wrong-mesh", "wrong-type", spotId);
-            var canonical = await runtime.ResolveInstanceSpotIntentAsync(
-                address,
-                CancellationToken.None
+            await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await runtime.ResolveInstanceSpotAsync(address, CancellationToken.None)
             );
+            var authorityReads = counter!.AuthorityReads;
+            var ownerReads = counter.EndedOwnerReads;
+            var resolution = await runtime.ResolveInstanceSpotAsync(
+                address,
+                CancellationToken.None,
+                instanceIntent: true
+            );
+            Assert.Equal(authorityReads + 1, counter.AuthorityReads);
+            Assert.Equal(ownerReads + 1, counter.EndedOwnerReads);
+            var canonical = resolution.Address;
             Assert.Equal("entry", canonical.MeshName);
             Assert.Equal("Tests.InstanceSpot", canonical.InstanceSpotType);
-            await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-                await runtime.ResolveInstanceSpotHandleAsync(canonical, CancellationToken.None)
-            );
-            Assert.Null(
-                await runtime.ResolveInstanceSpotHandleAsync(
-                    canonical,
-                    CancellationToken.None,
-                    instanceIntent: true
-                )
-            );
+            Assert.Null(resolution.Handle);
             var registration = runtime.Registration.SpotNodes["entry"];
             if (policy == "recreate")
                 registration.InstanceSpotRelocations["Tests.InstanceSpot"] =

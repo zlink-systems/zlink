@@ -115,9 +115,14 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "InMesh is valid only for an Instance Spot intent."
             );
-        if (_instanceIntent)
-            target = await runtime
-                .ResolveInstanceSpotIntentAsync(target, cancellationToken)
+        ZLinkResolvedSpotHandle? handle;
+        if (_exactSpotIdCall && !_instanceIntent)
+            handle = await runtime
+                .ResolveSpotHandleAsync(target.SpotId, cancellationToken)
+                .ConfigureAwait(false);
+        else
+            (target, handle) = await runtime
+                .ResolveInstanceSpotAsync(target, cancellationToken, _instanceIntent)
                 .ConfigureAwait(false);
         var activationTimeout = _instanceIntent
             ? runtime.Registration.ResolveMeshRequestTimeout(
@@ -131,13 +136,6 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
         var activationDeadlineUnixMs = _instanceIntent
             ? checked((ulong)submittedAt.Add(activationTimeout).ToUnixTimeMilliseconds())
             : 0;
-        var handle = _exactSpotIdCall
-            ? await runtime
-                .ResolveSpotHandleAsync(target.SpotId, cancellationToken)
-                .ConfigureAwait(false)
-            : await runtime
-                .ResolveInstanceSpotHandleAsync(target, cancellationToken, _instanceIntent)
-                .ConfigureAwait(false);
         if (handle is null)
         {
             if (!_instanceIntent)
@@ -294,10 +292,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             );
         var operationTimeout = _timeout ?? runtime.Registration.DefaultRequestTimeout;
         var deadline = Stopwatch.GetElapsedTime(0) + operationTimeout;
-        if (_instanceIntent)
-            target = await runtime
-                .ResolveInstanceSpotIntentAsync(target, cancellationToken)
-                .ConfigureAwait(false);
+
         var handle = await ResolveHandleAsync(cancellationToken).ConfigureAwait(false);
         if (handle is not null)
         {
@@ -365,12 +360,20 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
         );
     }
 
-    private ValueTask<ZLinkResolvedSpotHandle?> ResolveHandleAsync(
+    private async ValueTask<ZLinkResolvedSpotHandle?> ResolveHandleAsync(
         CancellationToken cancellationToken
-    ) =>
-        _exactSpotIdCall
-            ? runtime.ResolveSpotHandleAsync(target.SpotId, cancellationToken)
-            : runtime.ResolveInstanceSpotHandleAsync(target, cancellationToken, _instanceIntent);
+    )
+    {
+        if (_exactSpotIdCall && !_instanceIntent)
+            return await runtime
+                .ResolveSpotHandleAsync(target.SpotId, cancellationToken)
+                .ConfigureAwait(false);
+        var resolution = await runtime
+            .ResolveInstanceSpotAsync(target, cancellationToken, _instanceIntent)
+            .ConfigureAwait(false);
+        target = resolution.Address;
+        return resolution.Handle;
+    }
 
     private async ValueTask<TReply> RequestExistingAsync<TReply>(
         ZLinkResolvedSpotHandle handle,

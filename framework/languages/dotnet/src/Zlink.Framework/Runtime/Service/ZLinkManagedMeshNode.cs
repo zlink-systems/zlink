@@ -1585,9 +1585,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (!metadata.IsEmpty)
             wireParts.Add(metadata);
         wireParts.Add(
-            ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
-                operation,
-                metadata.IsEmpty ? null : metadata,
+            ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
                 parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray()
             )
         );
@@ -7234,9 +7232,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
 
         if (
-            !ZLinkServiceWireCodec.TryDecodeInstanceSpotActivationEnvelope(
-                operation,
-                record.HasMetadata ? received.Parts[1].ToArray() : null,
+            !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
                 received.Parts[payloadOffset].ToArray(),
                 out var decodedPayload
             )
