@@ -911,7 +911,8 @@ export class ZLinkChannelSocketRegistry {
     router: ZLinkBackendRouterSocket,
     peers = this.clientServerServerPeersForChannel(channelName)
   ): boolean {
-    const peer = peers.get(received.routingId as RoutingId);
+    const routingId = String(received.routingId) as RoutingId;
+    const peer = peers.get(routingId);
     peer?.liveness.recordReceived();
     if (received.parts.length === 0) return false;
     const first = received.parts[0];
@@ -931,11 +932,7 @@ export class ZLinkChannelSocketRegistry {
         received.replyToken === null
       ) {
         if (!this.acceptClientServerServerLivenessAck(peer, record.probeId)) {
-          this.reportStaleClientServerLivenessAck(
-            channelName,
-            String(received.routingId),
-            record.probeId
-          );
+          this.reportStaleClientServerLivenessAck(channelName, routingId, record.probeId);
         }
         return true;
       } else if (
@@ -960,7 +957,7 @@ export class ZLinkChannelSocketRegistry {
           reply = encodeClientServerAdmit(descriptor, normalizedEffectiveMaxMessageBytes);
           this.admitClientServerServerPeer(
             channelName,
-            String(received.routingId),
+            routingId,
             normalizedEffectiveMaxMessageBytes
           );
         }
@@ -971,7 +968,7 @@ export class ZLinkChannelSocketRegistry {
     if (received.replyToken !== null) {
       const message = RuntimeMessage.from(reply);
       try {
-        router.reply(received.routingId as RoutingId, received.replyToken, message);
+        router.reply(routingId, received.replyToken, message);
       } finally {
         message.close();
       }
