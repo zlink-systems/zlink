@@ -134,7 +134,7 @@ Trigger는 `runId`, `cellId`, `resetSeq`, phase만 전달하고 그 설정을 �
 하나의 phase는 한 번만 시작하며 중복 trigger는 같은 시작 acknowledgement를 돌려준다.
 
 Spot handler 안에서 outbound call을 재는 셀은 같은 process의 application driver가 public
-Spot request/send로 handler를 실행한다. Driver 호출도 §4.3의 request 규칙으로 연속 제출한다.
+Spot request/send로 handler를 실행한다. Driver 호출은 §4.3의 같은 process 호출 규칙을 따른다.
 Local driver 호출을 별도 KOPS로 세지 않는다.
 Driver 호출의 deadline은 §5.2의 측정 call deadline보다 `drainTimeoutMs`만큼 늦다. Driver 호출은
 측정 대상 remote call을 감싸므로, remote call이 자기 deadline에 끝나도 driver가 그 결과를 받을 수
@@ -149,7 +149,8 @@ Measured 종료 뒤 도착한 local driver 요청은 outbound call을 시작하�
 ### 4.3 부하 원칙
 
 Framework perf는 binding perf와 같은 원칙으로 부하를 건다. **Server-driven 셀은 in-flight
-상한을 두지 않고 backpressure 경계까지 연속 제출하고, 예외는 아래의 CS connector 하나다.**
+상한을 두지 않고 backpressure 경계까지 연속 제출하고, 예외는 Core HWM admission을 지나지 않는 call
+하나다.**
 In-flight 상한은 라이브러리의 처리 능력 대신 harness가 정한 동시 수를 재게 하고, Framework와
 Core의 backpressure 경로를 지나지 않게 하기 때문이다
 ([binding perf 정책 §7.2][perf-inflight]).
@@ -162,9 +163,14 @@ Core의 backpressure 경로를 지나지 않게 하기 때문이다
     call을 admission에서 기다리게 한다([Submit §5][submit]). Core가 대기 없이 거절해 call이
     public `Unavailable`로 끝나면 그 실패를 그대로 기록한다(§13).
   - 연속 제출 루프는 언어의 public 비동기 실행 모델로 실행하며 실행 문맥을 독점하지 않는다.
-- **CS connector는 연결마다 unresolved echo를 하나만 둔다.** CS client는 Core HWM admission을
-  지나지 않는 STREAM client이므로 binding perf의 [STREAM client 예외][perf-stream]와 같은
-  조건을 쓴다. 이 값은 설정 가능한 옵션이 아니다.
+- **Core HWM admission을 지나지 않는 call은 연결·stream마다 미완료 call을 하나만 둔다.** 이런 call은
+  backpressure 경계가 없어 연속 제출하면 대기열만 상한 없이 늘어나기 때문이다. 해당하는 call은 둘이다.
+  - CS connector: STREAM client이므로 binding perf의 [STREAM client 예외][perf-stream]와 같은
+    조건으로 연결마다 unresolved echo 하나를 둔다.
+  - 같은 process의 Spot 호출: §4.2의 local driver와 §10.7·§10.8의 local public 호출은 network와
+    Core queue를 지나지 않으므로 stream마다 미완료 call 하나를 둔다.
+
+  이 값은 설정 가능한 옵션이 아니다.
 - **Classic fanout publisher는 [`NoDrop`][nodrop]을 켠다.** 기본 동작은 HWM에서 event를 버리고
   publish를 성공으로 끝내므로 backpressure가 생기지 않기 때문이다. `NoDrop`을 켜면 publish는
   모든 일치 subscriber가 받을 수 있을 때까지 admission에서 기다린다.
