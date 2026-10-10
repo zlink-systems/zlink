@@ -1660,10 +1660,12 @@ public final class ZLinkChannelRuntime
     }
 
     private void startRequestLoop(String channelName, ZLinkBackendRouterSocket router) {
+        var serverPeers = sockets.clientServerServerPeersForChannel(channelName);
         receiveLoops.startRequest(
                 router,
                 received -> {
-                    if (sockets.tryHandleClientServerControl(channelName, router, received)) {
+                    if (sockets.tryHandleClientServerControl(
+                            channelName, router, received, serverPeers)) {
                         return;
                     }
                     if (routeDispatcher.dispatchBridgePacket(channelName, received)) {

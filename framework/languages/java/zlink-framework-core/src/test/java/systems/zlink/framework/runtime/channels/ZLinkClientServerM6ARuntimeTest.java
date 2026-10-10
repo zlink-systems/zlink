@@ -700,6 +700,49 @@ final class ZLinkClientServerM6ARuntimeTest {
     }
 
     @Test
+    void serverOrdinaryReceiveRefreshesOnlyItsPeerAndExpiresAfterLastRecord() {
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        sockets.setClientServerServerDescriptor(
+                "orders",
+                descriptor("orders", RoutingId.from("server"), 5, 1, "tcp://127.0.0.1:7001", 100));
+        ControlledRouter router = new ControlledRouter();
+        RoutingId active = RoutingId.from("active");
+        RoutingId silent = RoutingId.from("silent");
+        for (RoutingId source : List.of(active, silent)) {
+            Message hello =
+                    Message.from(
+                            ZLinkClientServerServiceWire.encodeHello(
+                                    new ZLinkClientServerServiceWire.Hello(
+                                            "orders", "default", 4096)));
+            assertTrue(
+                    sockets.tryHandleClientServerControl(
+                            "orders",
+                            router,
+                            new ZLinkBackendReceived(
+                                    Optional.of(source),
+                                    Optional.empty(),
+                                    Optional.of(1L),
+                                    List.of(hello),
+                                    parts -> {})));
+        }
+        long beforeReceive = System.nanoTime();
+        try (ZLinkBackendReceived received =
+                new ZLinkBackendReceived(
+                        Optional.of(active),
+                        Optional.empty(),
+                        Optional.empty(),
+                        List.of(Message.from("ordinary-message")))) {
+            assertFalse(sockets.tryHandleClientServerControl("orders", router, received));
+        }
+        long afterReceive = System.nanoTime();
+        sockets.tickClientServerLiveness(beforeReceive + TimeUnit.SECONDS.toNanos(15));
+        assertEquals(List.of(silent), router.disconnected);
+        sockets.tickClientServerLiveness(afterReceive + TimeUnit.SECONDS.toNanos(15));
+        assertEquals(List.of(silent, active), router.disconnected);
+        sockets.closeAll();
+    }
+
+    @Test
     void sameProcessServerUsesStoreDiscoveryAndExactDealerRouterAdmission() {
         assertStoreAdmission(false);
     }

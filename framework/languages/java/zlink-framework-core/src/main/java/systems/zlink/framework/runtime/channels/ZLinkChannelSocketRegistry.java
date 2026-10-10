@@ -89,12 +89,11 @@ final class ZLinkChannelSocketRegistry {
             new ConcurrentHashMap<>();
     private final Map<String, ZLinkInternalSpotNode> spotRouterNodes = new ConcurrentHashMap<>();
     private final List<ZLinkBackendObject> ownedSockets = new ArrayList<>();
-    private final Map<String, ClientServerServerPeer> clientServerServerPeers = new HashMap<>();
+    private final Map<String, Map<RoutingId, ClientServerServerPeer>> clientServerServerPeers =
+            new HashMap<>();
     private long nextClientServerProbeId = 1;
     private long clientServerControlCursor;
     private boolean unmanagedBackendClientMode;
-    private static final long CLIENT_SERVER_PROBE_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(5);
-    private static final long CLIENT_SERVER_DEADLINE_NANOS = TimeUnit.SECONDS.toNanos(15);
     // The public Poller has no wake-up call, and a DEALER may close only after its receive owner
     // left the poller wait (a Core socket is not thread safe). This interval bounds how long a
     // close waits for that owner; data and completions end the wait at once. Same value and
@@ -1149,8 +1148,27 @@ final class ZLinkChannelSocketRegistry {
                 });
     }
 
+    Map<RoutingId, ClientServerServerPeer> clientServerServerPeersForChannel(String channelName) {
+        return inStateLane(
+                () ->
+                        clientServerServerPeers.computeIfAbsent(
+                                channelName, ignored -> new ConcurrentHashMap<>()));
+    }
+
     boolean tryHandleClientServerControl(
             String channelName, ZLinkBackendRouterSocket router, ZLinkBackendReceived received) {
+        return tryHandleClientServerControl(
+                channelName, router, received, clientServerServerPeersForChannel(channelName));
+    }
+
+    boolean tryHandleClientServerControl(
+            String channelName,
+            ZLinkBackendRouterSocket router,
+            ZLinkBackendReceived received,
+            Map<RoutingId, ClientServerServerPeer> peers) {
+        RoutingId source = received.routingId().orElse(null);
+        ClientServerServerPeer peer = source == null ? null : peers.get(source);
+        if (peer != null) peer.liveness.recordReceived(System.nanoTime());
         if (received.parts().isEmpty()) {
             return false;
         }
@@ -1165,7 +1183,7 @@ final class ZLinkChannelSocketRegistry {
             if (control instanceof ZLinkClientServerServiceWire.LivenessAck ack
                     && received.routingId().isPresent()
                     && !received.isRequest()) {
-                acceptClientServerServerAck(channelName, received.routingId().get(), ack.probeId());
+                acceptClientServerServerAck(peer, ack.probeId());
                 received.close();
                 return true;
             }
@@ -1226,7 +1244,9 @@ final class ZLinkChannelSocketRegistry {
                             physical.addAll(clientServerConnections.values());
                             return new LivenessSnapshot(
                                     new ArrayList<>(physical),
-                                    List.copyOf(clientServerServerPeers.values()),
+                                    clientServerServerPeers.values().stream()
+                                            .flatMap(peers -> peers.values().stream())
+                                            .toList(),
                                     clientServerControlCursor);
                         });
         List<ClientServerConnection> clientConnections = snapshot.clientConnections();
@@ -1283,25 +1303,24 @@ final class ZLinkChannelSocketRegistry {
                     inStateLane(
                             () -> {
                                 ClientServerServerPeer current =
-                                        clientServerServerPeers.get(peer.key);
+                                        clientServerServerPeers
+                                                .getOrDefault(peer.channelName, Map.of())
+                                                .get(peer.routingId);
                                 if (current != peer) {
                                     return ServerPeerLivenessAction.NONE;
                                 }
-                                if (nowNanos >= current.deadlineAtNanos) {
-                                    clientServerServerPeers.remove(peer.key);
+                                if (current.liveness.isExpired(nowNanos)) {
+                                    clientServerServerPeers
+                                            .get(peer.channelName)
+                                            .remove(peer.routingId);
                                     return ServerPeerLivenessAction.DISCONNECT;
-                                } else if (nowNanos >= current.nextProbeAtNanos) {
-                                    current.nextProbeAtNanos =
-                                            nowNanos + CLIENT_SERVER_PROBE_INTERVAL_NANOS;
-                                    long probeId =
-                                            current.outstandingProbeId == 0
-                                                    ? allocateProbeIdCore()
-                                                    : current.outstandingProbeId;
-                                    current.outstandingProbeId = probeId;
-                                    return new ServerPeerLivenessAction(false, probeId);
-                                } else {
-                                    return ServerPeerLivenessAction.NONE;
                                 }
+                                long probeId =
+                                        current.liveness.tryGetProbe(
+                                                nowNanos, this::allocateProbeIdCore);
+                                return probeId == 0
+                                        ? ServerPeerLivenessAction.NONE
+                                        : new ServerPeerLivenessAction(false, probeId);
                             });
             if (action.disconnect()) {
                 signalTopologyChanged();
@@ -1659,32 +1678,27 @@ final class ZLinkChannelSocketRegistry {
             String channelName, RoutingId routingId, ZLinkBackendRouterSocket router) {
         inStateLane(
                 () -> {
-                    String key = serverPeerKey(channelName, routingId);
-                    long now = System.nanoTime();
-                    clientServerServerPeers.put(
-                            key,
+                    Map<RoutingId, ClientServerServerPeer> peers =
+                            clientServerServerPeers.computeIfAbsent(
+                                    channelName, ignored -> new ConcurrentHashMap<>());
+                    peers.put(
+                            routingId,
                             new ClientServerServerPeer(
-                                    key,
                                     channelName,
                                     routingId,
                                     router,
-                                    now + CLIENT_SERVER_PROBE_INTERVAL_NANOS,
-                                    now + CLIENT_SERVER_DEADLINE_NANOS));
+                                    new PeerState(
+                                            serverPeerKey(channelName, routingId),
+                                            System.nanoTime())));
                     return null;
                 });
     }
 
-    private void acceptClientServerServerAck(
-            String channelName, RoutingId routingId, long probeId) {
+    private void acceptClientServerServerAck(ClientServerServerPeer peer, long probeId) {
+        if (peer == null) return;
         inStateLane(
                 () -> {
-                    ClientServerServerPeer peer =
-                            clientServerServerPeers.get(serverPeerKey(channelName, routingId));
-                    if (peer == null || peer.outstandingProbeId != probeId) {
-                        return null;
-                    }
-                    peer.outstandingProbeId = 0;
-                    peer.deadlineAtNanos = System.nanoTime() + CLIENT_SERVER_DEADLINE_NANOS;
+                    peer.liveness.acknowledge(probeId, System.nanoTime());
                     return null;
                 });
     }
@@ -1692,7 +1706,13 @@ final class ZLinkChannelSocketRegistry {
     private void pushClientServerDescriptorUpdate(
             String channelName, ZLinkClientServerServerDescriptor descriptor) {
         List<ClientServerServerPeer> peers;
-        peers = inStateLane(() -> List.copyOf(clientServerServerPeers.values()));
+        peers =
+                inStateLane(
+                        () -> {
+                            Map<RoutingId, ClientServerServerPeer> current =
+                                    clientServerServerPeers.get(channelName);
+                            return current == null ? List.of() : List.copyOf(current.values());
+                        });
         for (ClientServerServerPeer peer : peers) {
             if (!peer.channelName.equals(channelName)) {
                 continue;
@@ -1869,6 +1889,7 @@ final class ZLinkChannelSocketRegistry {
                             connections.addAll(clientServerConnections.values());
                             clientServerConnections.clear();
                             clientServerServerDescriptors.clear();
+                            clientServerServerPeers.values().forEach(Map::clear);
                             clientServerServerPeers.clear();
                             return connections;
                         }));
@@ -2185,28 +2206,21 @@ final class ZLinkChannelSocketRegistry {
         }
     }
 
-    private static final class ClientServerServerPeer {
-        private final String key;
+    static final class ClientServerServerPeer {
         private final String channelName;
         private final RoutingId routingId;
         private final ZLinkBackendRouterSocket router;
-        private long nextProbeAtNanos;
-        private long deadlineAtNanos;
-        private long outstandingProbeId;
+        private final PeerState liveness;
 
         private ClientServerServerPeer(
-                String key,
                 String channelName,
                 RoutingId routingId,
                 ZLinkBackendRouterSocket router,
-                long nextProbeAtNanos,
-                long deadlineAtNanos) {
-            this.key = key;
+                PeerState liveness) {
             this.channelName = channelName;
             this.routingId = routingId;
             this.router = router;
-            this.nextProbeAtNanos = nextProbeAtNanos;
-            this.deadlineAtNanos = deadlineAtNanos;
+            this.liveness = liveness;
         }
     }
 
