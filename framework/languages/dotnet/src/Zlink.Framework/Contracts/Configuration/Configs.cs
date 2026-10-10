@@ -77,21 +77,3 @@ public interface IZLinkOutboundRouteConfig
 {
     bool ProbeRouterOnConnect { get; set; }
 }
-
-public interface IZLinkSpotPublisherConfig
-{
-    ulong SendHighWaterMark { get; set; }
-
-    TimeSpan? SendTimeout { get; set; }
-
-    TimeSpan? Linger { get; set; }
-}
-
-public interface IZLinkSpotSubscriberConfig
-{
-    ulong ReceiveHighWaterMark { get; set; }
-
-    TimeSpan? ReceiveTimeout { get; set; }
-
-    TimeSpan? Linger { get; set; }
-}

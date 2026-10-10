@@ -41,6 +41,7 @@
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
+        <Compile Include="Configuration/FanoutPublisherConfigurationTests.cs"/>
         <Compile Include="Configuration/StartupDependencyMetadataTests.cs"/>
         <Compile Include="Configuration/Registration/HandlerExposure.cs"/>
         <Compile Include="Configuration/Registration/NodesAndServices.cs"/>

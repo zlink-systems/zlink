@@ -66,9 +66,6 @@ public static class ServerApplication
             options.DefaultRequestTimeout = TimeSpan.FromMilliseconds(
                 config.workload.setupTimeoutMs
             );
-            options.DefaultSocketSendTimeout = TimeSpan.FromMilliseconds(
-                config.workload.socketSendTimeoutMs
-            );
             options
                 .ConfigureDispatch()
                 .Diagnostics.SetLevel(

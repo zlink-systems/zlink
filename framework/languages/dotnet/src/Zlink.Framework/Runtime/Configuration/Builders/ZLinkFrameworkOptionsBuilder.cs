@@ -34,17 +34,6 @@ internal sealed class ZLinkFrameworkOptionsBuilder : IZLinkFrameworkOptions
         }
     }
 
-    public TimeSpan DefaultSocketSendTimeout
-    {
-        get => _registration.DefaultSocketSendTimeout;
-        set
-        {
-            _registration.DefaultSocketSendTimeout =
-                ZLinkSpotPublisherConfig.NormalizeSendTimeout(value)
-                ?? throw new ZLinkConfigurationException("DefaultSocketSendTimeout is required.");
-        }
-    }
-
     public long ApplicationVersion
     {
         get => _registration.ApplicationVersion;

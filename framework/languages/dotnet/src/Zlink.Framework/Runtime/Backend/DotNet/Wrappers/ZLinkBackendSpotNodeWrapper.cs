@@ -267,15 +267,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _pump.EnsureStarted();
     }
 
-    public void ApplyRoleConfig(
-        IZLinkSpotPublisherConfig? publisher,
-        IZLinkSpotSubscriberConfig? subscriber
-    )
-    {
-        _ = publisher;
-        _ = subscriber;
-    }
-
     public void SetUserSpotOperationTarget(IUserSpotOperationTarget target)
     {
         _node.SetUserSpotOperationTarget(target);

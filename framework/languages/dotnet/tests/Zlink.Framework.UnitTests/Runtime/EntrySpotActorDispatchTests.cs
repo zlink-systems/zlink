@@ -7383,7 +7383,6 @@ public sealed partial class EntrySpotActorDispatchTests
         var (runtime, actor) = await CreateStartedRuntimeAsync(node);
         try
         {
-            runtime.Registration.DefaultSocketSendTimeout = TimeSpan.FromMilliseconds(20);
             var retained = CreateNativeBoundSession(runtime, actor);
 
             var pending = retained.Send(new ProbeRouteMessage("pending")).Async().AsTask();
@@ -12839,10 +12838,6 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public RoutingId PublisherRoutingId { get; private set; }
 
-        public IZLinkSpotPublisherConfig? PublisherConfig { get; private set; }
-
-        public IZLinkSpotSubscriberConfig? SubscriberConfig { get; private set; }
-
         public ulong RouterHighWaterMark { get; private set; }
 
         public TimeSpan? LastActorRequestTimeout { get; private set; }
@@ -13157,15 +13152,6 @@ public sealed partial class EntrySpotActorDispatchTests
         public void SetRouterHighWaterMark(ulong value)
         {
             RouterHighWaterMark = value;
-        }
-
-        public void ApplyRoleConfig(
-            IZLinkSpotPublisherConfig? publisher,
-            IZLinkSpotSubscriberConfig? subscriber
-        )
-        {
-            PublisherConfig = publisher;
-            SubscriberConfig = subscriber;
         }
 
         public void ConnectPeer(string endpoint) { }

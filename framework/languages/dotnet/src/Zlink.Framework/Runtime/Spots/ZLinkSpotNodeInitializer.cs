@@ -36,7 +36,6 @@ internal sealed class ZLinkSpotNodeInitializer(
             // single seal owner; the node only consults it.
             node.SetPeerAdmissionSealGate(() => runtime.DrainAdmission.IsSealedForShutdown);
             node.SetObjectRole(spotNodeRegistration.ObjectRole);
-            node.ApplyRoleConfig(spotNodeRegistration.SpotPublisherConfig, subscriber: null);
 
             var routerEndpoint = spotNodeRegistration.Router is { } routerRegistration
                 ? ZLinkNetworkEndpointResolver.Bind(

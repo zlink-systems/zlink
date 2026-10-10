@@ -268,8 +268,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         using var reservation = ReserveBoundTcpPort();
         var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
         var endpoint = $"tcp://{AdmissionTestServerHost}:{port}";
-        var sendTimeout = TimeSpan.FromSeconds(2);
-        await using var client = CreateClient(endpoint, defaultSendTimeout: sendTimeout);
+        await using var client = CreateClient(endpoint);
         await using var server = CreateServer(port, bindHost: AdmissionTestServerHost);
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -308,7 +307,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
         var endpoint = $"tcp://{AdmissionTestServerHost}:{port}";
         var sendTimeout = TimeSpan.FromMilliseconds(150);
-        await using var client = CreateClient(endpoint, defaultSendTimeout: sendTimeout);
+        await using var client = CreateClient(endpoint);
         await using var server = CreateServer(port, bindHost: AdmissionTestServerHost);
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -358,8 +357,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         using var reservation = ReserveBoundTcpPort();
         var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
         var endpoint = $"tcp://{AdmissionTestServerHost}:{port}";
-        var sendTimeout = TimeSpan.FromSeconds(2);
-        await using var client = CreateClient(endpoint, defaultSendTimeout: sendTimeout);
+        await using var client = CreateClient(endpoint);
         await using var server = CreateServer(port, bindHost: AdmissionTestServerHost);
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -403,7 +401,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         using var reservation = ReserveBoundTcpPort();
         var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
         var endpoint = $"tcp://{AdmissionTestServerHost}:{port}";
-        var sendTimeout = TimeSpan.FromMilliseconds(150);
         await using var client = CreateClient(endpoint);
         await using var server = CreateServer(port, bindHost: AdmissionTestServerHost);
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -3338,7 +3335,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         string endpoint,
         long maximumMessageBytes = 16L * 1024L * 1024L,
         TimeProvider? timeProvider = null,
-        TimeSpan? defaultSendTimeout = null,
         string? additionalEndpoint = null
     )
     {
@@ -3352,8 +3348,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         var provider = services.BuildServiceProvider();
         var registration = provider.GetRequiredService<ZLinkFrameworkRegistration>();
         registration.Channels["work"].Client!.SocketConfig.MaxMessageSize = maximumMessageBytes;
-        if (defaultSendTimeout is { } configuredDefaultSendTimeout)
-            registration.DefaultSocketSendTimeout = configuredDefaultSendTimeout;
         if (timeProvider is not null)
             registration.TimeProvider = timeProvider;
         return provider;

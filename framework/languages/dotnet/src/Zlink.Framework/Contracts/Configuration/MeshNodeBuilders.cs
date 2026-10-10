@@ -182,8 +182,6 @@ public interface IZLinkMeshNodeBuilder
 
     IZLinkMeshNodeSocketConfig ConfigureRouterSocket();
 
-    IZLinkSpotPublisherConfig ConfigureSpotPublisher();
-
     IZLinkMeshPeerConnections PeerConnections { get; }
 
     IZLinkMeshNodeBuilder SetDefaultRequestTimeout(TimeSpan timeout);

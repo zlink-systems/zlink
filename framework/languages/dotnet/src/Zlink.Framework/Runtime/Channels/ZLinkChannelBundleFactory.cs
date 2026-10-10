@@ -178,11 +178,7 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
         try
         {
             publisher = state.Context.CreatePublisherSocket();
-            ApplyPublisherSocketConfig(
-                publisher.Options,
-                channel,
-                registration.DefaultSocketSendTimeout
-            );
+            ApplyPublisherSocketConfig(publisher.Options, channel);
             var publisherRegistration =
                 channel.Publisher
                 ?? throw new InvalidOperationException(
@@ -247,13 +243,11 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
 
     internal static void ApplyPublisherSocketConfig(
         PubSocketOptions socket,
-        ZLinkChannelRegistration channel,
-        TimeSpan? defaultSendTimeout = null
+        ZLinkChannelRegistration channel
     )
     {
-        ApplySocketConfig(socket, channel.Publisher!.SocketConfig);
-        if (defaultSendTimeout is { } timeout)
-            socket.SendTimeout = timeout;
+        socket.Linger = TimeSpan.Zero;
+        socket.SendTimeout = channel.PublisherSendTimeout ?? ZLinkFanoutSendTimeout.Default;
         socket.NoDrop = channel.PublisherNoDrop.GetValueOrDefault();
     }
 
