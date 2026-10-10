@@ -582,7 +582,10 @@ int main ()
           map_submit_result_exception (zlink::submit_result_t::not_found, "native submit");
         if (submit_backpressured.kind () != framework_error_kind_t::unavailable
             || zlink::framework::detail::boundary_state (submit_backpressured)
-                 != zlink::framework::detail::boundary_error_t::disconnected
+                 == zlink::framework::detail::boundary_error_t::disconnected
+            || std::string (submit_backpressured.what ())
+                   .find ("submission capacity is unavailable")
+                 == std::string::npos
             || submit_disconnected.kind () != framework_error_kind_t::unavailable
             || zlink::framework::detail::boundary_state (submit_disconnected)
                  != zlink::framework::detail::boundary_error_t::disconnected

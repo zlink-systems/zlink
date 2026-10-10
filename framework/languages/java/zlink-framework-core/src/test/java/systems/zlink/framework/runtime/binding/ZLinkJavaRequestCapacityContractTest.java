@@ -224,7 +224,7 @@ final class ZLinkJavaRequestCapacityContractTest {
     void requestCapacityFailureUsesTheSubmissionPhase(boolean initialSubmission) {
         var failure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
         assertEquals(
-                initialSubmission ? RequestResult.NOT_CONNECTED : RequestResult.TIMED_OUT,
+                initialSubmission ? RequestResult.BACKPRESSURED : RequestResult.TIMED_OUT,
                 ZLinkJavaRawMeshNode.requestResult(failure, initialSubmission));
         var reply = new CompletableFuture<List<Message>>();
         var request = new CapacityRejectedRequest(initialSubmission, failure, reply);
@@ -250,6 +250,8 @@ final class ZLinkJavaRequestCapacityContractTest {
                             ? ZLinkFrameworkErrorKind.UNAVAILABLE
                             : ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                     terminal.kind());
+            if (initialSubmission)
+                assertTrue(terminal.getMessage().contains("submission capacity is unavailable"));
             assertSame(failure, terminal.getCause());
         }
     }

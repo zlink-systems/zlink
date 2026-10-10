@@ -220,14 +220,8 @@ final class ZLinkJavaDurableRequest {
                 return;
             }
         }
-        RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(cause, initialSubmission);
         completion.completeExceptionally(
-                terminal == null
-                        ? cause
-                        : new ZLinkFrameworkException(
-                                ZLinkJavaRawMeshNode.backendResult(terminal).toFrameworkErrorKind(),
-                                "durable request submission failed",
-                                cause));
+                ZLinkJavaRawMeshNode.requestFailure(cause, initialSubmission));
     }
 
     private void waitForRouteChange() {

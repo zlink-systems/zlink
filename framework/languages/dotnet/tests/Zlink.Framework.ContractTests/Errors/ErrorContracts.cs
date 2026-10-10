@@ -29,6 +29,8 @@ public sealed class ErrorContracts
 
         Assert.Equal(expected, error.Kind);
         Assert.IsType<ZlinkSubmitException>(error.InnerException);
+        Assert.Contains("submission capacity is unavailable", error.Message);
+        Assert.DoesNotContain("route is not connected", error.Message);
         Assert.DoesNotContain("Backpressured", Enum.GetNames<ZLinkFrameworkErrorKind>());
     }
 
@@ -66,6 +68,7 @@ public sealed class ErrorContracts
         );
 
         Assert.Equal(expected, error.Kind);
+        Assert.Contains("submission capacity is unavailable", error.Message);
         Assert.Equal(1, attempts);
     }
 

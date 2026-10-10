@@ -259,11 +259,7 @@ class infrastructure_request_retry_state_t final
                      && !completion.failure->submit_result;
         trace_mesh ("infrastructure-request-result correlation=" + std::to_string (_correlation)
                     + " result=" + std::to_string (static_cast<int> (completion.terminal)));
-        if ((completion.terminal == zlink::request_result_t::not_connected
-             && !(completion.failure
-                  && completion.failure->phase
-                       == detail::backend::raw_request_failure_phase_t::initial_admission
-                  && completion.failure->submit_result == zlink::submit_result_t::backpressured))
+        if (completion.terminal == zlink::request_result_t::not_connected
             || completion.terminal == zlink::request_result_t::timed_out) {
             schedule_retry ();
             return;
@@ -978,7 +974,8 @@ task_t<bool> raw_mesh_node_owner_t::observe_request (
                 messaging::request_failure_mapper_t{}
                   .transport_terminal (completion.terminal)
                   .value_or (foundation::operation_terminal_t::transport_failed);
-              (void) operations->fail (operation, terminal);
+              auto failure_reply = request_failure_reply_parts (correlation, completion.terminal);
+              (void) operations->fail (operation, terminal, std::move (failure_reply.front ()));
               return;
           }
           try {

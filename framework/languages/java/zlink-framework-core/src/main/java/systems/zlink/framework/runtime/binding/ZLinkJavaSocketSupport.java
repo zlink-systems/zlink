@@ -15,7 +15,6 @@ import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
@@ -161,18 +160,9 @@ final class ZLinkJavaSocketSupport {
             bindingReply.whenComplete(
                     (replyParts, failure) -> {
                         if (failure != null) {
-                            RequestResult terminal =
-                                    ZLinkJavaRawMeshNode.requestResult(failure, false);
                             result.completeExceptionally(
                                     new CompletionException(
-                                            terminal == null
-                                                    ? failure
-                                                    : new ZLinkFrameworkException(
-                                                            ZLinkJavaRawMeshNode.backendResult(
-                                                                            terminal)
-                                                                    .toFrameworkErrorKind(),
-                                                            failure.getMessage(),
-                                                            failure)));
+                                            ZLinkJavaRawMeshNode.requestFailure(failure, false)));
                             return;
                         }
                         try {
@@ -194,15 +184,8 @@ final class ZLinkJavaSocketSupport {
             ZLinkCompletionBridge.forwardCancellation(result, bindingReply);
             return result;
         } catch (RuntimeException failure) {
-            RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(failure, true);
             return CompletableFuture.failedFuture(
-                    terminal == null
-                            ? failure
-                            : new ZLinkFrameworkException(
-                                    ZLinkJavaRawMeshNode.backendResult(terminal)
-                                            .toFrameworkErrorKind(),
-                                    failure.getMessage(),
-                                    failure));
+                    ZLinkJavaRawMeshNode.requestFailure(failure, true));
         }
     }
 

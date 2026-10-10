@@ -3810,11 +3810,30 @@ final class ZLinkJavaRawMeshNode
         return result == null ? RequestResult.INTERNAL_ERROR : result;
     }
 
+    /** Preserves a classified failure and projects each typed binding error once. */
+    static Throwable requestFailure(Throwable failure, boolean initialSubmission) {
+        Throwable cause = unwrap(failure);
+        if (cause instanceof ZLinkFrameworkException) return cause;
+        RequestResult terminal = requestResult(cause, initialSubmission);
+        return terminal == null
+                ? failure
+                : new ZLinkFrameworkException(
+                        backendResult(terminal).toFrameworkErrorKind(),
+                        terminal == RequestResult.BACKPRESSURED
+                                ? "Operation failed because submission capacity is unavailable."
+                                : cause.getMessage(),
+                        cause);
+    }
+
     /** Returns null when the original failure has no typed request projection. */
     static RequestResult requestResult(Throwable failure, boolean initialSubmission) {
         Throwable current = unwrap(failure);
         if (current == null) {
             return RequestResult.OK;
+        }
+        if (current instanceof ZLinkFrameworkException framework
+                && framework.getCause() instanceof ZlinkSubmitException submit) {
+            return ZLinkOneWayCalls.toRequestResult(submit.getResult(), initialSubmission);
         }
         if (current instanceof ZlinkRequestException requestFailure) {
             return requestFailure.getResult();
@@ -4309,6 +4328,10 @@ final class ZLinkJavaRawMeshNode
         binding.whenComplete(
                 (received, failure) -> {
                     try {
+                        if (unwrap(failure) instanceof ZLinkFrameworkException framework) {
+                            result.completeExceptionally(framework);
+                            return;
+                        }
                         ZLinkBackendReceived outcome =
                                 failure == null ? received : onFailure.apply(failure);
                         ZLinkCompletionBridge.completeOrDiscard(
