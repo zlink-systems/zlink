@@ -115,6 +115,10 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "InMesh is valid only for an Instance Spot intent."
             );
+        if (_instanceIntent)
+            target = await runtime
+                .ResolveInstanceSpotIntentAsync(target, cancellationToken)
+                .ConfigureAwait(false);
         var activationTimeout = _instanceIntent
             ? runtime.Registration.ResolveMeshRequestTimeout(
                 runtime
@@ -132,7 +136,7 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
                 .ResolveSpotHandleAsync(target.SpotId, cancellationToken)
                 .ConfigureAwait(false)
             : await runtime
-                .ResolveInstanceSpotHandleAsync(target, cancellationToken)
+                .ResolveInstanceSpotHandleAsync(target, cancellationToken, _instanceIntent)
                 .ConfigureAwait(false);
         if (handle is null)
         {
@@ -141,7 +145,6 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
                     ZLinkFrameworkErrorKind.NotFound,
                     $"Spot '{target.SpotId}' was not found."
                 );
-            target = runtime.ResolveInstanceSpotIntent(target);
             var header = ZLinkClientCallCodec.CreateEnvelope(
                 ZLinkMessageKind.Command,
                 target.MeshName,
@@ -291,6 +294,10 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             );
         var operationTimeout = _timeout ?? runtime.Registration.DefaultRequestTimeout;
         var deadline = Stopwatch.GetElapsedTime(0) + operationTimeout;
+        if (_instanceIntent)
+            target = await runtime
+                .ResolveInstanceSpotIntentAsync(target, cancellationToken)
+                .ConfigureAwait(false);
         var handle = await ResolveHandleAsync(cancellationToken).ConfigureAwait(false);
         if (handle is not null)
         {
@@ -327,7 +334,6 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"Spot '{target.SpotId}' was not found."
             );
-        target = runtime.ResolveInstanceSpotIntent(target);
         var activationTimeout = Remaining(deadline);
         var header = ZLinkClientCallCodec.CreateEnvelope(
             ZLinkMessageKind.Request,
@@ -364,7 +370,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
     ) =>
         _exactSpotIdCall
             ? runtime.ResolveSpotHandleAsync(target.SpotId, cancellationToken)
-            : runtime.ResolveInstanceSpotHandleAsync(target, cancellationToken);
+            : runtime.ResolveInstanceSpotHandleAsync(target, cancellationToken, _instanceIntent);
 
     private async ValueTask<TReply> RequestExistingAsync<TReply>(
         ZLinkResolvedSpotHandle handle,

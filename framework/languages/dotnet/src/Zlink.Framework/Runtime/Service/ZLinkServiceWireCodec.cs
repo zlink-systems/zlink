@@ -1625,6 +1625,68 @@ internal static partial class ZLinkServiceWireCodec
         );
     }
 
+    internal static bool TryDecodeInstanceSpotActivationEnvelope(
+        InstanceSpotActivationOperation operation,
+        ReadOnlyMemory<byte>? metadata,
+        ReadOnlySpan<byte> encoded,
+        out IReadOnlyList<Message> payload
+    )
+    {
+        payload = Array.Empty<Message>();
+        try
+        {
+            var context = new ServiceWireCodec.DecodeContext(
+                null,
+                null,
+                null,
+                encoded.Length,
+                encoded.Length
+            );
+            var root = ServiceWireCodec.DecodeDurableInstanceActivationRecoveryV1(
+                encoded.ToArray(),
+                context
+            );
+            var application = ServiceWireCodec.EncodeApplicationPayloadEnvelopeV1(
+                root.ApplicationPayload,
+                context
+            );
+            if (
+                !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                    application,
+                    out var parts
+                )
+            )
+                return false;
+            payload = parts;
+            var expected = EncodeInstanceSpotActivationRecovery(
+                operation,
+                metadata,
+                parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray()
+            );
+            if (!encoded.SequenceEqual(expected))
+            {
+                foreach (var part in parts)
+                    part.Dispose();
+                payload = Array.Empty<Message>();
+                return false;
+            }
+            return true;
+        }
+        catch (Exception error)
+            when (error
+                    is InvalidDataException
+                        or EndOfStreamException
+                        or ArgumentException
+                        or OverflowException
+            )
+        {
+            foreach (var part in payload)
+                part.Dispose();
+            payload = Array.Empty<Message>();
+            return false;
+        }
+    }
+
     internal static byte[] EncodeInstanceSpotActivation(
         InstanceSpotActivationOperation operation,
         bool hasMetadata

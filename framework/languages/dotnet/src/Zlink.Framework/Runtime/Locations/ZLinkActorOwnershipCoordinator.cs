@@ -1560,7 +1560,10 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     || found.Snapshot.OwnerId != update.Snapshot.OwnerId
                     || found.Snapshot.OwnerLeaseGeneration != update.Snapshot.OwnerLeaseGeneration
                     || found.Snapshot.ObjectGeneration != update.Snapshot.ObjectGeneration
-                    || !TryDecodeCurrentActorAuthority(found.Snapshot.Payload.Span, out var payload)
+                    || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                        found.Snapshot.Payload.Span,
+                        out var payload
+                    )
                 )
                     break;
                 var continueRetry = await _lane
@@ -1631,7 +1634,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 && transferredRead.Snapshot.ObjectGeneration == snapshot.ObjectGeneration
                 && transferredRead.Snapshot.AuthorityOwnerGeneration
                     > snapshot.AuthorityOwnerGeneration
-                && TryDecodeCurrentActorAuthority(
+                && ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
                     transferredRead.Snapshot.Payload.Span,
                     out var currentAuthority
                 )
@@ -1678,30 +1681,15 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         return currentSnapshot.ObjectGeneration == expectedSourceSnapshot.ObjectGeneration
             && currentSnapshot.AuthorityOwnerGeneration
                 > expectedSourceSnapshot.AuthorityOwnerGeneration
-            && TryDecodeCurrentActorAuthority(
+            && ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
                 expectedSourceSnapshot.Payload.Span,
                 out var sourceAuthority
             )
-            && TryDecodeCurrentActorAuthority(
+            && ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
                 currentSnapshot.Payload.Span,
                 out var currentAuthority
             )
             && currentAuthority.NodeRid != sourceAuthority.NodeRid;
-    }
-
-    private static bool TryDecodeCurrentActorAuthority(
-        ReadOnlySpan<byte> payload,
-        out ZLinkActorAuthorityPayload authority
-    )
-    {
-        if (ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(payload, out authority))
-            return true;
-
-        return ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(payload, out var canonical)
-            && ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                canonical.SteadyAuthorityPayload.Span,
-                out authority
-            );
     }
 
     private static ReadOnlyMemory<byte> EncodeAuthorityPayload(

@@ -291,7 +291,13 @@ internal sealed class ZLinkSpotRuntimeManager(
                                     stableType,
                                     1
                                 )
+                            ),
+                            source.Registration.SpotRelocations.TryGetValue(
+                                stableType,
+                                out var policy
                             )
+                                ? policy.PolicyKind
+                                : null
                         ),
                         deadlineToken.Token
                     )
@@ -547,12 +553,8 @@ internal sealed class ZLinkSpotRuntimeManager(
                 throw new ZLinkConfigurationException(
                     "Remote User Spot creation requires the owner lease tracker."
                 );
-            //  A lost owner ends the operation here. The authority record is
-            //  never released and no other node takes the object over
-            //  (05-location-relocation/06-failure-failover-policy §4.2, §4.4),
-            //  so re-running the reservation reads the same record back. Only
-            //  `null` means "the record moved on and the reservation can run
-            //  again"; this answer is terminal for the caller's deadline.
+            // Reserve already applied the repository's §6.1 decision. A retained
+            // authority with an unavailable owner ends this GetOrCreate operation.
             if (
                 !await _leaseTracker
                     .IsOwnerTokenLiveAsync(

@@ -4102,6 +4102,10 @@ public sealed partial class StatefulServiceRuntimeTests
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
 
+        var metadata = ServiceWireCodec.EncodeMetadataFrame(
+            new ServiceWireCodec.MetadataFrame([new(new("test"), new("9-8"))]),
+            new ServiceWireCodec.DecodeContext(null, null, null, 4096, 4096)
+        );
         using var firstMessage = Message.From([1, 2, 3]);
         var activation = new InstanceSpotActivationTarget(
             "objects",
@@ -4123,7 +4127,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 out var operationId,
                 deadline,
                 TimeSpan.FromSeconds(3),
-                metadata: new byte[] { 9, 8 }
+                metadata: metadata
             )
         );
 
@@ -4145,7 +4149,7 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(operationId, activationTarget.LastOperation.OperationId);
         Assert.Equal(operationId.Low, activationTarget.LastOperation.ReplyRouteId);
         Assert.Equal(source.RoutingId, activationTarget.LastOperation.SourceNodeRid);
-        Assert.Equal([9, 8], activationTarget.LastMetadata.ToArray());
+        Assert.Equal(metadata, activationTarget.LastMetadata.ToArray());
         Assert.Equal([1, 2, 3], activationTarget.LastPayload.Single().ToArray());
     }
 
@@ -4178,6 +4182,10 @@ public sealed partial class StatefulServiceRuntimeTests
             && winner.Status().AdmittedPeerCount == 2
         );
 
+        var metadata = ServiceWireCodec.EncodeMetadataFrame(
+            new ServiceWireCodec.MetadataFrame([new(new("test"), new("7-8"))]),
+            new ServiceWireCodec.DecodeContext(null, null, null, 4096, 4096)
+        );
         using var firstMessage = Message.From([4, 5, 6]);
         var activation = new InstanceSpotActivationTarget(
             "objects",
@@ -4198,7 +4206,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 out var operationId,
                 deadline,
                 TimeSpan.FromSeconds(3),
-                metadata: new byte[] { 7, 8 }
+                metadata: metadata
             )
         );
 

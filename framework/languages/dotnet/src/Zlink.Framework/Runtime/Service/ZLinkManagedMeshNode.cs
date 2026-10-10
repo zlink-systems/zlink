@@ -1584,7 +1584,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var wireParts = new List<ReadOnlyMemory<byte>>(3) { head };
         if (!metadata.IsEmpty)
             wireParts.Add(metadata);
-        wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
+        wireParts.Add(
+            ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
+                operation,
+                metadata.IsEmpty ? null : metadata,
+                parts.Select(static part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray()
+            )
+        );
         PendingOperation? pending = null;
         if (request)
         {
@@ -7228,12 +7234,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
 
         if (
-            !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                received.Parts[payloadOffset],
+            !ZLinkServiceWireCodec.TryDecodeInstanceSpotActivationEnvelope(
+                operation,
+                record.HasMetadata ? received.Parts[1].ToArray() : null,
+                received.Parts[payloadOffset].ToArray(),
                 out var decodedPayload
             )
         )
         {
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             if (request)
                 Reply(
                     RequestResult.ProtocolError,

@@ -5,7 +5,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Configuration;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -32,6 +34,67 @@ internal sealed partial class ZLinkProviderLocationRepository
     private static readonly UTF8Encoding InventoryUtf8 = new(false, true);
     private readonly SemaphoreSlim aggregateRecoveryGate = new(1, 1);
     private int aggregateStagingRecoveryCompleted;
+
+    private async ValueTask<bool> AddMembershipCommitConditionsAsync(
+        ReadOnlyMemory<byte> payload,
+        ZLinkAuthoritySnapshot current,
+        List<ZLinkStoreCondition> conditions,
+        CancellationToken cancellationToken,
+        ZLinkAggregatePrepareRequest? aggregate = null
+    )
+    {
+        if (
+            current.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
+            || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(payload.Span, out var actor)
+            || actor.CurrentSpotKind != ZLinkSpotKind.User
+        )
+            return true;
+        if (
+            ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                current.Payload.Span,
+                out var previous
+            )
+            && previous.State == ZLinkActorAuthorityState.Ready
+            && previous.CurrentSpotKind == ZLinkSpotKind.User
+            && previous.CurrentSpotId == actor.CurrentSpotId
+            && previous.CurrentSpotGeneration == actor.CurrentSpotGeneration
+        )
+            return true;
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(actor.CurrentSpotId);
+        var spot = await ReadAuthorityRecordAsync(
+                key,
+                knownMeta: null,
+                projectCommittedAggregate: false,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        if (
+            spot is null
+            || spot.Snapshot.ObjectGeneration != actor.CurrentSpotGeneration
+            || spot.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
+        )
+            return false;
+        var participant = aggregate?.Participants.SingleOrDefault(p => p.Key == key);
+        var token =
+            participant?.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
+                ? aggregate!.TargetOwner
+                : new ZLinkLocationOwnerToken(
+                    spot.Snapshot.OwnerId,
+                    spot.Snapshot.OwnerLeaseGeneration
+                );
+        var owner = await ReadLiveOwnerAsync(token, cancellationToken).ConfigureAwait(false);
+        if (owner is null)
+            return false;
+        AddCondition(
+            conditions,
+            new ZLinkStoreCondition.Version(AuthorityMetaKey(key), spot.Version)
+        );
+        AddCondition(
+            conditions,
+            new ZLinkStoreCondition.Value(OwnerKey(token.OwnerId), owner.Value)
+        );
+        return true;
+    }
 
     public async ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
         ZLinkAuthorityKey key,
@@ -127,6 +190,16 @@ internal sealed partial class ZLinkProviderLocationRepository
                         != restore.ExpectedOwner.LeaseGeneration
                 )
                     return Conflict(current);
+                if (
+                    !await AddMembershipCommitConditionsAsync(
+                            restore.Payload,
+                            current.Snapshot,
+                            conditions,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
+                    return Conflict(current);
                 meta = current.Meta with { Payload = restore.Payload.ToArray() };
             }
             else if (mutation is ZLinkAuthorityMutation.Delete)
@@ -159,6 +232,16 @@ internal sealed partial class ZLinkProviderLocationRepository
             {
                 var put = (ZLinkAuthorityMutation.Put)mutation;
                 ValidateAuthorityPayload(put.Payload);
+                if (
+                    !await AddMembershipCommitConditionsAsync(
+                            put.Payload,
+                            current.Snapshot,
+                            conditions,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
+                    return Conflict(current);
                 var changesOwner =
                     put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
                 var targetOwner =
@@ -172,7 +255,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                 if (liveOwner is null)
                     return Conflict(current);
 
-                conditions.Add(
+                AddCondition(
+                    conditions,
                     new ZLinkStoreCondition.Value(OwnerKey(targetOwner.OwnerId), liveOwner.Value)
                 );
                 var nextAllocation = current.Snapshot.Allocation;
@@ -550,7 +634,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     )
     {
         var active = current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active;
-        if (active && request?.ObjectKind != ZLinkPlacementObjectKind.Actor)
+        if (active && request is null)
             return StaleAuthorityReclaimResult.NotReclaimable;
 
         // Relocation authority retains its own recovery protocol.
@@ -587,10 +671,81 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             if (ownerLive)
                 return StaleAuthorityReclaimResult.OwnerLive;
-            if (request?.ActorRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
+            if (request?.ObjectRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
-                    "Actor owner lease is unavailable."
+                    current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
+                    && ZLinkAuthorityKeyCodec.TryDecodeSpot(request!.Key, out var unavailableSpotId)
+                        ? $"User Spot '{unavailableSpotId}' owner lease is not live."
+                        : "Object owner lease is unavailable.",
+                    ZLinkRetryAdvice.RetryAfterStateChange
+                );
+        }
+        if (active)
+        {
+            if (current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot)
+            {
+                if (
+                    !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
+                        current.Snapshot.Payload.Span,
+                        out var spot
+                    )
+                    || spot.State != ZLinkUserSpotAuthorityState.Ready
+                )
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "User Spot is not steady Ready."
+                    );
+                ZLinkAuthorityScanCursor? cursor = null;
+                do
+                {
+                    var scan = await ListAuthoritiesAsync(
+                            ZLinkAuthorityKeyCodec.Prefix(ZLinkAuthorityKeyKind.Actor),
+                            cursor,
+                            ZLinkPageRequestPolicy.MaximumPageSize,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    if (scan is ZLinkAuthorityScanResult.ScanExpired)
+                    {
+                        cursor = null;
+                        continue;
+                    }
+                    var page = ((ZLinkAuthorityScanResult.Page)scan).Value;
+                    if (
+                        page.Items.Any(entry =>
+                            ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                                entry.Snapshot.Payload.Span,
+                                out var member
+                            )
+                            && member.CurrentSpotKind == ZLinkSpotKind.User
+                            && member.CurrentSpotId == spot.SpotId
+                            && member.CurrentSpotGeneration == current.Snapshot.ObjectGeneration
+                        )
+                    )
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            "User Spot still has members."
+                        );
+                    cursor = page.NextCursor;
+                    if (cursor is null)
+                        break;
+                } while (true);
+            }
+            else if (
+                current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
+                && (
+                    !ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                        current.Snapshot.Payload.Span,
+                        out var spot
+                    )
+                    || spot.State != ZLinkInstanceSpotAuthorityState.Ready
+                    || spot.ActivationRecovery is not null
+                )
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "Instance Spot is not steady Ready."
                 );
         }
         ZLinkStoreCondition descriptorCondition;
@@ -779,6 +934,16 @@ internal sealed partial class ZLinkProviderLocationRepository
             if (completion is ZLinkObjectCreationCompletion.Created created)
             {
                 ValidateAuthorityPayload(created.ReadyPayload);
+                if (
+                    !await AddMembershipCommitConditionsAsync(
+                            created.ReadyPayload,
+                            current.Snapshot,
+                            conditions,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
+                    return new ZLinkObjectCreationCompleteResult.Stale();
                 readyMeta = current.Meta with
                 {
                     Payload = created.ReadyPayload.ToArray(),
@@ -1396,6 +1561,18 @@ internal sealed partial class ZLinkProviderLocationRepository
                 target.DescriptorCondition,
                 target.OwnerCondition,
             };
+            for (var index = 0; index < request.Participants.Count; index++)
+                if (
+                    !await AddMembershipCommitConditionsAsync(
+                            request.Participants[index].AuthorityPayload,
+                            authorities[index]!.Snapshot,
+                            conditions,
+                            cancellationToken,
+                            request
+                        )
+                        .ConfigureAwait(false)
+                )
+                    return ZLinkAggregateCommitResult.Stale;
             var mutations = new List<ZLinkStoreMutation>();
             foreach (var pair in capacityRecords)
             {
@@ -3932,18 +4109,27 @@ internal sealed partial class ZLinkProviderLocationRepository
                 },
                 ReservedCreation = null,
             };
+            var conditions = new List<ZLinkStoreCondition>
+            {
+                new ZLinkStoreCondition.Version(AuthorityMetaKey(reservation.Key), current.Version),
+                target.DescriptorCondition,
+                target.OwnerCondition,
+                capacity.Condition,
+            };
+            if (
+                !await AddMembershipCommitConditionsAsync(
+                        readyPayload,
+                        current.Snapshot,
+                        conditions,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false)
+            )
+                return new ZLinkObjectCommitResult.Stale();
             var result = await _provider
                 .WriteAsync(
                     new ZLinkStoreWriteRequest(
-                        [
-                            new ZLinkStoreCondition.Version(
-                                AuthorityMetaKey(reservation.Key),
-                                current.Version
-                            ),
-                            target.DescriptorCondition,
-                            target.OwnerCondition,
-                            capacity.Condition,
-                        ],
+                        conditions,
                         [
                             new ZLinkStoreMutation.Put(
                                 AuthorityMetaKey(reservation.Key),

@@ -4,8 +4,39 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed partial class ZLinkFrameworkRuntime
 {
-    internal InstanceSpotIntentAddress ResolveInstanceSpotIntent(InstanceSpotIntentAddress address)
+    internal async ValueTask<InstanceSpotIntentAddress> ResolveInstanceSpotIntentAsync(
+        InstanceSpotIntentAddress address,
+        CancellationToken cancellationToken
+    )
     {
+        if (Registration.Locations.ResolveStore() is { } store)
+        {
+            var authority = await store
+                .ReadAuthorityAsync(
+                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(address.SpotId),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (authority is ZLinkAuthorityReadResult.Found found)
+            {
+                if (
+                    found.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.InstanceSpot
+                    || !ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                        found.Snapshot.Payload.Span,
+                        out var existing
+                    )
+                )
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.TypeMismatch,
+                        "Instance Spot authority kind does not match."
+                    );
+                return address with
+                {
+                    MeshName = existing.MeshName,
+                    InstanceSpotType = existing.StableType,
+                };
+            }
+        }
         var source = ResolveActorCreationSource(
             string.IsNullOrEmpty(address.MeshName) ? null : address.MeshName
         );
