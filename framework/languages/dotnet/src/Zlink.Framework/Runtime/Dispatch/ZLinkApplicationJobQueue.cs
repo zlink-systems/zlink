@@ -1201,6 +1201,8 @@ internal static class ZLinkApplicationJobQueueInvocation
     // Handler entry releases the queue permit, but the invocation still owns its turn.
     internal static bool IsActive => Current.Value is not null;
 
+    internal static ZLinkApplicationJobOrigin? CurrentOrigin => Current.Value?.Origin;
+
     internal static IDisposable Enter(ZLinkApplicationJobQueueLease lease)
     {
         ArgumentNullException.ThrowIfNull(lease);
