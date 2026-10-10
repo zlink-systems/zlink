@@ -109,3 +109,35 @@ test('a retired connection ACK cannot extend its replacement or another peer', (
   assert.equal(owner.acknowledge('peer', 'old', probe, 20_000), false);
   assert.deepEqual(owner.tick(21_000).timedOutNodes, ['other', 'peer']);
 });
+
+test('ClientServer server ordinary receive refreshes only its peer and expires after the last record', async () => {
+  const { ZLinkChannelSocketRegistry } = require('../../packages/framework/dist/runtime/channels/channel-socket-registry');
+  const { Message } = require('@zlink-systems/zlink');
+  const sockets = Object.create(ZLinkChannelSocketRegistry.prototype);
+  const disconnected = [];
+  const router = { async send() {}, disconnectPeer(rid) { disconnected.push(rid); } };
+  Object.assign(sockets, {
+    clientServerConnections: new Map(),
+    clientServerServerPeers: new Map(),
+    clientServerAdmittedClients: new Map(),
+    channelRouters: new Map([['orders', router]]),
+    fanoutConnections: new Map(),
+    ownedResources: [], publishers: new Map(),
+    nextClientServerProbeId: 1n,
+    ensureClientServerLivenessTimer() {}
+  });
+  sockets.admitClientServerServerPeer('orders', 'active', 4096);
+  sockets.admitClientServerServerPeer('orders', 'silent', 4096);
+  const beforeReceive = performance.now();
+  const message = Message.from('ordinary-message');
+  try {
+    assert.equal(sockets.tryHandleClientServerControl('orders', {
+      parts: [message], routingId: 'active', replyToken: null
+    }, router), false);
+  } finally { message.close(); }
+  const afterReceive = performance.now();
+  await sockets.tickClientServerLiveness(beforeReceive + 15_000);
+  assert.deepEqual(disconnected, ['silent']);
+  await sockets.tickClientServerLiveness(afterReceive + 15_000);
+  assert.deepEqual(disconnected, ['silent', 'active']);
+});

@@ -551,13 +551,19 @@ export class ZLinkChannelRuntimeLifecycle {
         unhandled: this.options.registration.dispatch?.unhandled
       });
       const spotRouteBridge = this.createSpotRouteBridgeForRouter(channelName, router);
+      const serverPeers = this.options.sockets.clientServerServerPeersForChannel(channelName);
       const loop = new ZLinkChannelReceiveLoop(
         channelName,
         router,
         dispatcher,
         spotRouteBridge,
         (received, socket) =>
-          this.options.sockets.tryHandleClientServerControl(channelName, received, socket),
+          this.options.sockets.tryHandleClientServerControl(
+            channelName,
+            received,
+            socket,
+            serverPeers
+          ),
         this.options.adapter.createReadablePoller(router),
         this.options.applicationJobQueue,
         (error) =>
