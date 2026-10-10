@@ -46,7 +46,7 @@ Owner가 일정 기간 작업을 받을 자격은 갱신하는 owner lease로 �
 | --- | --- |
 | 서로 다른 node에 같은 id의 첫 메시지가 동시에 도착 | 생성 권한을 얻은 node만 만든다. 경쟁에서 진 node의 request는 `Unavailable`로 끝나며, 원래 deadline이 끝났으면 timeout을 유지한다. 이미 송신 수락이 끝난 one-way send의 실패는 diagnostics에 기록한다. |
 | 같은 target에서 activation이 진행 중 | 뒤따른 요청은 같은 activation에 합류한다. `Ready` 뒤 도착 순서대로 queue에 들어가며, activation이 실패하면 원래 완료 계약으로 끝난다. Resolver가 생성 중인 위치를 발견한 호출도 activation을 기다린다. |
-| `Ready` owner가 강제 종료되거나 owner lease가 무효 | 새 요청은 `Unavailable`이다. Lease가 남아 있는 동안뿐 아니라 만료된 뒤에도 위치 정보를 자동 해제하거나 다음 메시지로 다른 node에 재생성하지 않는다. |
+| `Ready` owner가 강제 종료되거나 owner lease가 무효 | Owner lease가 무효이고 새 생성 의사가 있는 호출이면 [Location runtime §6.1](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 결과를 따른다. Disabled type이 회수 조건을 만족하면 해제를 commit한 뒤 새 incarnation을 만든다. 일반 호출은 authority를 회수하지 않는다. 새 incarnation은 이전 상태와 수락된 operation을 이어받지 않는다. |
 | Location Store 연결 또는 변경 응답 유실 | 변경 결과를 확인하기 전에는 성공을 추측하거나 다른 node를 만들어 처리하지 않는다. 기존 node 목록을 유지하는 유예 시간인 `StoreFailureGrace`는 owner 자격을 연장하지 않는다. 유효한 owner는 허용 시각까지 처리할 수 있지만, 그 시각을 넘으면 새 message·timer callback 시작과 상태 변경을 막는다. 이미 수락한 작업의 결과 처리와 정리는 진행할 수 있다. 결과 확인을 기다리는 request도 원래 timeout·취소·실패 완료 조건을 따른다. |
 | 계획된 relocation 진행 중 | Source는 현재 callback을 마친 뒤 새 callback 실행을 멈춘다. 대기 작업과 새 메시지는 target으로 전달·보관하고, target은 복원과 owner 변경 확정 뒤 실행을 시작한다. 실패 시점에 따라 source를 유지하거나 작업이 실패하며, 두 node가 함께 handler를 실행하지 않는다. 상세 결과는 [Relocation](37-relocation.ko.md)이 다룬다. |
 

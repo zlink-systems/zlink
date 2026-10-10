@@ -1,3 +1,4 @@
+import type { ServiceInstanceColdActivationTarget } from '../foundation/service-stateful-wire-codec';
 import { ZLinkFrameworkException, ZLinkSpotKind, type RoutingId } from '../../contracts';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
@@ -65,13 +66,7 @@ export function hasObjectClientCapability(role: 'none' | 'client' | 'server' | u
 type MissingTarget = {
   readonly meshName: string;
   readonly node: ZLinkBackendMeshNode;
-  readonly target: {
-    readonly targetNodeRid: string;
-    readonly targetNodeGeneration: bigint;
-    readonly targetSpotId: string;
-    readonly stableType: string;
-    readonly descriptorVersion: string;
-  };
+  readonly target: ServiceInstanceColdActivationTarget;
 };
 
 type MissingTargetSelection =
@@ -600,6 +595,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           node,
           target: {
             ...placement.target,
+            targetMeshName: meshName,
             targetSpotId: String(spotId),
             stableType
           }
