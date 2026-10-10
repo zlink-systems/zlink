@@ -370,8 +370,9 @@ request_failure_mapper_t::reply_header_exception (std::uint32_t terminal_result,
                                           operation_name
                                             + " failed because the remote target was busy.");
         case protocol::request_terminal_result::backpressured:
-            return framework_exception_t (framework_error_kind_t::unavailable,
-                                          operation_name + " target is unavailable.");
+            return framework_exception_t (
+              framework_error_kind_t::unavailable,
+              operation_name + " failed because submission capacity is unavailable.");
         case protocol::request_terminal_result::notConnected:
             return completion_exception (request_result_t::not_connected, operation_name);
         case protocol::request_terminal_result::invalidArgument:

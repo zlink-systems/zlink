@@ -28,6 +28,116 @@ import java.util.concurrent.TimeUnit;
 
 final class ZLinkJavaRawServicePortContractTest {
     @Test
+    void tokenlessRequestCapacityFailureRetainsItsKindAndCauseThroughMeshCompletion()
+            throws Exception {
+        var refusal =
+                new systems.zlink.contracts.errors.ZlinkSubmitException(
+                        systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED, 11);
+        var submit =
+                (systems.zlink.contracts.messaging.RequestSubmitOperation)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                systems.zlink.contracts.messaging.RequestSubmitOperation.class
+                                        .getClassLoader(),
+                                new Class<?>[] {
+                                    systems.zlink.contracts.messaging.RequestSubmitOperation.class
+                                },
+                                (proxy, method, args) -> {
+                                    if (method.getName().equals("submit")) throw refusal;
+                                    if (method.getName().equals("timeout")) return proxy;
+                                    throw new AssertionError(method.getName());
+                                });
+        var request =
+                (systems.zlink.contracts.messaging.RequestOperation)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                systems.zlink.contracts.messaging.RequestOperation.class
+                                        .getClassLoader(),
+                                new Class<?>[] {
+                                    systems.zlink.contracts.messaging.RequestOperation.class
+                                },
+                                (proxy, method, args) -> {
+                                    assertEquals("message", method.getName());
+                                    return submit;
+                                });
+        RouterSocket router =
+                (RouterSocket)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                RouterSocket.class.getClassLoader(),
+                                new Class<?>[] {RouterSocket.class},
+                                (proxy, method, args) ->
+                                        switch (method.getName()) {
+                                            case "hashCode" -> System.identityHashCode(proxy);
+                                            case "equals" -> proxy == args[0];
+                                            case "setRoutingId", "close" -> null;
+                                            case "request" -> request;
+                                            default -> throw new AssertionError(method.getName());
+                                        });
+        var context =
+                (systems.zlink.contracts.core.Context)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                systems.zlink.contracts.core.Context.class.getClassLoader(),
+                                new Class<?>[] {systems.zlink.contracts.core.Context.class},
+                                (proxy, method, args) -> {
+                                    assertEquals("createRouterSocket", method.getName());
+                                    return router;
+                                });
+        try (var port = new ZLinkJavaRawServicePort(context)) {
+            var target = RoutingId.from("capacity-target");
+            var caller = port.openRouter(RoutingId.from("capacity-source"));
+            var submitted =
+                    port.requestMessages(
+                            caller,
+                            target,
+                            List.of(Message.from(new byte[] {1})),
+                            Duration.ofSeconds(1),
+                            ignored -> {
+                                throw new AssertionError("capacity refusal has no reply");
+                            },
+                            ignored -> {});
+            var sourceError =
+                    assertThrows(
+                                    ExecutionException.class,
+                                    () -> submitted.toCompletableFuture().get(1, TimeUnit.SECONDS))
+                            .getCause();
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    ZLinkJavaRawMeshNode.backendResult(
+                                    ZLinkJavaRawMeshNode.requestTerminal(sourceError))
+                            .toFrameworkErrorKind());
+            var mapper =
+                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+                            "mapRequestFailure",
+                            java.util.concurrent.CompletionStage.class,
+                            java.util.function.Function.class);
+            mapper.setAccessible(true);
+            java.util.function.Function<
+                            Throwable,
+                            systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived>
+                    decodeFailure =
+                            failure ->
+                                    new systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendReceived(
+                                            ZLinkJavaRawMeshNode.backendResult(
+                                                    ZLinkJavaRawMeshNode.requestTerminal(failure)),
+                                            Optional.of(target),
+                                            Optional.empty(),
+                                            Optional.empty(),
+                                            List.of());
+            var mapped =
+                    (java.util.concurrent.CompletionStage<?>)
+                            mapper.invoke(null, submitted, decodeFailure);
+            var error =
+                    assertThrows(
+                                    ExecutionException.class,
+                                    () -> mapped.toCompletableFuture().get(1, TimeUnit.SECONDS))
+                            .getCause();
+            var framework = assertInstanceOf(ZLinkFrameworkException.class, error);
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, framework.kind());
+            assertTrue(framework.getMessage().contains("submission capacity is unavailable"));
+            assertSame(refusal, framework.getCause());
+        }
+    }
+
+    @Test
     void socketRegistrationRunsWithTheActualStateOwner() {
         var stopped = new IllegalStateException("creation stopped before native allocation");
         var context =

@@ -178,13 +178,13 @@ final class ZLinkJavaDurableRequest {
                 return;
             }
             pending = submit.apply(frames, Duration.ofNanos(remaining));
-            pending.whenComplete((reply, failure) -> post(() -> settle(reply, failure, false)));
+            pending.whenComplete((reply, failure) -> post(() -> settle(reply, failure)));
         } catch (RuntimeException failure) {
-            settle(null, failure, true);
+            settle(null, failure);
         }
     }
 
-    private void settle(List<byte[]> reply, Throwable failure, boolean initialSubmission) {
+    private void settle(List<byte[]> reply, Throwable failure) {
         pending = null;
         if (completion.isDone()) return;
         if (failure == null) {
@@ -220,14 +220,7 @@ final class ZLinkJavaDurableRequest {
                 return;
             }
         }
-        RequestResult terminal = ZLinkJavaRawMeshNode.requestResult(cause, initialSubmission);
-        completion.completeExceptionally(
-                terminal == null
-                        ? cause
-                        : new ZLinkFrameworkException(
-                                ZLinkJavaRawMeshNode.backendResult(terminal).toFrameworkErrorKind(),
-                                "durable request submission failed",
-                                cause));
+        completion.completeExceptionally(ZLinkJavaRawMeshNode.requestFailure(cause));
     }
 
     private void waitForRouteChange() {

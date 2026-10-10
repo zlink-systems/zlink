@@ -9725,46 +9725,30 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 _peersByRid.TryGetValue(target, out var peer) ? peer.Liveness : null
             );
             Task<IReadOnlyList<Message>> request;
-            try
+            lock (_socketGate)
             {
-                lock (_socketGate)
-                {
-                    var socket = _socket;
-                    if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
-                        throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                    request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
-                        socket.Request(target).Messages(messages).Timeout(timeout),
-                        timeout,
-                        cancellationToken,
-                        admission
-                    );
-                    ownershipTransferred = true;
-                }
-            }
-            catch (ZlinkSubmitException error)
-                when (error.Result == ZlinkSubmitException.ErrorCode.Backpressured)
-            {
-                throw ZLinkRequestFailureMapper.CreateSubmitException(
-                    error,
-                    nameof(ZLinkManagedMeshNode),
-                    completionFailure: false
+                var socket = _socket;
+                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
+                    throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
+                request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                    socket.Request(target).Messages(messages).Timeout(timeout),
+                    timeout,
+                    cancellationToken,
+                    admission
                 );
+                ownershipTransferred = true;
             }
-            try
-            {
-                var reply = await request.ConfigureAwait(false);
-                admission?.RecordReceived(Stopwatch.GetTimestamp());
-                return reply;
-            }
-            catch (ZlinkSubmitException error)
-                when (error.Result == ZlinkSubmitException.ErrorCode.Backpressured)
-            {
-                throw ZLinkRequestFailureMapper.CreateSubmitException(
-                    error,
-                    nameof(ZLinkManagedMeshNode),
-                    completionFailure: true
-                );
-            }
+            var reply = await request.ConfigureAwait(false);
+            admission?.RecordReceived(Stopwatch.GetTimestamp());
+            return reply;
+        }
+        catch (ZlinkSubmitException error)
+            when (error.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+        {
+            throw ZLinkRequestFailureMapper.CreateSubmitException(
+                error,
+                nameof(ZLinkManagedMeshNode)
+            );
         }
         finally
         {
