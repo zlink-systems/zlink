@@ -722,7 +722,7 @@ test('managed stream projects STREAM submit failures by admission phase', async 
   const failures = [
     [SubmitResult.NotConnected, 'completion', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable],
     [SubmitResult.NotConnected, 'submit', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable],
-    [SubmitResult.Backpressured, 'completion', ZLinkSubmitStatus.TimedOut, ZLinkFrameworkErrorKind.DeadlineExceeded],
+    [SubmitResult.Backpressured, 'completion', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable],
     [SubmitResult.Backpressured, 'submit', ZLinkSubmitStatus.RouteNotConnected, ZLinkFrameworkErrorKind.Unavailable]
   ];
   for (const [result, phase, status, kind] of failures) {

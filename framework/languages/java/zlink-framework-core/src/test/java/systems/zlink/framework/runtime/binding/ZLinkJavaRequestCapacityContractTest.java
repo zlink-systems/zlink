@@ -221,11 +221,9 @@ final class ZLinkJavaRequestCapacityContractTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void requestCapacityFailureUsesTheSubmissionPhase(boolean initialSubmission) {
+    void tokenlessRequestCapacityFailureIsUnavailableAtEitherBoundary(boolean initialSubmission) {
         var failure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
-        assertEquals(
-                initialSubmission ? RequestResult.BACKPRESSURED : RequestResult.TIMED_OUT,
-                ZLinkJavaRawMeshNode.requestResult(failure, initialSubmission));
+        assertEquals(RequestResult.BACKPRESSURED, ZLinkJavaRawMeshNode.requestResult(failure));
         var reply = new CompletableFuture<List<Message>>();
         var request = new CapacityRejectedRequest(initialSubmission, failure, reply);
         try (var message = Message.from(new byte[] {1})) {
@@ -245,36 +243,37 @@ final class ZLinkJavaRequestCapacityContractTest {
                     assertInstanceOf(
                             ZLinkFrameworkException.class,
                             assertThrows(CompletionException.class, completion::join).getCause());
-            assertEquals(
-                    initialSubmission
-                            ? ZLinkFrameworkErrorKind.UNAVAILABLE
-                            : ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                    terminal.kind());
-            if (initialSubmission)
-                assertTrue(terminal.getMessage().contains("submission capacity is unavailable"));
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, terminal.kind());
+            assertTrue(terminal.getMessage().contains("submission capacity is unavailable"));
             assertSame(failure, terminal.getCause());
         }
+        var oneWay =
+                systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.adaptOneWay(
+                                CompletableFuture.failedFuture(failure), initialSubmission)
+                        .toCompletableFuture();
+        var oneWayFailure =
+                assertInstanceOf(
+                        ZLinkFrameworkException.class,
+                        assertThrows(CompletionException.class, oneWay::join).getCause());
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, oneWayFailure.kind());
+        assertSame(failure, oneWayFailure.getCause());
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void wrappedFailuresUseTheTypedRequestProjection(boolean initialSubmission) {
+    @Test
+    void wrappedFailuresUseTheTypedRequestProjection() {
         assertNull(
                 ZLinkJavaRawMeshNode.requestResult(
-                        new CompletionException(new IllegalStateException("unknown")),
-                        initialSubmission));
+                        new CompletionException(new IllegalStateException("unknown"))));
         assertEquals(
                 RequestResult.INTERNAL_ERROR,
                 ZLinkJavaRawMeshNode.requestResult(
                         new CompletionException(
-                                new ZlinkSubmitException(SubmitResult.INTERNAL_ERROR)),
-                        initialSubmission));
+                                new ZlinkSubmitException(SubmitResult.INTERNAL_ERROR))));
         assertEquals(
                 RequestResult.INTERNAL_ERROR,
                 ZLinkJavaRawMeshNode.requestResult(
                         new CompletionException(
-                                new ZlinkRequestException(RequestResult.INTERNAL_ERROR)),
-                        initialSubmission));
+                                new ZlinkRequestException(RequestResult.INTERNAL_ERROR))));
     }
 
     @ParameterizedTest

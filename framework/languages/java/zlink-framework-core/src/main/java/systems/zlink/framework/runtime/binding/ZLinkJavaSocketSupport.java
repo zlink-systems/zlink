@@ -162,7 +162,7 @@ final class ZLinkJavaSocketSupport {
                         if (failure != null) {
                             result.completeExceptionally(
                                     new CompletionException(
-                                            ZLinkJavaRawMeshNode.requestFailure(failure, false)));
+                                            ZLinkJavaRawMeshNode.requestFailure(failure)));
                             return;
                         }
                         try {
@@ -184,8 +184,7 @@ final class ZLinkJavaSocketSupport {
             ZLinkCompletionBridge.forwardCancellation(result, bindingReply);
             return result;
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(
-                    ZLinkJavaRawMeshNode.requestFailure(failure, true));
+            return CompletableFuture.failedFuture(ZLinkJavaRawMeshNode.requestFailure(failure));
         }
     }
 

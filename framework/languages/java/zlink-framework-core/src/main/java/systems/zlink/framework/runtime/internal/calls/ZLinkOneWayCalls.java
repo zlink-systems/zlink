@@ -111,12 +111,9 @@ public final class ZLinkOneWayCalls {
                     Throwable cause = unwrap(error);
                     if (cause instanceof ZlinkSubmitException submit) {
                         RequestResult terminal =
-                                submit.getResult() == SubmitResult.BACKPRESSURED
-                                                || (!initialSubmission
-                                                        && submit.getResult()
-                                                                == SubmitResult.NOT_FOUND)
+                                !initialSubmission && submit.getResult() == SubmitResult.NOT_FOUND
                                         ? RequestResult.NOT_CONNECTED
-                                        : toRequestResult(submit.getResult(), initialSubmission);
+                                        : toRequestResult(submit.getResult());
                         result.completeExceptionally(
                                 ZLinkFrameworkErrorOrigin.framework(
                                         ZLinkBackendRequestResult.fromWireTerminal(terminal.value())
@@ -130,12 +127,11 @@ public final class ZLinkOneWayCalls {
         return result;
     }
 
-    /** Owns the typed submit projection; capacity meaning depends on admission phase. */
-    public static RequestResult toRequestResult(SubmitResult result, boolean initialSubmission) {
+    /** Owns the typed submit projection; a failed terminal has no admission wait token. */
+    public static RequestResult toRequestResult(SubmitResult result) {
         return switch (result) {
             case OK -> RequestResult.OK;
-            case BACKPRESSURED ->
-                    initialSubmission ? RequestResult.BACKPRESSURED : RequestResult.TIMED_OUT;
+            case BACKPRESSURED -> RequestResult.BACKPRESSURED;
             case NOT_CONNECTED -> RequestResult.NOT_CONNECTED;
             case NOT_FOUND -> RequestResult.NOT_FOUND;
             case NOT_ADMITTED -> RequestResult.REJECTED;

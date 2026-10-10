@@ -101,7 +101,7 @@ final class ZLinkJavaRawServicePortContractTest {
             assertEquals(
                     ZLinkFrameworkErrorKind.UNAVAILABLE,
                     ZLinkJavaRawMeshNode.backendResult(
-                                    ZLinkJavaRawMeshNode.requestTerminal(sourceError, true))
+                                    ZLinkJavaRawMeshNode.requestTerminal(sourceError))
                             .toFrameworkErrorKind());
             var mapper =
                     ZLinkJavaRawMeshNode.class.getDeclaredMethod(
@@ -117,8 +117,7 @@ final class ZLinkJavaRawServicePortContractTest {
                                     new systems.zlink.framework.runtime.internal.backend
                                             .ZLinkBackendReceived(
                                             ZLinkJavaRawMeshNode.backendResult(
-                                                    ZLinkJavaRawMeshNode.requestTerminal(
-                                                            failure, true)),
+                                                    ZLinkJavaRawMeshNode.requestTerminal(failure)),
                                             Optional.of(target),
                                             Optional.empty(),
                                             Optional.empty(),

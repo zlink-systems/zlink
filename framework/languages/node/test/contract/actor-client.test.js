@@ -910,7 +910,7 @@ test('actor native deadline preserves one terminal and releases the lower comple
 
 for (const [phase, expectedKind] of [
   ['submit', framework.ZLinkFrameworkErrorKind.Unavailable],
-  ['completion', framework.ZLinkFrameworkErrorKind.DeadlineExceeded]
+  ['completion', framework.ZLinkFrameworkErrorKind.Unavailable]
 ]) {
   test(`Actor capacity ${phase} preserves its public error kind`, async () => {
     const { SubmitResult } = require('@zlink-systems/zlink');

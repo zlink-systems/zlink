@@ -233,7 +233,7 @@ final class ZLinkJavaDurableRequestTest {
 
     @Test
     void writableWaitTimeoutEndsAsDeadlineExceededWithoutReplay() {
-        var failure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
+        var failure = new ZlinkRequestException(RequestResult.TIMED_OUT);
         var attempts = new AtomicInteger();
         var pending = new CompletableFuture<List<byte[]>>();
         var completion =
@@ -246,7 +246,7 @@ final class ZLinkJavaDurableRequestTest {
                                 },
                                 () -> false,
                                 Duration.ofSeconds(5));
-        pending.completeExceptionally(failure);
+        pending.completeExceptionally(ZLinkJavaRawMeshNode.requestFailure(failure));
         assertTrue(completion.toCompletableFuture().isDone());
         assertFailure(
                 completion.toCompletableFuture(),
