@@ -1,4 +1,5 @@
 import type { ApplicationJobRecordLease } from '../application-jobs/application-ingress-record-owner';
+import type { ReceiveRecord } from './service-runtime-contracts';
 
 export type ServiceMailboxDomain = 'application' | 'infrastructure';
 
@@ -23,6 +24,8 @@ export interface ServiceMailboxRecord {
   readonly stateful?: unknown;
   /** Host queue permit plus its ordinary Framework-owned ingress record. */
   readonly applicationJob?: ApplicationJobRecordLease;
+  /** Unregistered raw-pull terminal, retained by the existing mailbox owner. */
+  readonly completion?: ReceiveRecord;
 }
 
 export interface ServiceMailboxClaim {
@@ -85,7 +88,10 @@ export class ServiceMailbox {
   }
 
   tryEnqueue(record: ServiceMailboxRecord): boolean {
-    if (record.owner.length === 0 || record.parts.length === 0) {
+    if (
+      record.owner.length === 0 ||
+      (record.parts.length === 0 && record.completion === undefined)
+    ) {
       throw new TypeError('Mailbox records require an owner and retained payload.');
     }
     const target = this.domain(record.domain);

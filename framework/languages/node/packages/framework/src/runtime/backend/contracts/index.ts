@@ -27,6 +27,7 @@ import type {
 import type { RoutingId } from '../../../contracts';
 import type { ZLinkCoreHwmOptions } from '../../../contracts/Configuration';
 import type { ZLinkSubmitResult } from '../../messaging/submission-result';
+import type { ZLinkMeshCompletionHandler } from '../mesh-completion-table';
 import type { Message } from '../../../contracts/Common/Message';
 import type {
   ServiceSpotMessageFollowSeal,
@@ -390,6 +391,7 @@ export interface ZLinkBackendMeshNode {
     timeoutMs?: number
   ): MeshOperationId;
   setReadyHandler(handler: (readyDomains: number) => number): void;
+  setCompletionHandler(handler: ZLinkMeshCompletionHandler): void;
   createReadyBatch(capacity: number): ReadyBatch;
   createReceiveBatch(messageCapacity: number, partCapacity: number): ReceiveBatch;
   drainReady(

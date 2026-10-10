@@ -17,6 +17,7 @@ import {
   type SubmitResult as SubmitResultValue
 } from '@zlink-systems/zlink';
 import { randomBytes } from 'node:crypto';
+import type { ZLinkMeshCompletionHandler } from '../mesh-completion-table';
 import { setImmediate as yieldToIO } from 'node:timers/promises';
 import { type RoutingId, ZLinkFrameworkException } from '../../../contracts';
 
@@ -32,7 +33,6 @@ import {
   ZLINK_MAX_CAPACITY,
   ZLINK_MAX_PUBLIC_WEIGHT
 } from '../../../contracts/Configuration/RegistrationBuilderPolicy';
-import { shouldCompactBackingArray } from '../../admission';
 import type { ApplicationJobQueuePort } from '../../application-jobs/contracts';
 import type { ZLinkDispatchErrorReporter } from '../../channels/dispatch-error-reporter';
 import { ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE } from '../../foundation/operation-identity';
@@ -170,9 +170,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly lifecycleGeneration?: bigint;
     }
   >();
-  private readonly completions: Array<PendingCompletion | undefined> = [];
-  private completionHead = 0;
-  private completionCount = 0;
+  private completionHandler?: ZLinkMeshCompletionHandler;
   private readonly routingId: string;
   private readonly lifecycleGeneration: bigint;
   private bindEndpoint?: string;
@@ -484,7 +482,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.stateful = undefined;
     this.runtime?.close();
     this.runtime = undefined;
-    this.clearCompletions();
     this.closed = true;
   }
 
@@ -733,7 +730,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       drainingPeerCount: peers.filter((peer) => peer.descriptor.state === 'draining').length,
       pendingApplicationMessages: BigInt(this.runtime?.mailbox.pendingMessages('application') ?? 0),
       pendingInfrastructureMessages: BigInt(
-        (this.runtime?.mailbox.pendingMessages('infrastructure') ?? 0) + this.completionCount
+        this.runtime?.mailbox.pendingMessages('infrastructure') ?? 0
       ),
       pendingBytes: BigInt(
         (this.runtime?.mailbox.pendingBytes('application') ?? 0) +
@@ -849,6 +846,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     };
   }
 
+  setCompletionHandler(handler: ZLinkMeshCompletionHandler): void {
+    this.completionHandler = handler;
+  }
+
   setReadyHandler(handler: (readyDomains: number) => number): void {
     this.readyHandler = handler;
     this.notifyReady();
@@ -872,7 +873,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   } {
     const target = requireRawReadyBatch(batch);
     if ((domains & ReadyDomain.Infrastructure) !== 0) {
-      this.drainCompletions(target);
       this.drainMailbox('infrastructure', target);
     }
     if ((domains & ReadyDomain.Application) !== 0) {
@@ -881,7 +881,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const runtime = this.runtime;
     const infrastructureResidue =
       (domains & ReadyDomain.Infrastructure) !== 0 &&
-      (this.completionCount > 0 || (runtime?.mailbox.pendingMessages('infrastructure') ?? 0) > 0);
+      (runtime?.mailbox.pendingMessages('infrastructure') ?? 0) > 0;
     const applicationResidue =
       (domains & ReadyDomain.Application) !== 0 &&
       (runtime?.mailbox.pendingMessages('application') ?? 0) > 0;
@@ -1394,7 +1394,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): MeshOperationId {
     const binding = this.requireStateful().registry.binding(actor);
     if (binding === undefined) {
-      return this.enqueueImmediateFailure(OperationKind.StreamUnbind, RequestResult.NotFound);
+      return this.observeImmediateFailure(OperationKind.StreamUnbind, RequestResult.NotFound);
     }
     return this.observeStateful(
       OperationKind.StreamUnbind,
@@ -1562,7 +1562,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private notifyReady(): void {
     const runtime = this.runtime;
     let domains = ReadyDomain.None;
-    if (this.completionCount > 0 || (runtime?.mailbox.pendingMessages('infrastructure') ?? 0) > 0) {
+    if ((runtime?.mailbox.pendingMessages('infrastructure') ?? 0) > 0) {
       domains |= ReadyDomain.Infrastructure;
     }
     if ((runtime?.mailbox.pendingMessages('application') ?? 0) > 0) {
@@ -1578,8 +1578,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): MeshOperationId {
     const id = { high: 1n, low };
     void promise.then(
-      (result) => this.enqueueCompletion(id, operationKind, result),
-      (error) => this.enqueueCompletion(id, operationKind, requestFailureResult(error))
+      (result) => this.deliverCompletion(id, operationKind, result),
+      (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error))
     );
     return id;
   }
@@ -1590,66 +1590,40 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): MeshOperationId {
     const id = { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id };
     void pending.promise.then(
-      (result) => this.enqueueCompletion(id, operationKind, result),
-      (error) => this.enqueueCompletion(id, operationKind, requestFailureResult(error))
+      (result) => this.deliverCompletion(id, operationKind, result),
+      (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error))
     );
     return id;
   }
 
-  private enqueueImmediateFailure(operationKind: number, terminalResult: number): MeshOperationId {
+  private observeImmediateFailure(operationKind: number, terminalResult: number): MeshOperationId {
     const low = this.nextPeerIntent++;
-    const id = { high: 1n, low };
-    this.enqueueCompletion(id, operationKind, { terminalResult, failureCode: 0 });
-    return id;
+    return this.observeCompletion(
+      low,
+      operationKind,
+      Promise.resolve({ terminalResult, failureCode: 0 })
+    );
   }
 
-  private enqueueCompletion(
+  private deliverCompletion(
     operationId: MeshOperationId,
     operationKind: number,
     result: RawServiceRequestResult | ServiceStatefulResult
   ): void {
-    if (this.closed) return;
-    this.completions.push({ operationId, operationKind, result });
-    this.completionCount += 1;
-    this.readyHandler?.(ReadyDomain.Infrastructure);
-  }
-
-  private drainCompletions(batch: RawReadyBatch): void {
-    while (!batch.full && this.completionCount > 0) {
-      const completion = this.takeCompletion();
-      if (completion === undefined) continue;
-      batch.push(
-        {
-          ownerKind: ReadyOwnerKind.Node,
-          domain: ReadyDomain.Infrastructure,
-          spotId: null,
-          actor: null,
-          terminalCompletion: true
-        },
-        new CompletionClaim(completion)
+    if (this.completionHandler !== undefined) {
+      this.completionHandler({ operationId, terminalResult: result.terminalResult }, () =>
+        completionRecord(operationId, operationKind, result)
       );
+      return;
     }
-  }
-
-  private takeCompletion(): PendingCompletion | undefined {
-    const completion = this.completions[this.completionHead];
-    if (completion === undefined) return undefined;
-    this.completions[this.completionHead] = undefined;
-    this.completionHead += 1;
-    this.completionCount -= 1;
-    if (this.completionCount === 0) {
-      this.clearCompletions();
-    } else if (shouldCompactBackingArray(this.completionHead, this.completions.length)) {
-      this.completions.splice(0, this.completionHead);
-      this.completionHead = 0;
-    }
-    return completion;
-  }
-
-  private clearCompletions(): void {
-    this.completions.length = 0;
-    this.completionHead = 0;
-    this.completionCount = 0;
+    // The raw pull contract uses the existing infrastructure mailbox. A
+    // registered Framework owner receives the terminal directly above.
+    this.runtime?.mailbox.tryEnqueue({
+      owner: this.routingId,
+      domain: 'infrastructure',
+      parts: [],
+      completion: completionRecord(operationId, operationKind, result)
+    });
   }
 
   private drainMailbox(domain: ServiceMailboxDomain, batch: RawReadyBatch): void {
@@ -1658,7 +1632,16 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     while (!batch.full) {
       const claim = runtime.mailbox.tryClaim(domain, MAX_DRAIN_RECORDS, Number.MAX_SAFE_INTEGER);
       if (claim === undefined) break;
-      const owner = readyOwner(claim.owner, this.routingId, this.stateful, domain);
+      const owner =
+        claim.records[0]?.completion === undefined
+          ? readyOwner(claim.owner, this.routingId, this.stateful, domain)
+          : {
+              ownerKind: ReadyOwnerKind.Node,
+              domain: ReadyDomain.Infrastructure,
+              spotId: null,
+              actor: null,
+              terminalCompletion: true
+            };
       batch.push(owner, new MailboxClaim(runtime, claim));
     }
   }
@@ -1691,12 +1674,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     if (this.runtime !== undefined) throw new Error('MeshNode is already started.');
     if (this.closed) throw new Error('MeshNode is closed.');
   }
-}
-
-interface PendingCompletion {
-  readonly operationId: MeshOperationId;
-  readonly operationKind: number;
-  readonly result: RawServiceRequestResult | ServiceStatefulResult;
 }
 
 interface RawClaim {
@@ -2169,54 +2146,43 @@ class MailboxClaim implements RawClaim {
   }
 }
 
-class CompletionClaim implements RawClaim {
-  private consumed = false;
-
-  constructor(private readonly completion: PendingCompletion) {}
-
-  recvBatch(): { readonly ok: boolean; readonly records: ReceiveRecord[] } {
-    if (this.consumed) return { ok: false, records: [] };
-    this.consumed = true;
-    const payload = this.completion.result.payload;
-    return {
-      ok: true,
-      records: [
-        {
-          kind: ReceiveKind.Completion,
-          domain: ReadyDomain.Infrastructure,
-          sourceNodeRid: null,
-          sourceSpotId: null,
-          sourceBindingGeneration: 0n,
-          sourceActor: null,
-          operationId: this.completion.operationId,
-          operationKind: this.completion.operationKind,
-          channelName: null,
-          topic: null,
-          applicationMetadata: null,
-          kindData:
-            'kindData' in this.completion.result ? (this.completion.result.kindData ?? null) : null,
-          terminalResult: this.completion.result.terminalResult,
-          failureErrno: this.completion.result.failureCode,
-          parts:
-            payload === undefined
-              ? []
-              : payload.contentType === MULTIPART_CONTENT_TYPE
-                ? decodeMultipart(payload.payload)
-                : [Message.from(payload.payload)],
-          reply: () => SubmitResult.InvalidState,
-          replyActorJoin: () => SubmitResult.NotSupported
-        }
-      ]
-    };
-  }
-
-  release(): void {}
+function completionRecord(
+  operationId: MeshOperationId,
+  operationKind: number,
+  result: RawServiceRequestResult | ServiceStatefulResult
+): ReceiveRecord {
+  const payload = result.payload;
+  return {
+    kind: ReceiveKind.Completion,
+    domain: ReadyDomain.Infrastructure,
+    sourceNodeRid: null,
+    sourceSpotId: null,
+    sourceBindingGeneration: 0n,
+    sourceActor: null,
+    operationId,
+    operationKind,
+    channelName: null,
+    topic: null,
+    applicationMetadata: null,
+    kindData: 'kindData' in result ? (result.kindData ?? null) : null,
+    terminalResult: result.terminalResult,
+    failureErrno: result.failureCode,
+    parts:
+      payload === undefined
+        ? []
+        : payload.contentType === MULTIPART_CONTENT_TYPE
+          ? decodeMultipart(payload.payload)
+          : [ZLinkBufferMessage.from(payload.payload)],
+    reply: () => SubmitResult.InvalidState,
+    replyActorJoin: () => SubmitResult.NotSupported
+  };
 }
 
 function decodeMultipartRecord(
   runtime: RawServiceMeshRuntime,
   record: ServiceMailboxRecord
 ): ReceiveRecord {
+  if (record.completion !== undefined) return record.completion;
   const stateful = statefulMailboxData(record);
   if (stateful !== undefined) {
     return decodeStatefulRecord(record, stateful);

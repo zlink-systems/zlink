@@ -27,8 +27,14 @@ interface PendingCompletion {
   readonly removeAbort?: () => void;
 }
 
+export type ZLinkMeshCompletionTerminal = Pick<ReceiveRecord, 'operationId' | 'terminalResult'>;
+export type ZLinkMeshCompletionHandler = (
+  terminal: ZLinkMeshCompletionTerminal,
+  materialize: () => ReceiveRecord
+) => void;
+
 export class ZLinkMeshCompletionTable {
-  private readonly pending = new Map<string, PendingCompletion>();
+  private readonly pending = new Map<string | symbol, PendingCompletion>();
   private disposed = false;
 
   constructor(
@@ -36,10 +42,9 @@ export class ZLinkMeshCompletionTable {
   ) {}
 
   /**
-   * Submits and registers without yielding control to the event loop. Mesh
-   * completion dispatch is asynchronous, so a completion cannot overtake the
-   * registration. The table therefore does not need to retain responses that
-   * arrived before their waiter.
+   * Reserves the dispatcher slot before transport submission. The backend
+   * observes native terminals through Promises, so identity binding finishes
+   * before the terminal callback can run, without an infrastructure pump.
    */
   submit(operation: () => MeshOperationId, signal?: AbortSignal): Promise<ZLinkMeshCompletion> {
     if (this.isDisposed()) {
@@ -50,17 +55,8 @@ export class ZLinkMeshCompletionTable {
         signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
       );
     }
-    const operationId = operation();
-    // The backend submission callback can synchronously re-enter `dispose()`.
-    // TypeScript's control-flow analysis cannot observe mutation through it.
-    if (this.disposed) {
-      return Promise.reject(new Error('Mesh completion table is disposed.'));
-    }
-    const key = operationIdentityKey(operationId);
-    if (this.pending.has(key)) {
-      return Promise.reject(new Error(`Mesh operation '${key}' is already pending.`));
-    }
     return new Promise((resolve, reject) => {
+      let key: string | symbol = Symbol();
       const abort = () => {
         this.pending.delete(key);
         reject(signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
@@ -70,12 +66,29 @@ export class ZLinkMeshCompletionTable {
         return;
       }
       signal?.addEventListener('abort', abort, { once: true });
-      this.pending.set(key, {
+      const entry: PendingCompletion = {
         resolve,
         reject,
         removeAbort:
           signal === undefined ? undefined : () => signal.removeEventListener('abort', abort)
-      });
+      };
+      this.pending.set(key, entry);
+      try {
+        const operationId = operation();
+        // dispose/abort can consume the reserved slot during submission.
+        if (!this.pending.delete(key)) return;
+        key = operationIdentityKey(operationId);
+        if (this.pending.has(key)) {
+          throw new Error(`Mesh operation '${key}' is already pending.`);
+        }
+        this.pending.set(key, entry);
+      } catch (error) {
+        // Remove only this submission's slot; a duplicate identity retains
+        // the original waiter.
+        if (this.pending.get(key) === entry) this.pending.delete(key);
+        entry.removeAbort?.();
+        reject(error);
+      }
     });
   }
 
@@ -83,7 +96,9 @@ export class ZLinkMeshCompletionTable {
     return this.disposed;
   }
 
-  complete(record: ReceiveRecord): void {
+  complete(record: ReceiveRecord): void;
+  complete(record: ZLinkMeshCompletionTerminal, materialize: () => ReceiveRecord): void;
+  complete(record: ZLinkMeshCompletionTerminal, materialize?: () => ReceiveRecord): void {
     const key = operationIdentityKey(record.operationId);
     const pending = this.pending.get(key);
     if (pending === undefined) {
@@ -97,7 +112,9 @@ export class ZLinkMeshCompletionTable {
     this.pending.delete(key);
     pending.removeAbort?.();
     try {
-      pending.resolve(retainCompletion(record));
+      pending.resolve(
+        retainCompletion(materialize === undefined ? (record as ReceiveRecord) : materialize())
+      );
     } catch (error) {
       pending.reject(error);
     }
