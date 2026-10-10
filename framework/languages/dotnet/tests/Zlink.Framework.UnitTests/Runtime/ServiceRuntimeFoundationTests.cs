@@ -1029,6 +1029,17 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public void Liveness_AdmissionImmediatelyMakesFirstProbeDue_PerTransportLivenessSection3()
+    {
+        var liveness = new ZLinkServiceLiveness(0);
+        Assert.True(liveness.TryGetProbe(0, out var first));
+        Assert.NotEqual(0UL, first);
+        Assert.False(liveness.TryGetProbe(5 * Stopwatch.Frequency - 1, out _));
+        Assert.True(liveness.TryGetProbe(5 * Stopwatch.Frequency, out var periodic));
+        Assert.Equal(first, periodic);
+    }
+
+    [Fact]
     public void Liveness_PreviousAckIsReceiveEvidenceWithoutClearingOutstandingProbe()
     {
         var frequency = Stopwatch.Frequency;
@@ -1129,8 +1140,11 @@ public sealed class ServiceRuntimeFoundationTests
         var frequency = Stopwatch.Frequency;
         var liveness = new ZLinkServiceLiveness(0);
 
+        // Transport liveness §3: first probe is due immediately after admission.
+        Assert.True(liveness.TryGetProbe(0, out var firstProbe));
         Assert.False(liveness.TryGetProbe(5 * frequency - 1, out _));
-        Assert.True(liveness.TryGetProbe(5 * frequency, out var firstProbe));
+        Assert.True(liveness.TryGetProbe(5 * frequency, out var periodic));
+        Assert.Equal(firstProbe, periodic);
         Assert.NotEqual(0UL, firstProbe);
         Assert.True(liveness.TryGetProbe(10 * frequency, out var retransmit));
         Assert.Equal(firstProbe, retransmit);

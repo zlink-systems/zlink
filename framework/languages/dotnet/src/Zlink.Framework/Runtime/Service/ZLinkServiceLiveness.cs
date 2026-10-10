@@ -14,7 +14,7 @@ internal sealed class ZLinkServiceLiveness
     internal ZLinkServiceLiveness(long admittedTimestamp, TimeProvider? time = null)
     {
         _time = time ?? TimeProvider.System;
-        _nextProbeTimestamp = Add(admittedTimestamp, ProbeInterval);
+        _nextProbeTimestamp = admittedTimestamp;
         _deadlineTimestamp = Add(admittedTimestamp, PeerTimeout);
     }
 

@@ -1431,6 +1431,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         );
                         _admittedDescriptor = admission;
                         _liveness = new ZLinkServiceLiveness(_time.GetTimestamp(), _time);
+                        ProgressLivenessUnderState(_admissionStop.Token, out _);
                         _diagnostics = "ready";
                         using (ExecutionContext.SuppressFlow())
                         {
@@ -1559,43 +1560,47 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             {
                 await Task.Delay(delay, _time, cancellationToken).ConfigureAwait(false);
                 var timedOut = RunState(() =>
-                {
-                    if (IsDisposing || CurrentAdmission is null)
-                    {
-                        delay = ZLinkServiceLiveness.ProbeInterval;
-                        return false;
-                    }
-                    if (_liveness?.IsExpired(_time.GetTimestamp()) == true)
-                        return true;
-
-                    if (
-                        _liveness is null
-                        || !_liveness.TryGetProbe(_time.GetTimestamp(), out var probeId)
-                    )
-                    {
-                        delay =
-                            _liveness?.TimeUntilNextActivity(_time.GetTimestamp())
-                            ?? ZLinkServiceLiveness.ProbeInterval;
-                        return false;
-                    }
-                    Task requestTask;
-                    using (ExecutionContext.SuppressFlow())
-                        requestTask = RequestLivenessProbeAsync(
-                            probeId,
-                            _physicalGeneration,
-                            _liveness,
-                            cancellationToken
-                        );
-                    _requestTasks.RemoveAll(static candidate =>
-                        candidate.IsCompletedSuccessfully || candidate.IsCanceled
-                    );
-                    _requestTasks.Add(requestTask);
-                    delay = _liveness.TimeUntilNextActivity(_time.GetTimestamp());
-                    return false;
-                });
+                    ProgressLivenessUnderState(cancellationToken, out delay)
+                );
                 if (timedOut)
                     RestartAdmission("liveness:timeout");
             }
+        }
+
+        private bool ProgressLivenessUnderState(
+            CancellationToken cancellationToken,
+            out TimeSpan delay
+        )
+        {
+            delay = ZLinkServiceLiveness.ProbeInterval;
+            if (IsDisposing || CurrentAdmission is null)
+            {
+                return false;
+            }
+            if (_liveness?.IsExpired(_time.GetTimestamp()) == true)
+                return true;
+
+            if (_liveness is null || !_liveness.TryGetProbe(_time.GetTimestamp(), out var probeId))
+            {
+                delay =
+                    _liveness?.TimeUntilNextActivity(_time.GetTimestamp())
+                    ?? ZLinkServiceLiveness.ProbeInterval;
+                return false;
+            }
+            Task requestTask;
+            using (ExecutionContext.SuppressFlow())
+                requestTask = RequestLivenessProbeAsync(
+                    probeId,
+                    _physicalGeneration,
+                    _liveness,
+                    cancellationToken
+                );
+            _requestTasks.RemoveAll(static candidate =>
+                candidate.IsCompletedSuccessfully || candidate.IsCanceled
+            );
+            _requestTasks.Add(requestTask);
+            delay = _liveness.TimeUntilNextActivity(_time.GetTimestamp());
+            return false;
         }
 
         private async Task RequestLivenessProbeAsync(

@@ -2520,6 +2520,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5)
             );
+            await ReceiveAdmissionProbeAsync(router);
 
             var clientRid =
                 hello.RoutingId ?? throw new InvalidOperationException("missing client routing id");
@@ -2585,6 +2586,20 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 TimeSpan.FromSeconds(5)
             );
 
+            // Transport liveness §3: the first request is sent at admission (T=0).
+            using var admissionProbe = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(
+                ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
+                    admissionProbe.Parts,
+                    out var admissionProbeId
+                )
+            );
+            Assert.NotNull(admissionProbe.ReplyToken);
+            Assert.NotEqual(0UL, admissionProbeId);
+
             time.AdvanceMonotonic(TimeSpan.FromSeconds(5));
             using var first = await PollReceivedAsync(
                 storage => TryReceive(router, storage),
@@ -2598,6 +2613,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             );
             Assert.NotNull(first.ReplyToken);
             Assert.NotEqual(0UL, firstId);
+            Assert.Equal(admissionProbeId, firstId);
 
             time.AdvanceMonotonic(TimeSpan.FromSeconds(5));
             using var second = await PollReceivedAsync(
@@ -2632,7 +2648,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 );
             }
             Assert.Equal(0, transport.LivenessAckCount);
-            Assert.Equal(2, transport.SentLivenessProbeCount);
+            Assert.Equal(3, transport.SentLivenessProbeCount);
 
             // The expired deadline ends only the logical admission. The
             // connect intent stays with Core, so the next Hello uses the same
@@ -2680,7 +2696,12 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5)
             );
-            ulong previousId = 0;
+            var previousId = await ReceiveAdmissionProbeAsync(router);
+            await WaitUntilAsync(
+                transport,
+                () => transport.LivenessAckCount == 1,
+                TimeSpan.FromSeconds(1)
+            );
 
             for (var index = 0; index < 3; index++)
             {
@@ -2702,7 +2723,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
                 using var ack = ZLinkClientServerControlProtocol.EncodeLivenessAck(probeId);
                 probe.Reply().Message(ack).Submit();
-                var expectedAcks = index + 1;
+                var expectedAcks = index + 2;
                 await WaitUntilAsync(
                     transport,
                     () => transport.LivenessAckCount == expectedAcks,
@@ -2711,7 +2732,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 previousId = probeId;
             }
             Assert.Equal(1, transport.ReadyCount);
-            Assert.Equal(3, transport.SentLivenessProbeCount);
+            Assert.Equal(4, transport.SentLivenessProbeCount);
         }
         finally
         {
@@ -3059,6 +3080,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5)
             );
+            await ReceiveAdmissionProbeAsync(router);
             var clientRid =
                 firstHello.RoutingId
                 ?? throw new InvalidOperationException("missing client routing id");
@@ -3079,6 +3101,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5)
             );
+            await ReceiveAdmissionProbeAsync(router);
 
             // A physical reconnect performs one service handshake. No delayed
             // admission fallback may submit another Hello on the admitted peer.
@@ -3116,6 +3139,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5)
             );
+            await ReceiveAdmissionProbeAsync(router);
 
             var malformed = Message.From(new byte[] { 0x5a, 0x4d, 0x01, 0xff, 0x00 });
             await router
@@ -3161,6 +3185,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5)
             );
+            await ReceiveAdmissionProbeAsync(router);
         }
         finally
         {
@@ -3179,6 +3204,24 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     private static bool TryReceive(IRouterSocket router, Received storage)
     {
         return router.Recv(storage, RecvFlags.DontWait);
+    }
+
+    // Transport liveness §3 (05-transport-liveness.ko.md:95): admission sends a
+    // probe immediately. A raw server fixture must reply before its next record.
+    private static async Task<ulong> ReceiveAdmissionProbeAsync(IRouterSocket router)
+    {
+        using var probe = await PollReceivedAsync(
+            storage => TryReceive(router, storage),
+            TimeSpan.FromSeconds(5)
+        );
+        Assert.True(
+            ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probe.Parts, out var probeId)
+        );
+        Assert.NotEqual(0UL, probeId);
+        Assert.NotNull(probe.ReplyToken);
+        using var ack = ZLinkClientServerControlProtocol.EncodeLivenessAck(probeId);
+        probe.Reply().Message(ack).Submit();
+        return probeId;
     }
 
     private static void ReplyAdmission(IRouterSocket router, Received hello, string endpoint)
