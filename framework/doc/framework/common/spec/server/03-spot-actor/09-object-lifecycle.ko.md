@@ -79,7 +79,7 @@ Resolver의 `Unavailable`은 Ready route가 없는 authority의 상태를 보존
 `Creating`을 보면 위의 waiter로, explicit Close 중이면 owner route와 fence를 보존해 그 owner node로([Spot 메시징 §7](06-spot-address-messaging.ko.md#7-close와-generation-경계)), idle cleanup 중이면 §5의 route 갱신으로 전달한다. Instance
 intent가 없는 `Closing` direct call의 결과는 [Spot 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)가 정한다. Authority가
 없다는 `Missing`과 같은 상태로 취급하지 않는다. Instance intent가 owner lease가 무효인 steady `Ready`를
-보면 그 authority fence를 보존해 creation coordinator로 전달한다. Explicit `Close`, `IdleEvicted` cleanup,
+보면 creation coordinator로 전달하며, target이 현재 authority를 다시 읽어 해제를 요청한다. Explicit `Close`, `IdleEvicted` cleanup,
 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 조건부 해제 또는
 다른 정식 lifecycle operation이 authority release를 완료한 뒤에만 resolver가 새 `Missing`
 입력을 만들 수 있다.
@@ -304,8 +304,8 @@ pre-start terminal lease cleanup은 [Payload 소유권](../01-execution/05-paylo
 - 여러 caller가 동시에 같은 객체 생성을 요청해도 factory는 한 번만 실행되고, 나머지 caller는
   그 결과로 만들어진 객체를 대상으로 삼는다.
 - 생성이 끝난 직후에 보낸 message는 캐시 수명만큼 지연되지 않고 곧바로 처리된다.
-- Owner를 사용할 수 없다는 것만 확인된 경우(`Unavailable`)에는 새 생성을 시작하지 않으며, 그 결과는
-  진행 중인 요청의 terminal completion으로만 전달된다.
+- Owner를 사용할 수 없다는 것만 확인된 경우(`Unavailable`)에는 새 생성을 시작하지 않는다. Instance intent의
+  전달은 §3을 따르고, 그 밖에는 진행 중인 요청의 terminal completion으로 전달된다.
 
 **낡은 owner 필터링**
 

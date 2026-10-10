@@ -59,6 +59,10 @@ The runtime route cache is only a snapshot of the
 determine current authority. Join, leave, relocation, destroy, and close all
 only use a transaction that verifies the expected `StoreVersion`, generation,
 and [owner lease](../00-foundation/02-glossary.en.md#owner-lease).
+For both same-node and cross-node joins, a transaction adding membership to a User Spot checks the
+target Spot authority's SpotId, `ObjectGeneration`, and `StoreVersion`, and the validity of the
+owner lease recorded in that authority, as commit conditions. Application join approval or a
+locally active Spot doesn't replace those conditions.
 
 The Object Client or Server role requires a Location Store. Without a Store,
 it's rejected at startup, and a hidden local Store or a runtime-local object

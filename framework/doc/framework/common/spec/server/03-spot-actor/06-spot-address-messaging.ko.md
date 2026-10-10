@@ -312,9 +312,12 @@ Terminal call은 별도 check와 send로 나누지 않고 다음 순서로 resol
 2. Owner lease가 유효한 Ready authority가 있으면 저장된 kind와 stable type을 사용해 current owner로 전송한다.
 3. authority가 Missing이고 Instance intent가 없으면 §9 표의 결과로 끝낸다.
 4. authority가 Missing이거나 owner lease가 무효인 Ready이고 Instance intent가 있으면 eligible Object
-   Mesh를 선택한다. 뒤의 경우 target은 `Reserve` 전에 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의
-   해제를 요청하고, 해제가 commit되지 않으면 factory를 실행하지 않고 `Unavailable`로 끝낸다. 이
-   단계부터 후보 계산에 사용하는 descriptor는 owner lease가 살아 있는 것으로 한정한다 —
+   Mesh를 선택한다. 뒤의 경우 source는 authority를 Missing으로 보고하지 않고, 저장된 kind·stable type·Mesh로
+   대상을 정한다(caller가 명시한 type이 다르면 `TypeMismatch`). Optional initial Mesh와 type 자동 선택은
+   Missing일 때만 사용한다. Target은 현재 authority를 다시 읽어 `Reserve` 전에
+   [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제를 요청하고, 해제가 commit되지 않으면 factory를
+   실행하지 않고 `Unavailable`로 끝낸다. 해제 자격은 source에서 판정하지 않는다. 이
+   단계부터 후보 계산에 사용하는 descriptor는 owner lease가 유효한 것으로 한정한다 —
    판정 기준은
    [Location runtime §4.1](../05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증)이
    정한다. `InMesh`를 생략했고 후보가 0개이면 `NotConfigured`, 둘 이상이면
@@ -391,8 +394,8 @@ sequenceDiagram
 ```
 
 이 다이어그램은 Location Store에 owner가 없고 선택된 target이 생성 권한을 얻은 request의 정상
-흐름을 보여준다. 이미 Ready owner가 있으면 factory를 실행하지 않고 기존 Spot queue에 request를
-넣는다. 다른 target이 먼저 생성 권한을 얻었다면 현재 target은 Spot을 만들지 않고 §4.2의
+흐름을 보여준다. 이미 owner lease가 유효한 Ready owner가 있으면 factory를 실행하지 않고 기존 Spot
+queue에 request를 넣는다. 다른 target이 먼저 생성 권한을 얻었다면 현재 target은 Spot을 만들지 않고 §4.2의
 `Unavailable` 결과를 원래 operation에 확정한다.
 
 ### 4.1.1 Target process가 activation 도중 종료된 경우

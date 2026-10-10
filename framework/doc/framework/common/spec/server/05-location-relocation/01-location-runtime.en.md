@@ -852,17 +852,23 @@ alone makes this decision — `Reserve` uses the same decision when it reads an 
 and so does the startup scan when it passes a previous lifecycle's `Creating`. If the target owner
 lease is valid and the descriptor is the same lifecycle, the reservation isn't released.
 
-**An `Active` object record whose owner has ended is also released on re-creation.** When an
-operation that creates a new incarnation of the same ID — an Actor `Create` or `GetOrCreate`, a User
-Spot `GetOrCreate`, or a new message with [Instance intent](../00-foundation/02-glossary.en.md#instance-intent) — reads an `Active` record whose
-owner lease is missing, has a different `LeaseGeneration`, or has expired, and the relocation
-policy registered for that type on the node that `Reserve`s the new incarnation is `Disabled`, the
-Location repository releases that record. The node that `Reserve`s is the node that requested
+**A steady `Ready` object record whose owner has ended is also released on re-creation.** An
+operation that creates a new incarnation of the same ID is an Actor `Create` or `GetOrCreate`, a User
+Spot `GetOrCreate`, or a new message with [Instance intent](../00-foundation/02-glossary.en.md#instance-intent). When such an operation reads a
+steady `Ready` record whose owner lease is missing, has a different `LeaseGeneration`, or has
+expired, and the relocation policy registered for that type on the node that `Reserve`s the new
+incarnation is `Disabled`, the Location repository releases that record. `Closing` and an incomplete
+initial activation aren't eligible merely because their allocation is `Active`; they follow their
+own lifecycle or recovery procedures. The node that `Reserve`s is the node that requested
 creation for an Actor or User Spot, and the target that received the activation envelope for an
 Instance Spot. If the type isn't registered on that node, the policy isn't treated as `Disabled`. A
 User Spot is released only when the Location Store holds no Actor membership for that SpotId and
-`ObjectGeneration`. Membership is decided by reading the Store to the end, not from a process-local
-list or a partial page. If any remains, nothing changes. A record that carries relocation progress
+`ObjectGeneration`. The repository starts a new membership snapshot only after an exact read
+confirms that the owner lease recorded in the old Spot authority is invalid, and reads it to the
+end. Membership-addition commit conditions follow [Spot and Actor membership §1](../03-spot-actor/05-spot-actor-membership.en.md#1-identity-and-authority),
+so no membership commits to that incarnation once its lease is invalid. An expired snapshot
+discards prior pages and is read again; Store failure or an incomplete scan isn't treated as empty
+membership, and neither is a process-local list. If any member remains, nothing changes. A record that carries relocation progress
 or belongs to an aggregate, and an Instance Spot that still has an activation recovery pointer,
 aren't subject to this release and follow their own recovery procedures. The release checks, in
 one batch, the same conditions as the reservation release above (authority `StoreVersion`, owner
@@ -984,6 +990,9 @@ different results. If the process terminates mid-way, the factory may run again 
 same ID and same generation. So the factory must not break state if the same request
 runs again.
 
+If the existing record's owner lease is invalid, the [§6.1](#61-read-and-cas) release result applies before the
+table below. The table applies to a record whose owner lease is valid or that wasn't released.
+
 | Current record | `Create` | `GetOrCreate` |
 |---|---|---|
 | `Ready` of the same type | `AlreadyExists` | existing ref |
@@ -1078,8 +1087,9 @@ It isn't used for Actor, other Spot kinds, `Creating`, `Closing`, `Relocating`, 
 | After recording `Creating`, before `Ready` | Follows the reservation release decision of [§6.1](#61-read-and-cas). |
 | After `Ready`, before restoring the first message | Restores starting from the first message using the stored data. No new message is received before that. |
 
-If an existing `Ready` authority points to another owner or authority is `Creating`, the
-receiving target follows the losing-`Reserve` result in
+A steady `Ready` authority with an invalid owner lease first requests the [§6.1](#61-read-and-cas) release, and
+after the release commits, `Reserve`s from `Missing`. If an existing `Ready` authority points to
+another valid owner, is `Creating`, or wasn't released, the receiving target follows the losing-`Reserve` result in
 [Spot address messaging §4.2](../03-spot-actor/06-spot-address-messaging.en.md#42-when-several-nodes-receive-the-first-message-at-once). A message isn't run on an in-process
 instance of a previous generation. If it's a User Spot or a different type, it's
 `TypeMismatch`. No separate owner change is allowed between location confirmation and
@@ -1638,6 +1648,19 @@ store record golden fixture. Each item maps to one test.
 
 - Even concurrent requests for the same ID create only one `Creating`, and only one
   target runs the factory.
+- The [§6.1](#61-read-and-cas) ended-owner release applies the same inputs to the provider and in-memory
+  repositories in all four implementations. Released inputs (a Disabled Actor, a User Spot with no
+  members, a new Instance intent for a steady `Ready` Instance Spot) verify a new `ObjectGeneration`,
+  return of the old allocation's capacity, and one factory execution. Inputs that break one release
+  condition each (a valid lease, a type that isn't `Disabled` or isn't registered, a User Spot with
+  remaining members, a recovery pointer, `Closing`, aggregate or relocation progress, an ordinary
+  message or `Find`) verify that authority, membership, capacity, and factory execution count don't
+  change. Inputs whose registered policies differ between the requesting node and the factory
+  target (for an Instance, the source and the receiving target) verify the policy source.
+- A scan with a member after the first page, snapshot expiry, and Store failure aren't treated as
+  empty membership. Racing old-Spot lease invalidation with a late Join commit, and racing two
+  re-creation requests, verify that an old version doesn't delete new authority and capacity isn't
+  returned twice.
 - When creation finishes, it records `Ready`, capacity, and the final result together, or
   record deletion, space return, and a failure result together.
 - The same request can re-read the stored final result for 5 minutes from the original

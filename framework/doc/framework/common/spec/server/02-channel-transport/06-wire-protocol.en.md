@@ -495,7 +495,7 @@ length.
 | Kind | Purpose | Contents |
 |---|---|---|
 | `1` | Delivers to an existing [Ready](../00-foundation/02-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work, and whether the call carries [Instance intent](../00-foundation/02-glossary.en.md#instance-intent) (`instanceIntent`) |
-| `2` | Missing cold activation only | The target Mesh/node RID/lifecycle, Spot RID, stable type, descriptor version, and deadline — an authority fence is forbidden |
+| `2` | Cold activation request — the source authority is Missing, or Ready with an invalid owner lease (the target re-reads the current authority and requests the [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas) release) | The target Mesh/node RID/lifecycle, Spot RID, stable type, descriptor version, and deadline — an authority fence is forbidden |
 
 If a kind `2` route's operation identity or metadata presence/bytes differ
 from the ZLIA's target Mesh/stable type/descriptor version/deadline, it is

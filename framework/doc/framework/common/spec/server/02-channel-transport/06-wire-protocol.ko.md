@@ -446,7 +446,7 @@ Command 39 route는 첫 byte와 `u16` body length로 닫힌 union을 이룬다.
 | Kind | 용도 | 내용 |
 |---|---|---|
 | `1` | 기존 [Ready](../00-foundation/02-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion, 그 call의 [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent) 유무(`instanceIntent`) |
-| `2` | Missing cold activation 전용 | target Mesh·node RID·lifecycle, Spot RID, stable type, descriptor version, deadline — authority fence는 금지 |
+| `2` | Cold activation 요청 — 원본 authority가 Missing이거나, owner lease가 무효인 Ready(target이 현재 authority를 다시 읽어 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas) 해제를 요청한다) | target Mesh·node RID·lifecycle, Spot RID, stable type, descriptor version, deadline — authority fence는 금지 |
 
 Kind `2` route와 ZLIA의 target Mesh·stable type·descriptor version·deadline, operation identity와
 metadata presence·bytes가 다르면 reservation 전에 protocol error로 거부한다.

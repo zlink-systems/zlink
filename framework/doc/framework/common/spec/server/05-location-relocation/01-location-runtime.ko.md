@@ -764,15 +764,20 @@ lifecycle이 바뀌어도 이어진다 — 해제하지 않은 모든 allocation
 `Reserved`를 읽었을 때와 startup scan이 이전 lifecycle의 `Creating`을 넘겼을 때 같은 판정을 쓴다.
 Target owner lease가 유효하고 descriptor가 같은 lifecycle이면 해제하지 않는다.
 
-**Owner가 끝난 object의 `Active` record도 다시 만들 때 해제한다.** 같은 ID의 새 incarnation을 만드는
-operation — Actor `Create`·`GetOrCreate`, User Spot `GetOrCreate`, [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent)가 있는 새
-message — 이 `Active` record를 읽었고, 그 record의 owner lease가 없거나 다른 `LeaseGeneration`이거나
-만료됐으며, 새 incarnation을 `Reserve`하는 node에 등록된 그 type의 relocation 정책이 `Disabled`이면
-Location repository가 그 record를 해제한다. `Reserve`하는 node는 Actor와 User Spot에서는 생성을 요청한
+**Owner가 끝난 object의 steady `Ready` record도 다시 만들 때 해제한다.** 같은 ID의 새 incarnation을
+만드는 operation은 Actor `Create`·`GetOrCreate`, User Spot `GetOrCreate`, [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent)가 있는 새
+message다. 이 operation이 steady `Ready` record를 읽었고, 그 record의 owner lease가 없거나 다른
+`LeaseGeneration`이거나 만료됐으며, 새 incarnation을 `Reserve`하는 node에 등록된 그 type의 relocation
+정책이 `Disabled`이면 Location repository가 그 record를 해제한다. `Closing`이나 미완료 최초 activation은
+allocation이 `Active`라는 이유로 이 대상이 되지 않으며 각자의 lifecycle·recovery 절차를 따른다. `Reserve`하는 node는 Actor와 User Spot에서는 생성을 요청한
 node이고, Instance Spot에서는 activation envelope를 받은 target이다. 그 node에 type이 등록되어 있지
 않으면 `Disabled`로 보지 않는다. User Spot은 그 SpotId와 `ObjectGeneration`의 Actor membership이
-Location Store에 하나도 없을 때만 해제한다. Membership은 Store에서 끝까지 읽어 판정하며, process 안의
-목록이나 일부 page로 판정하지 않는다. 남아 있으면 아무것도 바꾸지 않는다. Relocation 진행 정보나
+Location Store에 하나도 없을 때만 해제한다. Repository는 old Spot authority에 기록된 owner lease가
+무효임을 exact read로 확인한 뒤 새 snapshot을 시작해 membership을 끝까지 읽는다. Membership을 추가하는
+transaction의 commit 조건은 [Spot·Actor membership §1](../03-spot-actor/05-spot-actor-membership.ko.md#1-identity와-authority)을 따르므로, lease가 무효인
+뒤에는 그 incarnation에 membership이 새로 commit되지 않는다. Snapshot이 만료되면 앞 page의 결과를 버리고
+다시 읽으며, Store failure나 끝까지 읽지 못한 scan을 빈 membership으로 보지 않는다. process 안의 목록으로도
+판정하지 않는다. Member가 남아 있으면 아무것도 바꾸지 않는다. Relocation 진행 정보나
 aggregate에 속한 record, activation recovery pointer가 남은 Instance Spot은 이 해제 대상이 아니며 각자의
 복구 절차를 따른다. 해제는 위 reservation 해제와 같은 조건(authority `StoreVersion`, owner lease 상태,
 descriptor 상태, 수용 공간 record)을 한 batch로 검사하고, authority와 그 incarnation의 membership을
@@ -880,6 +885,9 @@ Application이 반환한 `Rejected`와 callback exception은 다른 결과다. P
 종료되면 같은 ID와 같은 generation에 대해 factory가 다시 실행될 수 있다. 따라서 factory는
 같은 요청을 다시 실행해도 상태가 깨지지 않아야 한다.
 
+기존 record의 owner lease가 무효이면 아래 표보다 [§6.1](#61-read와-cas)의 해제 결과를 먼저 따른다. 아래 표는
+owner lease가 유효하거나 해제되지 않은 record에 적용한다.
+
 | 현재 record | `Create` | `GetOrCreate` |
 |---|---|---|
 | 같은 type의 `Ready` | `AlreadyExists` | 기존 ref |
@@ -967,7 +975,9 @@ Framework는 최초 message를 queue 선두에 복원한 뒤 새 message를 받�
 | `Creating` 기록 뒤 `Ready` 전 | [§6.1](#61-read와-cas)의 reservation 해제 판정을 따른다. |
 | `Ready` 뒤 최초 message 복원 전 | 저장 데이터로 최초 message부터 복원한다. 그 전에는 새 message를 받지 않는다. |
 
-이미 `Ready`인 authority가 다른 owner를 가리키거나 `Creating`이면, 수신 target은
+Owner lease가 무효인 steady `Ready` authority는 먼저 [§6.1](#61-read와-cas)의 해제를 요청하고, 해제가 commit되면
+`Missing`에서 `Reserve`한다. 이미 `Ready`인 authority가 유효한 다른 owner를 가리키거나 `Creating`이거나
+해제되지 않았으면, 수신 target은
 [Spot 주소 메시징 §4.2](../03-spot-actor/06-spot-address-messaging.ko.md#42-여러-node가-동시에-첫-message를-받는-경우)의
 `Reserve` 패배 결과를 따른다. 이전 generation의 process 내부 instance에서는 message를 실행하지 않는다. User
 Spot이거나 type이 다르면 `TypeMismatch`다. 위치 확인과 message 전달 사이에 별도의 owner
@@ -1470,6 +1480,16 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 **생성**
 
 - 동시에 같은 ID를 요청해도 `Creating`이 하나만 생기고 하나의 target만 factory를 실행한다.
+- [§6.1](#61-read와-cas)의 owner가 끝난 record 해제는 provider와 in-memory repository, 네 구현에 같은 입력을
+  적용한다. 해제되는 입력(Disabled Actor, member가 없는 User Spot, steady `Ready` Instance Spot의 새 Instance
+  intent)은 새 `ObjectGeneration`, 이전 allocation의 공간 반환과 factory 실행 한 번을 확인한다. 해제 조건을
+  하나씩 어긴 입력(유효한 lease, `Disabled`가 아니거나 등록되지 않은 type, member가 남은 User Spot, recovery
+  pointer, `Closing`, aggregate·relocation 진행, 일반 message·`Find`)은 authority·membership·수용 공간과
+  factory 실행 수가 바뀌지 않음을 확인한다. 생성을 요청한 node와 factory target(Instance는 source와 수신
+  target)의 등록 정책이 다른 입력으로 정책의 출처를 확인한다.
+- 첫 page 뒤에 member가 있는 scan, snapshot 만료, Store failure를 빈 membership으로 처리하지 않는다. Old
+  Spot의 lease 무효화와 늦은 Join commit을 경합시키고, 두 재생성 요청을 경합시켜 old version으로 새
+  authority를 지우거나 수용 공간을 두 번 반환하지 않음을 확인한다.
 - 생성이 끝나면 `Ready`, 수용 공간과 최종 결과를 한 번에 기록하거나, record 삭제와 공간
   반환과 실패 결과를 한 번에 기록한다.
 - 같은 요청은 최초 deadline에서 5분 동안 저장한 최종 결과를 다시 읽을 수 있다.

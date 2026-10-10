@@ -369,9 +369,13 @@ performs resolve and activation in the following order.
 3. If authority is Missing and there is no Instance intent, ends with the
    result in the §9 table.
 4. If authority is Missing, or Ready with an invalid owner lease, and there is Instance intent,
-   selects an eligible Object Mesh. In the latter case, the target requests the
-   [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas) release before `Reserve`, and
-   if the release doesn't commit, ends with `Unavailable` without running the factory. Starting at this step, only descriptors with a live owner lease
+   selects an eligible Object Mesh. In the latter case, the source doesn't report the authority as
+   Missing and uses its stored kind, stable type, and Mesh to identify the target object (a
+   caller-specified type that differs is `TypeMismatch`). The optional initial Mesh and automatic
+   type selection apply only when Missing. The target re-reads the current authority and requests
+   the [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas) release before `Reserve`;
+   if the release doesn't commit, it ends with `Unavailable` without running the factory. The
+   source doesn't decide release eligibility. Starting at this step, only descriptors with a valid owner lease
    are used to compute candidates —
    [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease)
    defines the criteria. If `InMesh` is omitted and there are 0 candidates,
@@ -465,7 +469,7 @@ sequenceDiagram
 
 This diagram shows the normal flow of a request where the Location Store has
 no owner and the selected target obtains creation authority. If a Ready
-owner already exists, the factory isn't run — the request is put on the
+owner with a valid owner lease already exists, the factory isn't run — the request is put on the
 existing Spot queue. If another target acquired creation authority first, the current target does not create a Spot
 and completes the original operation with the `Unavailable` result in §4.2.
 

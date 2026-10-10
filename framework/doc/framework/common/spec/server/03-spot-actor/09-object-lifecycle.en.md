@@ -89,8 +89,8 @@ intent seeing `Creating` goes to the waiter above; under explicit Close it keeps
 refresh in §5. [Spot messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability)
 decides the result for a `Closing` direct call without Instance intent. It isn't the
 same state as `Missing`, which means no authority exists. Instance intent seeing a steady
-`Ready` with an invalid owner lease keeps that authority fence and goes to the creation
-coordinator. Only after an explicit `Close`, `IdleEvicted` cleanup, the conditional release of
+`Ready` with an invalid owner lease goes to the creation coordinator, and the target re-reads the
+current authority and requests the release. Only after an explicit `Close`, `IdleEvicted` cleanup, the conditional release of
 [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas),
 or another formal lifecycle operation completes authority release can the resolver produce a
 new `Missing` input.
@@ -338,8 +338,8 @@ admission result. Each item maps to one test.
 - A message sent right after creation finishes is processed immediately, not delayed by
   the cache lifetime.
 - When only the fact that the owner can't be used is confirmed (`Unavailable`), a new
-  creation isn't started, and that result is delivered only as the terminal completion of
-  the in-progress request.
+  creation isn't started. Instance-intent forwarding follows §3; otherwise the result is
+  delivered as the terminal completion of the in-progress request.
 
 **Stale Owner Filtering**
 

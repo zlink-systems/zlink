@@ -125,8 +125,8 @@ operation 자체는 새 owner에게 자동으로 제출하지 않는다.
 operation — Actor `Create`·`GetOrCreate`, User Spot `GetOrCreate`, Instance intent가 있는 새 message — 은
 Actor나 Spot이 현재 어느 node에 있고 어느 node가 owner인지 판단하는 기준 정보인
 [authority](../00-foundation/02-glossary.ko.md#authority)를 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의
-조건부 해제가 commit된 뒤에만 새로 만든다. 해제 조건을 만족하지 않으면 그 operation은 `Unavailable`로
-끝난다.
+조건부 해제가 commit된 뒤에만 새로 만든다. 기존 record의 owner lease가 유효하면 type과 operation의 기존
+결과를 따르고, owner lease가 무효인데 해제되지 않으면 그 operation은 `Unavailable`로 끝난다.
 
 ### 4.3 Actor와 Spot 생성
 
@@ -168,8 +168,8 @@ Instance Spot은 별도 create API를 호출하지 않고 `Missing` 상태에서
 | Application의 explicit `Close`가 진행 중임 | Instance intent message의 전달과 실행 대상은 [Spot 주소 메시징 §7·§9](../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)를 따른다. |
 | 계획된 `Relocate`가 진행 중이거나 완료됨 | Relocation 계약에 따라 같은 object와 `ObjectGeneration`을 target으로 옮긴다. Cold activation이나 crash failover로 처리하지 않는다. |
 
-따라서 owner가 끝난 Instance Spot을 다른 node에서 다시 활성화하는 것은 relocation 정책이 `Disabled`인
-type의 새 incarnation뿐이다. 저장한 state와 수락된 operation을 복구하는 failover는 계약에 없다.
+이 경로는 Location runtime §6.1의 해제 결과에 따른 새 incarnation 생성이다. 이전 incarnation의 state와
+수락된 operation을 복구하는 failover가 아니다.
 
 최초 생성 recovery 정보는 Instance Spot의 최초 생성에만 사용한다. Actor, User Spot, 이미
 `Ready`인 Instance Spot과 host relocation에는 적용하지 않는다. 저장과 재개 순서는

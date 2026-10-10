@@ -138,7 +138,9 @@ owner recorded in the Location Store. An operation that creates a new incarnatio
 creates a new [authority](../00-foundation/02-glossary.en.md#authority), the reference information
 that determines which node an Actor or Spot is on and which node is currently the owner, only
 after the conditional release of [Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas)
-commits. If the release conditions aren't met, that operation ends with `Unavailable`.
+commits. If the existing record's owner lease is valid, the existing result for its type and
+operation applies; if the owner lease is invalid and the record isn't released, that operation
+ends with `Unavailable`.
 
 ### 4.3 Actor and Spot Creation
 
@@ -182,9 +184,8 @@ distinguishes what the Framework does based on current authority when a message 
 | The application's explicit `Close` is in progress | Forwarding and the execution target of an Instance-intent message follow [Spot address messaging §§7 and 9](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
 | A planned `Relocate` is in progress or finished | Moves the same object and `ObjectGeneration` to the target per the relocation contract. Not treated as cold activation or crash failover. |
 
-So reactivating an Instance Spot whose owner has ended on a different node is only a new
-incarnation of a type whose relocation policy is `Disabled`. A failover that recovers stored state
-and accepted operations isn't part of the contract.
+This path creates a new incarnation according to the release result in Location runtime §6.1. It
+isn't failover that recovers the previous incarnation's state or accepted operations.
 
 The first-creation recovery information is only used for an Instance Spot's first creation. It
 doesn't apply to Actor, User Spot, an already-`Ready` Instance Spot, or host relocation. The

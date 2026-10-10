@@ -145,7 +145,7 @@ Local owner와 remote owner에는 같은 handler, metadata와 completion 계약�
 |---|---|---|
 | `ReadyRoute` | route와 authority·owner lease fence | Positive route cache에 저장하고 route admission으로 전달한다. |
 | `Missing` | authority record가 없다는 사실 | creation coordinator로 전달한다. |
-| `Unavailable` | authority는 남아 있지만 Ready route가 없다는 사실과 그 authority 상태(`Creating`·`Closing` 등) | Instance intent가 없는 call은 [Spot 주소 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)의 terminal mapper로 전달한다. Instance-intent activation은 [Object lifecycle §3·§5](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)의 `Creating` 대기와 idle-cleanup route 갱신을 따른다. Explicit Close 중인 authority를 확인한 Instance intent는 owner route와 fence를 보존해 그 owner node로 전달하며, owner에서의 처리는 [Spot 주소 메시징 §7](06-spot-address-messaging.ko.md#7-close와-generation-경계)을 따른다. |
+| `Unavailable` | authority는 남아 있지만 Ready route가 없다는 사실과 그 authority 상태(`Creating`·`Closing` 등) | Instance intent가 없는 call은 [Spot 주소 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)의 terminal mapper로 전달한다. Instance-intent activation은 [Object lifecycle §3·§5](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)의 `Creating` 대기, owner lease가 무효인 steady `Ready`의 해제 요청, idle-cleanup route 갱신을 따른다. Explicit Close 중인 authority를 확인한 Instance intent는 owner route와 fence를 보존해 그 owner node로 전달하며, owner에서의 처리는 [Spot 주소 메시징 §7](06-spot-address-messaging.ko.md#7-close와-generation-경계)을 따른다. |
 | `StoreFailure` | authority 유무를 판정하지 못했다는 사실 | Store retry·reconciliation으로 전달한다. |
 
 Positive route cache에는 `ReadyRoute`만 저장하고, creation coordinator에는 `Missing`만
@@ -479,7 +479,7 @@ Request는 reply, error, timeout, cancellation 또는 shutdown 가운데 먼저 
   `StoreVersion`, stale result, Store recovery와 lease invalidation에서 즉시
   제거된다.
 - Resolver 결과가 `Missing`과 `Unavailable`을 서로 다른 tag로 돌려주고, `Missing`은
-  creation coordinator에만 연결된다. `Unavailable`은 Instance intent가 `Creating`·explicit Close·idle cleanup을 만난 경우 [Object lifecycle §3](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)의 전달 대상으로, 그 밖에는 terminal completion mapper로 연결된다.
+  creation coordinator에만 연결된다. `Unavailable`은 Instance intent가 `Creating`·explicit Close·idle cleanup·owner lease가 무효인 steady `Ready`를 만난 경우 [Object lifecycle §3](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)의 전달 대상으로, 그 밖에는 terminal completion mapper로 연결된다.
 - Positive route cache의 수명이 `MessageFollowDuration`을 넘지 않는다.
 - Target admission은 찾은 owner의 authority owner generation과 lease fence를 검증하고, direct
   message의 `ObjectGeneration`은 §2.6대로 대상 판정에서 제외하며, 새 incarnation으로 다시 지정하지

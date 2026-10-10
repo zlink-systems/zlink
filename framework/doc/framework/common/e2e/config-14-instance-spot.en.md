@@ -134,7 +134,9 @@ explicitly completed Close and re-create.
 requests each end in bounded `Unavailable` without running on another owner?
 
 - Starting condition: The Spot is Ready on owner A, and domain state is stored in the external
-  store. Another node, B, provides the same type but is not this Spot's owner.
+  store. Another node, B, provides the same type but is not this Spot's owner. The type's
+  relocation policy isn't `Disabled` (it isn't subject to the
+  [Location runtime §6.1](../spec/server/05-location-relocation/01-location-runtime.en.md#61-read-and-cas) release).
 - Procedure: Crash A and wait until public liveness/owner-lease status becomes invalid. In fresh
   fixtures, send one single-caller request and then two concurrent requests from separate callers.
   Whether the Location Store authority record is automatically deleted is not judged in this
@@ -214,7 +216,8 @@ has not recreated it. This scenario has no automatically created current owner.
 without the stale owner processing it?
 
 - Starting condition: The Spot is Ready on A; A is paused, and public owner lease is invalidated. B
-  provides the same type but does not automatically own this Spot.
+  provides the same type but does not automatically own this Spot. The type's relocation policy
+  isn't `Disabled`.
 - Procedure: A is resumed, and a request with a unique operation ID and a timer-observation request
   are sent.
 - Verification: The request ends in `Unavailable`, with no new handler/timer evidence on either A or
