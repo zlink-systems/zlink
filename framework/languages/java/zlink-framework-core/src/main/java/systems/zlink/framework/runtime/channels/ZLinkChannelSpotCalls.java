@@ -242,18 +242,16 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                             ? activation.activationDeadline(selectedMesh)
                             : 0;
             CompletionStage<Void> stage =
-                    SpotCallAddresses.resolve(resolver, target)
+                    (instanceIntent
+                                    ? CompletableFuture.<SpotTransportAddress>completedFuture(null)
+                                    : SpotCallAddresses.resolve(resolver, target))
                             .handle(
                                     (address, failure) ->
                                             systems.zlink.framework.runtime.internal.diagnostics
                                                     .ZLinkFlowContext.call(
                                                     operationFlow,
                                                     () -> {
-                                                        if (failure != null
-                                                                && (!instanceIntent
-                                                                        || !SpotTransportAddressResolver
-                                                                                .isStaleRoute(
-                                                                                        failure))) {
+                                                        if (failure != null) {
                                                             return CompletableFuture
                                                                     .<Void>failedFuture(
                                                                             SpotCallAddresses
@@ -278,7 +276,7 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                                                                                                 .values(),
                                                                                         activationDeadline)
                                                                         : submitExisting(address);
-                                                        return failure == null
+                                                        return resolver != null
                                                                 ? resolver.observeTerminal(
                                                                         target, submitted)
                                                                 : submitted;
@@ -599,18 +597,17 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext
                                 .current();
                 stage =
-                        SpotCallAddresses.resolve(resolver, target)
+                        (instanceIntent
+                                        ? CompletableFuture.<SpotTransportAddress>completedFuture(
+                                                null)
+                                        : SpotCallAddresses.resolve(resolver, target))
                                 .handle(
                                         (address, failure) ->
                                                 systems.zlink.framework.runtime.internal.diagnostics
                                                         .ZLinkFlowContext.call(
                                                         operationFlow,
                                                         () -> {
-                                                            if (failure != null
-                                                                    && (!instanceIntent
-                                                                            || !SpotTransportAddressResolver
-                                                                                    .isStaleRoute(
-                                                                                            failure))) {
+                                                            if (failure != null) {
                                                                 return CompletableFuture
                                                                         .<TReply>failedFuture(
                                                                                 SpotCallAddresses
@@ -630,7 +627,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                                                                             : submitExisting(
                                                                                     address,
                                                                                     replyType);
-                                                            return failure == null
+                                                            return resolver != null
                                                                     ? resolver.observeTerminal(
                                                                             target, submitted)
                                                                     : submitted;

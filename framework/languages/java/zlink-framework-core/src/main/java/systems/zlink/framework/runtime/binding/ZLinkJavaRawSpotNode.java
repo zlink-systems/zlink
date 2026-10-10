@@ -2394,6 +2394,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             cold.deadlineUnixMs(),
                             metadata,
                             ZLinkServiceM6AWireCodec.encodeFrameworkMultipartFrame(parts));
+            new ZLinkInstanceActivationRecoveryCodec()
+                    .validateColdActivation(header, envelope, metadata);
             var received =
                     new ZLinkBackendReceived(
                             ZLinkBackendRequestResult.OK,
