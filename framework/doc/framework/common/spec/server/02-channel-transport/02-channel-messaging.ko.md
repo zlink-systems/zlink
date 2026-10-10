@@ -413,9 +413,9 @@ endpoint나 내부 route frame을 직접 만들지 않는다.
 집합을 공유하지 않는다. 이 절은 publisher 설정, HWM admission과 `NoDrop`의 경계, subscriber의
 topic 등록, liveness beacon topic 예약만 정의한다.
 
-**Publisher 설정은 channel의 fanout builder 한 곳이 정한다.** 설정할 수 있는 것은 send timeout과
-`NoDrop` 둘이며, root나 MeshNode 설정으로 보충하거나 덮어쓰지 않는다. Publisher role이 없는
-channel에 설정하면 startup이 실패한다. 그 밖의 publisher socket 설정은 다음과 같다.
+**Publisher 설정은 channel의 fanout builder 한 곳이 정한다.** Fanout builder는 send timeout과
+`NoDrop`을 host startup 전에 확정하며, runtime 중에는 바꾸지 않는다. Root나 MeshNode 설정으로
+보충하거나 덮어쓰지 않는다. Publisher role이 없는 channel에 설정하면 startup이 실패한다. 그 밖의 publisher socket 설정은 다음과 같다.
 
 - Send HWM은 Framework가 설정하지 않는다. Core의 값이 그대로 적용된다.
 - Linger는 모든 publisher socket에서 0이다. Publish의 완료는 admission까지이므로 종료가 남은 송신을

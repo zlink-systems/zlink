@@ -468,9 +468,9 @@ fanout doesn't share a target set with RouteMesh ChannelName select-one or Spot 
 Multicast. This section defines only publisher configuration, the boundary of HWM admission
 and `NoDrop`, the subscriber's topic registration, and the liveness beacon topic reservation.
 
-**The channel's fanout builder alone sets publisher configuration.** It can set two things,
-the send timeout and `NoDrop`, and root or MeshNode settings don't supplement or override
-them. Setting them on a channel without the publisher role fails startup. The other publisher
+**The channel's fanout builder alone sets publisher configuration.** The fanout builder
+finalizes the send timeout and `NoDrop` before host startup, and they don't change at
+runtime. Root or MeshNode settings don't supplement or override them. Setting them on a channel without the publisher role fails startup. The other publisher
 socket settings are as follows.
 
 - The Framework doesn't set the send HWM. The Core value applies as is.
