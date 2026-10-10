@@ -234,10 +234,10 @@ public final class S2sSpotToChannelRequestEchoScenario {
     }
 
     public CompletionStage<Void> run() {
-        return Streams.launchRequests(config, measurement, this::issue);
+        return Streams.launchTerminals(config, measurement, this::issue);
     }
 
-    // The local driver submits request calls without waiting for their replies.
+    // Each local stream starts its next request after the previous driver reply.
     private Optional<CompletionLoop.Iteration<PerfDriveReply>> issue(int stream) {
         if (!measurement.canIssue()) {
             return Optional.empty();

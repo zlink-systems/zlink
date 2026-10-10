@@ -136,7 +136,7 @@ public sealed class S2sChannelToSpotSendSendEchoScenario(
     }
 
     public Task RunAsync() =>
-        ServerDrivenStreams.RunAdmissionsAsync(
+        ServerDrivenStreams.RunTerminalStreamsAsync(
             measurement,
             config.workload.logicalStreams!.Value,
             LoopAsync

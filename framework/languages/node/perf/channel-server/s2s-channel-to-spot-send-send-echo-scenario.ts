@@ -17,7 +17,7 @@ import { Measurement } from '../shared/measurement';
 import { ScenarioMetrics } from '../server-support/scenario-metrics';
 import { SendSendCorrelation } from '../server-support/send-send-correlation';
 import { ObjectsReadiness, runRole } from '../server-support/server-application';
-import { runAdmissionStreams, sleep, until } from '../server-support/wait';
+import { runTerminalStreams, sleep, until } from '../server-support/wait';
 
 // §10.4 s2s-channel-to-spot-send-send-echo. Question: how completion rate, throughput and round trip differ from the
 // request form of §10.3 when both directions are one-way sends. Roles: HTTP Client x1, Channel process (Object Client
@@ -89,7 +89,7 @@ export class S2sChannelToSpotSendSendEchoScenario {
   }
 
   run = (): Promise<void> =>
-    runAdmissionStreams(
+    runTerminalStreams(
       this.config.workload.logicalStreams as number,
       () => this.measurement.canIssue,
       (stream) => this.loop(stream)

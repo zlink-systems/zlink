@@ -17,7 +17,7 @@ import { Measurement } from '../shared/measurement';
 import { ScenarioMetrics } from '../server-support/scenario-metrics';
 import { SendSendCorrelation } from '../server-support/send-send-correlation';
 import { ObjectsReadiness, runRole } from '../server-support/server-application';
-import { runAdmissionStreams } from '../server-support/wait';
+import { runTerminalStreams } from '../server-support/wait';
 import { ActorCallerSetup } from './actor-caller-setup';
 
 // §10.10 actor-no-bind-send-send-echo. Question: what do the source admission of a global-ActorId send and the
@@ -82,7 +82,7 @@ export class ActorNoBindSendSendEchoScenario {
   }
 
   run = (): Promise<void> =>
-    runAdmissionStreams(
+    runTerminalStreams(
       this.config.workload.logicalStreams as number,
       () => this.measurement.canIssue,
       (stream) => this.loop(stream)

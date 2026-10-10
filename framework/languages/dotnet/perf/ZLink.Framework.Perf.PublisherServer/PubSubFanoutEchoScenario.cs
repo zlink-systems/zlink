@@ -82,7 +82,7 @@ public sealed class PubSubFanoutEchoScenario
     }
 
     public Task RunAsync() =>
-        ServerDrivenStreams.RunAdmissionsAsync(
+        ServerDrivenStreams.RunTerminalStreamsAsync(
             measurement,
             config.workload.logicalStreams!.Value,
             LoopAsync

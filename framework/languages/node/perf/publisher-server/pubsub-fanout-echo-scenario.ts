@@ -10,7 +10,7 @@ import {
   SequenceBitSet
 } from '../server-support/fanout-metrics';
 import { ObjectsReadiness, runRole } from '../server-support/server-application';
-import { runAdmissionStreams, until } from '../server-support/wait';
+import { runTerminalStreams, until } from '../server-support/wait';
 
 const PUBLISHER_NO_DROP = true;
 
@@ -67,7 +67,7 @@ export class PubSubFanoutEchoScenario {
   }
 
   run = (): Promise<void> =>
-    runAdmissionStreams(
+    runTerminalStreams(
       this.config.workload.logicalStreams as number,
       () => this.measurement.canIssue,
       () => this.loop()

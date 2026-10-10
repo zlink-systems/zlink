@@ -3,10 +3,7 @@ package systems.zlink.framework.perf.servers.spot
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.atomic.AtomicLongArray
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.future.await
-import kotlinx.coroutines.launch
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.requestToSpot
@@ -23,6 +20,7 @@ import systems.zlink.framework.perf.RoleConfig
 import systems.zlink.framework.perf.ScenarioMetrics
 import systems.zlink.framework.perf.kotlin.completionStage
 import systems.zlink.framework.perf.kotlin.planStreamTargets
+import systems.zlink.framework.perf.kotlin.runTerminalStreams
 import systems.zlink.framework.spots.ZLinkSpotManager
 
 class S2sSpotToChannelRequestEchoScenario(
@@ -127,38 +125,32 @@ class S2sSpotToChannelRequestEchoScenario(
     }
 
     fun run(): CompletionStage<Void> = completionStage {
-        coroutineScope {
-            repeat(config.workload().logicalStreams()) { stream ->
-                launch(Dispatchers.IO) {
-                    while (measurement.canIssue()) {
-                        val echo =
-                            measurement.request(stream, sequences.incrementAndGet(stream), false)
-                        metrics.count("driver.issued")
-                        val driverStarted = PerfClock.now()
-                        val driven =
-                            try {
-                                spots
-                                    .kotlin()
-                                    .requestToSpot<PerfDriveReply>(
-                                        streamTargets[stream],
-                                        PerfDriveRequest(echo),
-                                    )
-                                    .timeout(measurement.callTimeout(true))
-                                    .await()
-                            } catch (error: Throwable) {
-                                metrics.count("driver.failed")
-                                measurement.recordDiagnostic(error)
-                                if (error is CancellationException || error !is Exception)
-                                    throw error
-                                continue
-                            }
-                        if (!driven.started()) metrics.count("driver.notStarted")
-                        if (driven.echo() != null) {
-                            metrics.record("driverLatencyMs", driverStarted, PerfClock.now())
-                        }
-                    }
+        runTerminalStreams(config.workload().logicalStreams(), measurement::canIssue) { stream ->
+            val echo = measurement.request(stream, sequences.incrementAndGet(stream), false)
+            metrics.count("driver.issued")
+            val driverStarted = PerfClock.now()
+            val driven =
+                try {
+                    spots
+                        .kotlin()
+                        .requestToSpot<PerfDriveReply>(
+                            streamTargets[stream],
+                            PerfDriveRequest(echo),
+                        )
+                        .timeout(measurement.callTimeout(true))
+                        .await()
+                } catch (error: Throwable) {
+                    metrics.count("driver.failed")
+                    measurement.recordDiagnostic(error)
+                    if (error is CancellationException || error !is Exception) throw error
+                    return@runTerminalStreams true
                 }
+            if (!driven.started()) metrics.count("driver.notStarted")
+            if (driven.echo() != null) {
+                metrics.record("driverLatencyMs", driverStarted, PerfClock.now())
             }
+
+            true
         }
     }
 }

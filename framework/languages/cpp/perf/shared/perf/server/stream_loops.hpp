@@ -22,9 +22,9 @@ class stream_sequences_t
     std::vector<std::atomic<std::uint64_t>> _values;
 };
 
-// One-way operations advance only after their public admission terminal.
+// Each stream advances after its call terminal: local reply or remote one-way admission.
 template <typename TOperation>
-fw::task_t<void> admission_stream (role_t &role, TOperation operation, int stream)
+fw::task_t<void> terminal_stream (role_t &role, TOperation operation, int stream)
 {
     while (role.measurement.can_issue ())
         co_await operation (stream);
@@ -34,7 +34,7 @@ template <typename TOperation>
 void spawn_stream_loops (const loops_t &loops, role_t &role, TOperation operation)
 {
     for (int stream = 0; stream < *role.config.workload.logical_streams; ++stream)
-        loops->spawn (admission_stream (role, operation, stream),
+        loops->spawn (terminal_stream (role, operation, stream),
                       [&role] (std::exception_ptr error) {
                           role.measurement.record_diagnostic (std::move (error));
                       });

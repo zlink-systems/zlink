@@ -115,7 +115,7 @@ public class SessionEchoOnlyScenario(EndpointManifest manifest, Measurement meas
         var first =
             manifest.workload.connections!.Value / manifest.workload.clientCount * index
             + Math.Min(index, manifest.workload.connections.Value % manifest.workload.clientCount);
-        return ServerDrivenStreams.RunAdmissionsAsync(
+        return ServerDrivenStreams.RunTerminalStreamsAsync(
             measurement,
             connectors.Count,
             stream =>

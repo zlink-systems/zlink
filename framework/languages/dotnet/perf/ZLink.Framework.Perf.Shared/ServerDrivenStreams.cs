@@ -20,7 +20,7 @@ public static class ServerDrivenStreams
         }
     }
 
-    public static Task RunAdmissionsAsync(
+    public static Task RunTerminalStreamsAsync(
         Measurement measurement,
         int streamCount,
         Func<int, Task> operation
@@ -28,10 +28,10 @@ public static class ServerDrivenStreams
         Task.WhenAll(
             Enumerable
                 .Range(0, streamCount)
-                .Select(stream => RunAdmissionStreamAsync(measurement, operation, stream))
+                .Select(stream => RunTerminalStreamAsync(measurement, operation, stream))
         );
 
-    private static async Task RunAdmissionStreamAsync(
+    private static async Task RunTerminalStreamAsync(
         Measurement measurement,
         Func<int, Task> operation,
         int stream
