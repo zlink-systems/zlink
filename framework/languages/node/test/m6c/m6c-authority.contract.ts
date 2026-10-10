@@ -72,6 +72,339 @@ const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
 );
 
 for (const backend of ['provider', 'memory'] as const) {
+  for (const kind of ['user_spot', 'instance_spot'] as const) {
+    for (const scenario of [
+      'expired',
+      'live',
+      'recreate',
+      'unregistered',
+      'closing',
+      'race',
+      'snapshot',
+      'ordinary',
+      'relocation',
+      'typeMismatch',
+      'kindMismatch',
+      ...(kind === 'user_spot'
+        ? (['member', 'lateJoin', 'factory'] as const)
+        : (['recovery'] as const)),
+      ...(backend === 'provider' && kind === 'user_spot'
+        ? (['laterPageMember', 'scanExpired', 'storeFailure'] as const)
+        : [])
+    ] as const) {
+      test(`ended Spot re-creation: ${backend} ${kind} ${scenario}`, async () => {
+        let now = new Date(100);
+        const provider = new ZLinkInMemoryProviderLocationStore(() => now);
+        const store =
+          backend === 'provider'
+            ? new ZLinkLocationStoreRepository(provider, () => now)
+            : new ZLinkInMemoryLocationStore(() => now);
+        const old = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+        const configure = async (descriptor: typeof old) => {
+          await store.removeMeshNode({ meshName: 'mesh', rid: descriptor.rid }, descriptor);
+          await store.updateMeshNode(
+            {
+              ...descriptor,
+              objectCapabilities: [
+                {
+                  objectKind: kind,
+                  stableType: 'room',
+                  policy:
+                    scenario === 'factory' && descriptor.ownerId === 'owner-b'
+                      ? 'recreate'
+                      : 'disabled',
+                  hasSnapshotAdapter: false,
+                  limit: 0
+                }
+              ],
+              populationCapacity: {
+                ...descriptor.populationCapacity,
+                spotTypes: [
+                  { objectKind: kind, stableType: 'room', active: 0, reserved: 0, limit: 1 }
+                ]
+              }
+            },
+            ZLinkLocationWriteIntent.NewClaim
+          );
+        };
+        await configure(old);
+        const request = {
+          ...reserveRequest(`ended-${kind}-${scenario}`, target('node-a', 'owner-a')),
+          key: { kind, globalId: `ended-${kind}-${scenario}` },
+          capacity: {
+            actors: 0,
+            spots: 1,
+            spotType: { objectKind: kind, stableType: 'room', count: 1 }
+          },
+          actorRelocationPolicy: 'disabled' as const
+        };
+        const first = await store.reserve(request);
+        assert.equal(first.kind, 'reserved');
+        if (first.kind !== 'reserved') throw new Error('reservation missing');
+        const encode =
+          kind === 'user_spot'
+            ? encodeServiceUserSpotAuthorityPayload
+            : encodeServiceInstanceAuthorityPayload;
+        const payload = encode({
+          state: scenario === 'closing' ? 'closing' : 'ready',
+          stableType: 'room',
+          spotId: request.key.globalId,
+          ownerId: old.ownerId,
+          ownerLeaseGeneration: old.leaseGeneration,
+          ownerMeshName: 'mesh',
+          ownerNodeRid: 'node-a',
+          ownerNodeGeneration: 1n,
+          ...(scenario === 'recovery'
+            ? {
+                activationRecovery: {
+                  reference: 'old-recovery',
+                  sha256: Buffer.alloc(32, 1),
+                  encodedSize: 1,
+                  inboxSequence: 1n,
+                  replayCursor: 0n
+                }
+              }
+            : {})
+        });
+        const committed = await store.commit({
+          key: request.key,
+          target: request.target,
+          reservationId: first.reservationId,
+          expectedStoreVersion: first.creating.storeVersion.value,
+          readyPayload: payload
+        });
+        assert.equal(committed.kind, 'committed');
+        if (committed.kind !== 'committed') throw new Error('Ready missing');
+        const member = {
+          meshName: 'mesh',
+          actorId: 'member',
+          actorType: 'player',
+          actorRef: {
+            actorId: 'member',
+            objectGeneration: 1n,
+            meshName: 'mesh',
+            nodeRid: 'node-a'
+          },
+          ownerNodeRid: 'node-a',
+          ownerNodeGeneration: 1n,
+          spotKind: ZLinkSpotKind.User,
+          spotId: request.key.globalId,
+          spotGeneration: committed.ready.objectGeneration,
+          membershipEpoch: 1n,
+          ownerId: old.ownerId,
+          leaseGeneration: old.leaseGeneration,
+          updatedAt: now
+        };
+        if (scenario === 'member' || scenario === 'laterPageMember') {
+          if (scenario === 'laterPageMember')
+            await store.updateActor(
+              { ...member, actorId: 'a-first', spotKind: ZLinkSpotKind.Entry },
+              ZLinkLocationWriteIntent.NewClaim
+            );
+          assert.equal(
+            (await store.updateActor(member, ZLinkLocationWriteIntent.NewClaim)).status,
+            ZLinkLocationWriteStatus.Stored
+          );
+        }
+        if (scenario === 'relocation') {
+          const updated = await store.compareExchangeAuthority(
+            encodeAuthorityKey(kind, request.key.globalId),
+            committed.ready.storeVersion,
+            {
+              kind: 'put',
+              generationTransition: 'preserve',
+              payload: new ServiceRelocationAuthorityPayloadCodec().publish(payload, {
+                reference: 'old-relocation',
+                checksumCrc32c: 0,
+                aggregateId: '00000000-0000-0000-0000-000000000001',
+                aggregateGeneration: 1n,
+                inventoryDigest: '00'.repeat(32),
+                targetOwnerId: 'owner-b',
+                targetOwnerLeaseGeneration: 1n
+              })
+            }
+          );
+          assert.equal(updated.kind, 'stored');
+        }
+        if (scenario !== 'live') now = new Date(61_000);
+        const replacement = await writeTargetDescriptor(store, 'owner-b', 'node-b', 60_000);
+        await configure(replacement);
+        const next = {
+          ...request,
+          target: {
+            ...target('node-b', 'owner-b'),
+            nodeLifecycleGeneration: 1n,
+            owner: { ownerId: replacement.ownerId, leaseGeneration: replacement.leaseGeneration }
+          },
+          actorRelocationPolicy:
+            scenario === 'unregistered'
+              ? undefined
+              : scenario === 'snapshot'
+                ? ('snapshot' as const)
+                : scenario === 'recreate'
+                  ? ('recreate' as const)
+                  : ('disabled' as const)
+        };
+        const beforeAttempt = await store.readAuthority(
+          encodeAuthorityKey(kind, request.key.globalId)
+        );
+        if (scenario === 'typeMismatch' || scenario === 'kindMismatch') {
+          const mismatched =
+            scenario === 'typeMismatch'
+              ? { ...next, intent: { ...next.intent, stableType: 'different' } }
+              : {
+                  ...next,
+                  key: {
+                    ...next.key,
+                    kind: kind === 'user_spot' ? ('instance_spot' as const) : ('user_spot' as const)
+                  }
+                };
+          assert.equal((await store.reserve(mismatched)).kind, 'typeMismatch');
+          assert.deepEqual(
+            await store.readAuthority(encodeAuthorityKey(kind, request.key.globalId)),
+            beforeAttempt
+          );
+          return;
+        }
+        if (scenario === 'laterPageMember') {
+          const scan = provider.scan.bind(provider);
+          provider.scan = (scanRequest, signal) => scan({ ...scanRequest, limit: 1 }, signal);
+        }
+        if (scenario === 'scanExpired' || scenario === 'storeFailure') {
+          provider.scan = async () => {
+            if (scenario === 'scanExpired') return { kind: 'expired', storeNow: now };
+            throw new Error('Store unavailable');
+          };
+          await assert.rejects(
+            store.reserve(next),
+            /scan snapshot expired|Location Store provider is unavailable/
+          );
+          const retained = await store.readAuthority(
+            encodeAuthorityKey(kind, request.key.globalId)
+          );
+          assert.equal(retained.kind, 'snapshot');
+          if (retained.kind === 'snapshot')
+            assert.equal(retained.storeVersion.value, committed.ready.storeVersion.value);
+        } else if (scenario === 'ordinary') {
+          const key = encodeAuthorityKey(kind, request.key.globalId);
+          assert.equal((await store.readAuthority(key)).kind, 'snapshot');
+          assert.equal(
+            await store.releaseEndedReservation(key, committed.ready.storeVersion.value),
+            false
+          );
+          const retained = await store.readAuthority(key);
+          if (retained.kind !== 'snapshot') throw new Error('authority missing');
+          assert.equal(retained.storeVersion.value, committed.ready.storeVersion.value);
+        } else if (scenario === 'factory') {
+          let factories = 0;
+          const coordinator = new ZLinkUserSpotCreationCoordinator({
+            store,
+            relocationPolicy: () => 'disabled',
+            target: async () => ({
+              meshName: 'mesh',
+              nodeRid: 'node-b',
+              nodeGeneration: 1n,
+              owner: next.target.owner,
+              isLocal: true
+            })
+          });
+          const result = await coordinator.getOrCreate(
+            {
+              meshName: 'mesh',
+              spotId: request.key.globalId,
+              stableType: 'room',
+              requestPayload: Buffer.from('new-operation'),
+              timeoutMs: 1000
+            },
+            async (selected) => {
+              factories++;
+              return {
+                spotId: request.key.globalId,
+                state: ZLinkSpotCreateState.Created,
+                target: selected
+              };
+            }
+          );
+          assert.equal(factories, 1);
+          assert.equal(result.result.state, ZLinkSpotCreateState.Created);
+          const ready = await store.readAuthority(encodeAuthorityKey(kind, request.key.globalId));
+          if (ready.kind !== 'snapshot') throw new Error('new authority missing');
+          assert.ok(ready.objectGeneration > committed.ready.objectGeneration);
+        } else if (scenario === 'relocation') {
+          await assert.rejects(
+            store.reserve(next),
+            (error: unknown) =>
+              error instanceof ZLinkFrameworkException &&
+              error.kind === ZLinkFrameworkErrorKind.Unavailable
+          );
+        } else if (
+          [
+            'recreate',
+            'unregistered',
+            'closing',
+            'snapshot',
+            'member',
+            'laterPageMember',
+            'recovery'
+          ].includes(scenario)
+        ) {
+          await assert.rejects(
+            store.reserve(next),
+            (error: unknown) =>
+              error instanceof ZLinkFrameworkException &&
+              error.kind === ZLinkFrameworkErrorKind.Unavailable
+          );
+          const retained = await store.readAuthority(
+            encodeAuthorityKey(kind, request.key.globalId)
+          );
+          assert.equal(retained.kind, 'snapshot');
+          if (retained.kind !== 'snapshot') throw new Error('authority missing');
+          assert.equal(retained.storeVersion.value, committed.ready.storeVersion.value);
+          assert.equal(retained.objectGeneration, committed.ready.objectGeneration);
+          assert.deepEqual(retained.payload, committed.ready.payload);
+        } else if (scenario === 'live') {
+          assert.equal((await store.reserve(next)).kind, 'alreadyExists');
+        } else {
+          if (scenario === 'lateJoin')
+            assert.equal(
+              (
+                await store.updateActor(
+                  {
+                    ...member,
+                    ownerId: replacement.ownerId,
+                    leaseGeneration: replacement.leaseGeneration
+                  },
+                  ZLinkLocationWriteIntent.NewClaim
+                )
+              ).status,
+              ZLinkLocationWriteStatus.RejectedConflict
+            );
+          const results =
+            scenario === 'race'
+              ? await Promise.all([store.reserve(next), store.reserve(next)])
+              : [await store.reserve(next)];
+          assert.equal(results.filter((result) => result.kind === 'reserved').length, 1);
+          const winner = results.find((result) => result.kind === 'reserved');
+          if (winner?.kind !== 'reserved') throw new Error('winner missing');
+          assert.ok(winner.creating.objectGeneration > committed.ready.objectGeneration);
+          assert.deepEqual(winner.creating.payload, request.creatingPayload);
+          if (backend === 'provider') {
+            const capacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-a'));
+            if (capacity.kind !== 'found') throw new Error('capacity missing');
+            const stored = JSON.parse(Buffer.from(capacity.value.bytes).toString('utf8'));
+            assert.equal(stored.active.spots, 0);
+            assert.equal(
+              Object.values(stored.active.spotTypes).every((value) => value === 0),
+              true
+            );
+          }
+        }
+      });
+    }
+  }
+}
+
+for (const backend of ['provider', 'memory'] as const) {
   for (const scenario of [
     'expired',
     'live',
@@ -218,7 +551,13 @@ for (const backend of ['provider', 'memory'] as const) {
             error.kind === ZLinkFrameworkErrorKind.Unavailable
         );
       } else if (scenario === 'relocation' || scenario === 'relocationRecreate') {
-        assert.equal((await store.reserve(next)).kind, 'alreadyExists');
+        // Location runtime §6.1: an invalid lease with excluded relocation authority is Unavailable.
+        await assert.rejects(
+          store.reserve(next),
+          (error: unknown) =>
+            error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.Unavailable
+        );
         const retained = await store.readAuthority(
           encodeAuthorityKey('actor', request.key.globalId)
         );

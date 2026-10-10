@@ -105,7 +105,7 @@ for (const instanceIntent of [false, true]) {
 
 test('Missing cold activation retains its original kind 2 contract', () => {
   const target = { targetNodeRid: 'owner-node', targetNodeGeneration: 2n, targetSpotId: 'room',
-    stableType: 'Room', descriptorVersion: '1' };
+    stableType: 'Room', targetMeshName: 'mesh', descriptorVersion: '1' };
   const deadline = BigInt(Date.now() + 1000);
   const record = wire.decodeStatefulHeader(wire.encodeInstanceSpotActivationHeader(target, 1n, 'source', undefined,
     'request', { high: 1n, low: 2n }, deadline, 2n));

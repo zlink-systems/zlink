@@ -293,7 +293,7 @@ test('Instance activation does not start payload put when its deadline expires d
       applicationJobOwner: ApplicationIngressRecordOwner.create({ acquire: async () => permit }, permit, { close() {} }),
       parts: [encodeInstanceSpotActivationHeader({
         targetNodeRid: 'target', targetNodeGeneration: 3n,
-        targetSpotId: 'expired-gap-loc', stableType: 'Tenant', descriptorVersion: 'v1'
+        targetSpotId: 'expired-gap-loc', stableType: 'Tenant', targetMeshName: 'mesh', descriptorVersion: 'v1'
       }, 7n, 'source', undefined, 'send', { high: 1n, low: 2n }, deadline),
       encodeApplicationPayload({ packetName: 'TenantRequest', contentType: 'application/octet-stream', payload: Uint8Array.of(1) })]
     });

@@ -91,6 +91,7 @@ import type {
   ServiceActorCreateRecord,
   ServiceDirectSpotRouteFence,
   ServiceInstanceActivationTarget,
+  ServiceInstanceColdActivationTarget,
   ServiceInstanceRouteFence,
   ServiceRetiredBoundSessionRouteFence,
   ServiceSpotRouteFence,
@@ -320,7 +321,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   async sendToMissingInstanceSpot(
-    target: ServiceInstanceActivationTarget,
+    target: ServiceInstanceColdActivationTarget,
     parts: MessageLike | readonly MessageLike[],
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
@@ -337,7 +338,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   requestToMissingInstanceSpot(
-    target: ServiceInstanceActivationTarget,
+    target: ServiceInstanceColdActivationTarget,
     parts: MessageLike | readonly MessageLike[],
     deadlineUnixMs: bigint,
     sourceSpotId?: string,

@@ -1,3 +1,4 @@
+const { liveUserSpotAuthority } = require('../helpers/live-user-spot-authority');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -1384,6 +1385,8 @@ test('location lifecycle already-owned claim does not activate a second instance
 
 test('location lifecycle rolls failed activation back and renews actor spot state', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  await liveUserSpotAuthority(store, 'play', 'spot-1', 7n);
+
   const node = await lifecycleNode(store, 'owner-a', 'node-a');
 
   await assert.rejects(
@@ -1451,6 +1454,8 @@ test('location lifecycle rolls failed activation back and renews actor spot stat
 
 test('location lifecycle deactivates stale hosted actor and protects new owner row', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  await liveUserSpotAuthority(store, 'play', 'spot-1', 7n);
+
   const nodeA = await lifecycleNode(store, 'owner-a', 'node-a');
   const nodeB = await lifecycleNode(store, 'owner-b', 'node-b');
   let deactivated = 0;
@@ -1777,6 +1782,8 @@ test('location lifecycle claims spots and binds actor session routes with takeov
 
 test('store location resolvers seed reusable SpotHandle snapshots from live rows', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  await liveUserSpotAuthority(store, 'play', 'spot-1', 7n);
+
   const node = await lifecycleNode(store, 'owner-a', 'node-a', 'play');
   const resolvers = resolversFor(store);
   let spotResolveCount = 0;
@@ -1838,6 +1845,8 @@ test('store location resolvers seed reusable SpotHandle snapshots from live rows
 
 test('actor resolver keeps the current Actor route while its enclosing Spot projection changes', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  await liveUserSpotAuthority(store, 'play', 'spot-1', 7n);
+
   const firstOwner = await lifecycleNode(store, 'owner-a', 'node-a', 'play');
   const successor = await lifecycleNode(store, 'owner-b', 'node-b', 'play');
   const spotId = 'spot-1';
@@ -1870,6 +1879,16 @@ test('actor resolver keeps the current Actor route while its enclosing Spot proj
     3n
   );
   assert.notEqual(await resolvers.resolveActorRef(actorId), undefined);
+
+  const key = authorityKeys.encodeAuthorityKey('user_spot', spotId);
+  const currentAuthority = await store.readAuthority(key);
+  const movedAuthority = await store.compareExchangeAuthority(key, currentAuthority.storeVersion, {
+    kind: 'put',
+    generationTransition: 'reincarnate',
+    payload: currentAuthority.payload
+  });
+  assert.equal(movedAuthority.kind, 'stored');
+  assert.equal(movedAuthority.objectGeneration, 8n);
 
   const previousSpot = await store.resolveSpot({ meshName: 'play', spotId });
   await successor.runtime.writeSpot({
@@ -3209,6 +3228,8 @@ test('production repository shares Spot Actor and route ownership through only o
   const reader = new internal.ZLinkLocationStoreRepository(provider, () => now);
   const claimed = await writer.claimOwnerLease('owner-a', 30_000);
   assert.equal(claimed.kind, 'claimed');
+
+  await liveUserSpotAuthority(writer, 'play', 'room-1', 1n);
 
   const spotRow = {
     ...spot('owner-a', 'room-1'),
