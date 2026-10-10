@@ -8,6 +8,54 @@ const { ServiceMailbox } = require('../../packages/framework/dist/runtime/founda
 const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } =
   require('../../packages/framework/dist/runtime/host/application-job-queue');
 
+test('empty ready claims yield at the count boundary after releasing the claim', async (t) => {
+  let ready;
+  let received = 0;
+  let claimsHeld = 0;
+  const timers = [];
+  const node = {
+    setReadyHandler(handler) { ready = handler; },
+    createReadyBatch() {
+      return {
+        reset() {}, close() {},
+        takeClaim() {
+          claimsHeld += 1;
+          return {
+            recvBatch() { received += 1; return { ok: false, records: [] }; },
+            release() { claimsHeld -= 1; }
+          };
+        }
+      };
+    },
+    createReceiveBatch() { return { reset() {}, close() {} }; },
+    drainReady(domain) {
+      if (domain !== ReadyDomain.Application) return { ok: false, hasResidue: false, records: [] };
+      return { ok: true, hasResidue: false, records: [{ ordinaryIngressPreAdmitted: true }] };
+    }
+  };
+  t.mock.method(global, 'setTimeout', (callback, delay) => {
+    assert.equal(delay, 0);
+    timers.push({ callback, received, claimsHeld });
+    return { unref() {} };
+  });
+  const pump = new ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({})),
+    monotonicNowMs: () => 0,
+    dispatch() { assert.fail('empty claims must not dispatch'); }
+  });
+  try {
+    pump.start();
+    ready(ReadyDomain.Application);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(timers.map(({ received, claimsHeld }) => ({ received, claimsHeld })),
+      [{ received: 16, claimsHeld: 0 }]);
+  } finally {
+    const stopping = pump.dispose();
+    for (const timer of timers) timer.callback();
+    await stopping;
+  }
+});
+
 for (const trigger of ['elapsed', 'records']) {
   test(`dispatch ${trigger} yield releases the claim and admits the next handler before its timer`, async (t) => {
     const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({

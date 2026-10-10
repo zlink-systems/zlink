@@ -363,6 +363,8 @@ export class ZLinkMeshDispatchPump {
         // Empty ready claims also count as work, so they cannot monopolize
         // the microtask queue without giving I/O and deadlines a turn.
         this.recordsSinceYield += 1;
+        const yieldTurn = this.yieldIfNeeded();
+        if (yieldTurn !== undefined) await yieldTurn;
       }
       return false;
     } finally {
