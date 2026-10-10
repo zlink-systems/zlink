@@ -136,7 +136,6 @@ class ZLinkMeshNodeRuntimeTest {
         registration.configureRouterSocket().setSendHighWaterMark(7);
         registration.configureRouterSocket().setReceiveHighWaterMark(11);
         registration.configureRouterSocket().setReceiveTimeout(Duration.ofMillis(29));
-        registration.configureSpotPublisher().setSendHighWaterMark(91);
 
         RecordingMeshNode node = new RecordingMeshNode();
         try (ZLinkMeshNodesRuntime nodes = new ZLinkMeshNodesRuntime()) {
