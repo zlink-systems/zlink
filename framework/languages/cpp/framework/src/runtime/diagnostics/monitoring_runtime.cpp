@@ -344,6 +344,16 @@ void monitoring_runtime_t::publish_application_job_queue_failure () const
            "Failed to apply the absolute Application Job Queue receive-flow state"}});
 }
 
+void monitoring_runtime_t::publish_local_job_backlog (std::uint64_t local_waiters,
+                                                      std::uint32_t maximum) const
+{
+    log (log_level_t::warn, "zlink.runtime.host.local_job_backlog_exceeded",
+         {{"source_kind", "host"},
+          {monitoring_field::source_name, "zlink.runtime.host"},
+          {"local_waiters", std::to_string (local_waiters)},
+          {"effective_maximum", std::to_string (maximum)}});
+}
+
 void monitoring_runtime_t::publish_timer_failure (std::string source_name,
                                                   spot_id_t spot_id,
                                                   timer_failure_event_t failure) const

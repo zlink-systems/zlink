@@ -91,6 +91,7 @@
         <Compile Include="Runtime/SmallStateOwnershipMechanismTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
         <Compile Include="Runtime/ApplicationJobQueueTests.cs"/>
+        <Compile Include="Runtime/LocalJobBacklogTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementLifecycleTests.cs"/>
         <Compile Include="Runtime/TransportFailFastTests.cs"/>
         <Compile Include="Runtime/BackendAdapterFactoryTests.cs"/>

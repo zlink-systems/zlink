@@ -274,7 +274,12 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
 
     private ZLinkApplicationJobQueue.Permit reserveBeforeReceive(ReceiveLoop loop) {
         ZLinkApplicationJobQueue.Permit permit =
-                applicationJobQueue.acquireOrResume(executor, loop::runTurn, loop.pendingAcquire);
+                applicationJobQueue.acquireOrResume(
+                        executor,
+                        loop::runTurn,
+                        loop.pendingAcquire,
+                        systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
+                                .Origin.REMOTE);
         if (closed) {
             ZLinkApplicationJobQueue.cancelPendingAcquire(loop.pendingAcquire);
             if (permit != null) {

@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Dispatch;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal enum ZLinkActorFrameRoute
@@ -44,7 +46,8 @@ internal sealed record ZLinkActorHandoffFrame(
     ZLinkServiceWireCodec.RequestSourceFence? RequestSource = null,
     ulong RelocationReplyRouteId = 0,
     long CanonicalEncodedLength = 0,
-    ZLinkActorBoundSessionHandoffFence? BoundSessionSource = null
+    ZLinkActorBoundSessionHandoffFence? BoundSessionSource = null,
+    ZLinkApplicationJobOrigin Origin = ZLinkApplicationJobOrigin.Remote
 );
 
 internal sealed record ZLinkActorAcceptedRecord(
@@ -94,7 +97,8 @@ internal static class ZLinkActorHandoffFrames
                 out var boundSession
             )
                 ? boundSession
-                : null
+                : null,
+            Origin: ZLinkApplicationJobQueueInvocation.CurrentOrigin
         );
     }
 

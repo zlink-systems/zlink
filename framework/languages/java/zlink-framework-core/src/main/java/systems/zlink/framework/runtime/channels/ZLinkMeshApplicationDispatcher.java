@@ -337,7 +337,9 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                             : ZLinkChannelContentTypeFrame.decode(parts);
             Message ownedPayload = payload;
             CompletableFuture<ZLinkApplicationJobQueue.Permit> acquisition =
-                    applicationJobQueue.acquire().toCompletableFuture();
+                    applicationJobQueue
+                            .acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
+                            .toCompletableFuture();
             CompletableFuture<Integer> admission = new CompletableFuture<>();
             ZLinkCompletionBridge.forwardCancellation(admission, acquisition);
             acquisition.whenComplete(

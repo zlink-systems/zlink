@@ -65,6 +65,10 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     private long queuedApplicationJobs;
     private long permitsInUse;
     private long peakPermitsInUse;
+    private long localWaiters;
+    private boolean localBacklogLogged;
+    private static final java.util.logging.Logger LOGGER =
+            java.util.logging.Logger.getLogger(ZLinkApplicationJobQueue.class.getName());
     private long capacityWaitCount;
     private long capacityWaitDurationNanos;
     private long metricsEpoch;
@@ -144,9 +148,21 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         this.receiveFlow = new ZLinkApplicationJobReceiveFlowController(this);
     }
 
+    public enum Origin {
+        REMOTE,
+        LOCAL
+    }
+
     public CompletionStage<Permit> acquire() {
-        PressureSnapshot transition;
-        Permit permit;
+        return acquire(Origin.REMOTE);
+    }
+
+    public CompletionStage<Permit> acquire(Origin origin) {
+        Objects.requireNonNull(origin, "origin");
+        PressureSnapshot transition = null;
+        Permit permit = null;
+        CompletionStage<Permit> result = null;
+        long warning = 0;
         synchronized (lock) {
             if (closed) {
                 return CompletableFuture.failedFuture(
@@ -156,14 +172,16 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                 permit = reserveUnderLock();
                 transition = evaluatePressureUnderLock();
             } else {
-                Waiter waiter = new Waiter(this, null, nanoTime.getAsLong(), metricsEpoch);
+                Waiter waiter = new Waiter(this, null, nanoTime.getAsLong(), metricsEpoch, origin);
                 waiters.addLast(waiter);
                 capacityWaitCount = saturatingIncrement(capacityWaitCount);
-                return waiter.future;
+                warning = updateLocalWaitersUnderLock(origin, 1);
+                result = waiter.future;
             }
         }
         notifyPressureTransition(transition);
-        return CompletableFuture.completedFuture(permit);
+        if (warning != 0) logLocalBacklog(warning);
+        return result != null ? result : CompletableFuture.completedFuture(permit);
     }
 
     /**
@@ -174,9 +192,17 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     public <T> CompletionStage<T> acquireAndPublish(
             Function<Runnable, CompletionStage<Void>> post,
             Function<Permit, CompletionStage<T>> publication) {
+        return acquireAndPublish(Origin.REMOTE, post, publication);
+    }
+
+    public <T> CompletionStage<T> acquireAndPublish(
+            Origin origin,
+            Function<Runnable, CompletionStage<Void>> post,
+            Function<Permit, CompletionStage<T>> publication) {
         Objects.requireNonNull(post, "post");
         Objects.requireNonNull(publication, "publication");
         return acquire(
+                origin,
                 post,
                 acquisition -> {
                     CompletableFuture<T> completion =
@@ -198,13 +224,16 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     }
 
     private <T> T acquire(
+            Origin origin,
             Function<Runnable, CompletionStage<Void>> post,
             Function<CompletableFuture<Permit>, T> registration) {
+        Objects.requireNonNull(origin, "origin");
         T result;
         PressureSnapshot transition;
         Grant grant;
+        long warning = 0;
         synchronized (lock) {
-            Waiter waiter = new Waiter(this, post, nanoTime.getAsLong(), metricsEpoch);
+            Waiter waiter = new Waiter(this, post, nanoTime.getAsLong(), metricsEpoch, origin);
             result = registration.apply(waiter.future);
             if (closed) {
                 waiter.future.cancelFromQueue();
@@ -212,13 +241,16 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
             }
             boolean waiting = !waiters.isEmpty() || permitsInUse >= effectiveLimit;
             waiters.addLast(waiter);
-            if (waiting) capacityWaitCount = saturatingIncrement(capacityWaitCount);
-            else waiter.durationRecorded = true;
+            if (waiting) {
+                capacityWaitCount = saturatingIncrement(capacityWaitCount);
+                warning = updateLocalWaitersUnderLock(origin, 1);
+            } else waiter.durationRecorded = true;
             grant = waiting ? null : grantOldestUnderLock();
             transition = evaluatePressureUnderLock();
         }
         notifyPressureTransition(transition);
         finishGrant(grant);
+        if (warning != 0) logLocalBacklog(warning);
         return result;
     }
 
@@ -234,11 +266,12 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     public Permit acquireOrResume(
             Executor executor,
             Consumer<Permit> resume,
-            java.util.concurrent.atomic.AtomicReference<CompletableFuture<Permit>> pending) {
+            java.util.concurrent.atomic.AtomicReference<CompletableFuture<Permit>> pending,
+            Origin origin) {
         Objects.requireNonNull(executor, "executor");
         Objects.requireNonNull(resume, "resume");
         Objects.requireNonNull(pending, "pending");
-        CompletableFuture<Permit> acquisition = acquire().toCompletableFuture();
+        CompletableFuture<Permit> acquisition = acquire(origin).toCompletableFuture();
         if (acquisition.isDone()) {
             try {
                 return acquisition.join();
@@ -282,7 +315,11 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
 
     /** Blocking bridge for dedicated receive-loop threads. */
     public Permit acquireBlocking() throws InterruptedException {
-        CompletableFuture<Permit> future = acquire().toCompletableFuture();
+        return acquireBlocking(Origin.REMOTE);
+    }
+
+    public Permit acquireBlocking(Origin origin) throws InterruptedException {
+        CompletableFuture<Permit> future = acquire(origin).toCompletableFuture();
         try {
             return future.get();
         } catch (InterruptedException interrupted) {
@@ -690,11 +727,38 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         }
     }
 
+    private long updateLocalWaitersUnderLock(Origin origin, int delta) {
+        if (origin != Origin.LOCAL) return 0;
+        localWaiters += delta;
+        if (localWaiters == 0) localBacklogLogged = false;
+        if (!localBacklogLogged && localWaiters > effectiveLimit) {
+            localBacklogLogged = true;
+            return localWaiters;
+        }
+        return 0;
+    }
+
+    private void logLocalBacklog(long count) {
+        try {
+            LOGGER.log(
+                    java.util.logging.Level.WARNING,
+                    "zlink.runtime.host.local_job_backlog_exceeded source_kind=host source_name=zlink.runtime.host local_waiters={0} effective_maximum={1}",
+                    new Object[] {count, effectiveLimit});
+        } catch (RuntimeException failure) {
+            new java.util.logging.ErrorManager()
+                    .error(
+                            "Host local backlog logger failed",
+                            failure,
+                            java.util.logging.ErrorManager.WRITE_FAILURE);
+        }
+    }
+
     private void recordWaitDurationUnderLock(Waiter waiter) {
         if (waiter.durationRecorded) {
             return;
         }
         waiter.durationRecorded = true;
+        updateLocalWaitersUnderLock(waiter.origin, -1);
         if (waiter.metricsEpoch != metricsEpoch) {
             return;
         }
@@ -903,6 +967,7 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     }
 
     private static final class Waiter {
+        private final Origin origin;
         private final long startedAtNanos;
         private final long metricsEpoch;
         private final WaitFuture future;
@@ -915,7 +980,9 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                 ZLinkApplicationJobQueue owner,
                 Function<Runnable, CompletionStage<Void>> post,
                 long startedAtNanos,
-                long metricsEpoch) {
+                long metricsEpoch,
+                Origin origin) {
+            this.origin = origin;
             this.post = post;
             this.startedAtNanos = startedAtNanos;
             this.metricsEpoch = metricsEpoch;

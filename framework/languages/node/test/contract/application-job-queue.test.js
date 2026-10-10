@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const telemetry = require('./helpers/telemetry-log-capture');
 
 const {
   ApplicationJobQueue,
@@ -14,6 +15,113 @@ const {
 const {
   ApplicationIngressRecordOwner
 } = require('../../packages/framework/dist/runtime/application-jobs/application-ingress-record-owner');
+
+test('local job backlog warns once until every local waiter leaves', async () => {
+  telemetry.reset();
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 3n }, () => 1n)
+  );
+  const held = await Promise.all(
+    Array.from({ length: 3 }, () => queue.acquire(undefined, 'remote'))
+  );
+  const warnings = () =>
+    telemetry.records.filter(
+      (record) => record.eventId === 'zlink.runtime.host.local_job_backlog_exceeded'
+    );
+  const pending = [];
+  const add = (origin) => {
+    const stop = new AbortController();
+    const completion = queue.acquire(stop.signal, origin).catch((error) => {
+      assert.equal(error.name, 'AbortError');
+    });
+    pending.push({ stop, completion });
+    return stop;
+  };
+  try {
+    for (let i = 0; i < 4; i++) add('remote');
+    assert.equal(warnings().length, 0);
+    for (let episode = 1; episode <= 2; episode++) {
+      const local = Array.from({ length: 3 }, () => add('local'));
+      assert.equal(warnings().length, episode - 1);
+      const excess = add('local');
+      assert.equal(warnings().length, episode);
+      assert.equal(warnings().at(-1).localWaiters, 4);
+      assert.equal(warnings().at(-1).effectiveMaximum, 3);
+      assert.equal(warnings().at(-1).severityText, 'WARN');
+      excess.abort();
+      const repeated = add('local');
+      assert.equal(warnings().length, episode);
+      queue.resetMetrics();
+      repeated.abort();
+      local.forEach((stop) => stop.abort());
+    }
+  } finally {
+    pending.forEach(({ stop }) => stop.abort());
+    await Promise.all(pending.map(({ completion }) => completion));
+    held.forEach((permit) => permit.releaseAfterInternalProcessing());
+  }
+});
+
+test('local backlog logger failure preserves the waiting acquisition and episode', async () => {
+  const {
+    telemetryLogger
+  } = require('../../packages/framework/dist/runtime/diagnostics/message-flow');
+  const emit = telemetryLogger.emit;
+  let attempts = 0;
+  telemetryLogger.emit = () => {
+    attempts++;
+    throw new Error('logger failure');
+  };
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 1n)
+  );
+  const held = await queue.acquire(undefined, 'remote');
+  const stops = [new AbortController(), new AbortController(), new AbortController()];
+  const pending = [];
+  try {
+    for (const stop of stops) pending.push(queue.acquire(stop.signal, 'local'));
+    assert.equal(attempts, 1);
+    assert.equal(queue.snapshot().capacityWaiters, 3n);
+    held.releaseAfterInternalProcessing();
+    const granted = await pending[0];
+    assert.equal(granted.origin, 'local');
+    granted.releaseAfterInternalProcessing();
+    (await pending[1]).releaseAfterInternalProcessing();
+    (await pending[2]).releaseAfterInternalProcessing();
+    assert.equal(queue.snapshot().capacityWaiters, 0n);
+  } finally {
+    telemetryLogger.emit = emit;
+    stops.forEach((stop) => stop.abort());
+    await Promise.allSettled(pending);
+    held.releaseAfterInternalProcessing();
+  }
+});
+
+test('ingress record follow-up permits keep their original local origin', async () => {
+  telemetry.reset();
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 1n)
+  );
+  const initial = await queue.acquire(undefined, 'local');
+  const owner = ApplicationIngressRecordOwner.create(queue, initial, { close() {} });
+  const first = owner.takeInitial('application');
+  const pending = [owner.acquire('application'), owner.acquire('application')];
+  assert.equal(
+    telemetry.records.filter(
+      (record) => record.eventId === 'zlink.runtime.host.local_job_backlog_exceeded'
+    ).length,
+    1
+  );
+  first.releaseBeforeHandler();
+  first.close();
+  for (const acquisition of pending) {
+    const child = await acquisition;
+    child.releaseBeforeHandler();
+    child.close();
+  }
+  owner.close();
+  assert.equal(queue.snapshot().permitsInUse, 0n);
+});
 
 for (const profile of ['constructor', '__proto__']) {
   test(`application job queue rejects inherited profile ${profile} before resolving processors`, () => {
@@ -35,7 +143,6 @@ for (const profile of ['constructor', '__proto__']) {
   });
 }
 
-
 test('application job queue resolves the exact profile matrix and manual override', () => {
   const expected = new Map([
     ['compact', 32n],
@@ -56,7 +163,7 @@ test('application job queue resolves the exact profile matrix and manual overrid
           effectiveProcessorCount: processors,
           effectiveMaxQueuedApplicationJobs: perProcessor * processors,
           pausePermitCount: (perProcessor * processors * 80n + 99n) / 100n,
-          resumePermitCount: perProcessor * processors * 60n / 100n
+          resumePermitCount: (perProcessor * processors * 60n) / 100n
         }
       );
     }
@@ -81,27 +188,21 @@ test('application job queue resolves the exact profile matrix and manual overrid
 
   for (const invalid of [0n, -1n, 2_147_483_648n]) {
     assert.throws(
-      () => resolveApplicationJobQueueConfiguration(
-        { maxQueuedApplicationJobs: invalid },
-        () => 8n
-      ),
+      () =>
+        resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: invalid }, () => 8n),
       /maxQueuedApplicationJobs/u
     );
   }
 });
 
 test('effective processor count includes cgroup quota and explicit executor candidates', () => {
-  const v2Files = new Map([
-    ['/sys/fs/cgroup/cpu.max', '250000 100000']
-  ]);
+  const v2Files = new Map([['/sys/fs/cgroup/cpu.max', '250000 100000']]);
   assert.equal(
     nodeEffectiveProcessorCount(8, 16, (path) => v2Files.get(path)),
     2n
   );
 
-  const fractionalQuota = new Map([
-    ['/sys/fs/cgroup/cpu.max', '50000 100000']
-  ]);
+  const fractionalQuota = new Map([['/sys/fs/cgroup/cpu.max', '50000 100000']]);
   assert.equal(
     nodeEffectiveProcessorCount(undefined, 16, (path) => fractionalQuota.get(path)),
     1n
@@ -121,10 +222,7 @@ test('effective processor count includes cgroup quota and explicit executor cand
 test('application job queue hands a released permit to the oldest live waiter', async () => {
   let now = 0;
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration(
-      { maxQueuedApplicationJobs: 1n },
-      () => 8n
-    ),
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 8n),
     () => now
   );
 
@@ -189,10 +287,7 @@ test('application job queue hands a released permit to the oldest live waiter', 
 
 test('application job queue reset keeps gauges and rebases the peak', async () => {
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration(
-      { maxQueuedApplicationJobs: 2n },
-      () => 8n
-    )
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 2n }, () => 8n)
   );
   const first = await queue.acquire();
   const second = await queue.acquire();
@@ -214,10 +309,7 @@ test('application job queue reset keeps gauges and rebases the peak', async () =
 test('capacity waiter metrics stay in the epoch where the wait started', async () => {
   let now = 100;
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration(
-      { maxQueuedApplicationJobs: 1n },
-      () => 1n
-    ),
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 1n),
     () => now
   );
   const active = await queue.acquire();
@@ -237,11 +329,14 @@ test('capacity waiter metrics stay in the epoch where the wait started', async (
 
 test('application job queue validates hysteresis and uses exact ceil/floor permit counts', () => {
   assert.deepEqual(
-    resolveApplicationJobQueueConfiguration({
-      maxQueuedApplicationJobs: 7n,
-      pauseThresholdPercent: 80,
-      resumeThresholdPercent: 60
-    }, () => 1n),
+    resolveApplicationJobQueueConfiguration(
+      {
+        maxQueuedApplicationJobs: 7n,
+        pauseThresholdPercent: 80,
+        resumeThresholdPercent: 60
+      },
+      () => 1n
+    ),
     {
       configuredProfile: 'balanced',
       configuredManualMax: 7n,
@@ -270,11 +365,14 @@ test('application job queue validates hysteresis and uses exact ceil/floor permi
 test('application job queue pressure transitions use permits in use and reset only epoch metrics', async () => {
   let now = 0;
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration({
-      maxQueuedApplicationJobs: 5n,
-      pauseThresholdPercent: 80,
-      resumeThresholdPercent: 40
-    }, () => 1n),
+    resolveApplicationJobQueueConfiguration(
+      {
+        maxQueuedApplicationJobs: 5n,
+        pauseThresholdPercent: 80,
+        resumeThresholdPercent: 40
+      },
+      () => 1n
+    ),
     () => now
   );
   const states = [];
@@ -312,32 +410,30 @@ test('application job queue pressure transitions use permits in use and reset on
 
 test('one application job queue controller owns channel and raw receive-flow targets', async () => {
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration({
-      maxQueuedApplicationJobs: 2n,
-      pauseThresholdPercent: 50,
-      resumeThresholdPercent: 0
-    }, () => 1n)
+    resolveApplicationJobQueueConfiguration(
+      {
+        maxQueuedApplicationJobs: 2n,
+        pauseThresholdPercent: 50,
+        resumeThresholdPercent: 0
+      },
+      () => 1n
+    )
   );
   const channel = {};
   const raw = {};
   const states = [];
-  assert.equal(queue.registerReceiveFlowTarget(
-    channel,
-    state => states.push(`channel:${state}`)
-  ), true);
-  assert.equal(queue.registerReceiveFlowTarget(
-    raw,
-    state => states.push(`raw:${state}`)
-  ), true);
+  assert.equal(
+    queue.registerReceiveFlowTarget(channel, (state) => states.push(`channel:${state}`)),
+    true
+  );
+  assert.equal(
+    queue.registerReceiveFlowTarget(raw, (state) => states.push(`raw:${state}`)),
+    true
+  );
   assert.deepEqual(states, ['channel:running', 'raw:running']);
 
   const permit = await queue.acquire();
-  assert.deepEqual(states, [
-    'channel:running',
-    'raw:running',
-    'channel:paused',
-    'raw:paused'
-  ]);
+  assert.deepEqual(states, ['channel:running', 'raw:running', 'channel:paused', 'raw:paused']);
 
   queue.unregisterReceiveFlowTarget(channel);
   permit.releaseAfterInternalProcessing();
@@ -353,15 +449,18 @@ test('one application job queue controller owns channel and raw receive-flow tar
 
 test('receive-flow target may unregister reentrantly during a queue transition', async () => {
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration({
-      maxQueuedApplicationJobs: 1n,
-      pauseThresholdPercent: 100,
-      resumeThresholdPercent: 0
-    }, () => 1n)
+    resolveApplicationJobQueueConfiguration(
+      {
+        maxQueuedApplicationJobs: 1n,
+        pauseThresholdPercent: 100,
+        resumeThresholdPercent: 0
+      },
+      () => 1n
+    )
   );
   const target = {};
   const states = [];
-  queue.registerReceiveFlowTarget(target, state => {
+  queue.registerReceiveFlowTarget(target, (state) => {
     states.push(state);
     if (state === 'paused') queue.unregisterReceiveFlowTarget(target);
   });
@@ -377,25 +476,26 @@ test('initial receive-flow application fences a reentrant public unregister', ()
   );
   const target = {};
   const states = [];
-  assert.throws(() => queue.registerReceiveFlowTarget(target, state => {
-    states.push(state);
-    queue.unregisterReceiveFlowTarget(target);
-  }), /controller is disposed/);
+  assert.throws(
+    () =>
+      queue.registerReceiveFlowTarget(target, (state) => {
+        states.push(state);
+        queue.unregisterReceiveFlowTarget(target);
+      }),
+    /controller is disposed/
+  );
   assert.deepEqual(states, ['running']);
-  assert.equal(queue.registerReceiveFlowTarget(
-    target,
-    state => states.push(`replacement:${state}`)
-  ), true);
+  assert.equal(
+    queue.registerReceiveFlowTarget(target, (state) => states.push(`replacement:${state}`)),
+    true
+  );
   queue.unregisterReceiveFlowTarget(target);
   assert.deepEqual(states, ['running', 'replacement:running']);
 });
 
 test('application job permit stays queued until the first user callback instruction', async () => {
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration(
-      { maxQueuedApplicationJobs: 1n },
-      () => 8n
-    )
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 8n)
   );
   const permit = await queue.acquire();
   permit.markApplicationQueued();
@@ -411,23 +511,19 @@ test('application job permit stays queued until the first user callback instruct
 
 test('detached exact-target turn retains its ingress permit until callback start', async () => {
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration(
-      { maxQueuedApplicationJobs: 1n },
-      () => 8n
-    )
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 8n)
   );
   let retainedCloseCount = 0;
-  const owner = ApplicationIngressRecordOwner.create(
-    queue,
-    await queue.acquire(),
-    { close: () => { retainedCloseCount += 1; } }
-  );
+  const owner = ApplicationIngressRecordOwner.create(queue, await queue.acquire(), {
+    close: () => {
+      retainedCloseCount += 1;
+    }
+  });
   const applicationJob = owner.takeInitial('application');
   owner.close();
 
-  const detached = await runWithApplicationJobPermit(
-    applicationJob,
-    () => detachApplicationJobPermit()
+  const detached = await runWithApplicationJobPermit(applicationJob, () =>
+    detachApplicationJobPermit()
   );
   assert.ok(detached);
 

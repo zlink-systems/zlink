@@ -1185,9 +1185,14 @@ void app_t::_apply_zlink_framework ()
     detail::zlink_builder_access_t::bind_shared_core_context (_state->zlink,
                                                               std::move (core_context));
     const auto monitoring = _state->monitoring;
-    _state->application_job_queue =
-      std::make_shared<runtime::application_job_queue_t> (job_queue_configuration, [monitoring] {
+    _state->application_job_queue = std::make_shared<runtime::application_job_queue_t> (
+      job_queue_configuration,
+      [monitoring] {
           detail::monitoring_runtime_t (monitoring).publish_application_job_queue_failure ();
+      },
+      [monitoring] (std::uint64_t local_waiters, std::uint32_t maximum) {
+          detail::monitoring_runtime_t (monitoring)
+            .publish_local_job_backlog (local_waiters, maximum);
       });
     _state->host_capacity = std::make_shared<runtime::host_capacity_runtime_t> (
       detail::zlink_builder_access_t::shared_core_context (_state->zlink),

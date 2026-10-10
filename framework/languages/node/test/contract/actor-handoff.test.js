@@ -5,12 +5,8 @@ const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const actorHandoff = require('../../packages/framework/dist/runtime/actors/actor-handoff');
-const actorRelayWire = require(
-  '../../packages/framework/dist/runtime/actors/actor-packet-relay-wire'
-);
-const messageFollow = require(
-  '../../packages/framework/dist/runtime/actors/actor-message-follow-context'
-);
+const actorRelayWire = require('../../packages/framework/dist/runtime/actors/actor-packet-relay-wire');
+const messageFollow = require('../../packages/framework/dist/runtime/actors/actor-message-follow-context');
 const routingIds = require('../../packages/framework/dist/runtime/routing-id');
 const {
   ZLinkActorSerialExecutor
@@ -31,6 +27,52 @@ const {
 
 function frame(value) {
   return [zlink.Message.from(`header:${value}`), zlink.Message.from(value)];
+}
+
+for (const origin of ['local', 'remote']) {
+  test(`durable Actor source replay preserves the ${origin} ingress origin`, async () => {
+    const { coordinator } = harness();
+    const queue = new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 1n)
+    );
+    coordinator.beginProvisional('actor-1', 1n);
+    const parts = frame('held');
+    try {
+      const initial = await queue.acquire(undefined, origin);
+      await runWithApplicationJobPermit(initial, () =>
+        coordinator.capture('actor-1', parts, false, undefined, actorRef())
+      );
+    } finally {
+      parts.forEach((part) => part.close());
+    }
+    const observed = [];
+    const admission = coordinator.admitDeferredPrefix(
+      'actor-1',
+      (records) => ({
+        terminal: (async () => {
+          for (const record of records) {
+            await record.preparation.prepare(new AbortController().signal);
+            await record.drain(async () => undefined);
+          }
+        })()
+      }),
+      async (signal, retainedOrigin) => {
+        observed.push(retainedOrigin);
+        const permit = await queue.acquire(signal, retainedOrigin);
+        return {
+          run(operation) {
+            return runWithApplicationJobPermit(permit, operation);
+          },
+          cancel() {
+            permit.releaseAfterInternalProcessing();
+          }
+        };
+      }
+    );
+    await admission.terminal;
+    assert.deepEqual(observed, [origin]);
+    assert.equal(queue.snapshot().permitsInUse, 0n);
+  });
 }
 
 function actorRef(generation = 1n) {
@@ -93,15 +135,16 @@ function contextRef(parts, options = {}) {
     targetOwner: options.targetOwner ?? source,
     deadlineUnixMs: options.deadlineUnixMs,
     correlationId: options.request
-      ? options.correlationId ?? '22222222222222222222222222222222'
+      ? (options.correlationId ?? '22222222222222222222222222222222')
       : undefined,
     replyRouteId: options.request
-      ? options.replyRouteId ?? '33333333333333333333333333333333'
+      ? (options.replyRouteId ?? '33333333333333333333333333333333')
       : undefined,
     request: options.request ?? false,
     hopCount: options.hopCount ?? 0,
-    visitedOwners: options.visitedOwners
-      ?? [messageFollow.messageFollowOwnerFenceKey(options.targetOwner ?? source)],
+    visitedOwners: options.visitedOwners ?? [
+      messageFollow.messageFollowOwnerFenceKey(options.targetOwner ?? source)
+    ],
     payloadChecksumSha256: messageFollow.actorMessageFollowPayloadChecksum(parts)
   };
   const decoded = messageFollow.decodeActorMessageFollowContext(context);
@@ -148,8 +191,7 @@ function harness(messageFollowDurationMs = 30) {
     messageFollowDurationMs,
     isStaleActorRef: (_actorId, ref) => ref.objectGeneration !== currentGeneration,
     isCurrentActorRef: (_actorId, ref) =>
-      ref.objectGeneration === currentGeneration
-      && String(ref.nodeRid) === currentNodeRid,
+      ref.objectGeneration === currentGeneration && String(ref.nodeRid) === currentNodeRid,
     isCurrentHandoffTarget: (_actorId, spotId) => spotId === 'target-spot',
     currentOwnerFence: () => currentOwner,
     requestSource: () => {
@@ -158,11 +200,11 @@ function harness(messageFollowDurationMs = 30) {
       return requestSource;
     },
     validateReplySource: (source) =>
-      source.ownerId === replyHostOwnerId
-      && source.ownerLeaseGeneration === replyHostOwnerLeaseGeneration
-      && source.nodeRid === replyHostNodeRid
-      && source.nodeRidHex === replyHostNodeRidHex
-      && source.nodeGeneration === replyHostNodeGeneration,
+      source.ownerId === replyHostOwnerId &&
+      source.ownerLeaseGeneration === replyHostOwnerLeaseGeneration &&
+      source.nodeRid === replyHostNodeRid &&
+      source.nodeRidHex === replyHostNodeRidHex &&
+      source.nodeGeneration === replyHostNodeGeneration,
     onMarker: (marker, actorId, index) => markers.push({ marker, actorId, index })
   });
   return {
@@ -170,23 +212,37 @@ function harness(messageFollowDurationMs = 30) {
     followed,
     messageFollowPayloads,
     markers,
-    setCurrentGeneration(value) { currentGeneration = value; },
-    setCurrentNodeRid(value) { currentNodeRid = value; },
-    setCurrentOwner(value) { currentOwner = value; },
+    setCurrentGeneration(value) {
+      currentGeneration = value;
+    },
+    setCurrentNodeRid(value) {
+      currentNodeRid = value;
+    },
+    setCurrentOwner(value) {
+      currentOwner = value;
+    },
     setRequestSource(value) {
       requestSource = { meshName: 'mesh', ...value };
       sourceStateAvailable = true;
       replyHostOwnerId = requestSource.ownerId;
       replyHostOwnerLeaseGeneration = requestSource.ownerLeaseGeneration;
       replyHostNodeRid = requestSource.nodeRid;
-      replyHostNodeRidHex = requestSource.nodeRidHex
-        ?? Buffer.from(requestSource.nodeRid).toString('hex');
+      replyHostNodeRidHex =
+        requestSource.nodeRidHex ?? Buffer.from(requestSource.nodeRid).toString('hex');
       replyHostNodeGeneration = requestSource.nodeGeneration;
     },
-    removeSourceState() { sourceStateAvailable = false; },
-    setReplyHostOwnerLeaseGeneration(value) { replyHostOwnerLeaseGeneration = value; },
-    setReplyHostNodeGeneration(value) { replyHostNodeGeneration = value; },
-    sourceLookupCount() { return sourceLookupCount; }
+    removeSourceState() {
+      sourceStateAvailable = false;
+    },
+    setReplyHostOwnerLeaseGeneration(value) {
+      replyHostOwnerLeaseGeneration = value;
+    },
+    setReplyHostNodeGeneration(value) {
+      replyHostNodeGeneration = value;
+    },
+    sourceLookupCount() {
+      return sourceLookupCount;
+    }
   };
 }
 
@@ -208,10 +264,7 @@ test('handoff admission requires committed source and target owner fences', () =
     },
     validateReplySource: () => true
   });
-  assert.throws(
-    () => invalidGeneration.begin('actor-1', 0n),
-    /positive source ObjectGeneration/u
-  );
+  assert.throws(() => invalidGeneration.begin('actor-1', 0n), /positive source ObjectGeneration/u);
   assert.equal(sourceLookupCount, 0);
   assert.equal(invalidGeneration.isActive('actor-1'), false);
 
@@ -241,10 +294,7 @@ test('handoff admission requires committed source and target owner fences', () =
     },
     validateReplySource: () => true
   });
-  assert.throws(
-    () => missingSource.begin('actor-1', 1n),
-    /source fence unavailable/
-  );
+  assert.throws(() => missingSource.begin('actor-1', 1n), /source fence unavailable/);
 
   const { coordinator } = harness();
   coordinator.begin('actor-1', 1n);
@@ -272,20 +322,25 @@ test('in-flight handoff preserves moving packet arrival order in the commit back
   }
 
   const backlog = coordinator.snapshot('actor-1');
-  assert.deepEqual(backlog.map((packet) => Buffer.from(packet.payload, 'base64').toString()), ['P1', 'P2', 'P3']);
-  assert.deepEqual(backlog.map((packet) => packet.index), [0, 1, 2]);
-  assert.deepEqual(markers.map((entry) => entry.marker), [
-    'handoff_backlog',
-    'handoff_backlog',
-    'handoff_backlog'
-  ]);
+  assert.deepEqual(
+    backlog.map((packet) => Buffer.from(packet.payload, 'base64').toString()),
+    ['P1', 'P2', 'P3']
+  );
+  assert.deepEqual(
+    backlog.map((packet) => packet.index),
+    [0, 1, 2]
+  );
+  assert.deepEqual(
+    markers.map((entry) => entry.marker),
+    ['handoff_backlog', 'handoff_backlog', 'handoff_backlog']
+  );
 });
 
 test('provisional Join ingress replays one-way packets through the source mailbox in order', async () => {
   const { coordinator } = harness();
   const replayed = [];
   const replay = async (parts) => {
-      replayed.push(parts[1].data().toString());
+    replayed.push(parts[1].data().toString());
   };
   coordinator.beginProvisional('actor-1', 1n);
   for (const value of ['P1', 'P2']) {
@@ -320,7 +375,7 @@ test('rejected provisional Join releases its current Actor mailbox record before
   let newerQueued;
   let newerParts;
   let replayedNewerResolve;
-  const replayedNewer = new Promise(resolve => {
+  const replayedNewer = new Promise((resolve) => {
     replayedNewerResolve = resolve;
   });
   const directReplay = (
@@ -328,29 +383,33 @@ test('rejected provisional Join releases its current Actor mailbox record before
     _returnResponse,
     _remoteBoundSessionTarget,
     _fallbackActorRef
-  ) => actorMailbox.execute(() => spotSerial.execute(() => {
-    const value = replayedParts[1].data().toString();
-    events.push(`source:replayed:${value}`);
-    if (value === 'newer') replayedNewerResolve();
-  }));
+  ) =>
+    actorMailbox.execute(() =>
+      spotSerial.execute(() => {
+        const value = replayedParts[1].data().toString();
+        events.push(`source:replayed:${value}`);
+        if (value === 'newer') replayedNewerResolve();
+      })
+    );
   const replayInCurrentActorTurn = (
     replayedParts,
     _returnResponse,
     _remoteBoundSessionTarget,
     _fallbackActorRef
-  ) => spotSerial.execute(() => {
-    const value = replayedParts[1].data().toString();
-    events.push(`source:replayed:${value}`);
-    if (value === 'newer') replayedNewerResolve();
-  });
+  ) =>
+    spotSerial.execute(() => {
+      const value = replayedParts[1].data().toString();
+      events.push(`source:replayed:${value}`);
+      if (value === 'newer') replayedNewerResolve();
+    });
   const transfer = new ZLinkActorTransferRuntime({
     actorHandoff: coordinator,
     spotManager: () => ({
       admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
         const terminals = actorMailbox.admitDurablePrefix(
-          records.map(record => ({
-            operation: executeChild => record.drain((...args) =>
-              executeChild(() => replayInCurrentActorTurn(...args))),
+          records.map((record) => ({
+            operation: (executeChild) =>
+              record.drain((...args) => executeChild(() => replayInCurrentActorTurn(...args))),
             preparation: record.preparation,
             workOptions: { payloadBytes: record.payloadBytes }
           }))
@@ -365,20 +424,18 @@ test('rejected provisional Join releases its current Actor mailbox record before
         remoteBoundSessionTarget,
         fallbackActorRef
       ) {
-        return coordinator.capture(
-          actorId,
-          replayedParts,
-          returnResponse,
-          remoteBoundSessionTarget,
-          fallbackActorRef,
-          undefined,
-          undefined,
-          directReplay
-        ) ?? directReplay(
-          replayedParts,
-          returnResponse,
-          remoteBoundSessionTarget,
-          fallbackActorRef
+        return (
+          coordinator.capture(
+            actorId,
+            replayedParts,
+            returnResponse,
+            remoteBoundSessionTarget,
+            fallbackActorRef,
+            undefined,
+            undefined,
+            directReplay
+          ) ??
+          directReplay(replayedParts, returnResponse, remoteBoundSessionTarget, fallbackActorRef)
         );
       }
     }),
@@ -388,10 +445,7 @@ test('rejected provisional Join releases its current Actor mailbox record before
     async prepareApplicationJob() {
       applicationAdmissions += 1;
       activeApplicationAdmissions += 1;
-      peakApplicationAdmissions = Math.max(
-        peakApplicationAdmissions,
-        activeApplicationAdmissions
-      );
+      peakApplicationAdmissions = Math.max(peakApplicationAdmissions, activeApplicationAdmissions);
       let ready = true;
       return {
         async run(operation) {
@@ -412,50 +466,47 @@ test('rejected provisional Join releases its current Actor mailbox record before
     }
   });
   try {
-    const current = actorMailbox.execute(() => spotSerial.execute(async () => {
-      events.push('handler');
-      coordinator.beginProvisional('actor-1', 1n);
-      for (const value of ['held-1', 'held-2']) {
-        const parts = frame(value);
-        try {
-          await coordinator.capture(
-            'actor-1',
-            parts,
-            false,
-            undefined,
-            actorRef(),
-            undefined,
-            undefined,
-            directReplay
-          );
-        } finally {
-          parts.forEach((part) => part.close());
+    const current = actorMailbox.execute(() =>
+      spotSerial.execute(async () => {
+        events.push('handler');
+        coordinator.beginProvisional('actor-1', 1n);
+        for (const value of ['held-1', 'held-2']) {
+          const parts = frame(value);
+          try {
+            await coordinator.capture(
+              'actor-1',
+              parts,
+              false,
+              undefined,
+              actorRef(),
+              undefined,
+              undefined,
+              directReplay
+            );
+          } finally {
+            parts.forEach((part) => part.close());
+          }
         }
-      }
-      events.push('release:start');
-      await transfer.cancelDeferredActorHandoff(
-        { context: { actorId: 'actor-1' } },
-        { spotId: 'source-spot' }
-      );
-      events.push('release:end');
-      newerParts = frame('newer');
-      const captured = coordinator.capture(
-        'actor-1',
-        newerParts,
-        false,
-        undefined,
-        actorRef(),
-        undefined,
-        undefined,
-        directReplay
-      );
-      newerQueued = captured ?? directReplay(
-        newerParts,
-        false,
-        undefined,
-        actorRef()
-      );
-    }));
+        events.push('release:start');
+        await transfer.cancelDeferredActorHandoff(
+          { context: { actorId: 'actor-1' } },
+          { spotId: 'source-spot' }
+        );
+        events.push('release:end');
+        newerParts = frame('newer');
+        const captured = coordinator.capture(
+          'actor-1',
+          newerParts,
+          false,
+          undefined,
+          actorRef(),
+          undefined,
+          undefined,
+          directReplay
+        );
+        newerQueued = captured ?? directReplay(newerParts, false, undefined, actorRef());
+      })
+    );
 
     let timeout;
     try {
@@ -463,9 +514,12 @@ test('rejected provisional Join releases its current Actor mailbox record before
         current,
         new Promise((_, reject) => {
           timeout = setTimeout(
-            () => reject(new Error(
-              `rejected Join replay deadlocked behind its current Actor mailbox record: ${events.join(',')}`
-            )),
+            () =>
+              reject(
+                new Error(
+                  `rejected Join replay deadlocked behind its current Actor mailbox record: ${events.join(',')}`
+                )
+              ),
             1_000
           );
         })
@@ -487,9 +541,11 @@ test('rejected provisional Join releases its current Actor mailbox record before
     } finally {
       clearTimeout(replayTimeout);
     }
-    await actorMailbox.execute(() => spotSerial.execute(() => {
-      events.push('actor:next');
-    }));
+    await actorMailbox.execute(() =>
+      spotSerial.execute(() => {
+        events.push('actor:next');
+      })
+    );
 
     assert.deepEqual(events, [
       'handler',
@@ -524,7 +580,7 @@ test('provisional Join ingress preserves request completion when replayed locall
     ref,
     undefined,
     undefined,
-    async (_parts, returnResponse) => returnResponse ? 'local-reply' : undefined
+    async (_parts, returnResponse) => (returnResponse ? 'local-reply' : undefined)
   );
   parts.forEach((part) => part.close());
 
@@ -542,34 +598,29 @@ test('deferred Join release uses the direct Spot replay path without recapturing
     actorHandoff: coordinator,
     spotManager: () => ({
       admitRoutedActorPacketPrefix(_spotId, _actorId, records) {
-        const terminals = records.map(record => record.drain(async (
-          parts,
-          returnResponse,
-          remoteBoundSessionTarget,
-          fallbackActorRef
-        ) => {
-          directDispatches += 1;
-          const value = parts[1].data().toString();
-          replayed.push(value);
-          if (value === 'D2') throw new Error('observed direct replay failure');
-          return returnResponse
-            ? { remoteBoundSessionTarget, fallbackActorRef }
-            : undefined;
-        }));
-        return { terminal: Promise.allSettled(terminals).then(outcomes => {
-          const failed = outcomes.find(outcome => outcome.status === 'rejected');
-          if (failed !== undefined) throw failed.reason;
-        }) };
+        const terminals = records.map((record) =>
+          record.drain(
+            async (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) => {
+              directDispatches += 1;
+              const value = parts[1].data().toString();
+              replayed.push(value);
+              if (value === 'D2') throw new Error('observed direct replay failure');
+              return returnResponse ? { remoteBoundSessionTarget, fallbackActorRef } : undefined;
+            }
+          )
+        );
+        return {
+          terminal: Promise.allSettled(terminals).then((outcomes) => {
+            const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+            if (failed !== undefined) throw failed.reason;
+          })
+        };
       },
       dispatchRoutedActorPacket() {
         ordinaryDispatches += 1;
         throw new Error('release replay re-entered ordinary handoff capture');
       },
-      async dispatchRoutedActorPacketDirect(
-        _spotId,
-        _actorId,
-        parts
-      ) {
+      async dispatchRoutedActorPacketDirect(_spotId, _actorId, parts) {
         directDispatches += 1;
         const value = parts[1].data().toString();
         replayed.push(value);
@@ -583,14 +634,8 @@ test('deferred Join release uses the direct Spot replay path without recapturing
   coordinator.beginProvisional('actor-1', 1n);
   for (const value of ['D1', 'D2']) {
     const parts = frame(value);
-    await coordinator.capture(
-      'actor-1',
-      parts,
-      false,
-      undefined,
-      actorRef()
-    );
-    parts.forEach(part => part.close());
+    await coordinator.capture('actor-1', parts, false, undefined, actorRef());
+    parts.forEach((part) => part.close());
   }
 
   await transfer.completeDeferredActorHandoff(
@@ -598,7 +643,7 @@ test('deferred Join release uses the direct Spot replay path without recapturing
     { spotId: 'target-spot' },
     actorRef()
   );
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(replayed, ['D1', 'D2']);
   assert.equal(directDispatches, 2);
@@ -608,7 +653,7 @@ test('deferred Join release uses the direct Spot replay path without recapturing
   assert.equal(coordinator.isActive('actor-1'), false);
 });
 
-test('release replay preserves typed request failures and observes one-way failures', async t => {
+test('release replay preserves typed request failures and observes one-way failures', async (t) => {
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -631,11 +676,11 @@ test('release replay preserves typed request failures and observes one-way failu
   );
   const requestFailure = assert.rejects(
     request,
-    error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
   );
-  requestParts.forEach(part => part.close());
+  requestParts.forEach((part) => part.close());
   // Capture owns the backlog before the original deadline.
-  assert.equal(markers.filter(entry => entry.marker === 'handoff_backlog').length, 1);
+  assert.equal(markers.filter((entry) => entry.marker === 'handoff_backlog').length, 1);
   assert.equal(coordinator.isActive('actor-1'), true);
   now += 20;
   t.mock.timers.tick(20);
@@ -657,21 +702,15 @@ test('release replay preserves typed request failures and observes one-way failu
       throw new Error('one-way replay failed');
     }
   );
-  sendParts.forEach(part => part.close());
-  await assert.rejects(
-    coordinator.releaseDeferred('actor-1'),
-    /one-way replay failed/
-  );
+  sendParts.forEach((part) => part.close());
+  await assert.rejects(coordinator.releaseDeferred('actor-1'), /one-way replay failed/);
   assert.equal(coordinator.isActive('actor-1'), false);
 });
 
 test('durable request handoff returns its initial permit before capacity-one replay admission', async () => {
   const { coordinator } = harness();
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration(
-      { maxQueuedApplicationJobs: 1n },
-      () => 1n
-    )
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 1n)
   );
   coordinator.beginProvisional('actor-1', 1n);
   const parts = frame('capacity-one-request');
@@ -689,19 +728,15 @@ test('durable request handoff returns its initial permit before capacity-one rep
       async () => 'capacity-one-reply'
     )
   );
-  parts.forEach(part => part.close());
+  parts.forEach((part) => part.close());
 
   let replayAdmissions = 0;
-  const release = coordinator.releaseDeferred(
-    'actor-1',
-    undefined,
-    async operation => {
-      const permit = await queue.acquire();
-      permit.markApplicationQueued();
-      replayAdmissions += 1;
-      return await runWithApplicationJobPermit(permit, operation);
-    }
-  );
+  const release = coordinator.releaseDeferred('actor-1', undefined, async (operation) => {
+    const permit = await queue.acquire();
+    permit.markApplicationQueued();
+    replayAdmissions += 1;
+    return await runWithApplicationJobPermit(permit, operation);
+  });
   let timeout;
   try {
     const [, reply] = await Promise.race([
@@ -722,7 +757,7 @@ test('durable request handoff returns its initial permit before capacity-one rep
   assert.equal(coordinator.isActive('actor-1'), false);
 });
 
-test('Message Follow preserves operation identity and rejects an exhausted hop with its marker', async t => {
+test('Message Follow preserves operation identity and rejects an exhausted hop with its marker', async (t) => {
   let now = performance.now();
   t.mock.method(performance, 'now', () => now);
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -730,19 +765,10 @@ test('Message Follow preserves operation identity and rejects an exhausted hop w
   const { coordinator, messageFollowPayloads, markers } = harness(messageFollowDurationMs);
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete(
-    'actor-1',
-    target(),
-    targetActorRef(),
-    [],
-    ownerFence('target', 2n)
-  );
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
   const parts = frame('last-hop');
-  const visited = Array.from(
-    { length: 7 },
-    (_, index) => messageFollow.messageFollowOwnerFenceKey(
-      ownerFence(`visited-${index}`, BigInt(index + 10))
-    )
+  const visited = Array.from({ length: 7 }, (_, index) =>
+    messageFollow.messageFollowOwnerFenceKey(ownerFence(`visited-${index}`, BigInt(index + 10)))
   );
   visited.push(messageFollow.messageFollowOwnerFenceKey(sourceOwnerFence()));
   const ref = contextRef(parts, {
@@ -759,11 +785,8 @@ test('Message Follow preserves operation identity and rejects an exhausted hop w
   assert.equal(messageFollowPayloads[0].messageFollowContext.hopCount, 8);
 
   const loop = frame('loop');
-  const exhaustedVisited = Array.from(
-    { length: 8 },
-    (_, index) => messageFollow.messageFollowOwnerFenceKey(
-      ownerFence(`exhausted-${index}`, BigInt(index + 30))
-    )
+  const exhaustedVisited = Array.from({ length: 8 }, (_, index) =>
+    messageFollow.messageFollowOwnerFenceKey(ownerFence(`exhausted-${index}`, BigInt(index + 30)))
   );
   exhaustedVisited.push(messageFollow.messageFollowOwnerFenceKey(sourceOwnerFence()));
   const exhausted = contextRef(loop, {
@@ -786,9 +809,9 @@ test('Message Follow preserves operation identity and rejects an exhausted hop w
   const expiredParts = frame('expired-route');
   await assert.rejects(
     coordinator.capture('actor-1', expiredParts, false, undefined, contextRef(expiredParts)),
-    error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
-  expiredParts.forEach(part => part.close());
+  expiredParts.forEach((part) => part.close());
   t.mock.timers.tick(messageFollowDurationMs);
   assert.equal(messageFollowPayloads.length, 1);
 });
@@ -797,13 +820,7 @@ test('Message Follow rejects repeated stale packets that do not carry the origin
   const { coordinator, followed, markers } = harness();
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete(
-    'actor-1',
-    target(),
-    targetActorRef(),
-    [],
-    ownerFence('target', 2n)
-  );
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const parts = frame('missing-context');
@@ -819,10 +836,7 @@ test('Message Follow rejects repeated stale packets that do not carry the origin
   }
 
   assert.deepEqual(followed, []);
-  assert.equal(
-    markers.filter((entry) => entry.marker === 'message_follow_rejected').length,
-    2
-  );
+  assert.equal(markers.filter((entry) => entry.marker === 'message_follow_rejected').length, 2);
 });
 
 test('Message Follow request preserves its absolute deadline and drops a late relay reply', async () => {
@@ -833,7 +847,9 @@ test('Message Follow request preserves its absolute deadline and drops a late re
       async sendToSpot() {},
       async requestToSpot(_target, payload, options) {
         requests.push({ payload, options });
-        return await new Promise((resolve) => { completeRelay = resolve; });
+        return await new Promise((resolve) => {
+          completeRelay = resolve;
+        });
       }
     },
     messageFollowDurationMs: 1_000,
@@ -858,9 +874,10 @@ test('Message Follow request preserves its absolute deadline and drops a late re
   const requestHeader = streamProtocol.encodeStreamHeader({
     kind: streamProtocol.ZLinkStreamMessageKind.Request,
     codec: streamProtocol.ZLinkStreamCodec.Json,
-    flags: streamProtocol.ZLinkStreamHeaderFlags.HasRequestSeq
-      | streamProtocol.ZLinkStreamHeaderFlags.HasMetadata
-      | streamProtocol.ZLinkStreamHeaderFlags.HasCorrelationId,
+    flags:
+      streamProtocol.ZLinkStreamHeaderFlags.HasRequestSeq |
+      streamProtocol.ZLinkStreamHeaderFlags.HasMetadata |
+      streamProtocol.ZLinkStreamHeaderFlags.HasCorrelationId,
     requestSeq: 19n,
     name: 'DeadlineRequest',
     metadata: streamProtocol.actorRequestDeadlineMetadata(deadlineUnixMs),
@@ -888,10 +905,7 @@ test('Message Follow request preserves its absolute deadline and drops a late re
     (error) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
   );
   assert.equal(requests.length, 1);
-  assert.equal(
-    requests[0].payload.messageFollowContext.deadlineUnixMs,
-    deadlineUnixMs
-  );
+  assert.equal(requests[0].payload.messageFollowContext.deadlineUnixMs, deadlineUnixMs);
   const relayedHeader = streamProtocol.decodeStreamHeader(
     Buffer.from(requests[0].payload.header, 'base64')
   );
@@ -1083,13 +1097,7 @@ test('bound-session packets keep one sequence across snapshot and Message Follow
     ownerFence('target', 2n)
   );
   const s4 = frame('S4');
-  await coordinator.capture(
-    'actor-1',
-    s4,
-    false,
-    sessionTarget,
-    contextRef(s4)
-  );
+  await coordinator.capture('actor-1', s4, false, sessionTarget, contextRef(s4));
   s4.forEach((part) => part.close());
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -1125,13 +1133,13 @@ test('precommit abort drains appended ingress once through a single release task
   let peakAdmissions = 0;
   let unblockFirstAdmission;
   let firstAdmissionStartedResolve;
-  const firstAdmissionStarted = new Promise(resolve => {
+  const firstAdmissionStarted = new Promise((resolve) => {
     firstAdmissionStartedResolve = resolve;
   });
-  const firstAdmissionBlocked = new Promise(resolve => {
+  const firstAdmissionBlocked = new Promise((resolve) => {
     unblockFirstAdmission = resolve;
   });
-  const admission = async operation => {
+  const admission = async (operation) => {
     admissions += 1;
     activeAdmissions += 1;
     peakAdmissions = Math.max(peakAdmissions, activeAdmissions);
@@ -1153,23 +1161,17 @@ test('precommit abort drains appended ingress once through a single release task
 
   coordinator.begin('actor-1', 1n);
   const requestParts = frame('P1');
-  const request = coordinator.capture(
-    'actor-1',
-    requestParts,
-    true,
-    undefined,
-    actorRef()
-  );
-  requestParts.forEach(part => part.close());
+  const request = coordinator.capture('actor-1', requestParts, true, undefined, actorRef());
+  requestParts.forEach((part) => part.close());
   const secondParts = frame('P2');
   await coordinator.capture('actor-1', secondParts, false, undefined, actorRef());
-  secondParts.forEach(part => part.close());
+  secondParts.forEach((part) => part.close());
 
   const firstRelease = coordinator.releaseCanceled('actor-1', replay, admission);
   await firstAdmissionStarted;
   const newerParts = frame('newer');
   await coordinator.capture('actor-1', newerParts, false, undefined, actorRef());
-  newerParts.forEach(part => part.close());
+  newerParts.forEach((part) => part.close());
   const duplicateRelease = coordinator.releaseCanceled('actor-1', replay, admission);
   coordinator.cancel('actor-1');
   unblockFirstAdmission();
@@ -1214,7 +1216,7 @@ test('a sealed Session route refuses a connection-bound send at capture and keep
   coordinator.cancel('actor-1');
 });
 
-test('Message Follow relays before duration expiry and prunes route and stale records after removal', async t => {
+test('Message Follow relays before duration expiry and prunes route and stale records after removal', async (t) => {
   let now = performance.now();
   t.mock.method(performance, 'now', () => now);
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -1230,7 +1232,10 @@ test('Message Follow relays before duration expiry and prunes route and stale re
 
   now += 20;
   t.mock.timers.tick(20);
-  assert.equal(markers.some((entry) => entry.marker === 'message_follow_route_removed'), true);
+  assert.equal(
+    markers.some((entry) => entry.marker === 'message_follow_route_removed'),
+    true
+  );
   assert.equal(coordinator.messageFollowCount('actor-1'), 0);
 
   // The stale-tenure records live only as long as the follow window: a late
@@ -1252,7 +1257,9 @@ test('Message Follow notification suppression retries rejection and marks only a
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      async requestToSpot() { return { ok: true }; }
+      async requestToSpot() {
+        return { ok: true };
+      }
     },
     messageFollowDurationMs: 1_000,
     requestSource: () => ({
@@ -1272,13 +1279,7 @@ test('Message Follow notification suppression retries rejection and marks only a
   });
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete(
-    'actor-1',
-    target(),
-    targetActorRef(),
-    [],
-    ownerFence('target', 2n)
-  );
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
   const origin = {
     sourceNodeRid: zlink.RoutingId.from('ingress-source'),
     originalOperation: { high: 7n, low: 11n },
@@ -1337,16 +1338,28 @@ test('a returning tenure with a newer authority fence bypasses the departed stal
   });
   const returned = frame('returned-tenure');
   assert.equal(
-    coordinator.capture('actor-1', returned, false, undefined, contextRef(returned, {
-      sourceOwner: returnedFence,
-      targetOwner: returnedFence
-    })),
+    coordinator.capture(
+      'actor-1',
+      returned,
+      false,
+      undefined,
+      contextRef(returned, {
+        sourceOwner: returnedFence,
+        targetOwner: returnedFence
+      })
+    ),
     undefined
   );
   returned.forEach((part) => part.close());
   assert.deepEqual(followed, []);
-  assert.equal(markers.some((entry) => entry.marker === 'message_follow_rejected'), false);
-  assert.equal(markers.some((entry) => entry.marker === 'message_follow_expired'), false);
+  assert.equal(
+    markers.some((entry) => entry.marker === 'message_follow_rejected'),
+    false
+  );
+  assert.equal(
+    markers.some((entry) => entry.marker === 'message_follow_expired'),
+    false
+  );
 
   // A context that still addresses the departed tenure keeps following.
   const departedFence = messageFollow.ownerFence({
@@ -1357,10 +1370,16 @@ test('a returning tenure with a newer authority fence bypasses the departed stal
     authorityOwnerGeneration: 1n
   });
   const departed = frame('departed-tenure');
-  await coordinator.capture('actor-1', departed, false, undefined, contextRef(departed, {
-    sourceOwner: departedFence,
-    targetOwner: departedFence
-  }));
+  await coordinator.capture(
+    'actor-1',
+    departed,
+    false,
+    undefined,
+    contextRef(departed, {
+      sourceOwner: departedFence,
+      targetOwner: departedFence
+    })
+  );
   departed.forEach((part) => part.close());
   assert.deepEqual(followed, ['departed-tenure']);
 });
@@ -1372,14 +1391,14 @@ test('a Core-routed packet owned by the current actor bypasses an older Message 
   coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
 
   const current = frame('current-owner');
-  assert.equal(
-    coordinator.capture('actor-1', current, false, undefined, actorRef(2n)),
-    undefined
-  );
+  assert.equal(coordinator.capture('actor-1', current, false, undefined, actorRef(2n)), undefined);
   current.forEach((part) => part.close());
 
   assert.deepEqual(followed, []);
-  assert.equal(markers.some((entry) => entry.marker === 'message_follow_relay'), false);
+  assert.equal(
+    markers.some((entry) => entry.marker === 'message_follow_relay'),
+    false
+  );
 });
 
 test('a current ActorRef bypasses an older same-generation route after returning to the node', async () => {
@@ -1397,34 +1416,23 @@ test('a current ActorRef bypasses an older same-generation route after returning
   setCurrentNodeRid(String(actorRef(1n).nodeRid));
 
   const current = frame('returned-owner');
-  assert.equal(
-    coordinator.capture('actor-1', current, false, undefined, actorRef(1n)),
-    undefined
-  );
+  assert.equal(coordinator.capture('actor-1', current, false, undefined, actorRef(1n)), undefined);
   current.forEach((part) => part.close());
 
   assert.deepEqual(followed, []);
-  assert.equal(markers.some((entry) => entry.marker === 'message_follow_relay'), false);
+  assert.equal(
+    markers.some((entry) => entry.marker === 'message_follow_relay'),
+    false
+  );
 });
 
 test('an exact current-owner context bypasses an older Message Follow route', async () => {
-  const {
-    coordinator,
-    followed,
-    markers,
-    setCurrentGeneration
-  } = harness();
+  const { coordinator, followed, markers, setCurrentGeneration } = harness();
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
   const currentFence = ownerFence('target', 2n);
   setCurrentGeneration(1n);
-  coordinator.complete(
-    'actor-1',
-    target(),
-    targetActorRef(),
-    [],
-    currentFence
-  );
+  coordinator.complete('actor-1', target(), targetActorRef(), [], currentFence);
 
   const current = frame('current-target');
   const owner = contextRef(current, {
@@ -1432,14 +1440,14 @@ test('an exact current-owner context bypasses an older Message Follow route', as
     targetOwner: currentFence,
     actorRef: targetActorRef()
   });
-  assert.equal(
-    coordinator.capture('actor-1', current, false, undefined, owner),
-    undefined
-  );
+  assert.equal(coordinator.capture('actor-1', current, false, undefined, owner), undefined);
   current.forEach((part) => part.close());
 
   assert.deepEqual(followed, []);
-  assert.equal(markers.some((entry) => entry.marker === 'message_follow_relay'), false);
+  assert.equal(
+    markers.some((entry) => entry.marker === 'message_follow_relay'),
+    false
+  );
 });
 
 test('chained relocation keeps exact source-owner routes with one ObjectGeneration', async (t) => {
@@ -1453,13 +1461,7 @@ test('chained relocation keeps exact source-owner routes with one ObjectGenerati
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
   const firstFence = ownerFence('first', 2n);
-  coordinator.complete(
-    'actor-1',
-    target('first'),
-    targetActorRef('first', 1n),
-    [],
-    firstFence
-  );
+  coordinator.complete('actor-1', target('first'), targetActorRef('first', 1n), [], firstFence);
   assert.equal(coordinator.messageFollowCount('actor-1'), 1);
 
   setRequestSource({
@@ -1492,13 +1494,7 @@ test('chained relocation keeps exact source-owner routes with one ObjectGenerati
     targetActorRef('first', 1n),
     firstRelayContext
   );
-  await coordinator.capture(
-    'actor-1',
-    packet,
-    false,
-    undefined,
-    firstTargetRef
-  );
+  await coordinator.capture('actor-1', packet, false, undefined, firstTargetRef);
   packet.forEach((part) => part.close());
   assert.deepEqual(followed, ['chain', 'chain']);
   assert.equal(
@@ -1515,13 +1511,7 @@ test('duplicate Message Follow operation reaches the target exactly once', async
   const { coordinator, followed } = harness(1_000);
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete(
-    'actor-1',
-    target(),
-    targetActorRef(),
-    [],
-    ownerFence('target', 2n)
-  );
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
   const first = frame('deduplicated');
   const second = frame('deduplicated');
   const firstRef = contextRef(first, {
@@ -1637,13 +1627,7 @@ test('positive Message Follow request returns one correlated reply and preserves
   });
   coordinator.begin('actor-1', 1n, 'source-node', 1n, 1n);
   coordinator.snapshot('actor-1');
-  coordinator.complete(
-    'actor-1',
-    target(),
-    targetActorRef(),
-    [],
-    ownerFence('target', 2n)
-  );
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
   const request = frame('positive-request');
   const requestRef = contextRef(request, {
     operationId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -1652,25 +1636,18 @@ test('positive Message Follow request returns one correlated reply and preserves
     replyRouteId: 'cccccccccccccccccccccccccccccccc',
     deadlineUnixMs: Date.now() + 10_000
   });
-  assert.deepEqual(
-    await coordinator.capture('actor-1', request, true, undefined, requestRef),
-    { accepted: true }
-  );
+  assert.deepEqual(await coordinator.capture('actor-1', request, true, undefined, requestRef), {
+    accepted: true
+  });
   request.forEach((part) => part.close());
   assert.equal(relays[0].returnResponse, true);
-  assert.equal(
-    relays[0].messageFollowContext.correlationId,
-    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-  );
-  assert.equal(
-    relays[0].messageFollowContext.replyRouteId,
-    'cccccccccccccccccccccccccccccccc'
-  );
+  assert.equal(relays[0].messageFollowContext.correlationId, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+  assert.equal(relays[0].messageFollowContext.replyRouteId, 'cccccccccccccccccccccccccccccccc');
 
   response = {
     ok: false,
     error: 'moving',
-      errorKind: framework.ZLinkFrameworkInternalErrorKind.ActorMoving
+    errorKind: framework.ZLinkFrameworkInternalErrorKind.ActorMoving
   };
   const failed = frame('typed-error');
   const failedRef = contextRef(failed, {
@@ -1720,13 +1697,7 @@ test('in-flight request preserves framing, reply correlation, and the caller tim
     ok: true,
     response: { marker: 'R1', requestSeq: '731' }
   };
-  coordinator.complete(
-    'actor-1',
-    target(),
-    targetActorRef(),
-    [terminal],
-    ownerFence('target', 2n)
-  );
+  coordinator.complete('actor-1', target(), targetActorRef(), [terminal], ownerFence('target', 2n));
   assert.equal(
     coordinator.acceptRelocatedTerminal('actor-1', backlog[0], terminal, 'target-node', 2n),
     'terminalReceived'
@@ -1751,7 +1722,9 @@ test('in-flight request preserves framing, reply correlation, and the caller tim
   const lateBacklog = coordinator.snapshot('actor-1');
   const caller = Promise.race([
     lateReply,
-    new Promise((_resolve, reject) => setTimeout(() => reject(new Error('normal request timeout')), 5))
+    new Promise((_resolve, reject) =>
+      setTimeout(() => reject(new Error('normal request timeout')), 5)
+    )
   ]);
   await assert.rejects(caller, /normal request timeout/);
   const lateTerminal = {
@@ -1767,9 +1740,7 @@ test('in-flight request preserves framing, reply correlation, and the caller tim
     ownerFence('late', 2n)
   );
   assert.equal(
-    coordinator.acceptRelocatedTerminal(
-      'actor-1', lateBacklog[0], lateTerminal, 'late-node', 2n
-    ),
+    coordinator.acceptRelocatedTerminal('actor-1', lateBacklog[0], lateTerminal, 'late-node', 2n),
     'terminalReceived'
   );
   assert.deepEqual(await lateReply, { marker: 'late' });
@@ -1790,51 +1761,62 @@ test('late terminal uses captured source evidence after Actor removal and reject
   request.forEach((part) => part.close());
   const [packet] = coordinator.snapshot('actor-1');
   const terminal = { index: packet.index, ok: true, response: { accepted: true } };
-  coordinator.complete(
-    'actor-1',
-    target(),
-    targetActorRef(),
-    [terminal],
-    ownerFence('target', 2n)
-  );
+  coordinator.complete('actor-1', target(), targetActorRef(), [terminal], ownerFence('target', 2n));
   removeSourceState();
 
   const withSource = (source) => ({ ...packet, source: { ...packet.source, ...source } });
   assert.equal(
     coordinator.acceptRelocatedTerminal(
-      'actor-1', withSource({ ownerId: 'forged-owner' }), terminal, 'target-node', 2n
+      'actor-1',
+      withSource({ ownerId: 'forged-owner' }),
+      terminal,
+      'target-node',
+      2n
     ),
     'notAcknowledged'
   );
   assert.equal(
     coordinator.acceptRelocatedTerminal(
-      'actor-1', withSource({ ownerLeaseGeneration: '2' }), terminal, 'target-node', 2n
+      'actor-1',
+      withSource({ ownerLeaseGeneration: '2' }),
+      terminal,
+      'target-node',
+      2n
     ),
     'notAcknowledged'
   );
   assert.equal(
     coordinator.acceptRelocatedTerminal(
-      'actor-1', withSource({ nodeRid: 'forged-node' }), terminal, 'target-node', 2n
+      'actor-1',
+      withSource({ nodeRid: 'forged-node' }),
+      terminal,
+      'target-node',
+      2n
     ),
     'notAcknowledged'
   );
   assert.equal(
     coordinator.acceptRelocatedTerminal(
-      'actor-1', withSource({ nodeGeneration: '2' }), terminal, 'target-node', 2n
+      'actor-1',
+      withSource({ nodeGeneration: '2' }),
+      terminal,
+      'target-node',
+      2n
     ),
     'notAcknowledged'
   );
   assert.equal(
     coordinator.acceptRelocatedTerminal(
-      'actor-1', withSource({ replyRouteId: 'ffffffffffffffffffffffffffffffff' }),
-      terminal, 'target-node', 2n
+      'actor-1',
+      withSource({ replyRouteId: 'ffffffffffffffffffffffffffffffff' }),
+      terminal,
+      'target-node',
+      2n
     ),
     'notAcknowledged'
   );
   assert.equal(
-    coordinator.acceptRelocatedTerminal(
-      'forged-actor', packet, terminal, 'target-node', 2n
-    ),
+    coordinator.acceptRelocatedTerminal('forged-actor', packet, terminal, 'target-node', 2n),
     'notAcknowledged'
   );
   assert.equal(
@@ -1986,7 +1968,9 @@ test('Message Follow keeps opaque node identities that share the same display te
       async sendToSpot(targetRoute, payload) {
         relays.push({ targetNodeRid: String(targetRoute.targetNodeRid), payload });
       },
-      async requestToSpot() { return { ok: true }; }
+      async requestToSpot() {
+        return { ok: true };
+      }
     },
     requestSource: () => source,
     validateReplySource: () => true
@@ -1995,7 +1979,11 @@ test('Message Follow keeps opaque node identities that share the same display te
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
   coordinator.complete(
-    'actor-1', target('first'), targetActorRef('first'), [], ownerFence('first', 2n)
+    'actor-1',
+    target('first'),
+    targetActorRef('first'),
+    [],
+    ownerFence('first', 2n)
   );
   source = {
     ...source,
@@ -2005,11 +1993,18 @@ test('Message Follow keeps opaque node identities that share the same display te
   coordinator.begin('actor-1', 1n);
   coordinator.snapshot('actor-1');
   coordinator.complete(
-    'actor-1', target('second'), targetActorRef('second'), [], ownerFence('second', 2n)
+    'actor-1',
+    target('second'),
+    targetActorRef('second'),
+    [],
+    ownerFence('second', 2n)
   );
   assert.equal(coordinator.messageFollowCount('actor-1'), 2);
 
-  for (const [sourceRid, sourceOwner] of [[sourceA, sourceFenceA], [sourceB, sourceFenceB]]) {
+  for (const [sourceRid, sourceOwner] of [
+    [sourceA, sourceFenceA],
+    [sourceB, sourceFenceB]
+  ]) {
     const parts = frame(`opaque-${sourceOwner.nodeRidHex}`);
     const ref = contextRef(parts, {
       actorRef: { ...actorRef(), nodeRid: sourceRid },
@@ -2019,27 +2014,30 @@ test('Message Follow keeps opaque node identities that share the same display te
     await coordinator.capture('actor-1', parts, false, undefined, ref);
     parts.forEach((part) => part.close());
   }
-  assert.deepEqual(relays.map((relay) => relay.targetNodeRid), ['first-node', 'second-node']);
   assert.deepEqual(
-    relays.map((relay) => relay.payload.actorNodeRidHex),
-    [
-      Buffer.from('first-node').toString('hex'),
-      Buffer.from('second-node').toString('hex')
-    ]
+    relays.map((relay) => relay.targetNodeRid),
+    ['first-node', 'second-node']
   );
   assert.deepEqual(
-    relays.map((relay) =>
-      actorRelayWire.decodeRemoteActorPacketRelayPayload(
-        JSON.parse(JSON.stringify(relay.payload))
-      ).messageFollowContext.sourceOwner.nodeRidHex),
+    relays.map((relay) => relay.payload.actorNodeRidHex),
+    [Buffer.from('first-node').toString('hex'), Buffer.from('second-node').toString('hex')]
+  );
+  assert.deepEqual(
+    relays.map(
+      (relay) =>
+        actorRelayWire.decodeRemoteActorPacketRelayPayload(
+          JSON.parse(JSON.stringify(relay.payload))
+        ).messageFollowContext.sourceOwner.nodeRidHex
+    ),
     ['ff', 'fe']
   );
 
   coordinator.begin('actor-1', 1n);
   const terminalParts = frame('opaque-target-terminal');
-  const terminalReply = coordinator.capture(
-    'actor-1', terminalParts, true, undefined, { ...actorRef(), nodeRid: sourceB }
-  );
+  const terminalReply = coordinator.capture('actor-1', terminalParts, true, undefined, {
+    ...actorRef(),
+    nodeRid: sourceB
+  });
   terminalParts.forEach((part) => part.close());
   const [terminalPacket] = coordinator.snapshot('actor-1');
   const terminal = { index: terminalPacket.index, ok: true, response: 'opaque-target' };
@@ -2059,19 +2057,13 @@ test('Message Follow keeps opaque node identities that share the same display te
     nodeGeneration: 1n,
     authorityOwnerGeneration: 2n
   });
-  coordinator.complete(
-    'actor-1', opaqueTarget, opaqueTargetRef, [terminal], opaqueTargetOwner
-  );
+  coordinator.complete('actor-1', opaqueTarget, opaqueTargetRef, [terminal], opaqueTargetOwner);
   assert.equal(
-    coordinator.acceptRelocatedTerminal(
-      'actor-1', terminalPacket, terminal, sourceB, 2n
-    ),
+    coordinator.acceptRelocatedTerminal('actor-1', terminalPacket, terminal, sourceB, 2n),
     'notAcknowledged'
   );
   assert.equal(
-    coordinator.acceptRelocatedTerminal(
-      'actor-1', terminalPacket, terminal, sourceA, 2n
-    ),
+    coordinator.acceptRelocatedTerminal('actor-1', terminalPacket, terminal, sourceA, 2n),
     'terminalReceived'
   );
   assert.equal(await terminalReply, 'opaque-target');
@@ -2091,13 +2083,14 @@ test('Message Follow keeps opaque node identities that share the same display te
 
 test('Message Follow accepts legacy visited owner keys without weakening opaque RID fences', () => {
   const parts = frame('legacy-visited-owner');
-  const legacyKey = (fence) => [
-    fence.nodeRid,
-    fence.nodeGeneration,
-    fence.ownerId,
-    fence.ownerLeaseGeneration,
-    fence.authorityOwnerGeneration
-  ].join('\u0000');
+  const legacyKey = (fence) =>
+    [
+      fence.nodeRid,
+      fence.nodeGeneration,
+      fence.ownerId,
+      fence.ownerLeaseGeneration,
+      fence.authorityOwnerGeneration
+    ].join('\u0000');
   const legacyOwner = sourceOwnerFence();
   const legacyOwnerKey = legacyKey(legacyOwner);
   const legacyContext = {
@@ -2113,10 +2106,7 @@ test('Message Follow accepts legacy visited owner keys without weakening opaque 
 
   const decodedLegacy = messageFollow.decodeActorMessageFollowContext(legacyContext);
   assert.deepEqual(decodedLegacy.visitedOwners, [legacyOwnerKey]);
-  assert.notEqual(
-    legacyOwnerKey,
-    messageFollow.messageFollowOwnerFenceKey(legacyOwner)
-  );
+  assert.notEqual(legacyOwnerKey, messageFollow.messageFollowOwnerFenceKey(legacyOwner));
 
   const nextOwner = messageFollow.ownerFence({
     ownerId: 'next-owner',
@@ -2136,9 +2126,8 @@ test('Message Follow accepts legacy visited owner keys without weakening opaque 
     messageFollow.messageFollowOwnerFenceKey(nextOwner)
   ]);
   assert.deepEqual(
-    messageFollow.decodeActorMessageFollowContext(
-      JSON.parse(JSON.stringify(advanced))
-    ).visitedOwners,
+    messageFollow.decodeActorMessageFollowContext(JSON.parse(JSON.stringify(advanced)))
+      .visitedOwners,
     advanced.visitedOwners
   );
 
@@ -2147,11 +2136,12 @@ test('Message Follow accepts legacy visited owner keys without weakening opaque 
     nodeRidHex: Buffer.from(legacyOwner.nodeRid).toString('hex')
   });
   assert.throws(
-    () => messageFollow.advanceActorMessageFollowContext(
-      advanced,
-      nextOwner,
-      legacyOwnerWithCanonicalTextBytes
-    ),
+    () =>
+      messageFollow.advanceActorMessageFollowContext(
+        advanced,
+        nextOwner,
+        legacyOwnerWithCanonicalTextBytes
+      ),
     /owner loop was detected/u
   );
 
@@ -2161,12 +2151,13 @@ test('Message Follow accepts legacy visited owner keys without weakening opaque 
     nodeRidHex: 'ff'
   });
   assert.throws(
-    () => messageFollow.decodeActorMessageFollowContext({
-      ...legacyContext,
-      sourceOwner: opaqueOwner,
-      targetOwner: opaqueOwner,
-      visitedOwners: [legacyKey(opaqueOwner)]
-    }),
+    () =>
+      messageFollow.decodeActorMessageFollowContext({
+        ...legacyContext,
+        sourceOwner: opaqueOwner,
+        targetOwner: opaqueOwner,
+        visitedOwners: [legacyKey(opaqueOwner)]
+      }),
     /visited owner fence chain is invalid/u
   );
 
@@ -2191,9 +2182,8 @@ test('Message Follow accepts legacy visited owner keys without weakening opaque 
   );
   assert.equal(exactOpaqueAdvance.hopCount, 1);
   assert.deepEqual(
-    messageFollow.decodeActorMessageFollowContext(
-      JSON.parse(JSON.stringify(exactOpaqueAdvance))
-    ).visitedOwners,
+    messageFollow.decodeActorMessageFollowContext(JSON.parse(JSON.stringify(exactOpaqueAdvance)))
+      .visitedOwners,
     exactOpaqueAdvance.visitedOwners
   );
   parts.forEach((part) => part.close());
@@ -2201,13 +2191,14 @@ test('Message Follow accepts legacy visited owner keys without weakening opaque 
 
 test('Message Follow rejects ambiguous legacy keys across embedded NUL boundaries', () => {
   const parts = frame('legacy-nul-boundary');
-  const legacyKey = (fence) => [
-    fence.nodeRid,
-    fence.nodeGeneration,
-    fence.ownerId,
-    fence.ownerLeaseGeneration,
-    fence.authorityOwnerGeneration
-  ].join('\u0000');
+  const legacyKey = (fence) =>
+    [
+      fence.nodeRid,
+      fence.nodeGeneration,
+      fence.ownerId,
+      fence.ownerLeaseGeneration,
+      fence.authorityOwnerGeneration
+    ].join('\u0000');
   const nodeBoundaryFence = messageFollow.ownerFence({
     ownerId: 'owner',
     ownerLeaseGeneration: 1n,
@@ -2240,23 +2231,20 @@ test('Message Follow rejects ambiguous legacy keys across embedded NUL boundarie
     payloadChecksumSha256: messageFollow.actorMessageFollowPayloadChecksum(parts)
   });
   assert.throws(
-    () => messageFollow.decodeActorMessageFollowContext(
-      context(nodeBoundaryFence, ambiguousLegacyKey)
-    ),
+    () =>
+      messageFollow.decodeActorMessageFollowContext(context(nodeBoundaryFence, ambiguousLegacyKey)),
     /visited owner fence chain is invalid/u
   );
   assert.throws(
-    () => messageFollow.decodeActorMessageFollowContext(
-      context(ownerBoundaryFence, ambiguousLegacyKey)
-    ),
+    () =>
+      messageFollow.decodeActorMessageFollowContext(
+        context(ownerBoundaryFence, ambiguousLegacyKey)
+      ),
     /visited owner fence chain is invalid/u
   );
 
   const decodedCanonical = messageFollow.decodeActorMessageFollowContext(
-    context(
-      nodeBoundaryFence,
-      messageFollow.messageFollowOwnerFenceKey(nodeBoundaryFence)
-    )
+    context(nodeBoundaryFence, messageFollow.messageFollowOwnerFenceKey(nodeBoundaryFence))
   );
   const advanced = messageFollow.advanceActorMessageFollowContext(
     decodedCanonical,
@@ -2265,9 +2253,8 @@ test('Message Follow rejects ambiguous legacy keys across embedded NUL boundarie
   );
   assert.equal(advanced.hopCount, 1);
   assert.deepEqual(
-    messageFollow.decodeActorMessageFollowContext(
-      JSON.parse(JSON.stringify(advanced))
-    ).visitedOwners,
+    messageFollow.decodeActorMessageFollowContext(JSON.parse(JSON.stringify(advanced)))
+      .visitedOwners,
     advanced.visitedOwners
   );
   parts.forEach((part) => part.close());

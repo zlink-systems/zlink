@@ -391,7 +391,7 @@ export class ZLinkMeshDispatchPump {
 
   private async acquirePermit(): Promise<ApplicationJobPermitPort | undefined> {
     try {
-      return await this.options.applicationJobQueue.acquire(this.capacityStop.signal);
+      return await this.options.applicationJobQueue.acquire(this.capacityStop.signal, 'remote');
     } catch (error) {
       if (this.disposed || this.capacityStop.signal.aborted) return undefined;
       throw error;

@@ -1,3 +1,5 @@
+import { SeverityNumber } from '@opentelemetry/api-logs';
+import { telemetryLogger } from '../diagnostics/message-flow';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { ZLinkApplicationJobQueueProfile } from '../../contracts/Dispatch';
 import {
@@ -11,6 +13,7 @@ import {
 import { readFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import type {
+  ApplicationJobOrigin,
   ApplicationJobPermitPort,
   ApplicationJobQueuePort
 } from '../application-jobs/contracts';
@@ -122,7 +125,10 @@ export function resolveApplicationJobQueueConfiguration(
 export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
   private state: 'reserved' | 'queued' | 'released' = 'reserved';
 
-  constructor(private readonly owner: ApplicationJobQueue) {}
+  constructor(
+    private readonly owner: ApplicationJobQueue,
+    readonly origin: ApplicationJobOrigin
+  ) {}
 
   markApplicationQueued(): void {
     if (this.state !== 'reserved') {
@@ -149,6 +155,7 @@ export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
 }
 
 interface CapacityWaiter {
+  readonly origin: ApplicationJobOrigin;
   readonly resolve: (permit: ApplicationJobQueuePermit) => void;
   readonly reject: (reason: unknown) => void;
   readonly signal?: AbortSignal;
@@ -164,6 +171,8 @@ interface CapacityWaiter {
  * directly to the oldest live waiter without allocating the configured limit.
  */
 export class ApplicationJobQueue implements ApplicationJobQueuePort {
+  private localWaiters = 0;
+  private localBacklogLogged = false;
   private reservedSupplyPermits = 0n;
   private queuedApplicationJobs = 0n;
   private peakPermitsInUse = 0n;
@@ -191,7 +200,8 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
   constructor(
     private readonly configuration: ApplicationJobQueueConfiguration,
     private readonly nowMs: () => number = () => performance.now(),
-    private readonly handlerStartGate?: () => boolean
+    private readonly handlerStartGate?: () => boolean,
+    private readonly loggerFailureReporter?: (error: unknown) => void
   ) {
     this.receiveFlowController = new ApplicationJobReceiveFlowController(this, (state) => state);
   }
@@ -242,9 +252,12 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
     this.receiveFlowController.unregister(target);
   }
 
-  acquire(signal?: AbortSignal): Promise<ApplicationJobQueuePermit> {
+  acquire(
+    signal?: AbortSignal,
+    origin: ApplicationJobOrigin = 'remote'
+  ): Promise<ApplicationJobQueuePermit> {
     return new Promise((resolve, reject) => {
-      const permit = this.acquireOrResume(resolve, reject, signal);
+      const permit = this.acquireOrResume(resolve, reject, signal, origin);
       if (permit !== undefined) resolve(permit);
     });
   }
@@ -252,18 +265,20 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
   acquireOrResume(
     resume: (permit: ApplicationJobQueuePermit) => void,
     reject: (reason: unknown) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    origin: ApplicationJobOrigin = 'remote'
   ): ApplicationJobQueuePermit | undefined {
     if (signal?.aborted === true) {
       reject(abortReason(signal));
       return undefined;
     }
     if (this.waiters.length === 0 && this.permitsInUse() < this.limit()) {
-      return this.reserve();
+      return this.reserve(origin);
     }
 
     new Promise<ApplicationJobQueuePermit>((resolve, reject) => {
       const waiter: CapacityWaiter = {
+        origin,
         resolve,
         reject,
         signal,
@@ -274,8 +289,10 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
       };
       this.waiters.push(waiter);
       this.capacityWaitCount += 1n;
+      const warningCount = this.updateLocalWaiters(origin, 1);
       signal?.addEventListener('abort', waiter.abort, { once: true });
       this.drainWaiters();
+      if (warningCount !== undefined) this.logLocalBacklog(warningCount);
     })
       .then(resume)
       .catch(reject);
@@ -371,12 +388,15 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
     return this.reservedSupplyPermits + this.queuedApplicationJobs;
   }
 
-  private reserve(evaluatePressure = true): ApplicationJobQueuePermit {
+  private reserve(
+    origin: ApplicationJobOrigin,
+    evaluatePressure = true
+  ): ApplicationJobQueuePermit {
     this.reservedSupplyPermits += 1n;
     const current = this.permitsInUse();
     if (current > this.peakPermitsInUse) this.peakPermitsInUse = current;
     if (evaluatePressure) this.evaluatePressure();
-    return new ApplicationJobQueuePermit(this);
+    return new ApplicationJobQueuePermit(this, origin);
   }
 
   private drainWaiters(): void {
@@ -386,7 +406,7 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
       waiter.active = false;
       waiter.signal?.removeEventListener('abort', waiter.abort);
       this.recordCompletedWait(waiter);
-      waiter.resolve(this.reserve(false));
+      waiter.resolve(this.reserve(waiter.origin, false));
     }
   }
 
@@ -402,9 +422,45 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
   }
 
   private recordCompletedWait(waiter: CapacityWaiter): void {
+    this.updateLocalWaiters(waiter.origin, -1);
     if (waiter.metricsEpoch !== this.metricsEpoch) return;
     const durationMs = Math.max(0, this.nowMs() - waiter.startedAtMs);
     this.capacityWaitDurationSeconds += durationMs / MILLISECONDS_PER_SECOND;
+  }
+
+  private updateLocalWaiters(origin: ApplicationJobOrigin, delta: number): number | undefined {
+    if (origin !== 'local') return undefined;
+    this.localWaiters += delta;
+    if (this.localWaiters === 0) this.localBacklogLogged = false;
+    if (!this.localBacklogLogged && this.localWaiters > Number(this.limit())) {
+      this.localBacklogLogged = true;
+      return this.localWaiters;
+    }
+    return undefined;
+  }
+
+  private logLocalBacklog(localWaiters: number): void {
+    try {
+      telemetryLogger.emit({
+        eventName: 'zlink.runtime.host.local_job_backlog_exceeded',
+        timestamp: new Date(),
+        severityNumber: SeverityNumber.WARN,
+        severityText: 'WARN',
+        body: 'Same-host jobs waiting for a host permit exceeded the application job queue maximum.',
+        attributes: {
+          source_kind: 'host',
+          source_name: 'zlink.runtime.host',
+          local_waiters: localWaiters,
+          effective_maximum: Number(this.limit())
+        }
+      });
+    } catch (error) {
+      try {
+        this.loggerFailureReporter?.(error);
+      } catch {
+        // A diagnostics reporter cannot change an acquisition either.
+      }
+    }
   }
 
   private evaluatePressure(): void {

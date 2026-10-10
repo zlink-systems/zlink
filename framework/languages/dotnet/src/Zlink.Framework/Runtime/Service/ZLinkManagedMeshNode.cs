@@ -5323,7 +5323,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var transferred = false;
         try
         {
-            admission = await queue.AcquireAsync(cancellationToken).ConfigureAwait(false);
+            admission = await queue
+                .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
+                .ConfigureAwait(false);
             if (cancellationToken.IsCancellationRequested)
                 return;
             Interlocked.Exchange(ref _reservedRawApplicationAdmission, admission)?.Dispose();
@@ -11108,7 +11110,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var owner = new ZLinkApplicationJobQueueRecordOwner(payloadOwner, admission);
                 transferred = true;
                 EnqueueOwned(key, record, parts, admitApplication: true, payloadOwner: owner);
-            }
+            },
+            ZLinkApplicationJobOrigin.Local
         );
         _ = FinishAdmissionAsync();
 

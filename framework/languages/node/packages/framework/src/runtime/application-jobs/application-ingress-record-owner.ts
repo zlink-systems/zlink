@@ -1,4 +1,8 @@
-import type { ApplicationJobPermitPort, ApplicationJobQueuePort } from './contracts';
+import type {
+  ApplicationJobOrigin,
+  ApplicationJobPermitPort,
+  ApplicationJobQueuePort
+} from './contracts';
 
 export type ApplicationJobRecordDomain = 'application' | 'infrastructure';
 
@@ -85,6 +89,10 @@ export class ApplicationJobRecordLease implements ApplicationJobPermitPort {
     private readonly permit: ApplicationJobPermitPort
   ) {}
 
+  get origin(): ApplicationJobOrigin {
+    return this.shared.origin;
+  }
+
   markApplicationQueued(): void {
     // The owner classifies and marks the child atomically when it is created;
     // downstream dispatch must not mutate queue accounting a second time.
@@ -132,12 +140,14 @@ class SharedIngressRecordState {
   private jobCount = 0;
   private initialPermit?: ApplicationJobPermitPort;
   private recordClosed = false;
+  readonly origin: ApplicationJobOrigin;
 
   constructor(
     private readonly queue: ApplicationJobQueuePort,
     initialPermit: ApplicationJobPermitPort,
     private readonly record: IngressRecordPort
   ) {
+    this.origin = initialPermit.origin ?? 'remote';
     this.initialPermit = initialPermit;
   }
 
@@ -160,7 +170,7 @@ class SharedIngressRecordState {
   }
 
   acquirePermit(signal: AbortSignal): Promise<ApplicationJobPermitPort> {
-    return this.queue.acquire(signal);
+    return this.queue.acquire(signal, this.origin);
   }
 
   createJob(

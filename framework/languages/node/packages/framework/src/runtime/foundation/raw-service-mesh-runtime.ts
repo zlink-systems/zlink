@@ -574,7 +574,7 @@ export class RawServiceMeshRuntime {
       signal === undefined
         ? this.applicationJobStop.signal
         : AbortSignal.any([this.applicationJobStop.signal, signal]);
-    const permit = await this.applicationJobQueue.acquire(waitSignal);
+    const permit = await this.applicationJobQueue.acquire(waitSignal, 'local');
     return ApplicationIngressRecordOwner.create(this.applicationJobQueue, permit, { close() {} });
   }
 
@@ -716,7 +716,8 @@ export class RawServiceMeshRuntime {
           resolveAcquisition(permit);
         },
         rejectAcquisition,
-        this.applicationJobStop.signal
+        this.applicationJobStop.signal,
+        'remote'
       );
       if (permit !== undefined) this.receivePermit = permit;
       else {

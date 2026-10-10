@@ -590,7 +590,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         var transferred = false;
         try
         {
-            admission = await queue.AcquireAsync(cancellationToken).ConfigureAwait(false);
+            admission = await queue
+                .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
+                .ConfigureAwait(false);
             if (cancellationToken.IsCancellationRequested)
                 return;
             Interlocked.Exchange(ref _reservedApplicationAdmission, admission)?.Dispose();

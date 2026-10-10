@@ -349,7 +349,12 @@ export class ZLinkFrameworkRuntimeHost
         } catch {
           return false;
         }
-      }
+      },
+      (error) =>
+        (this.errorSink ?? this.preStartErrorSink).reportRuntimeTaskException(
+          'logger-provider',
+          error
+        )
     );
     this.capacityStatus = new HostCapacityStatusProjection(
       options.registration.coreHwm,
@@ -721,13 +726,13 @@ export class ZLinkFrameworkRuntimeHost
       sessionRelocationWire: () => this.serviceRelocation,
       clearRemoteActorPacketTarget: (actorId) =>
         this.boundSessionRelay.clearRemoteActorPacketTarget(actorId),
-      prepareApplicationJob: async (preparationSignal) => {
+      prepareApplicationJob: async (preparationSignal, origin) => {
         const runtimeSignal = this.executionState?.abortController.signal;
         const signal =
           runtimeSignal === undefined
             ? preparationSignal
             : AbortSignal.any([runtimeSignal, preparationSignal]);
-        const permit = await this.applicationJobQueue.acquire(signal);
+        const permit = await this.applicationJobQueue.acquire(signal, origin);
         let state: 'ready' | 'running' | 'closed' = 'ready';
         let closedReason: unknown;
         let abort: (() => void) | undefined;
@@ -3012,7 +3017,10 @@ export class ZLinkFrameworkRuntimeHost
     try {
       state.taskRunner.runDetached('mesh-node-local-route-dispatch', async () => {
         try {
-          const permit = await this.applicationJobQueue.acquire(state.abortController.signal);
+          const permit = await this.applicationJobQueue.acquire(
+            state.abortController.signal,
+            'local'
+          );
           permit.markApplicationQueued();
           await runWithApplicationJobPermit(permit, () =>
             channelRuntime.dispatchLocalMeshRoute(meshName, sourceNodeRid, ownedParts)
