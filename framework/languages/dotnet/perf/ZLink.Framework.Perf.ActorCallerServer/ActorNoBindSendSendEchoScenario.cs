@@ -119,7 +119,7 @@ public sealed class ActorNoBindSendSendEchoScenario(
     }
 
     public Task RunAsync() =>
-        ServerDrivenStreams.RunAdmissionsAsync(
+        ServerDrivenStreams.RunTerminalStreamsAsync(
             measurement,
             config.workload.logicalStreams!.Value,
             LoopAsync

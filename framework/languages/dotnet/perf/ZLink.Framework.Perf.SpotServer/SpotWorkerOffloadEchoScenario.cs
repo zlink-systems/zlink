@@ -139,7 +139,7 @@ public sealed class SpotWorkerOffloadEchoScenario(
     }
 
     public Task RunAsync() =>
-        ServerDrivenStreams.RunRequestsAsync(
+        ServerDrivenStreams.RunTerminalStreamsAsync(
             measurement,
             config.workload.logicalStreams!.Value,
             LoopAsync

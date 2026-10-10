@@ -3,10 +3,7 @@ package systems.zlink.framework.perf.servers.spot
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.atomic.AtomicLongArray
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.future.await
-import kotlinx.coroutines.launch
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.requestToSpot
@@ -20,6 +17,7 @@ import systems.zlink.framework.perf.RoleConfig
 import systems.zlink.framework.perf.ScenarioMetrics
 import systems.zlink.framework.perf.kotlin.completionStage
 import systems.zlink.framework.perf.kotlin.planStreamTargets
+import systems.zlink.framework.perf.kotlin.runTerminalStreams
 import systems.zlink.framework.spots.ZLinkSpotManager
 
 class SpotNoAwaitEchoScenario(
@@ -93,34 +91,29 @@ class SpotNoAwaitEchoScenario(
     }
 
     fun run(): CompletionStage<Void> = completionStage {
-        coroutineScope {
-            repeat(config.workload().logicalStreams()) { stream ->
-                launch(Dispatchers.IO) {
-                    while (measurement.canIssue()) {
-                        val spotId = streamTargets[stream]
-                        val request =
-                            measurement.request(stream, sequences.incrementAndGet(stream), false)
-                        val started = measurement.beginOperation()
-                        if (started < 0) break
-                        try {
+        runTerminalStreams(config.workload().logicalStreams(), measurement::canIssue) { stream ->
+            val spotId = streamTargets[stream]
+            val request = measurement.request(stream, sequences.incrementAndGet(stream), false)
+            val started = measurement.beginOperation()
+            if (started < 0) return@runTerminalStreams false
+            try {
 
-                            val sent = request.withSentTicks(started)
-                            val reply =
-                                spots
-                                    .kotlin()
-                                    .requestToSpot<PerfEchoReply>(spotId, sent)
-                                    .timeout(measurement.callTimeout())
-                                    .await()
-                            PayloadPattern.validateIdentity(sent, reply)
-                            measurement.pattern().validate(reply.payload())
-                            measurement.completeOperation(started)
-                        } catch (error: Exception) {
-                            measurement.completeOperation(started, error)
-                            if (error is CancellationException) throw error
-                        }
-                    }
-                }
+                val sent = request.withSentTicks(started)
+                val reply =
+                    spots
+                        .kotlin()
+                        .requestToSpot<PerfEchoReply>(spotId, sent)
+                        .timeout(measurement.callTimeout())
+                        .await()
+                PayloadPattern.validateIdentity(sent, reply)
+                measurement.pattern().validate(reply.payload())
+                measurement.completeOperation(started)
+            } catch (error: Exception) {
+                measurement.completeOperation(started, error)
+                if (error is CancellationException) throw error
             }
+
+            true
         }
     }
 }

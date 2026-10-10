@@ -24,7 +24,7 @@ import { Measurement } from '../shared/measurement';
 import { PayloadPattern } from '../shared/payload';
 import { ScenarioMetrics } from '../server-support/scenario-metrics';
 import { ObjectsReadiness, ROLE_CONFIG, runRole } from '../server-support/server-application';
-import { runRequestStreams, until } from '../server-support/wait';
+import { runTerminalStreams, until } from '../server-support/wait';
 import { ActorlessSpot, configureSpotRole, createSpots, publishSpots } from './spot-role';
 
 // §10.5 s2s-spot-to-channel-request-echo. Question: how the terminal (ordinary or Yield) and the number of Spots
@@ -104,14 +104,13 @@ export class S2sSpotToChannelRequestEchoScenario {
   }
 
   run = (): Promise<void> =>
-    runRequestStreams(
+    runTerminalStreams(
       this.config.workload.logicalStreams as number,
       () => this.measurement.canIssue,
-      (stream) => this.loop(stream),
-      (error) => this.measurement.recordDiagnostic(error)
+      (stream) => this.loop(stream)
     );
 
-  // The local driver: one PerfDriveRequest per operation; the in-flight slot is the driver's until the handler returns.
+  // Each local stream starts its next PerfDriveRequest after the handler returns.
   private async loop(stream: number): Promise<void> {
     const { config, measurement, metrics } = this;
     const spotId = config.spotIds[stream % config.spotIds.length];
