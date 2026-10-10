@@ -449,7 +449,9 @@ Command 39 route는 첫 byte와 `u16` body length로 닫힌 union을 이룬다.
 | `2` | Cold activation 요청 — 원본 authority가 Missing이거나, owner lease가 무효인 Ready(target이 현재 authority를 다시 읽어 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas) 해제를 요청한다) | target Mesh·node RID·lifecycle, Spot RID, stable type, descriptor version, deadline — authority fence는 금지 |
 
 Kind `2` route와 ZLIA의 target Mesh·stable type·descriptor version·deadline, operation identity와
-metadata presence·bytes가 다르면 reservation 전에 protocol error로 거부한다.
+metadata presence·bytes가 다르면 protocol error로 거부한다. 이 대조는
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제와 reservation보다
+먼저 끝내며, 불일치이면 authority·membership·수용 공간을 바꾸지 않는다.
 
 ### Target host의 scan과 recovery
 

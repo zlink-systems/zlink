@@ -499,7 +499,9 @@ length.
 
 If a kind `2` route's operation identity or metadata presence/bytes differ
 from the ZLIA's target Mesh/stable type/descriptor version/deadline, it is
-rejected as a protocol error before reservation.
+rejected as a protocol error. This comparison finishes before both the
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas) release and reservation,
+and a mismatch leaves authority, membership, and capacity unchanged.
 
 ### Target Host Scan and Recovery
 

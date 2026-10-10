@@ -169,8 +169,8 @@ which state it was in again.
 | `Unavailable` | The fact that authority remains without a Ready route, and that authority's state (`Creating`, `Closing`, and so on) | Calls without Instance intent go to the terminal mapper of [Spot address messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability). Instance-intent activation follows the `Creating` wait, the release request for a steady `Ready` with an invalid owner lease, and the idle-cleanup route refresh in [Object lifecycle §§3, 5](09-object-lifecycle.en.md#3-when-to-build-a-missing-object). An Instance intent that observes authority under explicit Close keeps the owner route and fence and is forwarded to that owner node; handling at the owner follows [Spot address messaging §7](06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
 | `StoreFailure` | The fact that authority presence couldn't be determined | Delivered to Store retry/reconciliation. |
 
-Only `ReadyRoute` is stored in the positive route cache, and only `Missing` is
-delivered to the creation coordinator. The resolver returns `Missing` only
+Only `ReadyRoute` is stored in the positive route cache. Forwarding to the
+creation coordinator follows [Object lifecycle §3](09-object-lifecycle.en.md#3-when-to-build-a-missing-object). The resolver returns `Missing` only
 after the lifecycle component that owns authority release completes that
 release — without this order, an object still being cleaned up would look as
 if it already didn't exist.

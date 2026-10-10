@@ -885,8 +885,8 @@ Application이 반환한 `Rejected`와 callback exception은 다른 결과다. P
 종료되면 같은 ID와 같은 generation에 대해 factory가 다시 실행될 수 있다. 따라서 factory는
 같은 요청을 다시 실행해도 상태가 깨지지 않아야 한다.
 
-기존 record의 owner lease가 무효이면 아래 표보다 [§6.1](#61-read와-cas)의 해제 결과를 먼저 따른다. 아래 표는
-owner lease가 유효하거나 해제되지 않은 record에 적용한다.
+기존 record의 owner lease가 무효이면 [§6.1](#61-read와-cas)의 결과로 끝내고, 해제가 commit된 경우에만
+`Missing`의 생성 절차로 진행한다. 아래 표의 `Ready` 행은 owner lease가 유효한 record에만 적용한다.
 
 | 현재 record | `Create` | `GetOrCreate` |
 |---|---|---|

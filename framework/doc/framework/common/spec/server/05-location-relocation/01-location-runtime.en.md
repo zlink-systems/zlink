@@ -990,8 +990,9 @@ different results. If the process terminates mid-way, the factory may run again 
 same ID and same generation. So the factory must not break state if the same request
 runs again.
 
-If the existing record's owner lease is invalid, the [§6.1](#61-read-and-cas) release result applies before the
-table below. The table applies to a record whose owner lease is valid or that wasn't released.
+If the existing record's owner lease is invalid, the operation completes with the [§6.1](#61-read-and-cas)
+result and proceeds to the `Missing` creation procedure only when the release commits. The `Ready` rows
+in the table below apply only to a record whose owner lease is valid.
 
 | Current record | `Create` | `GetOrCreate` |
 |---|---|---|

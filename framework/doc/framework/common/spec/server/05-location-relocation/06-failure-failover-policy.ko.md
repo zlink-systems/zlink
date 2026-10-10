@@ -163,7 +163,7 @@ Instance Spot은 별도 create API를 호출하지 않고 `Missing` 상태에서
 | Authority record가 없는 `Missing` | Eligible node 하나를 선택해 새 `ObjectGeneration`의 cold activation을 시작한다. |
 | `Creating` 또는 최초 message를 아직 복원하지 않은 `Ready` | 같은 target lifecycle이면 저장한 생성 record와 최초 message로 같은 `ObjectGeneration`의 생성을 계속한다. Target lifecycle이 끝난 `Creating`은 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas) 해제 뒤 `Missing`이 된다. 해제 전에는 새 incarnation을 만들지 않는다. |
 | Owner lease가 유효한 `Ready` | 현재 owner로 message를 보낸다. Cold activation을 시작하지 않는다. |
-| `Ready` owner process가 종료되었거나 owner lease가 무효임 | [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 해제가 commit되면 `Missing`에서 새 `ObjectGeneration`의 cold activation을 시작한다. 이전 incarnation의 state와 수락된 operation은 이어받지 않는다. 해제 조건을 만족하지 않으면 operation은 `Unavailable`로 끝난다. |
+| Owner lease가 무효인 `Ready` | [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 해제가 commit되면 `Missing`에서 새 `ObjectGeneration`의 cold activation을 시작한다. 이전 incarnation의 state와 수락된 operation은 이어받지 않는다. 해제 조건을 만족하지 않으면 operation은 `Unavailable`로 끝난다. |
 | Application의 explicit `Close`가 authority release까지 완료됨 | 이후 조회 결과는 `Missing`이다. 다음 Instance intent message는 새 `ObjectGeneration`의 cold activation을 시작할 수 있다. |
 | Application의 explicit `Close`가 진행 중임 | Instance intent message의 전달과 실행 대상은 [Spot 주소 메시징 §7·§9](../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)를 따른다. |
 | 계획된 `Relocate`가 진행 중이거나 완료됨 | Relocation 계약에 따라 같은 object와 `ObjectGeneration`을 target으로 옮긴다. Cold activation이나 crash failover로 처리하지 않는다. |
