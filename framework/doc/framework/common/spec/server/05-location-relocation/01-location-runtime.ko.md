@@ -1490,6 +1490,10 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 - 첫 page 뒤에 member가 있는 scan, snapshot 만료, Store failure를 빈 membership으로 처리하지 않는다. Old
   Spot의 lease 무효화와 늦은 Join commit을 경합시키고, 두 재생성 요청을 경합시켜 old version으로 새
   authority를 지우거나 수용 공간을 두 번 반환하지 않음을 확인한다.
+- 해제 조건을 만족하는 steady `Ready`에 대한 Instance 재생성 요청에서
+  [wire protocol §8](../02-channel-transport/06-wire-protocol.ko.md)의 kind 2 route·ZLIA 대조 값을 하나씩 다르게 주면
+  protocol error로 끝나고 authority·membership·수용 공간이 바뀌지 않으며 factory가 실행되지 않는다. 값이 모두
+  같으면 위의 해제와 새 생성 결과를 확인한다.
 - 생성이 끝나면 `Ready`, 수용 공간과 최종 결과를 한 번에 기록하거나, record 삭제와 공간
   반환과 실패 결과를 한 번에 기록한다.
 - 같은 요청은 최초 deadline에서 5분 동안 저장한 최종 결과를 다시 읽을 수 있다.

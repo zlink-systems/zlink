@@ -1662,6 +1662,10 @@ store record golden fixture. Each item maps to one test.
   empty membership. Racing old-Spot lease invalidation with a late Join commit, and racing two
   re-creation requests, verify that an old version doesn't delete new authority and capacity isn't
   returned twice.
+- For an Instance re-creation request on a steady `Ready` that meets the release conditions, varying
+  each kind 2 route-to-ZLIA comparison value of [wire protocol §8](../02-channel-transport/06-wire-protocol.en.md)
+  one at a time ends with a protocol error, leaves authority, membership, and capacity unchanged, and
+  runs no factory. When all values match, the release and new-creation results above are verified.
 - When creation finishes, it records `Ready`, capacity, and the final result together, or
   record deletion, space return, and a failure result together.
 - The same request can re-read the stored final result for 5 minutes from the original
