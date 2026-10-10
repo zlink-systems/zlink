@@ -2443,8 +2443,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     Optional<String> packetName,
                     String contentType,
                     Map<String, String> metadata,
-                    long deadline) {
-                return resolveInstanceSpotRoute(spotId, stableType, meshName, deadline)
+                    long deadline,
+                    systems.zlink.framework.runtime.internal.spots.SpotTransportAddress
+                            readyRoute) {
+                return resolveInstanceSpotRoute(spotId, stableType, meshName, deadline, readyRoute)
                         .thenCompose(
                                 activation -> {
                                     List<Message> parts =
@@ -2485,7 +2487,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     Optional<String> packetName,
                     String contentType,
                     Map<String, String> metadata,
-                    Duration timeout) {
+                    Duration timeout,
+                    systems.zlink.framework.runtime.internal.spots.SpotTransportAddress
+                            readyRoute) {
                 Duration effective = timeout == null ? defaultRequestTimeout : timeout;
                 long deadline = System.currentTimeMillis() + effective.toMillis();
                 byte[] applicationMetadata =
@@ -2501,22 +2505,30 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 metadata,
                                 systems.zlink.framework.runtime.internal.diagnostics
                                         .ZLinkFlowContext.current());
-                Supplier<CompletionStage<List<Message>>> attempt =
-                        () ->
-                                resolveInstanceSpotRoute(spotId, stableType, meshName, deadline)
-                                        .thenCompose(
-                                                activation ->
-                                                        requestInstanceSpot(
-                                                                activation,
-                                                                applicationMetadata,
-                                                                parts,
-                                                                deadline));
+                java.util.function.Function<
+                                systems.zlink.framework.runtime.internal.spots.SpotTransportAddress,
+                                CompletionStage<List<Message>>>
+                        attempt =
+                                route ->
+                                        resolveInstanceSpotRoute(
+                                                        spotId,
+                                                        stableType,
+                                                        meshName,
+                                                        deadline,
+                                                        route)
+                                                .thenCompose(
+                                                        activation ->
+                                                                requestInstanceSpot(
+                                                                        activation,
+                                                                        applicationMetadata,
+                                                                        parts,
+                                                                        deadline));
                 //  Failover policy §4.4: after Close released the authority, the next Instance
                 //  intent message cold-activates. spotMoving is the owner fence refusal made
                 //  before admission, so one authority read decides: Missing continues as a cold
                 //  activation, any other authority keeps that first terminal. A message the
                 //  owner accepted ends with its own terminal and is never placed again.
-                return attempt.get()
+                return attempt.apply(readyRoute)
                         .exceptionallyCompose(
                                 failure ->
                                         ZLinkRequestFailureMapping.causeCode(failure)
@@ -2538,7 +2550,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                         read
                                                                                         instanceof
                                                                                         ZLinkAuthorityMissing
-                                                                                ? attempt.get()
+                                                                                ? attempt.apply(
+                                                                                        null)
                                                                                 : CompletableFuture
                                                                                         .failedFuture(
                                                                                                 failure)))
@@ -2571,12 +2584,36 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     private CompletionStage<InstanceActivation> resolveInstanceSpotRoute(
-            String spotId, String requestedType, String requestedMesh, long deadline) {
+            String spotId,
+            String requestedType,
+            String requestedMesh,
+            long deadline,
+            systems.zlink.framework.runtime.internal.spots.SpotTransportAddress readyRoute) {
         systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator.requireCallerAssignable(
                 spotId);
         var admissionFailure = spotHostAdmissionFailure(spotId);
         if (admissionFailure != null) {
             return CompletableFuture.failedFuture(admissionFailure);
+        }
+        if (readyRoute != null) {
+            requireInstanceSpotType(
+                    readyRoute.spotKind() == systems.zlink.framework.spots.ZLinkSpotKind.INSTANCE,
+                    readyRoute.stableType(),
+                    requestedType);
+            return CompletableFuture.completedFuture(
+                    new InstanceActivation(
+                            routeMeshNodesByName.get(readyRoute.routerChannelId()),
+                            new systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                                    readyRoute.targetNodeRid(),
+                                    readyRoute.targetNodeGeneration(),
+                                    readyRoute.spotId(),
+                                    readyRoute.spotGeneration(),
+                                    readyRoute.ownerId(),
+                                    readyRoute.authorityOwnerGeneration(),
+                                    readyRoute.ownerLeaseGeneration(),
+                                    readyRoute.storeVersion()),
+                            readyRoute.stableType()));
         }
         var store = requireUserSpotLocationStore();
         String key = systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(spotId);
@@ -2588,54 +2625,46 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         userSpotAuthorities
                                                 .decode(existing.payload())
                                                 .orElseThrow();
-                                if (authority.instance().isEmpty()
-                                        || (requestedType != null
-                                                && !requestedType.equals(authority.stableType()))) {
-                                    return CompletableFuture.failedFuture(
-                                            ZLinkFrameworkErrorOrigin.framework(
-                                                    ZLinkFrameworkErrorKind.TYPE_MISMATCH,
-                                                    "Instance Spot type does not match"));
-                                }
+                                requireInstanceSpotType(
+                                        authority.instance().isPresent(),
+                                        authority.stableType(),
+                                        requestedType);
                                 if (existing.allocation().state()
                                         == systems.zlink.framework.runtime.internal.locations
                                                 .ZLinkPlacementAllocationState.ACTIVE) {
-                                    return store.readOwnerLease(existing.ownerId())
+                                    return systems.zlink.framework.runtime.internal.spots
+                                            .SpotTransportAddressResolver.resolveForCall(
+                                                    userSpotLocationResolvers
+                                                            .resolveReadySpot(spotId, existing)
+                                                            .thenApply(
+                                                                    route ->
+                                                                            Optional.ofNullable(
+                                                                                            route)
+                                                                                    .map(
+                                                                                            systems
+                                                                                                            .zlink
+                                                                                                            .framework
+                                                                                                            .runtime
+                                                                                                            .internal
+                                                                                                            .spots
+                                                                                                            .SpotTransportAddress
+                                                                                                    ::fromRoute)),
+                                                    true)
                                             .thenCompose(
-                                                    lease -> {
-                                                        if (lease
-                                                                        instanceof
-                                                                        systems.zlink.framework
-                                                                                        .runtime
-                                                                                        .internal
-                                                                                        .locations
-                                                                                        .ZLinkOwnerLeaseFound
-                                                                                found
-                                                                && found.token().leaseGeneration()
-                                                                        == existing
-                                                                                .ownerLeaseGeneration()
-                                                                && found.leaseExpiresAt()
-                                                                        .isAfter(
-                                                                                found.storeNow())) {
-                                                            return CompletableFuture
-                                                                    .completedFuture(
-                                                                            new InstanceActivation(
-                                                                                    routeMeshNodesByName
-                                                                                            .get(
-                                                                                                    authority
-                                                                                                            .meshName()),
-                                                                                    instanceRoute(
-                                                                                            authority,
-                                                                                            existing),
-                                                                                    authority
-                                                                                            .stableType()));
-                                                        }
-                                                        return coldInstanceActivation(
-                                                                store,
-                                                                authority.meshName(),
-                                                                authority.stableType(),
-                                                                spotId,
-                                                                deadline);
-                                                    });
+                                                    route ->
+                                                            route == null
+                                                                    ? coldInstanceActivation(
+                                                                            store,
+                                                                            authority.meshName(),
+                                                                            authority.stableType(),
+                                                                            spotId,
+                                                                            deadline)
+                                                                    : resolveInstanceSpotRoute(
+                                                                            spotId,
+                                                                            requestedType,
+                                                                            requestedMesh,
+                                                                            deadline,
+                                                                            route));
                                 }
                                 return CompletableFuture.failedFuture(
                                         ZLinkFrameworkErrorOrigin.framework(
@@ -2654,6 +2683,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             spotId,
                                                             deadline));
                         });
+    }
+
+    private static void requireInstanceSpotType(
+            boolean instance, String actualType, String requestedType) {
+        if (!instance || requestedType != null && !requestedType.equals(actualType)) {
+            throw ZLinkFrameworkErrorOrigin.framework(
+                    ZLinkFrameworkErrorKind.TYPE_MISMATCH, "Instance Spot type does not match");
+        }
     }
 
     private CompletionStage<InstanceActivation> coldInstanceActivation(
@@ -2929,100 +2966,53 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     ZLinkFrameworkErrorKind.TYPE_MISMATCH,
                                                     "Instance Spot type does not match"));
                                 }
-                                return store.readOwnerLease(current.ownerId())
+                                if (current.allocation().state()
+                                        != systems.zlink.framework.runtime.internal.locations
+                                                .ZLinkPlacementAllocationState.ACTIVE) {
+                                    return CompletableFuture.failedFuture(
+                                            ZLinkFrameworkErrorOrigin.framework(
+                                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                    "Instance Spot creation is in progress"));
+                                }
+                                var request =
+                                        new ZLinkObjectReservationRequest(
+                                                ZLinkPlacementObjectKind.INSTANCE_SPOT,
+                                                key,
+                                                envelope.stableType(),
+                                                "",
+                                                new byte[32],
+                                                0,
+                                                new ZLinkMeshNodeDescriptorKey(
+                                                        envelope.targetMeshName(),
+                                                        envelope.targetNodeRid()),
+                                                envelope.targetNodeGeneration(),
+                                                new ZLinkLocationOwnerToken(
+                                                        current.ownerId(),
+                                                        current.ownerLeaseGeneration()),
+                                                new byte[0],
+                                                ZLinkPlacementCapacityBundle.spot(
+                                                        ZLinkPlacementObjectKind.INSTANCE_SPOT,
+                                                        envelope.stableType(),
+                                                        1),
+                                                registeredSpotPolicy(
+                                                        envelope.targetMeshName(),
+                                                        envelope.stableType(),
+                                                        ZLinkPlacementObjectKind.INSTANCE_SPOT));
+                                return store.releaseEndedReservation(
+                                                request,
+                                                current.storeVersion(),
+                                                () ->
+                                                        System.currentTimeMillis()
+                                                                >= envelope.deadlineUnixMs())
                                         .thenCompose(
-                                                lease -> {
-                                                    if (lease
-                                                                    instanceof
-                                                                    systems.zlink.framework.runtime
-                                                                                    .internal
-                                                                                    .locations
-                                                                                    .ZLinkOwnerLeaseFound
-                                                                            found
-                                                            && found.token().leaseGeneration()
-                                                                    == current
-                                                                            .ownerLeaseGeneration()
-                                                            && found.leaseExpiresAt()
-                                                                    .isAfter(found.storeNow())) {
-                                                        if (current.allocation().state()
-                                                                        == systems.zlink.framework
-                                                                                .runtime.internal
-                                                                                .locations
-                                                                                .ZLinkPlacementAllocationState
-                                                                                .ACTIVE
-                                                                && authority
-                                                                        .nodeRid()
-                                                                        .equals(
-                                                                                envelope
-                                                                                        .targetNodeRid())
-                                                                && authority.nodeGeneration()
-                                                                        == envelope
-                                                                                .targetNodeGeneration()) {
-                                                            return CompletableFuture
-                                                                    .completedFuture(
-                                                                            instanceRoute(
-                                                                                    authority,
-                                                                                    current));
-                                                        }
-                                                        return CompletableFuture.failedFuture(
-                                                                ZLinkFrameworkErrorOrigin.framework(
-                                                                        ZLinkFrameworkErrorKind
-                                                                                .UNAVAILABLE,
-                                                                        "Cold activation target is not the current owner"));
-                                                    }
-                                                    var request =
-                                                            new ZLinkObjectReservationRequest(
-                                                                    ZLinkPlacementObjectKind
-                                                                            .INSTANCE_SPOT,
-                                                                    key,
-                                                                    envelope.stableType(),
-                                                                    "",
-                                                                    new byte[32],
-                                                                    0,
-                                                                    new ZLinkMeshNodeDescriptorKey(
-                                                                            envelope
-                                                                                    .targetMeshName(),
-                                                                            envelope
-                                                                                    .targetNodeRid()),
-                                                                    envelope.targetNodeGeneration(),
-                                                                    new ZLinkLocationOwnerToken(
-                                                                            current.ownerId(),
-                                                                            current
-                                                                                    .ownerLeaseGeneration()),
-                                                                    new byte[0],
-                                                                    ZLinkPlacementCapacityBundle
-                                                                            .spot(
-                                                                                    ZLinkPlacementObjectKind
-                                                                                            .INSTANCE_SPOT,
-                                                                                    envelope
-                                                                                            .stableType(),
-                                                                                    1),
-                                                                    registeredSpotPolicy(
-                                                                            envelope
-                                                                                    .targetMeshName(),
-                                                                            envelope.stableType(),
-                                                                            ZLinkPlacementObjectKind
-                                                                                    .INSTANCE_SPOT));
-                                                    return store.releaseEndedReservation(
-                                                                    request,
-                                                                    current.storeVersion(),
-                                                                    () ->
-                                                                            System
-                                                                                            .currentTimeMillis()
-                                                                                    >= envelope
-                                                                                            .deadlineUnixMs())
-                                                            .thenCompose(
-                                                                    released ->
-                                                                            released
-                                                                                    ? reserveInstanceSpotTarget(
-                                                                                            envelope)
-                                                                                    : CompletableFuture
-                                                                                            .failedFuture(
-                                                                                                    ZLinkFrameworkErrorOrigin
-                                                                                                            .framework(
-                                                                                                                    ZLinkFrameworkErrorKind
-                                                                                                                            .UNAVAILABLE,
-                                                                                                                    "Ended Instance Spot authority was not released")));
+                                                released -> {
+                                                    if (released)
+                                                        return reserveInstanceSpotTarget(envelope);
+                                                    return CompletableFuture.failedFuture(
+                                                            ZLinkFrameworkErrorOrigin.framework(
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .UNAVAILABLE,
+                                                                    "Cold activation target is not the current owner"));
                                                 });
                             }
                             return store.listMeshNodes(
@@ -3354,8 +3344,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     .ZLinkAuthoritySnapshot
                                             snapshot)) {
                                 return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "Instance Spot reservation is missing"));
+                                        ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
+                                                "Instance Spot authority is unavailable"));
                             }
                             var authority =
                                     userSpotAuthorities

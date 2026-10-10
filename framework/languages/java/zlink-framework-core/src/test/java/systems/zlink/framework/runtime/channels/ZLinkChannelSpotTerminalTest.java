@@ -135,8 +135,8 @@ final class ZLinkChannelSpotTerminalTest {
                     request && !missing ? 1 : 0,
                     probe.operationIds.size(),
                     "no second operation ID");
-            // Instance intent resolves authority in its creation coordinator (Object lifecycle §3).
-            assertEquals(instance ? 0 : 1, probe.resolves);
+            assertEquals(1, probe.resolves, "Ready routes use the resolver before activation");
+            assertEquals(missing ? 1 : 0, probe.coordinatorCalls);
             assertEquals(stale ? 1 : 0, probe.invalidations);
             assertEquals(missing ? 1 : 0, probe.activations);
         } finally {

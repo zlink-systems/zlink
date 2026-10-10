@@ -4,7 +4,6 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -14,7 +13,6 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
-import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.framework.spots.ZLinkSpotSendCall;
 
@@ -242,9 +240,7 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                             ? activation.activationDeadline(selectedMesh)
                             : 0;
             CompletionStage<Void> stage =
-                    (instanceIntent
-                                    ? CompletableFuture.<SpotTransportAddress>completedFuture(null)
-                                    : SpotCallAddresses.resolve(resolver, target))
+                    SpotTransportAddressResolver.resolveForCall(resolver, target, instanceIntent)
                             .handle(
                                     (address, failure) ->
                                             systems.zlink.framework.runtime.internal.diagnostics
@@ -274,7 +270,8 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                                                                                         contentType,
                                                                                         metadata
                                                                                                 .values(),
-                                                                                        activationDeadline)
+                                                                                        activationDeadline,
+                                                                                        address)
                                                                         : submitExisting(address);
                                                         return resolver != null
                                                                 ? resolver.observeTerminal(
@@ -597,10 +594,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext
                                 .current();
                 stage =
-                        (instanceIntent
-                                        ? CompletableFuture.<SpotTransportAddress>completedFuture(
-                                                null)
-                                        : SpotCallAddresses.resolve(resolver, target))
+                        SpotTransportAddressResolver.resolveForCall(
+                                        resolver, target, instanceIntent)
                                 .handle(
                                         (address, failure) ->
                                                 systems.zlink.framework.runtime.internal.diagnostics
@@ -623,7 +618,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                                                                                                             "Instance Spot runtime is not configured"))
                                                                                     : activateRequest(
                                                                                             activation,
-                                                                                            replyType)
+                                                                                            replyType,
+                                                                                            address)
                                                                             : submitExisting(
                                                                                     address,
                                                                                     replyType);
@@ -656,7 +652,9 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
     }
 
     private <TReply> CompletionStage<TReply> activateRequest(
-            ZLinkInstanceSpotCallRuntime activation, Class<TReply> replyType) {
+            ZLinkInstanceSpotCallRuntime activation,
+            Class<TReply> replyType,
+            SpotTransportAddress readyRoute) {
         return activation
                 .request(
                         target,
@@ -666,7 +664,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         packetName,
                         contentType,
                         metadata.values(),
-                        timeout)
+                        timeout,
+                        readyRoute)
                 .thenApply(
                         parts -> {
                             try {
@@ -725,26 +724,6 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
 
 final class SpotCallAddresses {
     private SpotCallAddresses() {}
-
-    static CompletionStage<SpotTransportAddress> resolve(
-            SpotTransportAddressResolver resolver, String target) {
-        if (resolver == null) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException("SpotHandle resolver is not configured"));
-        }
-        return resolver.resolve(target)
-                .thenCompose(
-                        address ->
-                                address.map(CompletableFuture::completedFuture)
-                                        .orElseGet(
-                                                () ->
-                                                        CompletableFuture.failedFuture(
-                                                                ZLinkFrameworkErrorOrigin.framework(
-                                                                        ZLinkFrameworkErrorKind
-                                                                                .NOT_FOUND,
-                                                                        "SpotHandle route is stale"
-                                                                                + " or unavailable"))));
-    }
 
     static RuntimeException unwrap(Throwable failure) {
         Throwable current = failure;

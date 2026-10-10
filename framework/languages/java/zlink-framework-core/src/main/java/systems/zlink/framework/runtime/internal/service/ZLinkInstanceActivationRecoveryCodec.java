@@ -7,39 +7,6 @@ import java.util.Optional;
 
 /** Adapts the canonical durable Instance activation recovery envelope. */
 public final class ZLinkInstanceActivationRecoveryCodec {
-    public void validateColdActivation(
-            ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
-            RecoveryEnvelope envelope,
-            byte[] metadata) {
-        if (!(message.route() instanceof ZLinkServiceM6BWireCodec.InstanceColdActivation cold)
-                || !message.instanceIntent()
-                || !cold.targetSpotId().equals(envelope.targetSpotId())
-                || !cold.targetNodeRid().equals(envelope.targetNodeRid())
-                || cold.targetNodeGeneration() != envelope.targetNodeGeneration()
-                || !cold.targetMeshName().equals(envelope.targetMeshName())
-                || !cold.stableType().equals(envelope.stableType())
-                || !cold.targetDescriptorVersion().equals(envelope.descriptorVersion())
-                || cold.deadlineUnixMs() != envelope.deadlineUnixMs()
-                || !message.sourceNodeRid().equals(envelope.sourceNodeRid())
-                || message.sourceNodeGeneration() != envelope.sourceNodeGeneration()
-                || !java.util.Objects.equals(
-                        message.sourceSpotId(), envelope.sourceSpotId().orElse(null))
-                || message.request() != envelope.request()
-                || message.operationHigh() != envelope.operationHigh()
-                || message.operationLow() != envelope.operationLow()
-                || !java.util.Objects.equals(message.replyRouteId(), envelope.replyRouteId())
-                || ((message.flags()
-                                        & systems.zlink.framework.runtime.protocol
-                                                .ServiceWireConstants.FLAG_METADATA)
-                                != 0)
-                        != (envelope.metadataFrame().length != 0)
-                || !java.util.Arrays.equals(metadata, envelope.metadataFrame())) {
-            throw new systems.zlink.framework.errors.ZLinkFrameworkException(
-                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                    "Instance cold activation route and recovery envelope do not match");
-        }
-    }
-
     private static final String DURABLE_TYPE = "instance-activation-recovery-v1";
 
     public byte[] encode(RecoveryEnvelope envelope) {

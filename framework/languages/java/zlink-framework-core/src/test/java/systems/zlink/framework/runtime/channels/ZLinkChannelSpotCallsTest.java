@@ -22,11 +22,12 @@ final class ZLinkChannelSpotCallsTest {
                 Assertions.assertThrows(
                         CompletionException.class,
                         () ->
-                                SpotCallAddresses.resolve(
+                                SpotTransportAddressResolver.resolveForCall(
                                                 ignored ->
                                                         CompletableFuture.completedFuture(
                                                                 Optional.empty()),
-                                                "stale-spot")
+                                                "stale-spot",
+                                                false)
                                         .toCompletableFuture()
                                         .join());
 

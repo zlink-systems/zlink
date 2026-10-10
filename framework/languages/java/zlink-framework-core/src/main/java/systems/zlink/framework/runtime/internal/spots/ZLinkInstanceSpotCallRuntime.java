@@ -24,7 +24,8 @@ public interface ZLinkInstanceSpotCallRuntime {
             Optional<String> packetName,
             String contentType,
             Map<String, String> metadata,
-            long activationDeadline);
+            long activationDeadline,
+            SpotTransportAddress readyRoute);
 
     CompletionStage<List<Message>> request(
             String spotId,
@@ -34,5 +35,6 @@ public interface ZLinkInstanceSpotCallRuntime {
             Optional<String> packetName,
             String contentType,
             Map<String, String> metadata,
-            Duration timeout);
+            Duration timeout,
+            SpotTransportAddress readyRoute);
 }

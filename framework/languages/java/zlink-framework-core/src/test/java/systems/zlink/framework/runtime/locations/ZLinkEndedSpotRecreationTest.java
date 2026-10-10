@@ -10,6 +10,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
+import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -22,6 +23,165 @@ import java.util.Optional;
 import java.util.concurrent.CompletionException;
 
 final class ZLinkEndedSpotRecreationTest {
+    @ParameterizedTest
+    @CsvSource({"false", "true"})
+    void nonMembershipAuthorityCommitKeepsGenerationOnlyOwnerFence(boolean missingExpiry) {
+        var provider = new LeaseExpiryViewProvider(missingExpiry);
+        var fixture =
+                fixture(
+                        new ZLinkProviderLocationRepository(provider),
+                        ZLinkPlacementObjectKind.INSTANCE_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY);
+        var before =
+                (ZLinkAuthoritySnapshot)
+                        fixture.store.read(fixture.key, () -> false).toCompletableFuture().join();
+        provider.expiredOwner = fixture.oldOwner.ownerId();
+        assertInstanceOf(
+                ZLinkAuthorityStored.class,
+                fixture.store
+                        .compareExchange(
+                                fixture.key,
+                                new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                new ZLinkAuthorityPut(before.payload()),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false", "true"})
+    void membershipCommitRejectsMatchingSpotLeaseWithInvalidExpiry(boolean missingExpiry) {
+        var provider = new LeaseExpiryViewProvider(missingExpiry);
+        var fixture =
+                fixture(
+                        new ZLinkProviderLocationRepository(provider),
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY);
+        var actor = member(fixture, "expiry-member", false);
+        var before =
+                (ZLinkAuthoritySnapshot)
+                        fixture.store
+                                .read(actor.authorityKey(), () -> false)
+                                .toCompletableFuture()
+                                .join();
+        provider.expiredOwner = fixture.oldOwner.ownerId();
+        assertInstanceOf(
+                ZLinkAuthorityConflict.class,
+                fixture.store
+                        .compareExchange(
+                                actor.authorityKey(),
+                                new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                new ZLinkAuthorityPut(
+                                        memberPayload(fixture, "expiry-member", true)),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
+        assertEquals(
+                before.storeVersion(),
+                ((ZLinkAuthoritySnapshot)
+                                fixture.store
+                                        .read(actor.authorityKey(), () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .storeVersion());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false", "true"})
+    void nonMembershipCreationCommitKeepsGenerationOnlyOwnerFence(boolean missingExpiry) {
+        var provider = new LeaseExpiryViewProvider(missingExpiry);
+        var fixture =
+                fixture(
+                        new ZLinkProviderLocationRepository(provider),
+                        ZLinkPlacementObjectKind.INSTANCE_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY);
+        var reservation =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                fixture.store
+                                        .reserve(
+                                                new ZLinkObjectReservationRequest(
+                                                        ZLinkPlacementObjectKind.INSTANCE_SPOT,
+                                                        ZLinkAuthorityKeyCodec.spot(
+                                                                "non-membership-creation"),
+                                                        "room",
+                                                        "intent",
+                                                        new byte[32],
+                                                        1,
+                                                        new ZLinkMeshNodeDescriptorKey(
+                                                                "mesh",
+                                                                fixture.newDescriptor.rid()),
+                                                        1,
+                                                        fixture.newOwner,
+                                                        new byte[] {1},
+                                                        ZLinkPlacementCapacityBundle.spot(
+                                                                ZLinkPlacementObjectKind
+                                                                        .INSTANCE_SPOT,
+                                                                "room",
+                                                                1),
+                                                        new RelocationPolicy.Disabled()),
+                                                () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .reservation();
+        provider.expiredOwner = fixture.newOwner.ownerId();
+        assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                fixture.store
+                        .commit(reservation, new byte[] {2}, () -> false)
+                        .toCompletableFuture()
+                        .join());
+    }
+
+    private static final class LeaseExpiryViewProvider implements ZLinkLocationStore {
+        private final ZLinkLocationStore delegate = new ZLinkInMemoryProviderLocationStore();
+        private final boolean missingExpiry;
+        private String expiredOwner;
+
+        private LeaseExpiryViewProvider(boolean missingExpiry) {
+            this.missingExpiry = missingExpiry;
+        }
+
+        public java.util.concurrent.CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            return delegate.read(key, cancellation)
+                    .thenApply(
+                            read -> {
+                                if (expiredOwner == null
+                                        || !(read instanceof ZLinkStoreReadFound found))
+                                    return read;
+                                var value = found.value();
+                                try {
+                                    var record =
+                                            new com.fasterxml.jackson.databind.ObjectMapper()
+                                                    .readTree(value.bytes());
+                                    if (!record.has("leaseGeneration")
+                                            || !record.path("ownerId")
+                                                    .asText()
+                                                    .equals(expiredOwner)) return read;
+                                } catch (java.io.IOException failure) {
+                                    throw new AssertionError(failure);
+                                }
+                                return new ZLinkStoreReadFound(
+                                        new ZLinkStoreValue(
+                                                value.bytes(),
+                                                value.version(),
+                                                missingExpiry ? null : value.storeNow(),
+                                                value.storeNow()));
+                            });
+        }
+
+        public java.util.concurrent.CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            return delegate.write(request, cancellation);
+        }
+
+        public java.util.concurrent.CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+            return delegate.scan(request, cancellation);
+        }
+    }
+
     @ParameterizedTest
     @CsvSource({
         "provider, USER_SPOT",
@@ -182,8 +342,33 @@ final class ZLinkEndedSpotRecreationTest {
         "memory, USER_SPOT",
         "memory, INSTANCE_SPOT"
     })
-    void liveLeaseDoesNotReleaseReadySpot(String backend, ZLinkPlacementObjectKind kind) {
+    void liveLeaseDoesNotReleaseReadySpot(String backend, ZLinkPlacementObjectKind kind)
+            throws ReflectiveOperationException {
         var fixture = fixture(backend, kind, ZLinkServiceAuthorityPayloadCodec.State.READY);
+        var before =
+                (ZLinkAuthoritySnapshot)
+                        fixture.store.read(fixture.key, () -> false).toCompletableFuture().join();
+        assertFalse(
+                fixture.store
+                        .releaseEndedReservation(
+                                request(
+                                        fixture,
+                                        fixture.newOwner,
+                                        fixture.newDescriptor,
+                                        new RelocationPolicy.Disabled()),
+                                before.storeVersion(),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
+        assertEquals(
+                before.storeVersion(),
+                ((ZLinkAuthoritySnapshot)
+                                fixture.store
+                                        .read(fixture.key, () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .storeVersion());
+        assertEquals(1, oldSpotSlots(fixture));
         assertInstanceOf(
                 ZLinkObjectAlreadyExists.class,
                 fixture.store

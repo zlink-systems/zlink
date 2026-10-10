@@ -3019,12 +3019,66 @@ final class ZLinkProviderAuthorityRepository {
                                                     conditions.add(
                                                             new ZLinkStoreVersionCondition(
                                                                     key, found.value().version()));
-                                                return requireLiveOwner(
-                                                        new ZLinkLocationOwnerToken(
-                                                                record.ownerId(),
-                                                                record.ownerLeaseGeneration()),
-                                                        conditions,
-                                                        cancellation);
+                                                return provider.read(
+                                                                ownerKey(record.ownerId()),
+                                                                cancellation)
+                                                        .thenApply(
+                                                                ownerRead -> {
+                                                                    if (!(ownerRead
+                                                                                    instanceof
+                                                                                    ZLinkStoreReadFound
+                                                                                            ownerFound)
+                                                                            || ownerGeneration(
+                                                                                            ownerFound
+                                                                                                    .value()
+                                                                                                    .bytes())
+                                                                                    != record
+                                                                                            .ownerLeaseGeneration()
+                                                                            || ownerFound
+                                                                                            .value()
+                                                                                            .expiresAt()
+                                                                                    == null
+                                                                            || !ownerFound
+                                                                                    .value()
+                                                                                    .expiresAt()
+                                                                                    .isAfter(
+                                                                                            ownerFound
+                                                                                                    .value()
+                                                                                                    .storeNow()))
+                                                                        return false;
+                                                                    var required =
+                                                                            ZLinkOwnerLeaseRecordCodec
+                                                                                    .valueCondition(
+                                                                                            record
+                                                                                                    .ownerId(),
+                                                                                            record
+                                                                                                    .ownerLeaseGeneration());
+                                                                    var prior =
+                                                                            conditions.stream()
+                                                                                    .filter(
+                                                                                            condition ->
+                                                                                                    condition
+                                                                                                                    instanceof
+                                                                                                                    ZLinkStoreValueCondition
+                                                                                                                            value
+                                                                                                            && value.key()
+                                                                                                                    .equals(
+                                                                                                                            required
+                                                                                                                                    .key()))
+                                                                                    .map(
+                                                                                            condition ->
+                                                                                                    (ZLinkStoreValueCondition)
+                                                                                                            condition)
+                                                                                    .findFirst();
+                                                                    if (prior.isPresent())
+                                                                        return Arrays.equals(
+                                                                                prior.get()
+                                                                                        .expected(),
+                                                                                required
+                                                                                        .expected());
+                                                                    conditions.add(required);
+                                                                    return true;
+                                                                });
                                             });
                         });
     }
@@ -3193,30 +3247,12 @@ final class ZLinkProviderAuthorityRepository {
                         read -> {
                             if (!(read instanceof ZLinkStoreReadFound found)
                                     || ownerGeneration(found.value().bytes())
-                                            != owner.leaseGeneration()
-                                    || found.value().expiresAt() == null
-                                    || !found.value()
-                                            .expiresAt()
-                                            .isAfter(found.value().storeNow())) {
+                                            != owner.leaseGeneration()) {
                                 return false;
                             }
-                            var required =
+                            conditions.add(
                                     ZLinkOwnerLeaseRecordCodec.valueCondition(
-                                            owner.ownerId(), owner.leaseGeneration());
-                            var prior =
-                                    conditions.stream()
-                                            .filter(
-                                                    condition ->
-                                                            condition
-                                                                            instanceof
-                                                                            ZLinkStoreValueCondition
-                                                                                    value
-                                                                    && value.key().equals(key))
-                                            .map(condition -> (ZLinkStoreValueCondition) condition)
-                                            .findFirst();
-                            if (prior.isPresent())
-                                return Arrays.equals(prior.get().expected(), required.expected());
-                            conditions.add(required);
+                                            owner.ownerId(), owner.leaseGeneration()));
                             return true;
                         });
     }
