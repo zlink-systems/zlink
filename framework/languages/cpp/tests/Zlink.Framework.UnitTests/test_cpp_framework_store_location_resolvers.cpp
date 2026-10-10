@@ -221,6 +221,7 @@ class test_location_repository_t : public zlink::framework::location_repository_
     zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
     read_owner_lease (std::string owner_id) override
     {
+        ++owner_read_count;
         return _inner.read_owner_lease (std::move (owner_id));
     }
 
@@ -247,6 +248,7 @@ class test_location_repository_t : public zlink::framework::location_repository_
     read_authority (zlink::framework::authority_key_t key,
                     std::stop_token cancellation = {}) override
     {
+        ++authority_read_count;
         if (fail_authority_queries) {
             return zlink::framework::task_t<zlink::framework::authority_read_result_t> (
               zlink::framework::result_t<zlink::framework::authority_read_result_t>::failure (
@@ -359,6 +361,8 @@ class test_location_repository_t : public zlink::framework::location_repository_
     std::atomic_size_t abort_count{0};
     std::atomic_size_t resolve_spot_count{0};
     std::atomic_size_t resolve_actor_count{0};
+    std::atomic_size_t authority_read_count{0};
+    std::atomic_size_t owner_read_count{0};
     std::atomic_bool force_reserve_conflict{false};
 
   private:
@@ -1957,6 +1961,26 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
         EXPECT_EQ ("node-instance", reply.value ().node_rid);
     EXPECT_EQ (1, sends.load ());
     EXPECT_EQ (1, requests.load ());
+    std::vector<std::pair<std::size_t, std::size_t>> lookup_counts;
+    for (bool instance_intent : {false, true}) {
+        location_options_t options;
+        options.route_cache_max_age = std::chrono::seconds (1);
+        store_location_resolvers_t measured (store, options);
+        store.authority_read_count = 0;
+        store.owner_read_count = 0;
+        const auto ready =
+          measured.resolve_spot_address ({}, "instance-spot", instance_intent).result ().value ();
+        ASSERT_TRUE (ready);
+        EXPECT_EQ (1u, ready->authority_owner_generation);
+        lookup_counts.emplace_back (store.authority_read_count.load (),
+                                    store.owner_read_count.load ());
+        ASSERT_TRUE (
+          measured.resolve_spot_address ({}, "instance-spot", instance_intent).result ().value ());
+        EXPECT_EQ (lookup_counts.back ().first, store.authority_read_count);
+        EXPECT_EQ (lookup_counts.back ().second, store.owner_read_count);
+    }
+    EXPECT_EQ (1u, lookup_counts.front ().first);
+    EXPECT_EQ (lookup_counts.front (), lookup_counts.back ());
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnly)
@@ -3139,6 +3163,222 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ContextOnlySpotFactoryReceivesExactF
     EXPECT_EQ (1u, observed_generation);
     EXPECT_EQ (1, destruction_count->load (std::memory_order_relaxed))
       << "host teardown must release the Spot instance/context ownership cycle";
+}
+
+class ended_user_request_entry_t final
+    : public zlink::framework::entry_spot_t<zlink::framework::actor_t>
+{
+  public:
+    explicit ended_user_request_entry_t (zlink::framework::entry_spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+    zlink::framework::entry_spot_context_t &context () noexcept override { return _context; }
+    const zlink::framework::entry_spot_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+    void configure () override {}
+    zlink::framework::task_t<void> on_actor_joined (zlink::framework::actor_t &) override
+    {
+        co_return;
+    }
+    zlink::framework::task_t<void> on_leave_actor (zlink::framework::actor_t &) override
+    {
+        co_return;
+    }
+
+  private:
+    zlink::framework::entry_spot_context_t _context;
+};
+
+class ended_user_reclaim_client_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    ended_user_reclaim_client_t (zlink::framework::app_t &app,
+                                 bool allowed,
+                                 std::atomic_int &factories) :
+        app (&app), allowed (allowed), factories (&factories)
+    {
+    }
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
+    {
+        namespace fw = zlink::framework;
+        namespace rt = fw::runtime;
+        auto &repository = services.get_required<fw::location_repository_t> ();
+        auto &manager = services.get_required<fw::spot_manager_t> ();
+        const auto before = std::get<fw::authority_snapshot_t> (
+          repository.read_authority (rt::spot_authority_key ("ended-user")).result ().value ());
+        (void) manager.find (fw::spot_id_t ("ended-user")).result ();
+        auto route = app->advanced ().zlink ().route_client (
+          services.get_required<fw::serializer_registry_t> ());
+        const auto ordinary =
+          route.request_to_spot (fw::spot_id_t ("ended-user"), user_spot_delivery_probe_t{1})
+            .timeout (std::chrono::seconds (3))
+            .async<user_spot_delivery_probe_t> ()
+            .result ();
+        EXPECT_FALSE (ordinary);
+        if (!ordinary)
+            EXPECT_EQ (ordinary.error_kind (), fw::framework_error_kind_t::unavailable);
+        const auto retained = std::get<fw::authority_snapshot_t> (
+          repository.read_authority (rt::spot_authority_key ("ended-user")).result ().value ());
+        EXPECT_EQ (before.store_version, retained.store_version);
+        EXPECT_EQ (before.payload, retained.payload);
+        EXPECT_EQ (factories->load (), 0);
+        const auto created = manager.get_or_create (fw::spot_id_t ("ended-user"), "room")
+                               .in_mesh ("factory-mesh")
+                               .timeout (std::chrono::seconds (3))
+                               .async ()
+                               .result ();
+        if (allowed) {
+            EXPECT_TRUE (created) << (created.error () ? created.error ()->what () : "");
+            if (created) {
+                EXPECT_GT (created.value ().spot.object_generation (), before.object_generation);
+                const auto after = std::get<fw::authority_snapshot_t> (
+                  repository.read_authority (rt::spot_authority_key ("ended-user"))
+                    .result ()
+                    .value ());
+                EXPECT_GT (after.object_generation, before.object_generation);
+                EXPECT_NE (after.payload, before.payload);
+            }
+            EXPECT_EQ (factories->load (), 1);
+        } else {
+            EXPECT_FALSE (created);
+            EXPECT_EQ (created.error_kind (), fw::framework_error_kind_t::unavailable);
+            const auto after = std::get<fw::authority_snapshot_t> (
+              repository.read_authority (rt::spot_authority_key ("ended-user")).result ().value ());
+            EXPECT_EQ (after.store_version, before.store_version);
+            EXPECT_EQ (after.payload, before.payload);
+            EXPECT_EQ (factories->load (), 0);
+        }
+        observed = true;
+        app->stop ();
+        co_return;
+    }
+    void stop () noexcept override {}
+    bool observed = false;
+
+  private:
+    zlink::framework::app_t *app;
+    bool allowed;
+    std::atomic_int *factories;
+};
+
+static void verify_ended_user_policy_source (bool provider, unsigned policy)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    using namespace std::chrono_literals;
+    auto opaque = std::make_shared<rt::in_memory_location_store_t> ();
+    std::shared_ptr<fw::location_repository_t> repository =
+      provider ? std::static_pointer_cast<fw::location_repository_t> (
+                   std::make_shared<rt::provider_location_repository_t> (*opaque))
+               : std::static_pointer_cast<fw::location_repository_t> (
+                   std::make_shared<rt::in_memory_location_repository_t> ());
+    const auto owner = std::get<fw::owner_lease_claimed_t> (
+                         repository->claim_owner_lease ("ended-user-old", 60s).result ().value ())
+                         .token;
+    fw::mesh_node_descriptor_t old;
+    old.mesh_name = "factory-mesh";
+    old.rid = zlink::routing_id_t::from ("old-user-node");
+    old.lifecycle_generation = 1;
+    old.descriptor_revision = 1;
+    old.endpoint = "tcp://127.0.0.1:7010";
+    old.owner_id = owner.owner_id;
+    old.lease_generation = owner.lease_generation;
+    old.object_role = fw::object_role_t::server;
+    old.state = fw::framework_runtime_state_t::serving;
+    old.security_identity = "old-user-node";
+    old.activation_concurrency.limit = 1;
+    old.entry_spot_id = "old-entry";
+    old.object_capabilities = {{fw::placement_object_kind_t::user_spot, "room",
+                                fw::maintenance_policy_kind_t::disabled, false, 0}};
+    old.capacity.spots.limit = 1;
+    old.capacity.spot_types = {{fw::placement_object_kind_t::user_spot, "room", {1, 0, 0}}};
+    ASSERT_EQ (repository->update_mesh_node (old, fw::location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               fw::location_write_status_t::stored);
+    fw::object_reserve_request_t reserve;
+    reserve.key = {fw::placement_object_kind_t::user_spot, "ended-user"};
+    reserve.intent.stable_type = "room";
+    reserve.target = {old.mesh_name, fw::node_rid_t::from_string ("old-user-node"), 1, owner};
+    reserve.capacity_bundle = {
+      0, 1, fw::spot_type_capacity_delta_t{fw::placement_object_kind_t::user_spot, "room", 1}};
+    const auto first =
+      std::get<fw::object_reserved_t> (repository->reserve (reserve).result ().value ());
+    rt::user_spot_authority_payload_t payload{.stable_type = "room",
+                                              .spot_id = "ended-user",
+                                              .owner_id = owner.owner_id,
+                                              .owner_lease_generation =
+                                                static_cast<std::uint64_t> (owner.lease_generation),
+                                              .mesh_name = old.mesh_name,
+                                              .node_rid = reserve.target.node_rid,
+                                              .node_generation = 1};
+    ASSERT_TRUE (std::holds_alternative<fw::object_committed_t> (
+      repository
+        ->commit ({reserve.key, first.fence, rt::encode_user_spot_authority_payload (payload)})
+        .result ()
+        .value ()));
+    repository->release_owner_lease (owner).result ().value ();
+    auto app = fw::app_t::create ();
+    std::atomic_int factories{0};
+    app.advanced ().services ().add_factory<fw::location_repository_t> (
+      [repository] (fw::service_provider_t &) { return repository; },
+      fw::service_lifetime_t::singleton);
+    app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
+        options.add_location_store (opaque);
+        options.add_relocation_store (std::make_shared<rt::in_memory_relocation_store_t> ());
+        auto request = options.add_route_mesh ("request-mesh");
+        request.set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from ("request-node"))
+          .listen ("tcp://127.0.0.1:0")
+          .add_entry_spot<ended_user_request_entry_t> ();
+        if (policy != 2)
+            request.add_spot_factory<context_owned_user_spot_t> (
+              "room",
+              [] (fw::spot_context_t context) {
+                  return std::make_shared<context_owned_user_spot_t> (std::move (context));
+              },
+              [policy] (auto &factory) {
+                  if (policy == 0)
+                      factory.disable_relocation ();
+                  else
+                      factory.recreate_on_relocation ();
+              });
+        auto target = options.add_route_mesh ("factory-mesh");
+        target.set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from ("factory-node"))
+          .listen ("tcp://127.0.0.1:0")
+          .add_spot_factory<context_owned_user_spot_t> (
+            "room",
+            [&] (fw::spot_context_t context) {
+                ++factories;
+                return std::make_shared<context_owned_user_spot_t> (std::move (context));
+            },
+            [policy] (auto &factory) {
+                if (policy == 0)
+                    factory.recreate_on_relocation ();
+                else
+                    factory.disable_relocation ();
+            });
+    });
+    auto client = std::make_unique<ended_user_reclaim_client_t> (app, policy == 0, factories);
+    auto *observed = client.get ();
+    app.add_hosted_service (std::move (client));
+    EXPECT_EQ (app.run (0, nullptr), 0);
+    EXPECT_TRUE (observed->observed);
+}
+TEST (ZLinkFrameworkStoreLocationResolvers, EndedEmptyUserProviderUsesRequestNodePolicy)
+{
+    for (unsigned policy = 0; policy != 3; ++policy)
+        verify_ended_user_policy_source (true, policy);
+}
+TEST (ZLinkFrameworkStoreLocationResolvers, EndedEmptyUserInMemoryUsesRequestNodePolicy)
+{
+    for (unsigned policy = 0; policy != 3; ++policy)
+        verify_ended_user_policy_source (false, policy);
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers,

@@ -89,14 +89,15 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
 
     internal async ValueTask<(
         ZLinkResolvedSpotLocation? Row,
-        ZLinkLocationResolutionKind Kind
+        ZLinkLocationResolutionKind Kind,
+        ZLinkAuthoritySnapshot? Authority
     )> ResolveSpotRowWithStatusAsync(
         ZLinkSpotLocationKey key,
         CancellationToken cancellationToken = default
     )
     {
         var result = await ResolveSpotRowCoreAsync(key, cancellationToken).ConfigureAwait(false);
-        return (result.Row, result.Kind);
+        return (result.Row, result.Kind, result.Authority);
     }
 
     internal async ValueTask<ZLinkResolvedActorLocation?> ResolveActorRowAsync(
@@ -140,7 +141,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
     private async ValueTask<(
         ZLinkResolvedSpotLocation? Row,
         bool LiveRowPresent,
-        ZLinkLocationResolutionKind Kind
+        ZLinkLocationResolutionKind Kind,
+        ZLinkAuthoritySnapshot? Authority
     )> ResolveSpotRowCoreAsync(ZLinkSpotLocationKey key, CancellationToken cancellationToken)
     {
         var cached = await TryGetCachedAsync(_spotRoutes, key).ConfigureAwait(false);
@@ -150,7 +152,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"resolve_spot_row spot={key.SpotId} source=cache hit={cached.Row is not null}"
                 );
-            return (cached.Row, true, ZLinkLocationResolutionKind.Ready);
+            return (cached.Row, true, ZLinkLocationResolutionKind.Ready, null);
         }
 
         if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
@@ -169,6 +171,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                     )
             )
             .ConfigureAwait(false);
+        var snapshot = (authority as ZLinkAuthorityReadResult.Found)?.Snapshot;
         var raw = ProjectSpot(authority);
         var (row, liveRowPresent) = await _liveRows
             .ResolveWithPresenceAsync(raw, static row => row.OwnerId, cancellationToken)
@@ -181,7 +184,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 liveRowPresent,
                 raw is not null ? ZLinkLocationResolutionKind.KnownUnavailable
                 : IsClosingSpot(authority) ? ZLinkLocationResolutionKind.Closing
-                : ZLinkLocationResolutionKind.Missing
+                : ZLinkLocationResolutionKind.Missing,
+                snapshot
             );
         }
 
@@ -195,8 +199,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 )
                 .ConfigureAwait(false);
             return remaining is null
-                ? (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable)
-                : (row, liveRowPresent, ZLinkLocationResolutionKind.Closing);
+                ? (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable, snapshot)
+                : (row, liveRowPresent, ZLinkLocationResolutionKind.Closing, snapshot);
         }
 
         if (
@@ -205,9 +209,9 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         )
         {
             InvalidateSpotRoute(key);
-            return (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable);
+            return (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable, snapshot);
         }
-        return (row, liveRowPresent, ZLinkLocationResolutionKind.Ready);
+        return (row, liveRowPresent, ZLinkLocationResolutionKind.Ready, null);
     }
 
     private async ValueTask<(

@@ -32,6 +32,7 @@ import type {
   ZLinkObjectCommitResult,
   ZLinkObjectCreationCompleteRequest,
   ZLinkObjectCreationCompleteResult,
+  ZLinkEndedOwnerReleaseIntent,
   ZLinkObjectReserveRequest,
   ZLinkObjectReserveResult,
   ZLinkCreationOperationIdentity,
@@ -42,7 +43,13 @@ import type {
 } from './internal-location-contracts';
 import { encodeAuthorityKey } from './authority-key-codec';
 import { creationTerminalPreimage } from './opaque-record-key';
-import { ServiceRelocationAuthorityPayloadCodec } from '../foundation/service-relocation-runtime';
+import {
+  ServiceRelocationAuthorityPayloadCodec,
+  serviceRelocationAuthorityApplicationPayload
+} from '../foundation/service-relocation-runtime';
+import { decodeServiceReadySpotAuthority } from '../foundation/service-authority-payload-codec';
+import { decodeActorAuthorityPayload } from '../actors/actor-authority-payload-codec';
+import { ZLinkSpotKind } from '../../contracts';
 
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 
@@ -64,6 +71,7 @@ export interface ZLinkInMemoryAuthorityValidation {
     currentActive: ZLinkCapacityVector
   ): boolean;
   identityClaimed?(authorityKey: string): boolean;
+  hasSpotMembers?(spotId: string, objectGeneration: bigint): boolean;
 }
 
 interface AuthorityRow {
@@ -203,6 +211,26 @@ export class ZLinkInMemoryAuthorityStore {
     if (!this.isOwnerLive(row.snapshot)) {
       return { kind: 'conflict', current: this.read(keyValue) };
     }
+    const actor =
+      row.snapshot.allocation.objectKind === 'actor'
+        ? decodeActorAuthorityPayload(
+            serviceRelocationAuthorityApplicationPayload(mutation.payload)
+          )
+        : undefined;
+    const previousActor =
+      actor === undefined
+        ? undefined
+        : decodeActorAuthorityPayload(
+            serviceRelocationAuthorityApplicationPayload(row.snapshot.payload)
+          );
+    if (
+      actor?.currentSpotKind === ZLinkSpotKind.User &&
+      (previousActor?.currentSpotKind !== ZLinkSpotKind.User ||
+        previousActor.currentSpotId !== actor.currentSpotId ||
+        previousActor.currentSpotGeneration !== actor.currentSpotGeneration) &&
+      !this.acceptsUserSpotMembership(actor.currentSpotId, actor.currentSpotGeneration)
+    )
+      return { kind: 'conflict', current: this.read(keyValue) };
     if (
       mutation.generationTransition === 'reincarnate' &&
       (this.objectGeneration >= MAX_GENERATION || this.ownerGeneration >= MAX_GENERATION)
@@ -283,27 +311,41 @@ export class ZLinkInMemoryAuthorityStore {
   async releaseEndedReservation(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    request?: ZLinkEndedOwnerReleaseIntent
   ): Promise<boolean> {
     signal?.throwIfAborted();
-    return this.tryReleaseEndedReservation(key, expectedStoreVersion);
+    return this.tryReleaseEndedReservation(key, expectedStoreVersion, request);
+  }
+
+  acceptsUserSpotMembership(spotId: string, objectGeneration: bigint): boolean {
+    const row = this.rows.get(encodeAuthorityKey('user_spot', spotId).value);
+    return (
+      row !== undefined &&
+      row.snapshot.allocation.objectKind === 'user_spot' &&
+      row.snapshot.allocation.state === 'active' &&
+      row.snapshot.objectGeneration === objectGeneration &&
+      decodeServiceReadySpotAuthority(row.snapshot.payload)?.kind === 'user_spot' &&
+      this.isOwnerLive(row.snapshot)
+    );
   }
 
   private tryReleaseEndedReservation(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
-    request?: ZLinkObjectReserveRequest
+    request?: ZLinkEndedOwnerReleaseIntent
   ): boolean {
     const current = this.rows.get(key.value);
     if (
       current === undefined ||
       current.snapshot.storeVersion.value !== expectedStoreVersion ||
       (current.snapshot.allocation.state === 'active'
-        ? request?.key.kind !== 'actor'
+        ? request === undefined
         : current.creation === undefined)
     )
       return false;
     if (current.snapshot.allocation.state === 'active') {
+      let unavailable = false;
       for (const aggregate of this.aggregates.values()) {
         if (
           aggregate.state === 'prepared' &&
@@ -311,9 +353,9 @@ export class ZLinkInMemoryAuthorityStore {
             (participant) => participant.authorityKey.value === key.value
           )
         )
-          return false;
+          unavailable = true;
       }
-      if (relocationAuthorityCodec.read(current.snapshot.payload) !== undefined) return false;
+      unavailable ||= relocationAuthorityCodec.read(current.snapshot.payload) !== undefined;
       if (
         this.validation.isOwnerLive({
           ownerId: current.snapshot.ownerId,
@@ -321,10 +363,37 @@ export class ZLinkInMemoryAuthorityStore {
         })
       )
         return false;
-      if (request?.actorRelocationPolicy !== 'disabled')
+      const spot =
+        current.snapshot.allocation.objectKind === 'actor'
+          ? undefined
+          : decodeServiceReadySpotAuthority(current.snapshot.payload);
+      if (current.snapshot.allocation.objectKind !== 'actor') {
+        unavailable ||=
+          spot === undefined ||
+          spot.kind !== request?.key.kind ||
+          spot.stableType !== request.intent.stableType ||
+          spot.spotId !== request.key.globalId ||
+          spot.activationRecovery !== undefined;
+        if (spot?.kind === 'user_spot') {
+          unavailable ||=
+            this.validation.hasSpotMembers?.(spot.spotId, current.snapshot.objectGeneration) ===
+            true;
+          for (const row of this.rows.values()) {
+            if (row.snapshot.allocation.objectKind !== 'actor') continue;
+            const actor = decodeActorAuthorityPayload(
+              serviceRelocationAuthorityApplicationPayload(row.snapshot.payload)
+            );
+            unavailable ||=
+              actor?.currentSpotKind === ZLinkSpotKind.User &&
+              actor.currentSpotId === spot.spotId &&
+              actor.currentSpotGeneration === current.snapshot.objectGeneration;
+          }
+        }
+      }
+      if (unavailable || request?.actorRelocationPolicy !== 'disabled')
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
-          'Actor owner lease is unavailable.'
+          'Object owner lease is unavailable.'
         );
     } else if (
       this.validation.isTargetLive(
@@ -532,6 +601,17 @@ export class ZLinkInMemoryAuthorityStore {
     if (!this.creationTerminalAvailable(terminalRecord)) {
       return { kind: 'stale' };
     }
+    const actor =
+      request.completion.kind === 'created'
+        ? decodeActorAuthorityPayload(
+            serviceRelocationAuthorityApplicationPayload(request.completion.readyPayload)
+          )
+        : undefined;
+    if (
+      actor?.currentSpotKind === ZLinkSpotKind.User &&
+      !this.acceptsUserSpotMembership(actor.currentSpotId, actor.currentSpotGeneration)
+    )
+      return { kind: 'stale' };
     const nextVersion = this.tryNextStoreVersion();
     if (nextVersion === undefined) return { kind: 'generationExhausted' };
     const pending = row.snapshot.allocation;
@@ -697,6 +777,30 @@ export class ZLinkInMemoryAuthorityStore {
         row.snapshot.storeVersion.value !== participant.expectedStoreVersion.value
       ) {
         return { kind: 'stale' };
+      }
+      const actor =
+        row.snapshot.allocation.objectKind === 'actor'
+          ? decodeActorAuthorityPayload(
+              serviceRelocationAuthorityApplicationPayload(participant.authorityPayload)
+            )
+          : undefined;
+      if (actor?.currentSpotKind === ZLinkSpotKind.User) {
+        const participantSpot = aggregate.request.participants.find(
+          (candidate) =>
+            candidate.authorityKey.value ===
+            encodeAuthorityKey('user_spot', actor.currentSpotId).value
+        );
+        if (participantSpot === undefined) {
+          if (!this.acceptsUserSpotMembership(actor.currentSpotId, actor.currentSpotGeneration))
+            return { kind: 'stale' };
+        } else {
+          const spot = this.rows.get(participantSpot.authorityKey.value);
+          if (
+            spot?.snapshot.allocation.objectKind !== 'user_spot' ||
+            spot.snapshot.objectGeneration !== actor.currentSpotGeneration
+          )
+            return { kind: 'stale' };
+        }
       }
       if (participant.ownerTransition === 'newOwner') {
         if (

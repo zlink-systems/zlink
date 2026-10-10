@@ -1267,9 +1267,11 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
             return;
         }
         const auto joined =
-          remote ? spot_runtime.join_remote_actor_to_spot_erased (actor_ref, entry_id,
-                                                                  zlink::message_t{})
-                 : spot_runtime.join_actor_to_spot_erased (actor_ref, entry_id, zlink::message_t{});
+          (remote
+             ? spot_runtime.join_remote_actor_to_spot_erased (actor_ref, entry_id,
+                                                              zlink::message_t{})
+             : spot_runtime.join_actor_to_spot_erased (actor_ref, entry_id, zlink::message_t{}))
+            .result ();
         const auto source_drained =
           run_serial_turn (source, "entry-return-source-leave-observed", [] {});
         const auto current = node->actor_spot_ids.find (key);

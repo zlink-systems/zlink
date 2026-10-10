@@ -1,3 +1,4 @@
+const { liveUserSpotAuthority } = require('../helpers/live-user-spot-authority');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -1079,6 +1080,8 @@ test('remote actor takeover fences a stale source release by location generation
   const source = await locationLifecycleNode(store, 'owner-source', 'node-source');
   const target = await locationLifecycleNode(store, 'owner-target', 'node-target');
 
+  await liveUserSpotAuthority(store, 'play', 'room-target', 9n);
+
   const sourceClaim = await source.lifecycle.claimActor('player', 'alice', rid('node-source'));
   assert.equal(sourceClaim.status, framework.ZLinkActorClaimStatus.Claimed);
   await source.lifecycle.setActorRef('player', 'alice', {
@@ -1124,6 +1127,8 @@ test('remote actor takeover preserves moving source state until the commit reply
       return new PlayerActor(context);
     }
   }
+  await liveUserSpotAuthority(store, 'play', 'room-target', 9n);
+
   let destroyedCleanup = 0;
   const manager = createActorManager({
     actorFactories: new Map([['player', PlayerFactory]]),

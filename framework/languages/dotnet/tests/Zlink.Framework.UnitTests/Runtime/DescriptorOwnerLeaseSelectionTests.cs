@@ -4,6 +4,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
@@ -317,6 +318,34 @@ public sealed partial class EntrySpotActorDispatchTests
                 corruptStore.Enabled = false;
             await runtime.StopAsync(CancellationToken.None);
         }
+    }
+
+    [Fact]
+    public async Task EndedEmptyDisabledUserSpotGetOrCreateCreatesNewGeneration()
+    {
+        await using var fixture = await CreateReadyAuthorityFixtureAsync(
+            "ended-empty-user",
+            RoutingId.From("ended-empty-user-node"),
+            TimeSpan.FromSeconds(1),
+            userSpot: true
+        );
+        var before = await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey);
+        fixture.Runtime.Registration.SpotNodes["entry"].SpotRelocations[fixture.StableType] =
+            new ZLinkObjectRelocationRegistration(
+                typeof(EmptyUserSpot),
+                new ZLinkObjectPlacementOptions(),
+                ZLinkObjectRelocationRegistration.DisabledPolicy,
+                null,
+                null
+            );
+        fixture.Time.Advance(TimeSpan.FromSeconds(2));
+        var result = await fixture
+            .Runtime.GetOrCreate(fixture.ObjectId, fixture.StableType)
+            .Async();
+        Assert.Equal(ZLinkSpotCreateState.Created, result.State);
+        var after = await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey);
+        Assert.True(after.ObjectGeneration > before.ObjectGeneration);
+        Assert.NotEqual(before.OwnerId, after.OwnerId);
     }
 
     [Fact]

@@ -2,6 +2,11 @@ import type { RoutingId } from '../../contracts/Common';
 import type { ZLinkFrameworkRuntimeState, ZLinkSpotKind } from '../../contracts';
 
 export interface ZLinkSpotRouteResolver {
+  resolve(
+    spotId: RoutingId,
+    signal: AbortSignal | undefined,
+    instanceIntent: true
+  ): Promise<ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute>;
   resolve(spotId: RoutingId, signal?: AbortSignal): Promise<ZLinkSpotRouteTarget>;
   invalidate?(spotId: RoutingId): void;
 }
@@ -27,4 +32,13 @@ export interface ZLinkSpotRouteTarget {
   readonly authorityStoreVersion?: string;
   /** Current state of the owning MeshNode, when the route was resolved from Location Store. */
   readonly targetNodeState?: ZLinkFrameworkRuntimeState;
+}
+
+export interface ZLinkInstanceReactivationRoute extends Pick<
+  ZLinkSpotRouteTarget,
+  'spotId' | 'spotKind' | 'stableType'
+> {
+  readonly kind: 'coldActivation';
+  readonly meshName: string;
+  readonly stableType: string;
 }

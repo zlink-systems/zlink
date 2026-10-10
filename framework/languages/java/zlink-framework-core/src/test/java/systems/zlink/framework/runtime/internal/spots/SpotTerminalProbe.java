@@ -23,6 +23,7 @@ public final class SpotTerminalProbe
     public int resolves;
     public int invalidations;
     public int activations;
+    public int coordinatorCalls;
     public int submissions;
     public java.util.function.Function<Message, CompletionStage<Void>> readySend;
     public java.util.function.BiFunction<Message, Duration, CompletionStage<List<Message>>>
@@ -59,9 +60,11 @@ public final class SpotTerminalProbe
             Optional<String> packetName,
             String contentType,
             Map<String, String> metadata,
-            long activationDeadline) {
-        if (!missing)
-            return java.util.Objects.requireNonNull(readySend, "readySend").apply(payload);
+            long deadline,
+            SpotTransportAddress readyRoute) {
+        if (readyRoute != null) return java.util.Objects.requireNonNull(readySend).apply(payload);
+        coordinatorCalls++;
+        if (!missing) return java.util.Objects.requireNonNull(readySend).apply(payload);
         activations++;
         payload.close();
         return CompletableFuture.failedFuture(terminal);
@@ -76,10 +79,12 @@ public final class SpotTerminalProbe
             Optional<String> packetName,
             String contentType,
             Map<String, String> metadata,
-            Duration timeout) {
-        if (!missing)
-            return java.util.Objects.requireNonNull(readyRequest, "readyRequest")
-                    .apply(payload, timeout);
+            Duration timeout,
+            SpotTransportAddress readyRoute) {
+        if (readyRoute != null)
+            return java.util.Objects.requireNonNull(readyRequest).apply(payload, timeout);
+        coordinatorCalls++;
+        if (!missing) return java.util.Objects.requireNonNull(readyRequest).apply(payload, timeout);
         activations++;
         payload.close();
         return CompletableFuture.failedFuture(terminal);

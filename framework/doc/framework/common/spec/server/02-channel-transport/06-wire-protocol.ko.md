@@ -446,10 +446,16 @@ Command 39 route는 첫 byte와 `u16` body length로 닫힌 union을 이룬다.
 | Kind | 용도 | 내용 |
 |---|---|---|
 | `1` | 기존 [Ready](../00-foundation/02-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion, 그 call의 [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent) 유무(`instanceIntent`) |
-| `2` | Missing cold activation 전용 | target Mesh·node RID·lifecycle, Spot RID, stable type, descriptor version, deadline — authority fence는 금지 |
+| `2` | Cold activation 요청 — 원본 authority가 Missing이거나, owner lease가 무효인 Ready(target이 현재 authority를 다시 읽어 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas) 해제를 요청한다) | target Mesh·node RID·lifecycle, Spot RID, stable type, descriptor version, deadline — authority fence는 금지 |
 
-Kind `2` route와 ZLIA의 target Mesh·stable type·descriptor version·deadline, operation identity와
-metadata presence·bytes가 다르면 reservation 전에 protocol error로 거부한다.
+Kind `2` route와 operation identity가 같은 ZLIA가 그 target에 이미 저장되어 있으면, 두 값의 target Mesh·stable
+type·descriptor version·deadline과 metadata presence·bytes가 다를 때 protocol error로 거부한다. 같은 operation의
+재전송만 대조한다. operation identity가 다른 Instance intent는
+[Spot 주소 메시징 §4.2](../03-spot-actor/06-spot-address-messaging.ko.md#42-여러-node가-동시에-첫-message를-받는-경우)의
+같은 target activation 합류를 따르고, 저장된 ZLIA가 없는 첫 activation에서는 target이 route로 ZLIA를 만든다.
+이 대조는
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제와 reservation보다
+먼저 끝내며, 불일치이면 authority·membership·수용 공간을 바꾸지 않는다.
 
 ### Target host의 scan과 recovery
 

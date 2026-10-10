@@ -1,4 +1,10 @@
-import { ServiceRelocationAuthorityPayloadCodec } from '../foundation/service-relocation-runtime';
+import {
+  ServiceRelocationAuthorityPayloadCodec,
+  serviceRelocationAuthorityApplicationPayload
+} from '../foundation/service-relocation-runtime';
+import { decodeServiceReadySpotAuthority } from '../foundation/service-authority-payload-codec';
+import { decodeActorAuthorityPayload } from '../actors/actor-authority-payload-codec';
+import { ZLinkSpotKind } from '../../contracts';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { createHash, randomUUID } from 'node:crypto';
 import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
@@ -76,6 +82,7 @@ import {
   type ZLinkObjectCommitResult,
   type ZLinkObjectCreationCompleteRequest,
   type ZLinkObjectCreationCompleteResult,
+  type ZLinkEndedOwnerReleaseIntent,
   type ZLinkObjectReserveRequest,
   type ZLinkObjectReserveResult,
   type ZLinkOwnerLeaseClaimResult,
@@ -429,10 +436,39 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                 payload: Buffer.from(mutation.payload)
               }
             };
+      const actor =
+        mutation.kind !== 'delete' && record.snapshot.allocation.objectKind === 'actor'
+          ? decodeActorAuthorityPayload(
+              serviceRelocationAuthorityApplicationPayload(mutation.payload)
+            )
+          : undefined;
+      const previousActor =
+        actor === undefined
+          ? undefined
+          : decodeActorAuthorityPayload(
+              serviceRelocationAuthorityApplicationPayload(record.snapshot.payload)
+            );
+      const membershipConditions =
+        actor?.currentSpotKind === ZLinkSpotKind.User &&
+        (previousActor?.currentSpotKind !== ZLinkSpotKind.User ||
+          previousActor.currentSpotId !== actor.currentSpotId ||
+          previousActor.currentSpotGeneration !== actor.currentSpotGeneration)
+          ? await this.userSpotMembershipConditions(
+              actor.currentSpotId,
+              actor.currentSpotGeneration,
+              signal,
+              {
+                ownerId: record.snapshot.ownerId,
+                leaseGeneration: record.snapshot.ownerLeaseGeneration
+              }
+            )
+          : [];
+      if (membershipConditions === undefined) return { kind: 'conflict', current: snapshot };
       const result = await this.provider.write(
         {
           conditions: [
             { kind: 'version', key: rowKey, expected: current.value.version },
+            ...membershipConditions,
             ...(mutation.kind === 'restore'
               ? []
               : [
@@ -945,7 +981,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         ) {
           throw new Error('Aggregate participant staging checksum does not match inventory.');
         }
-        authorityRows.push({ key: rowKeyForParticipant, current, record, entry });
+        authorityRows.push({ key: rowKeyForParticipant, current, record, entry, payload });
       }
 
       const targetDescriptorKey = meshKey(
@@ -1024,12 +1060,52 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           bytes: encodeJson(capacity)
         });
       }
+      const membershipConditions: ZLinkStoreCondition[] = [];
+      for (const row of authorityRows) {
+        if (row.record.snapshot.allocation.objectKind !== 'actor') continue;
+        const actor = decodeActorAuthorityPayload(
+          serviceRelocationAuthorityApplicationPayload(row.payload)
+        );
+        if (actor?.currentSpotKind !== ZLinkSpotKind.User) continue;
+        const spotKey = encodeAuthorityKey('user_spot', actor.currentSpotId);
+        const participantSpot = authorityRows.find(
+          (candidate) => candidate.entry.authorityKey === spotKey.value
+        );
+        if (participantSpot !== undefined) {
+          if (
+            participantSpot.record.snapshot.allocation.objectKind !== 'user_spot' ||
+            participantSpot.record.snapshot.objectGeneration !== actor.currentSpotGeneration
+          )
+            return { kind: 'stale' };
+          continue;
+        }
+        if (
+          membershipConditions.some(
+            (condition) => condition.key.value === authorityKey(spotKey.value).value
+          )
+        )
+          continue;
+        const conditions = await this.userSpotMembershipConditions(
+          actor.currentSpotId,
+          actor.currentSpotGeneration,
+          signal,
+          aggregate.targetOwner
+        );
+        if (conditions === undefined) return { kind: 'stale' };
+        membershipConditions.push(
+          ...conditions.filter(
+            (condition) =>
+              !membershipConditions.some((existing) => existing.key.value === condition.key.value)
+          )
+        );
+      }
       const published = await this.provider.write(
         {
           conditions: [
             { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
             versionCondition(targetDescriptorKey, descriptorRead),
             leaseValueCondition(targetLeaseKey, aggregate.targetOwner),
+            ...membershipConditions,
             ...[...capacityReads.entries()].map(([value, read]) => ({
               kind: 'version' as const,
               key: capacityKeys.get(value)!,
@@ -1128,10 +1204,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   override async releaseEndedReservation(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    request?: ZLinkEndedOwnerReleaseIntent
   ): Promise<boolean> {
     return (
-      (await this.tryReleaseEndedReservation(key, expectedStoreVersion, signal)) === 'reclaimed'
+      (await this.tryReleaseEndedReservation(key, expectedStoreVersion, signal, request)) ===
+      'reclaimed'
     );
   }
 
@@ -1139,7 +1217,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
     signal?: AbortSignal,
-    request?: ZLinkObjectReserveRequest
+    request?: ZLinkEndedOwnerReleaseIntent
   ): Promise<'notReclaimable' | 'conflict' | 'reclaimed'> {
     const rowKey = authorityKey(key.value);
     const current = await this.provider.read(rowKey, signal);
@@ -1148,11 +1226,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const record = decodeAuthorityRecord(current.value.bytes);
     const snapshot = record.snapshot;
     if (
-      (snapshot.allocation.state === 'active'
-        ? request?.key.kind !== 'actor'
-        : snapshot.pendingCreation === undefined) ||
-      record.aggregate !== undefined ||
-      hasRelocationAuthority(snapshot.payload)
+      snapshot.allocation.state === 'active'
+        ? request === undefined
+        : snapshot.pendingCreation === undefined
     )
       return 'notReclaimable';
     const leaseKey = ownerKey(snapshot.ownerId);
@@ -1174,10 +1250,60 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const ownerLive = sameLiveOwner(lease, snapshot);
     if (snapshot.allocation.state === 'active') {
       if (ownerLive) return 'notReclaimable';
-      if (request?.actorRelocationPolicy !== 'disabled')
+      let unavailable = record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload);
+      if (snapshot.allocation.objectKind !== 'actor') {
+        const spot = decodeServiceReadySpotAuthority(snapshot.payload);
+        unavailable ||=
+          spot === undefined ||
+          spot.kind !== request?.key.kind ||
+          spot.stableType !== request.intent.stableType ||
+          spot.spotId !== request.key.globalId ||
+          spot.activationRecovery !== undefined;
+        if (spot?.kind === 'user_spot') {
+          // The snapshot starts only after the old owner's lease was found invalid.
+          for (const prefix of [`${PREFIX}actor:`, `${AUTHORITY_PREIMAGE_PREFIX}actor\0`]) {
+            membershipSnapshot: for (;;) {
+              let snapshotHasMember = false;
+              let cursor: ZLinkStoreScanCursor | undefined;
+              do {
+                const page = await this.provider.scan(
+                  { prefix, cursor, limit: ZLINK_PROVIDER_MAX_PAGE_SIZE },
+                  signal
+                );
+                if (page.kind === 'expired') continue membershipSnapshot;
+                for (const item of page.value.items) {
+                  if (prefix === `${PREFIX}actor:`) {
+                    const actor = normalizeActor(
+                      decodeJson<DescriptorRecord<ZLinkActorLocation>>(item.value.bytes).descriptor
+                    );
+                    snapshotHasMember ||=
+                      actor.spotKind === ZLinkSpotKind.User &&
+                      String(actor.spotId) === spot.spotId &&
+                      actor.spotGeneration === snapshot.objectGeneration;
+                  } else {
+                    const authority = decodeAuthorityRecord(item.value.bytes).snapshot;
+                    if (authority.allocation.objectKind !== 'actor') continue;
+                    const actor = decodeActorAuthorityPayload(
+                      serviceRelocationAuthorityApplicationPayload(authority.payload)
+                    );
+                    snapshotHasMember ||=
+                      actor?.currentSpotKind === ZLinkSpotKind.User &&
+                      actor.currentSpotId === spot.spotId &&
+                      actor.currentSpotGeneration === snapshot.objectGeneration;
+                  }
+                }
+                cursor = page.value.nextCursor;
+              } while (cursor !== undefined);
+              unavailable ||= snapshotHasMember;
+              break;
+            }
+          }
+        }
+      }
+      if (unavailable || request?.actorRelocationPolicy !== 'disabled')
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
-          'Actor owner lease is unavailable.'
+          'Object owner lease is unavailable.'
         );
     } else if (
       ownerLive &&
@@ -1185,6 +1311,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       reviveMeshDescriptor(
         decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(descriptor.value.bytes).descriptor
       ).lifecycleGeneration === snapshot.allocation.descriptorLifecycleGeneration
+    )
+      return 'notReclaimable';
+    if (
+      snapshot.allocation.state !== 'active' &&
+      (record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload))
     )
       return 'notReclaimable';
     const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
@@ -1601,6 +1732,22 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           'Creation terminal expiry must be the live operation deadline plus five minutes.'
         );
       }
+      const actor =
+        request.completion.kind === 'created'
+          ? decodeActorAuthorityPayload(
+              serviceRelocationAuthorityApplicationPayload(request.completion.readyPayload)
+            )
+          : undefined;
+      const membershipConditions =
+        actor?.currentSpotKind === ZLinkSpotKind.User
+          ? await this.userSpotMembershipConditions(
+              actor.currentSpotId,
+              actor.currentSpotGeneration,
+              signal,
+              request.target.owner
+            )
+          : [];
+      if (membershipConditions === undefined) return { kind: 'stale' };
       const mutations =
         request.completion.kind === 'created'
           ? [
@@ -1642,6 +1789,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           conditions: [
             { kind: 'version', key: rowKey, expected: current.value.version },
             { kind: 'missing', key: terminalRowKey },
+            ...membershipConditions,
             versionCondition(descriptorKey, descriptorRead),
             leaseValueCondition(leaseKey, request.target.owner),
             conditionFor(capacityRowKey, capacityRead)
@@ -2073,7 +2221,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       actorKey(location.meshName, location.actorId),
       normalizeActor(location),
       intent,
-      signal
+      signal,
+      location
     );
   }
 
@@ -2615,11 +2764,48 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     };
   }
 
+  private async userSpotMembershipConditions(
+    spotId: string,
+    objectGeneration: bigint,
+    signal?: AbortSignal,
+    conditionedOwner?: ZLinkLocationOwnerToken
+  ): Promise<ZLinkStoreCondition[] | undefined> {
+    const key = authorityKey(encodeAuthorityKey('user_spot', spotId).value);
+    const read = await this.provider.read(key, signal);
+    if (read.kind === 'missing') return undefined;
+    const record = decodeAuthorityRecord(read.value.bytes);
+    const snapshot = record.snapshot;
+    if (
+      record.aggregate !== undefined ||
+      snapshot.allocation.objectKind !== 'user_spot' ||
+      snapshot.allocation.state !== 'active' ||
+      snapshot.objectGeneration !== objectGeneration ||
+      decodeServiceReadySpotAuthority(snapshot.payload)?.kind !== 'user_spot'
+    )
+      return undefined;
+    const leaseKey = ownerKey(snapshot.ownerId);
+    const lease = await this.provider.read(leaseKey, signal);
+    if (!sameLiveOwner(lease, snapshot)) return undefined;
+    return [
+      { kind: 'version', key, expected: read.value.version },
+      ...(conditionedOwner?.ownerId === snapshot.ownerId &&
+      conditionedOwner.leaseGeneration === snapshot.ownerLeaseGeneration
+        ? []
+        : [
+            leaseValueCondition(leaseKey, {
+              ownerId: snapshot.ownerId,
+              leaseGeneration: snapshot.ownerLeaseGeneration
+            })
+          ])
+    ];
+  }
+
   private async updateOwnedLocation<T extends LeaseOwnedLocation>(
     rowKey: ZLinkStoreKey,
     location: T,
     intent: ZLinkLocationWriteIntent,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    membership?: Pick<ZLinkActorLocation, 'spotKind' | 'spotId' | 'spotGeneration'>
   ): Promise<ZLinkLocationWriteResult> {
     const leaseKey = ownerKey(location.ownerId);
     const [lease, current] = await Promise.all([
@@ -2673,6 +2859,24 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       return rejected(lease.value.storeNow);
     }
 
+    const previousMembership =
+      current.kind === 'found' && membership !== undefined
+        ? decodeJson<DescriptorRecord<ZLinkActorLocation>>(current.value.bytes).descriptor
+        : undefined;
+    const membershipConditions =
+      membership?.spotKind === ZLinkSpotKind.User &&
+      (previousMembership?.spotKind !== ZLinkSpotKind.User ||
+        String(previousMembership.spotId) !== String(membership.spotId) ||
+        BigInt(previousMembership.spotGeneration) !== membership.spotGeneration)
+        ? await this.userSpotMembershipConditions(
+            String(membership.spotId),
+            membership.spotGeneration,
+            signal,
+            { ownerId: location.ownerId, leaseGeneration: locationOwnerGeneration(location) }
+          )
+        : [];
+    if (membershipConditions === undefined) return rejected(lease.value.storeNow);
+
     const result = await this.provider.write(
       {
         conditions: [
@@ -2680,7 +2884,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             ownerId: location.ownerId,
             leaseGeneration: locationOwnerGeneration(location)
           }),
-          rowCondition
+          rowCondition,
+          ...membershipConditions
         ],
         mutations: [
           {

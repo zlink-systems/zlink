@@ -4102,6 +4102,10 @@ public sealed partial class StatefulServiceRuntimeTests
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
 
+        var metadata = ServiceWireCodec.EncodeMetadataFrame(
+            new ServiceWireCodec.MetadataFrame([new(new("test"), new("9-8"))]),
+            new ServiceWireCodec.DecodeContext(null, null, null, 4096, 4096)
+        );
         using var firstMessage = Message.From([1, 2, 3]);
         var activation = new InstanceSpotActivationTarget(
             "objects",
@@ -4123,7 +4127,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 out var operationId,
                 deadline,
                 TimeSpan.FromSeconds(3),
-                metadata: new byte[] { 9, 8 }
+                metadata: metadata
             )
         );
 
@@ -4145,8 +4149,126 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(operationId, activationTarget.LastOperation.OperationId);
         Assert.Equal(operationId.Low, activationTarget.LastOperation.ReplyRouteId);
         Assert.Equal(source.RoutingId, activationTarget.LastOperation.SourceNodeRid);
-        Assert.Equal([9, 8], activationTarget.LastMetadata.ToArray());
+        Assert.Equal(metadata, activationTarget.LastMetadata.ToArray());
         Assert.Equal([1, 2, 3], activationTarget.LastPayload.Single().ToArray());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InstanceSpotIngressAcceptsCanonicalApplicationPayload(bool durablePayload)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(context, "canonical-instance-source");
+        await using var target = NewNode(context, "canonical-instance-target");
+        var endpoint = $"inproc://canonical-instance-{Guid.NewGuid():N}";
+        target.SetBind(endpoint);
+        source.ConnectPeer(endpoint, target.RoutingId);
+        var recorder = new RecordingInstanceSpotActivationTarget();
+        target.SetInstanceSpotActivationTarget(recorder);
+        source.Start();
+        target.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
+        var operation = new InstanceSpotActivationOperation(
+            new InstanceSpotActivationTarget(
+                "objects",
+                target.RoutingId,
+                target.Status().LifecycleGeneration,
+                "canonical-instance",
+                "Sample.InstanceSpot",
+                "descriptor-1"
+            ),
+            source.RoutingId,
+            source.Status().LifecycleGeneration,
+            "caller-spot",
+            new MeshOperationId(1575, 3),
+            false,
+            0,
+            checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds())
+        );
+        var application = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
+            new ReadOnlyMemory<byte>[] { new byte[] { 1, 2, 3 } }
+        );
+        if (durablePayload)
+        {
+            operation = operation with
+            {
+                IsRequest = true,
+                ReplyRouteId = operation.OperationId.Low,
+            };
+            application = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(
+                operation,
+                null,
+                new ReadOnlyMemory<byte>[] { new byte[] { 1, 2, 3 } }
+            );
+            var socket = (IRouterSocket)
+                typeof(ZLinkManagedMeshNode)
+                    .GetField(
+                        "_socket",
+                        System.Reflection.BindingFlags.Instance
+                            | System.Reflection.BindingFlags.NonPublic
+                    )!
+                    .GetValue(source)!;
+            using var head = Message.From(
+                ZLinkServiceWireCodec.EncodeInstanceSpotActivation(operation, false)
+            );
+            using var body = Message.From(application);
+            var reply = await socket
+                .Request(target.RoutingId)
+                .Message(head)
+                .Message(body)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Async()
+                .Reply;
+            try
+            {
+                Assert.True(
+                    ZLinkServiceWireCodec.TryDecodeReply(
+                        Assert.Single(reply).AsReadOnlySpan(),
+                        out var terminal,
+                        out _
+                    )
+                );
+                Assert.Equal((int)RequestResult.ProtocolError, terminal.TerminalResult);
+                Assert.Equal(
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
+                    terminal.FailureCode
+                );
+                Assert.Equal(0, recorder.Count);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(reply);
+            }
+            return;
+        }
+        // Inject the canonical peer frame through the Framework's transport lane.
+        // Binding internals are not accessed.
+        var send = typeof(ZLinkManagedMeshNode).GetMethod(
+            "TryScheduleRoutedSend",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+        )!;
+        Assert.True(
+            (bool)
+                send.Invoke(
+                    source,
+                    new object?[]
+                    {
+                        target.RoutingId,
+                        new ReadOnlyMemory<byte>[]
+                        {
+                            ZLinkServiceWireCodec.EncodeInstanceSpotActivation(operation, false),
+                            application,
+                        },
+                        null,
+                    }
+                )!
+        );
+        await WaitUntilAsync(() => recorder.Count == 1);
+        Assert.Equal(operation, recorder.LastOperation);
+        Assert.Equal(new byte[] { 1, 2, 3 }, recorder.LastPayload.Single().ToArray());
     }
 
     [Fact]
@@ -4178,6 +4300,10 @@ public sealed partial class StatefulServiceRuntimeTests
             && winner.Status().AdmittedPeerCount == 2
         );
 
+        var metadata = ServiceWireCodec.EncodeMetadataFrame(
+            new ServiceWireCodec.MetadataFrame([new(new("test"), new("7-8"))]),
+            new ServiceWireCodec.DecodeContext(null, null, null, 4096, 4096)
+        );
         using var firstMessage = Message.From([4, 5, 6]);
         var activation = new InstanceSpotActivationTarget(
             "objects",
@@ -4198,7 +4324,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 out var operationId,
                 deadline,
                 TimeSpan.FromSeconds(3),
-                metadata: new byte[] { 7, 8 }
+                metadata: metadata
             )
         );
 

@@ -549,6 +549,84 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         CancellationToken cancellationToken
     )
     {
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(operation.Target.TargetSpotId);
+        var read = await authorityStore
+            .ReadAuthorityAsync(key, cancellationToken)
+            .ConfigureAwait(false);
+        if (
+            read is ZLinkAuthorityReadResult.Found saved
+            && saved.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
+            && saved.Snapshot.Allocation.Descriptor.Rid == node.RoutingId
+            && saved.Snapshot.Allocation.DescriptorLifecycleGeneration
+                == node.MeshStatus().LifecycleGeneration
+        )
+        {
+            ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                saved.Snapshot.Payload.Span,
+                out var savedAuthority
+            );
+            var reference =
+                saved.Snapshot.ReservedCreation?.RequestContentReference
+                ?? savedAuthority?.ActivationRecovery?.Reference;
+            if (reference is not null)
+            {
+                var root = await relocationStore
+                    .GetRelocationAsync(reference, cancellationToken)
+                    .ConfigureAwait(false);
+                if (root is not ZLinkRelocationReadResult.Found savedRoot)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.DataLost,
+                        "Stored Instance activation is missing."
+                    );
+                var context = new ServiceWireCodec.DecodeContext(
+                    null,
+                    null,
+                    null,
+                    savedRoot.Payload.Length,
+                    savedRoot.Payload.Length
+                );
+                ServiceWireCodec.InstanceActivationRecoveryV1 prior;
+                try
+                {
+                    prior = ServiceWireCodec.DecodeDurableInstanceActivationRecoveryV1(
+                        savedRoot.Payload.ToArray(),
+                        context
+                    );
+                }
+                catch (Exception error) when (error is IOException or ArgumentException)
+                {
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.ProtocolError,
+                        "Stored Instance activation is invalid.",
+                        innerException: error
+                    );
+                }
+                var hasMetadata = metadata is { Length: > 0 };
+                if (
+                    prior.Operation.High.Value == operation.OperationId.High
+                    && prior.Operation.Low.Value == operation.OperationId.Low
+                    && (
+                        prior.TargetMeshName.Value != operation.Target.MeshName
+                        || prior.StableType.Value != operation.Target.StableType
+                        || prior.TargetDescriptorVersion.Value != operation.Target.DescriptorVersion
+                        || prior.DeadlineUnixMs.Value != operation.DeadlineUnixMs
+                        || (prior.HasMetadata == ServiceWireCodec.Bool8.True) != hasMetadata
+                        || (
+                            hasMetadata
+                            && !ServiceWireCodec
+                                .EncodeMetadataFrame(prior.Metadata!, context)
+                                .AsSpan()
+                                .SequenceEqual(metadata!.Value.Span)
+                        )
+                    )
+                )
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.ProtocolError,
+                        "Instance route does not match the stored activation."
+                    );
+            }
+        }
+
         ValidateTarget(operation);
         if (!registration.InstanceSpotFactories.ContainsKey(operation.Target.StableType))
             throw new ZLinkFrameworkException(
@@ -556,7 +634,6 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 $"Instance Spot type '{operation.Target.StableType}' is not registered."
             );
 
-        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(operation.Target.TargetSpotId);
         var requestSource = await ResolveRequestSourceAsync(
                 operation.Target.MeshName,
                 operation.SourceNodeRid,
@@ -565,9 +642,6 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
             )
             .ConfigureAwait(false);
 
-        var read = await authorityStore
-            .ReadAuthorityAsync(key, cancellationToken)
-            .ConfigureAwait(false);
         if (
             read is ZLinkAuthorityReadResult.Found found
             && found.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
@@ -648,7 +722,13 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                                 operation.Target.StableType,
                                 1
                             )
+                        ),
+                        registration.InstanceSpotRelocations.TryGetValue(
+                            operation.Target.StableType,
+                            out var policy
                         )
+                            ? policy.PolicyKind
+                            : null
                     ),
                     cancellationToken
                 )

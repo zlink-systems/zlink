@@ -121,12 +121,12 @@ operation 자체는 새 owner에게 자동으로 제출하지 않는다.
 이 경로는 owner process 장애 뒤 새 owner를 선택하는 failover가 아니다.
 
 현재 `Ready` Actor 또는 Spot의 owner process가 종료되면 Framework는 다른 node에 같은 object를
-자동 복원하지 않는다. Location Store에 기록된 owner를 임의로 바꾸지 않는다. 명시적 Actor `Create`·`GetOrCreate`에 따른 새
-incarnation 생성은 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 조건부 해제가 끝난 뒤
-생성 확정 절차를 따른다. 이 규칙은 Instance Spot에도 동일하게 적용한다. Instance
-Spot이라는 종류만으로 owner lease 만료 뒤, Actor나 Spot이 현재 어느 node에 있고 어느 node가
-owner인지 판단하는 기준 정보인 [authority](../00-foundation/02-glossary.ko.md#authority)를 release하거나
-다음 message를 cold activation으로 전환하지 않는다.
+자동 복원하지 않는다. Location Store에 기록된 owner를 임의로 바꾸지 않는다. 새 incarnation을 만드는
+operation — Actor `Create`·`GetOrCreate`, User Spot `GetOrCreate`, Instance intent가 있는 새 message — 은
+Actor나 Spot이 현재 어느 node에 있고 어느 node가 owner인지 판단하는 기준 정보인
+[authority](../00-foundation/02-glossary.ko.md#authority)를 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의
+조건부 해제가 commit된 뒤에만 새로 만든다. 기존 record의 owner lease가 유효하면 type과 operation의 기존
+결과를 따르고, owner lease가 무효인데 해제되지 않으면 그 operation은 `Unavailable`로 끝난다.
 
 ### 4.3 Actor와 Spot 생성
 
@@ -163,15 +163,13 @@ Instance Spot은 별도 create API를 호출하지 않고 `Missing` 상태에서
 | Authority record가 없는 `Missing` | Eligible node 하나를 선택해 새 `ObjectGeneration`의 cold activation을 시작한다. |
 | `Creating` 또는 최초 message를 아직 복원하지 않은 `Ready` | 같은 target lifecycle이면 저장한 생성 record와 최초 message로 같은 `ObjectGeneration`의 생성을 계속한다. Target lifecycle이 끝난 `Creating`은 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas) 해제 뒤 `Missing`이 된다. 해제 전에는 새 incarnation을 만들지 않는다. |
 | Owner lease가 유효한 `Ready` | 현재 owner로 message를 보낸다. Cold activation을 시작하지 않는다. |
-| `Ready` owner process가 종료되었거나 owner lease가 무효임 | Authority record를 자동 해제하지 않고 다른 node에서 새 incarnation을 만들지 않는다. Operation은 `Unavailable`로 끝난다. |
+| Owner lease가 무효인 `Ready` | [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 해제가 commit되면 `Missing`에서 새 `ObjectGeneration`의 cold activation을 시작한다. 이전 incarnation의 state와 수락된 operation은 이어받지 않는다. 해제 조건을 만족하지 않으면 operation은 `Unavailable`로 끝난다. |
 | Application의 explicit `Close`가 authority release까지 완료됨 | 이후 조회 결과는 `Missing`이다. 다음 Instance intent message는 새 `ObjectGeneration`의 cold activation을 시작할 수 있다. |
 | Application의 explicit `Close`가 진행 중임 | Instance intent message의 전달과 실행 대상은 [Spot 주소 메시징 §7·§9](../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계)를 따른다. |
 | 계획된 `Relocate`가 진행 중이거나 완료됨 | Relocation 계약에 따라 같은 object와 `ObjectGeneration`을 target으로 옮긴다. Cold activation이나 crash failover로 처리하지 않는다. |
 
-따라서 "process가 종료된 뒤 lease가 만료되면 다음 message가 다른 node에서 Instance Spot을
-다시 활성화한다"는 동작은 현재 계약에 없다. 그런 동작을 제공하려면, 장애가 난 owner의
-authority를 어떤 조건에서 해제할지, 저장한 state와 수락된 operation을 어떻게 복구할지,
-이전 owner를 어떤 fence로 차단할지를 별도의 failover 계약으로 정의해야 한다.
+이 경로는 Location runtime §6.1의 해제 결과에 따른 새 incarnation 생성이다. 이전 incarnation의 state와
+수락된 operation을 복구하는 failover가 아니다.
 
 최초 생성 recovery 정보는 Instance Spot의 최초 생성에만 사용한다. Actor, User Spot, 이미
 `Ready`인 Instance Spot과 host relocation에는 적용하지 않는다. 저장과 재개 순서는
@@ -284,8 +282,9 @@ Spot 하나의 global ID를 지정해 해당 Spot에 send 또는 request를 전�
   ObjectGeneration mismatch만으로 application handler 실행을 거부하지 않는다.
 - Destroy·Close, membership, relocation과 생성 recovery는 같은 ObjectGeneration인지 확인한다.
 - Actor를 제거한 뒤 같은 ActorId로 다시 만들어도 이전 Session binding을 다시 사용하지 않는다.
-- Instance Spot은 `Missing`일 때만 cold activation을 시작한다. `Ready` owner process 종료나
-  owner lease 만료를 `Missing`으로 바꾸거나 cold activation으로 복구하지 않는다.
+- Instance Spot은 `Missing`일 때만 cold activation을 시작한다. 무효 owner를 본 것만으로 `Missing`을
+  만들지 않으며, [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 해제가 commit된 뒤 새
+  `ObjectGeneration`으로 시작하는 생성과 같은 target lifecycle의 최초 activation recovery를 구분한다.
 - `Ready` authority에 cold activation의 recovery root와 replay cursor를 가리키는 [activation recovery pointer](../00-foundation/02-glossary.ko.md#activation-recovery-pointer)가 남아 있더라도 최초 cold activation의
   미완료 operation을 authority가 지정한 동일 target node·lifecycle에서 재개하는 데만
   사용한다. Steady `Ready` owner 장애 뒤 다른 target을 선택하는 근거로 사용하지 않는다.

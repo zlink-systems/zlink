@@ -127,6 +127,8 @@ final class ZLinkInMemoryAuthorityStore {
                         if (!current.owner.equals(restore.expectedOwner())) {
                             return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
                         }
+                        if (!spotMembershipIsCurrent(current.payload, restore.payload()))
+                            return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
                         if (revision == Long.MAX_VALUE) {
                             return completed(new ZLinkAuthorityGenerationExhausted());
                         }
@@ -142,6 +144,12 @@ final class ZLinkInMemoryAuthorityStore {
                         return completed(stored(stored, now));
                     }
                     byte[] reincarnatePayload = ZLinkAuthorityMutation.reincarnatePayload(mutation);
+                    if (!spotMembershipIsCurrent(
+                            current.payload,
+                            reincarnatePayload != null
+                                    ? reincarnatePayload
+                                    : ((ZLinkAuthorityPut) mutation).payload()))
+                        return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
                     if (revision == Long.MAX_VALUE
                             || (reincarnatePayload != null
                                     && (objectGeneration == Long.MAX_VALUE
@@ -205,6 +213,36 @@ final class ZLinkInMemoryAuthorityStore {
                 });
     }
 
+    private boolean spotMembershipIsCurrent(byte[] previousPayload, byte[] payload) {
+        var actor = new ZLinkActorAuthorityPayloadCodec().decode(payload);
+        if (actor.isEmpty()
+                || actor.get().currentSpotKind()
+                        != systems.zlink.framework.spots.ZLinkSpotKind.USER.value()) return true;
+        var membership = actor.get();
+        var previous = new ZLinkActorAuthorityPayloadCodec().decode(previousPayload);
+        if (previous.isPresent()
+                && previous.get().state() == ZLinkActorAuthorityPayloadCodec.State.READY
+                && previous.get().currentSpotKind() == membership.currentSpotKind()
+                && previous.get().currentSpotId().equals(membership.currentSpotId())
+                && previous.get().currentSpotGeneration() == membership.currentSpotGeneration())
+            return true;
+        Row target = rows.get(ZLinkAuthorityKeyCodec.spot(membership.currentSpotId()));
+        if (target == null
+                || target.objectGeneration != membership.currentSpotGeneration()
+                || !ownerLeaseIsLive.test(target.owner)
+                || participantIsPrepared(ZLinkAuthorityKeyCodec.spot(membership.currentSpotId())))
+            return false;
+        return new ZLinkServiceAuthorityPayloadCodec()
+                .decode(target.payload)
+                .filter(
+                        spot ->
+                                spot.user().isPresent()
+                                        && spot.spotId().equals(membership.currentSpotId())
+                                        && spot.state()
+                                                == ZLinkServiceAuthorityPayloadCodec.State.READY)
+                .isPresent();
+    }
+
     CompletionStage<Boolean> releaseEndedReservation(
             String key, String expectedStoreVersion, ZLinkStoreCancellation cancellation) {
         return inStateLane(
@@ -221,15 +259,34 @@ final class ZLinkInMemoryAuthorityStore {
         return releaseEndedReservationOnLane(key, current, null);
     }
 
+    CompletionStage<Boolean> releaseEndedReservation(
+            ZLinkObjectReservationRequest request,
+            String expectedStoreVersion,
+            ZLinkStoreCancellation cancellation) {
+        return inStateLane(
+                () -> {
+                    Row current = rows.get(request.authorityKey());
+                    return completed(
+                            current != null
+                                    && current.storeVersion.equals(expectedStoreVersion)
+                                    && current.allocation.objectKind() == request.objectKind()
+                                    && current.allocation.stableType().equals(request.stableType())
+                                    && releaseEndedReservationOnLane(
+                                            request.authorityKey(), current, request));
+                });
+    }
+
     private boolean releaseEndedReservationOnLane(
             String key, Row current, ZLinkObjectReservationRequest request) {
         boolean active = current.allocation.state() == ZLinkPlacementAllocationState.ACTIVE;
-        if ((active && (request == null || request.objectKind() != ZLinkPlacementObjectKind.ACTOR))
-                || participantIsPrepared(key)
-                || !Arrays.equals(
-                        current.payload,
-                        ZLinkCanonicalRelocationAuthorityStateCodec.applicationPayloadOrOriginal(
-                                current.payload))) return false;
+        if ((active && request == null)
+                || (!active
+                        && (participantIsPrepared(key)
+                                || !Arrays.equals(
+                                        current.payload,
+                                        ZLinkCanonicalRelocationAuthorityStateCodec
+                                                .applicationPayloadOrOriginal(current.payload)))))
+            return false;
         var descriptor =
                 descriptorLookup.find(
                         current.allocation.descriptor(),
@@ -238,10 +295,53 @@ final class ZLinkInMemoryAuthorityStore {
         boolean ownerLive = ownerLeaseIsLive.test(current.owner);
         if (active) {
             if (ownerLive) return false;
-            if (!(request.actorRelocationPolicy()
+            if (participantIsPrepared(key)
+                    || !Arrays.equals(
+                            current.payload,
+                            ZLinkCanonicalRelocationAuthorityStateCodec
+                                    .applicationPayloadOrOriginal(current.payload)))
+                throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "Ended authority requires relocation recovery");
+            if (!(request.relocationPolicy()
                     instanceof ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled))
                 throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE, "Actor owner lease is unavailable");
+                        ZLinkFrameworkErrorKind.UNAVAILABLE, "Object owner lease is unavailable");
+            if (current.allocation.objectKind() != ZLinkPlacementObjectKind.ACTOR) {
+                var spot = new ZLinkServiceAuthorityPayloadCodec().decode(current.payload);
+                if (spot.isEmpty()
+                        || spot.get().state() != ZLinkServiceAuthorityPayloadCodec.State.READY
+                        || spot.get().activationRecoveryState().isPresent()
+                        || (spot.get().user().isPresent()
+                                && rows.values().stream()
+                                        .anyMatch(
+                                                row ->
+                                                        new ZLinkActorAuthorityPayloadCodec()
+                                                                .decode(row.payload)
+                                                                .filter(
+                                                                        actor ->
+                                                                                actor
+                                                                                                        .currentSpotKind()
+                                                                                                == systems
+                                                                                                        .zlink
+                                                                                                        .framework
+                                                                                                        .spots
+                                                                                                        .ZLinkSpotKind
+                                                                                                        .USER
+                                                                                                        .value()
+                                                                                        && actor.currentSpotId()
+                                                                                                .equals(
+                                                                                                        spot.get()
+                                                                                                                .spotId())
+                                                                                        && actor
+                                                                                                        .currentSpotGeneration()
+                                                                                                == current.objectGeneration)
+                                                                .isPresent()))) {
+                    throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Ended Spot authority is not reclaimable");
+                }
+            }
         } else if (ownerLive
                 && descriptor != null
                 && descriptor.lifecycleGeneration()
@@ -275,19 +375,6 @@ final class ZLinkInMemoryAuthorityStore {
                     if (current != null
                             && releaseEndedReservationOnLane(
                                     request.authorityKey(), current, request)) current = null;
-                    if (current != null
-                            && request.objectKind() != ZLinkPlacementObjectKind.ACTOR
-                            && current.allocation.state() == ZLinkPlacementAllocationState.ACTIVE
-                            && !ownerLeaseIsLive.test(current.owner)
-                            && !participantIsPrepared(request.authorityKey())
-                            && Arrays.equals(
-                                    current.payload,
-                                    ZLinkCanonicalRelocationAuthorityStateCodec
-                                            .applicationPayloadOrOriginal(current.payload))) {
-                        adjustActive(current.allocation, current.allocation.capacityBundle(), -1);
-                        rows.remove(request.authorityKey());
-                        current = null;
-                    }
                     if (current != null) {
                         if (current.allocation.state() == ZLinkPlacementAllocationState.PENDING) {
                             return completed(new ZLinkObjectConflict(snapshot(current, now)));
@@ -416,6 +503,8 @@ final class ZLinkInMemoryAuthorityStore {
                 current.allocation.stableType())) {
             return ZLinkObjectCommitResult.STALE;
         }
+        if (!spotMembershipIsCurrent(current.payload, readyPayload))
+            return ZLinkObjectCommitResult.STALE;
         if (!hasCounterRoom(revision, 1)) {
             return ZLinkObjectCommitResult.GENERATION_EXHAUSTED;
         }
@@ -697,6 +786,44 @@ final class ZLinkInMemoryAuthorityStore {
                     }
                     if (!aggregateStateIsCurrent(state.request, fence)) {
                         return completed(ZLinkAggregateCommitResult.STALE);
+                    }
+                    for (var participant : state.request.participants()) {
+                        var actor =
+                                new ZLinkActorAuthorityPayloadCodec()
+                                        .decode(participant.authorityPayload());
+                        if (actor.isPresent()) {
+                            var target =
+                                    state.request.participants().stream()
+                                            .filter(
+                                                    spot ->
+                                                            spot.authorityKey()
+                                                                    .equals(
+                                                                            ZLinkAuthorityKeyCodec
+                                                                                    .spot(
+                                                                                            actor.get()
+                                                                                                    .currentSpotId())))
+                                            .findFirst();
+                            if (target.isPresent()) {
+                                if (target.get().objectGeneration()
+                                                != actor.get().currentSpotGeneration()
+                                        || new ZLinkServiceAuthorityPayloadCodec()
+                                                .decode(target.get().authorityPayload())
+                                                .filter(
+                                                        spot ->
+                                                                spot.user().isPresent()
+                                                                        && spot.spotId()
+                                                                                .equals(
+                                                                                        actor.get()
+                                                                                                .currentSpotId()))
+                                                .isEmpty())
+                                    return completed(ZLinkAggregateCommitResult.STALE);
+                                continue;
+                            }
+                        }
+                        if (!spotMembershipIsCurrent(
+                                rows.get(participant.authorityKey()).payload,
+                                participant.authorityPayload()))
+                            return completed(ZLinkAggregateCommitResult.STALE);
                     }
                     int ownerGenerationCount =
                             Math.toIntExact(

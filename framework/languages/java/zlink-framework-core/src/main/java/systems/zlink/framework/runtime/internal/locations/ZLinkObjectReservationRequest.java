@@ -17,7 +17,7 @@ public record ZLinkObjectReservationRequest(
         ZLinkLocationOwnerToken targetOwner,
         byte[] creatingPayload,
         ZLinkPlacementCapacityBundle capacityBundle,
-        RelocationPolicy actorRelocationPolicy) {
+        RelocationPolicy relocationPolicy) {
     public ZLinkObjectReservationRequest(
             ZLinkPlacementObjectKind objectKind,
             String authorityKey,

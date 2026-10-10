@@ -218,8 +218,15 @@ struct object_reserve_request_t
     std::vector<std::byte> creating_payload;
     placement_capacity_bundle_t capacity_bundle;
     std::chrono::system_clock::time_point operation_deadline{};
-    std::optional<detail::factory_relocation_kind_t> actor_relocation_policy;
+    std::optional<detail::factory_relocation_kind_t> relocation_policy;
 };
+inline bool authority_matches_creation_type (const authority_snapshot_t &authority,
+                                             const object_reserve_request_t &request)
+{
+    return authority.allocation.object_kind == request.key.kind
+           && authority.allocation.stable_type == request.intent.stable_type;
+}
+
 struct object_reservation_fence_t
 {
     std::string reservation_id;
@@ -514,9 +521,11 @@ class location_repository_t
     virtual task_t<std::optional<creation_terminal_record_t>>
     read_creation_terminal (creation_operation_identity_t operation,
                             std::stop_token cancellation = {}) = 0;
-    virtual task_t<bool> release_ended_reservation (authority_key_t key,
-                                                    std::string expected_store_version,
-                                                    std::stop_token cancellation = {})
+    virtual task_t<bool>
+    release_ended_reservation (authority_key_t key,
+                               std::string expected_store_version,
+                               std::stop_token cancellation = {},
+                               std::optional<object_reserve_request_t> request = std::nullopt)
     {
         throw std::logic_error ("Reservation lifecycle recovery is not supported");
         co_return false;

@@ -5,6 +5,10 @@ import type { ZLinkRelocationConfiguration } from '../../contracts/Configuration
 export interface ZLinkObjectReserveRequest extends ReserveRequest {
   readonly actorRelocationPolicy?: ZLinkRelocationConfiguration<unknown>['kind'];
 }
+export type ZLinkEndedOwnerReleaseIntent = Pick<
+  ZLinkObjectReserveRequest,
+  'key' | 'actorRelocationPolicy'
+> & { readonly intent: Pick<ZLinkObjectReserveRequest['intent'], 'stableType'> };
 export type * from '../../contracts/Locations/Authority';
 export type {
   ZLinkActorLocation,

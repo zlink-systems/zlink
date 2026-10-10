@@ -4,15 +4,6 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed partial class ZLinkFrameworkRuntime
 {
-    internal InstanceSpotIntentAddress ResolveInstanceSpotIntent(InstanceSpotIntentAddress address)
-    {
-        var source = ResolveActorCreationSource(
-            string.IsNullOrEmpty(address.MeshName) ? null : address.MeshName
-        );
-        var meshName = source.Registration.SpotMeshChannelName ?? source.Registration.SpotNodeName;
-        return address with { MeshName = meshName };
-    }
-
     internal ZLinkSpotNodeRuntime ResolveActorCreationSource(string? meshName)
     {
         var state =

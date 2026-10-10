@@ -88,9 +88,12 @@ The resolver's `Unavailable` preserves the authority state without a Ready route
 intent seeing `Creating` goes to the waiter above; under explicit Close it keeps the owner route and fence and goes to that owner node ([Spot messaging §7](06-spot-address-messaging.en.md#7-close-and-the-generation-boundary)); during idle cleanup it follows the route
 refresh in §5. [Spot messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability)
 decides the result for a `Closing` direct call without Instance intent. It isn't the
-same state as `Missing`, which means no authority exists. Only after an explicit `Close`,
-`IdleEvicted` cleanup, or another formal lifecycle operation completes authority release
-can the resolver produce a new `Missing` input.
+same state as `Missing`, which means no authority exists. Instance intent seeing a steady
+`Ready` with an invalid owner lease goes to the creation coordinator, and the target re-reads the
+current authority and requests the release. Only after an explicit `Close`, `IdleEvicted` cleanup, the conditional release of
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas),
+or another formal lifecycle operation completes authority release can the resolver produce a
+new `Missing` input.
 
 Stored creation intent resumes only an incomplete first cold-activation operation on the
 same target node and lifecycle. It isn't used for takeover or queue recovery after a
@@ -335,8 +338,8 @@ admission result. Each item maps to one test.
 - A message sent right after creation finishes is processed immediately, not delayed by
   the cache lifetime.
 - When only the fact that the owner can't be used is confirmed (`Unavailable`), a new
-  creation isn't started, and that result is delivered only as the terminal completion of
-  the in-progress request.
+  creation isn't started. Instance-intent forwarding follows §3; otherwise the result is
+  delivered as the terminal completion of the in-progress request.
 
 **Stale Owner Filtering**
 

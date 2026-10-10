@@ -495,11 +495,18 @@ length.
 | Kind | Purpose | Contents |
 |---|---|---|
 | `1` | Delivers to an existing [Ready](../00-foundation/02-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work, and whether the call carries [Instance intent](../00-foundation/02-glossary.en.md#instance-intent) (`instanceIntent`) |
-| `2` | Missing cold activation only | The target Mesh/node RID/lifecycle, Spot RID, stable type, descriptor version, and deadline — an authority fence is forbidden |
+| `2` | Cold activation request — the source authority is Missing, or Ready with an invalid owner lease (the target re-reads the current authority and requests the [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas) release) | The target Mesh/node RID/lifecycle, Spot RID, stable type, descriptor version, and deadline — an authority fence is forbidden |
 
-If a kind `2` route's operation identity or metadata presence/bytes differ
-from the ZLIA's target Mesh/stable type/descriptor version/deadline, it is
-rejected as a protocol error before reservation.
+If a ZLIA with the same operation identity as a kind `2` route is already stored at that target, the
+route is rejected as a protocol error when its target Mesh, stable type, descriptor version,
+deadline, or metadata presence/bytes differ from that ZLIA. Only a redelivery of the same operation
+is compared. An Instance intent with a different operation identity follows the same-target
+activation join in [Spot address messaging §4.2](../03-spot-actor/06-spot-address-messaging.en.md#42-when-several-nodes-receive-the-first-message-at-once),
+and on a first activation with no stored ZLIA, the target builds the ZLIA from the route. This
+comparison
+finishes before both the
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas) release and reservation,
+and a mismatch leaves authority, membership, and capacity unchanged.
 
 ### Target Host Scan and Recovery
 

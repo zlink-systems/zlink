@@ -801,7 +801,8 @@ final class ZLinkChannelRuntimeTest {
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata,
-                                long activationDeadline) {
+                                long activationDeadline,
+                                SpotTransportAddress readyRoute) {
                             throw new AssertionError("ready route must not activate");
                         }
 
@@ -814,7 +815,8 @@ final class ZLinkChannelRuntimeTest {
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata,
-                                Duration timeout) {
+                                Duration timeout,
+                                SpotTransportAddress readyRoute) {
                             return CompletableFuture.completedFuture(
                                     backend.bridge.requestReplyParts);
                         }
@@ -1240,7 +1242,7 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void instanceSpotRequestDoesNotActivateWhenReadyOwnerIsUnavailable() throws Exception {
+    void instanceSpotIntentDelegatesUnavailableAuthorityToCoordinator() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
@@ -1283,9 +1285,13 @@ final class ZLinkChannelRuntimeTest {
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata,
-                                long activationDeadline) {
+                                long activationDeadline,
+                                SpotTransportAddress readyRoute) {
                             sendActivationAttempts.incrementAndGet();
-                            return CompletableFuture.completedFuture(null);
+                            return CompletableFuture.failedFuture(
+                                    new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                            "repository did not release Ready authority"));
                         }
 
                         @Override
@@ -1297,13 +1303,13 @@ final class ZLinkChannelRuntimeTest {
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata,
-                                Duration timeout) {
+                                Duration timeout,
+                                SpotTransportAddress readyRoute) {
                             activationAttempts.incrementAndGet();
-                            byte[] reply =
-                                    new ZLinkJsonMessageSerializer()
-                                            .serialize(new TestReply("reactivated"))
-                                            .bytes();
-                            return CompletableFuture.completedFuture(List.of(Message.from(reply)));
+                            return CompletableFuture.failedFuture(
+                                    new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                            "repository did not release Ready authority"));
                         }
                     });
 
@@ -1334,8 +1340,8 @@ final class ZLinkChannelRuntimeTest {
             assertEquals(
                     ZLinkFrameworkErrorKind.UNAVAILABLE,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
-            assertEquals(0, sendActivationAttempts.get());
-            assertEquals(0, activationAttempts.get());
+            assertEquals(1, sendActivationAttempts.get());
+            assertEquals(1, activationAttempts.get());
             assertEquals(0, backend.spotNode.entrySpot.sendAttempts);
             assertEquals(0, backend.spotNode.entrySpot.requestAttempts);
             assertEquals(0L, metrics.inflight("play.route", "instance_spot"));
@@ -1392,7 +1398,8 @@ final class ZLinkChannelRuntimeTest {
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata,
-                                long activationDeadline) {
+                                long activationDeadline,
+                                SpotTransportAddress readyRoute) {
                             return resolver.resolve(spotId)
                                     .thenCompose(
                                             address -> {
@@ -1415,7 +1422,8 @@ final class ZLinkChannelRuntimeTest {
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata,
-                                Duration timeout) {
+                                Duration timeout,
+                                SpotTransportAddress readyRoute) {
                             throw new AssertionError("request activation is not expected");
                         }
                     });

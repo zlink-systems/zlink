@@ -26,7 +26,11 @@ import {
   type ResolvedSpotHandle
 } from '../spots/spot-handle';
 
-import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import type {
+  ZLinkSpotRouteResolver,
+  ZLinkSpotRouteTarget,
+  ZLinkInstanceReactivationRoute
+} from '../spots/spot-routing-internal';
 import { encodeAuthorityKey } from './authority-key-codec';
 import { isKnownZLinkLocationAutoConnectType, isKnownZLinkLocationRole } from './canonical-codec';
 import {
@@ -951,7 +955,17 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
     ) => Promise<ZLinkFrameworkRuntimeState | undefined>
   ) {}
 
-  async resolve(spotId: RoutingId, signal?: AbortSignal): Promise<ZLinkSpotRouteTarget> {
+  resolve(
+    spotId: RoutingId,
+    signal: AbortSignal | undefined,
+    instanceIntent: true
+  ): Promise<ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute>;
+  resolve(spotId: RoutingId, signal?: AbortSignal): Promise<ZLinkSpotRouteTarget>;
+  async resolve(
+    spotId: RoutingId,
+    signal?: AbortSignal,
+    instanceIntent?: true
+  ): Promise<ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute> {
     const key = String(spotId);
     const prepared = await this.lane.run(() => this.beginResolutionCore(key));
     try {
@@ -980,6 +994,15 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
                   signal
                 );
           if (remainingLeaseMs !== undefined && remainingLeaseMs <= 0) {
+            if (instanceIntent === true && ready?.kind === 'instance_spot') {
+              return {
+                kind: 'coldActivation',
+                spotId,
+                spotKind: ZLinkSpotKind.Instance,
+                meshName: ready.ownerMeshName,
+                stableType: ready.stableType
+              };
+            }
             throw new ZLinkFrameworkException(
               ZLinkFrameworkErrorKind.Unavailable,
               `SPOT '${spotId}' Ready authority owner lease is unavailable.`

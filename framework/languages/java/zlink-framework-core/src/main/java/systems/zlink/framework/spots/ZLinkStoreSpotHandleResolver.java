@@ -88,16 +88,7 @@ public final class ZLinkStoreSpotHandleResolver
                                                         != ((FrameworkSpotHandle) handle)
                                                                 .spotGeneration()
                                         ? Optional.empty()
-                                        : Optional.of(
-                                                new SpotTransportAddress(
-                                                        addresses.routerChannelId(row.meshName()),
-                                                        row.nodeRid(),
-                                                        row.spotId(),
-                                                        row.spotGeneration(),
-                                                        row.targetNodeGeneration(),
-                                                        row.authorityOwnerGeneration(),
-                                                        row.ownerLeaseGeneration(),
-                                                        row.spotKind())));
+                                        : Optional.of(SpotTransportAddress.fromRoute(row)));
     }
 
     @Override

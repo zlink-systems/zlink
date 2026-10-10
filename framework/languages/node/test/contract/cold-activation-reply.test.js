@@ -203,6 +203,7 @@ function pair() {
     targetNodeGeneration: 7n,
     targetSpotId: 'room',
     stableType: 'T',
+    targetMeshName: 'mesh',
     descriptorVersion: '1'
   };
   const route = {

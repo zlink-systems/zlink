@@ -9,6 +9,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.PeerChannels;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -518,6 +519,12 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Alternate backends may materialize Instance Spot elsewhere.
     }
 
+    default void setInstanceSpotActivationValidator(
+            java.util.function.Function<
+                            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope,
+                            CompletionStage<ZLinkAuthorityReadResult>>
+                    validator) {}
+
     default void registerInstanceSpotType(
             String stableType, InstanceSpotActivationHandler handler) {
         registerInstanceSpotType(stableType);
@@ -546,7 +553,8 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 ZLinkBackendSpot backendSpot);
 
         default CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
-                ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
+                ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
+                ZLinkAuthorityReadResult authority) {
             return CompletableFuture.failedFuture(
                     new UnsupportedOperationException("Cold activation is unavailable"));
         }

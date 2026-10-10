@@ -635,17 +635,30 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
     registration.spot_builder.add_actor_factory<actor_t, reclaim_registration_factory_t> (
       "player", std::make_shared<reclaim_registration_factory_t> (),
       [] (auto &factory) { factory.disable_relocation (); });
-    request.actor_relocation_policy =
+    request.relocation_policy =
       registration.spot_state->actor_factories.at ("player").relocation.kind;
     const auto first =
       std::get<object_reserved_t> (repository.reserve (request).result ().value ());
-    auto ready_payload = bytes ("old-state-and-membership");
+    auto ready_payload = encode_actor_authority_payload (actor_authority_payload_t{
+      .state =
+        scenario == "notReady" ? actor_authority_state_t::creating : actor_authority_state_t::ready,
+      .stable_type = "player",
+      .actor_id = "reclaim-actor",
+      .current_spot_id = "reclaim-entry",
+      .current_spot_generation = 1,
+      .current_spot_kind = actor_authority_spot_kind_t::entry,
+      .owner_id = old_owner.owner_id,
+      .owner_lease_generation = static_cast<std::uint64_t> (old_owner.lease_generation),
+      .mesh_name = "reclaim-mesh",
+      .node_rid = request.target.node_rid,
+      .node_generation = 1});
     if ((scenario == "relocation" || scenario == "relocationRecreate")) {
         auto canonical = encode_actor_authority_payload (actor_authority_payload_t{
           .stable_type = "player",
           .actor_id = "reclaim-actor",
           .current_spot_id = "reclaim-entry",
           .current_spot_generation = 1,
+          .current_spot_kind = actor_authority_spot_kind_t::entry,
           .owner_id = old_owner.owner_id,
           .owner_lease_generation = static_cast<std::uint64_t> (old_owner.lease_generation),
           .mesh_name = "reclaim-mesh",
@@ -661,6 +674,10 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
     }
     ASSERT_TRUE (std::holds_alternative<object_committed_t> (
       repository.commit ({request.key, first.fence, ready_payload}).result ().value ()));
+    const auto committed =
+      repository.read_authority (actor_authority_key (request.key.global_id)).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (committed));
+    EXPECT_FALSE (std::get<authority_snapshot_t> (committed).pending_creation);
     if (scenario == "liveDescriptorGone")
         repository.remove_mesh_node ({old_descriptor.mesh_name, old_descriptor.rid}, old_owner)
           .result ()
@@ -669,7 +686,7 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
         repository.release_owner_lease (old_owner).result ().value ();
     request.target = {"reclaim-mesh", node_rid_t::from_string ("reclaim-target"), 1, new_owner};
     if (scenario == "recreate" || scenario == "relocationRecreate")
-        request.actor_relocation_policy = detail::factory_relocation_kind_t::recreate;
+        request.relocation_policy = detail::factory_relocation_kind_t::recreate;
     if (scenario == "typeMismatch")
         request.intent.stable_type = "different";
     if (scenario == "race") {
@@ -689,30 +706,28 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
           1);
         return;
     }
-    if (scenario == "recreate") {
+    if (scenario == "recreate" || scenario == "relocation" || scenario == "relocationRecreate"
+        || scenario == "notReady") {
+        const auto before = std::get<authority_snapshot_t> (
+          repository.read_authority (actor_authority_key (request.key.global_id))
+            .result ()
+            .value ());
         const auto next = repository.reserve (request).result ();
         ASSERT_FALSE (next);
         EXPECT_EQ (next.error_kind (), framework_error_kind_t::unavailable);
+        const auto after = std::get<authority_snapshot_t> (
+          repository.read_authority (actor_authority_key (request.key.global_id))
+            .result ()
+            .value ());
+        EXPECT_EQ (before.store_version, after.store_version);
+        EXPECT_EQ (before.payload, after.payload);
         return;
     }
     const auto retained_before =
       repository.read_authority (actor_authority_key (request.key.global_id)).result ().value ();
     const auto next = repository.reserve (request).result ();
     ASSERT_TRUE (next);
-    if ((scenario == "relocation" || scenario == "relocationRecreate")) {
-        EXPECT_TRUE (std::holds_alternative<object_already_exists_t> (next.value ()));
-        const auto retained_after =
-          repository.read_authority (actor_authority_key (request.key.global_id))
-            .result ()
-            .value ();
-        const auto *before = std::get_if<authority_snapshot_t> (&retained_before);
-        const auto *after = std::get_if<authority_snapshot_t> (&retained_after);
-        ASSERT_NE (before, nullptr);
-        ASSERT_NE (after, nullptr);
-        EXPECT_EQ (after->store_version, before->store_version);
-        EXPECT_EQ (after->object_generation, before->object_generation);
-        EXPECT_EQ (after->payload, ready_payload);
-    } else if (scenario == "live" || scenario == "liveDescriptorGone")
+    if (scenario == "live" || scenario == "liveDescriptorGone")
         EXPECT_TRUE (std::holds_alternative<object_already_exists_t> (next.value ()));
     else if (scenario == "typeMismatch")
         EXPECT_TRUE (std::holds_alternative<object_type_mismatch_t> (next.value ()));
@@ -734,7 +749,414 @@ INSTANTIATE_TEST_SUITE_P (RepositoryImplementations,
                                                                  "typeMismatch",
                                                                  "race",
                                                                  "relocation",
-                                                                 "relocationRecreate")));
+                                                                 "relocationRecreate",
+                                                                 "notReady")));
+
+class reclaim_scan_store_t final : public location_store_t
+{
+  public:
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        if (before_member_write
+            && std::any_of (request.mutations.begin (), request.mutations.end (),
+                            [] (const auto &mutation) {
+                                const auto *put = std::get_if<store_put_t> (&mutation);
+                                return put
+                                       && put->key.value.starts_with (std::string ("authority")
+                                                                      + '\0' + "actor" + '\0');
+                            })) {
+            auto callback = std::exchange (before_member_write, {});
+            co_await callback ();
+        }
+        co_return co_await inner.write (std::move (request));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        if (armed) {
+            ++scans;
+            if (fail_scan)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "membership snapshot failed");
+            if (expire_next_page && request.cursor) {
+                expire_next_page = false;
+                ++expired;
+                co_return store_scan_expired_t{};
+            }
+            request.limit = 1;
+        }
+        co_return co_await inner.scan (std::move (request));
+    }
+    in_memory_location_store_t inner;
+    bool armed = false;
+    bool fail_scan = false;
+    bool expire_next_page = false;
+    std::function<task_t<void> ()> before_member_write;
+    unsigned scans = 0;
+    unsigned expired = 0;
+};
+
+class EndedSpotReclaimTest
+    : public ::testing::TestWithParam<std::tuple<bool, placement_object_kind_t, std::string>>
+{
+};
+
+TEST_P (EndedSpotReclaimTest, NewIncarnationRequiresEndedOwnerAndDisabledRegistration)
+{
+    reclaim_scan_store_t opaque;
+    provider_location_repository_t provider (opaque);
+    in_memory_location_repository_t memory;
+    location_repository_t &repository = std::get<0> (GetParam ())
+                                          ? static_cast<location_repository_t &> (provider)
+                                          : static_cast<location_repository_t &> (memory);
+    const auto kind = std::get<1> (GetParam ());
+    const auto scenario = std::get<2> (GetParam ());
+    const auto old_owner =
+      std::get<owner_lease_claimed_t> (
+        repository.claim_owner_lease ("ended-spot-old", 60s).result ().value ())
+        .token;
+    const auto new_owner =
+      std::get<owner_lease_claimed_t> (
+        repository.claim_owner_lease ("ended-spot-new", 60s).result ().value ())
+        .token;
+    const auto publish = [&] (const std::string &rid, const location_owner_token_t &owner) {
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "ended-spot-mesh";
+        descriptor.rid = zlink::routing_id_t::from (rid);
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.owner_id = owner.owner_id;
+        descriptor.lease_generation = owner.lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.application_version = 1;
+        descriptor.security_identity = rid;
+        descriptor.activation_concurrency.limit = 1;
+        descriptor.entry_spot_id = "entry-" + rid;
+        descriptor.object_capabilities.push_back ({placement_object_kind_t::actor, "player",
+                                                   maintenance_policy_kind_t::disabled, false, 0});
+        descriptor.object_capabilities.push_back (
+          {kind, "room", maintenance_policy_kind_t::disabled, false, 0});
+        descriptor.capacity.actors.limit = 2;
+        descriptor.capacity.spots.limit = 1;
+        descriptor.capacity.spot_types.push_back ({kind, "room", {1, 0, 0}});
+        ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status,
+                   location_write_status_t::stored);
+    };
+    publish ("ended-spot-source", old_owner);
+    publish ("ended-spot-target", new_owner);
+    object_reserve_request_t request;
+    request.key = {kind, "ended-spot"};
+    request.intent.stable_type = "room";
+    request.target = {"ended-spot-mesh", node_rid_t::from_string ("ended-spot-source"), 1,
+                      old_owner};
+    request.creating_payload = bytes ("creating");
+    request.capacity_bundle = {0, 1, spot_type_capacity_delta_t{kind, "room", 1}};
+    request.relocation_policy = detail::factory_relocation_kind_t::disabled;
+    const auto first =
+      std::get<object_reserved_t> (repository.reserve (request).result ().value ());
+    const auto ready =
+      kind == placement_object_kind_t::user_spot
+        ? encode_user_spot_authority_payload (user_spot_authority_payload_t{
+            .state = scenario == "closing" ? user_spot_authority_state_t::closing
+                                           : user_spot_authority_state_t::ready,
+            .stable_type = "room",
+            .spot_id = "ended-spot",
+            .owner_id = old_owner.owner_id,
+            .owner_lease_generation = static_cast<std::uint64_t> (old_owner.lease_generation),
+            .mesh_name = request.target.mesh_name,
+            .node_rid = request.target.node_rid,
+            .node_generation = 1})
+        : encode_instance_spot_authority_payload (instance_spot_authority_payload_t{
+            .state = scenario == "closing" ? instance_spot_authority_state_t::closing
+                                           : instance_spot_authority_state_t::ready,
+            .stable_type = "room",
+            .spot_id = "ended-spot",
+            .owner_id = old_owner.owner_id,
+            .owner_lease_generation = static_cast<std::uint64_t> (old_owner.lease_generation),
+            .mesh_name = request.target.mesh_name,
+            .node_rid = request.target.node_rid,
+            .node_generation = 1,
+            .activation_recovery =
+              scenario == "recovery"
+                ? std::optional<activation_recovery_pointer_t>{{.reference = "old-root",
+                                                                .encoded_size = 1,
+                                                                .inbox_sequence = 1}}
+                : std::nullopt});
+    ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+      repository.commit ({request.key, first.fence, ready}).result ().value ()));
+    const auto before = std::get<authority_snapshot_t> (
+      repository.read_authority (spot_authority_key ("ended-spot")).result ().value ());
+    if (scenario == "pageMember" || scenario == "snapshotExpired") {
+        object_reserve_request_t decoy;
+        decoy.key = {placement_object_kind_t::actor, "a-first-page"};
+        decoy.intent.stable_type = "player";
+        decoy.target = {"ended-spot-mesh", node_rid_t::from_string ("ended-spot-target"), 1,
+                        new_owner};
+        decoy.capacity_bundle.actor_slots = 1;
+        const auto reserved =
+          std::get<object_reserved_t> (repository.reserve (decoy).result ().value ());
+        actor_authority_payload_t payload{.stable_type = "player",
+                                          .actor_id = "a-first-page",
+                                          .current_spot_id = "entry",
+                                          .current_spot_generation = 1,
+                                          .current_spot_kind = actor_authority_spot_kind_t::entry,
+                                          .owner_id = new_owner.owner_id,
+                                          .owner_lease_generation =
+                                            static_cast<std::uint64_t> (new_owner.lease_generation),
+                                          .mesh_name = decoy.target.mesh_name,
+                                          .node_rid = decoy.target.node_rid,
+                                          .node_generation = 1};
+        ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+          repository.commit ({decoy.key, reserved.fence, encode_actor_authority_payload (payload)})
+            .result ()
+            .value ()));
+    }
+    std::optional<authority_snapshot_t> member_before;
+    std::optional<object_reservation_fence_t> member_fence;
+    std::vector<std::byte> joined_payload;
+    if (scenario == "member" || scenario == "lateJoin" || scenario == "pageMember"
+        || scenario == "lateJoinCommit" || scenario == "lateJoinVersion"
+        || scenario == "initialLateJoin") {
+        object_reserve_request_t member_request;
+        member_request.key = {placement_object_kind_t::actor, "ended-spot-member"};
+        member_request.intent.stable_type = "player";
+        member_request.target = {"ended-spot-mesh", node_rid_t::from_string ("ended-spot-target"),
+                                 1, new_owner};
+        member_request.capacity_bundle.actor_slots = 1;
+        const auto reserved =
+          std::get<object_reserved_t> (repository.reserve (member_request).result ().value ());
+        actor_authority_payload_t member{.stable_type = "player",
+                                         .actor_id = "ended-spot-member",
+                                         .current_spot_id = "entry",
+                                         .current_spot_generation = 1,
+                                         .current_spot_kind = actor_authority_spot_kind_t::entry,
+                                         .owner_id = new_owner.owner_id,
+                                         .owner_lease_generation =
+                                           static_cast<std::uint64_t> (new_owner.lease_generation),
+                                         .mesh_name = member_request.target.mesh_name,
+                                         .node_rid = member_request.target.node_rid,
+                                         .node_generation = 1};
+        member_fence = reserved.fence;
+        if (scenario != "initialLateJoin") {
+            ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+              repository
+                .commit (
+                  {member_request.key, reserved.fence, encode_actor_authority_payload (member)})
+                .result ()
+                .value ()));
+        }
+        member.current_spot_id = "ended-spot";
+        member.current_spot_generation = before.object_generation;
+        member.current_spot_kind = actor_authority_spot_kind_t::user;
+        joined_payload = encode_actor_authority_payload (member);
+        member_before = std::get<authority_snapshot_t> (
+          repository.read_authority (actor_authority_key (member.actor_id)).result ().value ());
+        if (scenario == "member" || scenario == "pageMember") {
+            ASSERT_TRUE (std::holds_alternative<authority_stored_t> (
+              repository
+                .compare_exchange_authority (actor_authority_key (member.actor_id),
+                                             member_before->store_version,
+                                             authority_put_t{joined_payload})
+                .result ()
+                .value ()));
+        }
+    }
+    if (scenario == "aggregate") {
+        aggregate_prepare_request_t aggregate;
+        aggregate.aggregate_id.value[0] = std::byte{1};
+        aggregate.aggregate_generation = 1;
+        aggregate.participants = {{spot_authority_key ("ended-spot"),
+                                   before.store_version,
+                                   authority_generation_transition_t::new_owner,
+                                   ready,
+                                   {}}};
+        aggregate.target_descriptor = {"ended-spot-mesh",
+                                       zlink::routing_id_t::from ("ended-spot-target")};
+        aggregate.target_descriptor_lifecycle_generation = 1;
+        aggregate.target_owner = new_owner;
+        aggregate.capacity_bundle = request.capacity_bundle;
+        ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (
+          repository.prepare_aggregate (aggregate).result ().value ()));
+    }
+    if (scenario != "live" && scenario != "lateJoinCommit" && scenario != "lateJoinVersion")
+        repository.release_owner_lease (old_owner).result ().value ();
+    request.target = {"ended-spot-mesh", node_rid_t::from_string ("ended-spot-target"), 1,
+                      new_owner};
+    if (scenario == "recreate")
+        request.relocation_policy = detail::factory_relocation_kind_t::recreate;
+    if (scenario == "unregistered")
+        request.relocation_policy.reset ();
+    if (scenario == "lateJoinCommit" || scenario == "lateJoinVersion") {
+        opaque.before_member_write = [&] () -> task_t<void> {
+            if (scenario == "lateJoinCommit")
+                co_await repository.release_owner_lease (old_owner);
+            else {
+                auto closing = *decode_ready_user_spot_authority_payload (ready);
+                closing.state = user_spot_authority_state_t::closing;
+                const auto stored = co_await repository.compare_exchange_authority (
+                  spot_authority_key ("ended-spot"), before.store_version,
+                  authority_put_t{encode_user_spot_authority_payload (closing)});
+                EXPECT_TRUE (std::holds_alternative<authority_stored_t> (stored));
+            }
+        };
+    }
+    if (scenario == "lateJoin" || scenario == "lateJoinCommit" || scenario == "lateJoinVersion") {
+        const auto joined = repository
+                              .compare_exchange_authority (
+                                actor_authority_key ("ended-spot-member"),
+                                member_before->store_version, authority_put_t{joined_payload})
+                              .result ()
+                              .value ();
+        EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (joined));
+        const auto retained = std::get<authority_snapshot_t> (
+          repository.read_authority (actor_authority_key ("ended-spot-member")).result ().value ());
+        EXPECT_EQ (retained.store_version, member_before->store_version);
+        EXPECT_EQ (retained.payload, member_before->payload);
+        return;
+    }
+    if (scenario == "initialLateJoin") {
+        const auto committed = repository
+                                 .commit ({{placement_object_kind_t::actor, "ended-spot-member"},
+                                           *member_fence,
+                                           joined_payload})
+                                 .result ()
+                                 .value ();
+        EXPECT_TRUE (std::holds_alternative<object_commit_conflict_t> (committed));
+        const auto after = std::get<authority_snapshot_t> (
+          repository.read_authority (actor_authority_key ("ended-spot-member")).result ().value ());
+        EXPECT_EQ (after.store_version, member_before->store_version);
+        EXPECT_EQ (after.payload, member_before->payload);
+        EXPECT_EQ (after.allocation.state, placement_allocation_state_t::reserved);
+        ASSERT_TRUE (after.pending_creation);
+        EXPECT_EQ (after.pending_creation->reservation_id, member_fence->reservation_id);
+        return;
+    }
+    opaque.armed = true;
+    opaque.fail_scan = scenario == "storeFailure";
+    opaque.expire_next_page = scenario == "snapshotExpired";
+    if (scenario == "typeMismatch") {
+        request.intent.stable_type = "different";
+        request.capacity_bundle.spot_type->stable_type = "different";
+    }
+    if (scenario == "kindMismatch")
+        request.key.kind = kind == placement_object_kind_t::user_spot
+                             ? placement_object_kind_t::instance_spot
+                             : placement_object_kind_t::user_spot;
+    if (scenario == "kindMismatch")
+        request.capacity_bundle.spot_type->object_kind = request.key.kind;
+    if (scenario == "typeMismatch" || scenario == "kindMismatch") {
+        const auto stale =
+          repository
+            .release_ended_reservation (spot_authority_key ("ended-spot"),
+                                        before.store_version + "-stale", {}, request)
+            .result ();
+        ASSERT_TRUE (stale);
+        EXPECT_FALSE (stale.value ());
+        const auto mismatched = repository
+                                  .release_ended_reservation (spot_authority_key ("ended-spot"),
+                                                              before.store_version, {}, request)
+                                  .result ();
+        ASSERT_FALSE (mismatched);
+        EXPECT_EQ (framework_error_kind_t::type_mismatch, mismatched.error_kind ());
+    } else if (scenario == "live") {
+        const auto live = repository
+                            .release_ended_reservation (spot_authority_key ("ended-spot"),
+                                                        before.store_version, {}, request)
+                            .result ();
+        ASSERT_TRUE (live);
+        EXPECT_FALSE (live.value ());
+    } else if (scenario == "aggregate" || scenario == "recreate" || scenario == "unregistered"
+               || scenario == "closing"
+               || (scenario == "recovery" && kind == placement_object_kind_t::instance_spot)) {
+        const auto denied = repository
+                              .release_ended_reservation (spot_authority_key ("ended-spot"),
+                                                          before.store_version, {}, request)
+                              .result ();
+        ASSERT_FALSE (denied);
+        EXPECT_EQ (framework_error_kind_t::unavailable, denied.error_kind ());
+    }
+    const auto result = [&] {
+        if (scenario != "race")
+            return repository.reserve (request).result ();
+        auto first =
+          std::async (std::launch::async, [&] { return repository.reserve (request).result (); });
+        auto second =
+          std::async (std::launch::async, [&] { return repository.reserve (request).result (); });
+        auto one = first.get ();
+        auto two = second.get ();
+        EXPECT_TRUE (one);
+        EXPECT_TRUE (two);
+        if (!one || !two)
+            return one;
+        const bool one_won = std::holds_alternative<object_reserved_t> (one.value ());
+        const bool two_won = std::holds_alternative<object_reserved_t> (two.value ());
+        EXPECT_EQ (static_cast<int> (one_won) + static_cast<int> (two_won), 1);
+        return one_won ? one : two;
+    }();
+    if (scenario == "expired" || scenario == "snapshotExpired" || scenario == "race"
+        || (scenario == "recovery" && kind == placement_object_kind_t::user_spot)) {
+        ASSERT_TRUE (result);
+        const auto *winner = std::get_if<object_reserved_t> (&result.value ());
+        ASSERT_NE (winner, nullptr);
+        EXPECT_GT (winner->creating.object_generation, before.object_generation);
+        EXPECT_NE (winner->creating.payload, ready);
+        EXPECT_EQ (winner->creating.owner.owner_id, new_owner.owner_id);
+        const auto old_capacity = repository.list_mesh_nodes ("ended-spot-mesh").result ().value ();
+        const auto &nodes = old_capacity.items;
+        const auto source = std::find_if (nodes.begin (), nodes.end (), [] (const auto &node) {
+            return node.rid.to_string () == "ended-spot-source";
+        });
+        ASSERT_NE (source, nodes.end ());
+        EXPECT_EQ (source->capacity.spots.active, 0u);
+        if (scenario == "snapshotExpired") {
+            EXPECT_EQ (opaque.expired, 1u);
+            EXPECT_GE (opaque.scans, 4u);
+        }
+    } else {
+        if (scenario == "typeMismatch" || scenario == "kindMismatch") {
+            ASSERT_TRUE (result);
+            EXPECT_TRUE (std::holds_alternative<object_type_mismatch_t> (result.value ()));
+        } else if (scenario == "live") {
+            ASSERT_TRUE (result);
+            EXPECT_TRUE (std::holds_alternative<object_already_exists_t> (result.value ()));
+        } else {
+            ASSERT_FALSE (result);
+            EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
+        }
+        const auto after = std::get<authority_snapshot_t> (
+          repository.read_authority (spot_authority_key ("ended-spot")).result ().value ());
+        EXPECT_EQ (after.store_version, before.store_version);
+        EXPECT_EQ (after.payload, before.payload);
+        if (scenario == "pageMember")
+            EXPECT_GE (opaque.scans, 2u);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P (
+  ProviderAndInMemory, EndedSpotReclaimTest, ::testing::ValuesIn ([] {
+      std::vector<std::tuple<bool, placement_object_kind_t, std::string>> inputs;
+      for (const bool provider : {false, true}) {
+          for (const auto kind :
+               {placement_object_kind_t::user_spot, placement_object_kind_t::instance_spot})
+              for (const auto scenario : {"expired", "live", "recreate", "unregistered", "closing",
+                                          "recovery", "race", "typeMismatch", "kindMismatch"})
+                  inputs.emplace_back (provider, kind, scenario);
+          for (const auto scenario : {"member", "lateJoin", "initialLateJoin", "aggregate"})
+              inputs.emplace_back (provider, placement_object_kind_t::user_spot, scenario);
+      }
+      for (const auto scenario :
+           {"pageMember", "snapshotExpired", "storeFailure", "lateJoinCommit", "lateJoinVersion"})
+          inputs.emplace_back (true, placement_object_kind_t::user_spot, scenario);
+      return inputs;
+  }()));
 
 class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
 {

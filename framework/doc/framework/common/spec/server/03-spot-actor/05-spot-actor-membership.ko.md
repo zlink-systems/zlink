@@ -52,6 +52,9 @@ Runtime route cache는 [authority](../00-foundation/02-glossary.ko.md#authority)
 뿐이며 cache만으로 current authority를
 결정하지 않는다. Join, leave, relocation, destroy와 close는 expected
 `StoreVersion`, generation과 [owner lease](../00-foundation/02-glossary.ko.md#owner-lease)를 검증하는 transaction만 사용한다.
+User Spot에 membership을 추가하는 transaction은 same-node와 cross-node 모두 대상 Spot authority의
+SpotId·`ObjectGeneration`·`StoreVersion`과 그 authority에 기록된 owner lease의 유효성을 commit 조건으로
+검사한다. Application의 Join 승인이나 local 활성 Spot 확인으로 이 조건을 대신하지 않는다.
 
 Object Client 또는 Server role은 Location Store가 필수다. Store가 없으면 startup에서 거부하며 hidden local
 Store, runtime-local object manager와 같은 이름의 축소된 의미를 만들지 않는다. Object role이 `None`인 manual

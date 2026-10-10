@@ -798,7 +798,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
     if (source_registration && source_registration->spot_state) {
         const auto factory = source_registration->spot_state->actor_factories.find (stable_type);
         if (factory != source_registration->spot_state->actor_factories.end ())
-            reserve.actor_relocation_policy = factory->second.relocation.kind;
+            reserve.relocation_policy = factory->second.relocation.kind;
     }
     while (std::chrono::steady_clock::now () < deadline) {
         const auto reserved = co_await _location_store->reserve (reserve);
@@ -1295,14 +1295,14 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (actor_ref_t actor)
     }
 }
 
-task_t<spot_create_result_t>
-mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_node_runtime_t> &,
-                                            bool exclusive,
-                                            std::optional<spot_id_t> spot_id,
-                                            std::string stable_type,
-                                            std::optional<std::string> mesh_name,
-                                            std::optional<message_t> request,
-                                            std::chrono::milliseconds timeout)
+task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
+  std::shared_ptr<detail::mesh_node_runtime_t> request_source,
+  bool exclusive,
+  std::optional<spot_id_t> spot_id,
+  std::string stable_type,
+  std::optional<std::string> mesh_name,
+  std::optional<message_t> request,
+  std::chrono::milliseconds timeout)
 {
     const auto deadline = std::chrono::steady_clock::now () + timeout;
     if (!_location_store || stable_type.empty ())
@@ -1421,6 +1421,22 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
     reserve_request.creating_payload = creating_payload;
     reserve_request.capacity_bundle = {
       0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, stable_type, 1}};
+    const auto source_index =
+      std::distance (_nodes.begin (), std::find (_nodes.begin (), _nodes.end (), request_source));
+    const auto &source_registration = _registrations[static_cast<std::size_t> (source_index)];
+    if (source_registration && source_registration->spot_state
+        && source_registration->spot_state->spot_factories.contains (stable_type)
+        && std::find (source_registration->spot_state->snapshot.instance_spot_names.begin (),
+                      source_registration->spot_state->snapshot.instance_spot_names.end (),
+                      stable_type)
+             == source_registration->spot_state->snapshot.instance_spot_names.end ()) {
+        const auto policy =
+          source_registration->spot_state->spot_factory_relocations.find (stable_type);
+        reserve_request.relocation_policy =
+          policy == source_registration->spot_state->spot_factory_relocations.end ()
+            ? detail::factory_relocation_kind_t::disabled
+            : policy->second.kind;
+    }
     object_reserve_result_t reserved;
     while (true) {
         reserve_request.target = {selected_mesh,
@@ -1966,6 +1982,17 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                           result_t<result_t<protocol::instance_spot_activation_header_t>>::success (
                             result_t<protocol::instance_spot_activation_header_t>::success (
                               std::move (request))));
+                    },
+                    [registration] (const std::string &stable_type)
+                      -> std::optional<detail::factory_relocation_kind_t> {
+                        const auto &types = registration->spot_state->snapshot.instance_spot_names;
+                        if (std::find (types.begin (), types.end (), stable_type) == types.end ())
+                            return std::nullopt;
+                        const auto found =
+                          registration->spot_state->spot_factory_relocations.find (stable_type);
+                        return found == registration->spot_state->spot_factory_relocations.end ()
+                                 ? std::nullopt
+                                 : std::make_optional (found->second.kind);
                     }});
             }
         }

@@ -140,6 +140,15 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     }
 
     @Override
+    public CompletionStage<Boolean> releaseEndedReservation(
+            ZLinkObjectReservationRequest request,
+            String expectedStoreVersion,
+            ZLinkStoreCancellation cancellation) {
+        return authority.releaseEndedReservation(
+                request, expectedStoreVersion, cancellation::isCancellationRequested);
+    }
+
+    @Override
     public CompletionStage<ZLinkObjectReserveResult> reserve(
             ZLinkObjectReservationRequest request, ZLinkStoreCancellation cancellation) {
         return authority().reserve(request, cancellation);

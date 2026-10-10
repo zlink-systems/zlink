@@ -294,7 +294,7 @@ public final class ZLinkStoreLocationResolvers
         actorRoutes.clear();
     }
 
-    private CompletionStage<SpotRoute> resolveReadySpot(String spotId, Object read) {
+    public CompletionStage<SpotRoute> resolveReadySpot(String spotId, Object read) {
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
             spotRoutes.remove(spotId);
             return CompletableFuture.completedFuture(null);
@@ -321,7 +321,10 @@ public final class ZLinkStoreLocationResolvers
                         authority.nodeGeneration(),
                         snapshot.authorityOwnerGeneration(),
                         snapshot.ownerLeaseGeneration(),
-                        authority.user().isPresent() ? ZLinkSpotKind.USER : ZLinkSpotKind.INSTANCE);
+                        authority.user().isPresent() ? ZLinkSpotKind.USER : ZLinkSpotKind.INSTANCE,
+                        authority.stableType(),
+                        snapshot.ownerId(),
+                        snapshot.storeVersion());
         if (authority.state() != ZLinkServiceAuthorityPayloadCodec.State.READY) {
             spotRoutes.remove(spotId);
             return CompletableFuture.completedFuture(route);
@@ -507,7 +510,10 @@ public final class ZLinkStoreLocationResolvers
             long targetNodeGeneration,
             long authorityOwnerGeneration,
             long ownerLeaseGeneration,
-            ZLinkSpotKind spotKind) {}
+            ZLinkSpotKind spotKind,
+            String stableType,
+            String ownerId,
+            String storeVersion) {}
 
     public record ActorRoute(
             ActorRef actorRef,

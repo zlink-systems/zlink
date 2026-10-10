@@ -4144,18 +4144,23 @@ bool verify_draining_host_refuses_new_admission_with_shutting_down ()
         return !result && result.error_kind () == framework_error_kind_t::shutting_down;
     };
 
-    const auto remote_join = runtime.join_remote_actor_to_spot_erased (
-      draining_actor, spot_id_t ("draining-room"), zlink::message_t{},
-      spot_node_runtime_t::default_actor_context ());
+    const auto remote_join = runtime
+                               .join_remote_actor_to_spot_erased (
+                                 draining_actor, spot_id_t ("draining-room"), zlink::message_t{},
+                                 spot_node_runtime_t::default_actor_context ())
+                               .result ();
     const auto remote_admission =
       runtime
         .admit_remote_actor_to_spot ("draining-transfer", draining_actor,
                                      spot_id_t ("draining-source"), spot_id_t ("draining-room"),
                                      zlink::message_t{})
         .result ();
-    const auto entry_join = runtime.join_actor_to_entry_spot_erased (
-      draining_actor, node_rid_t::from_string ("draining-host-node"), zlink::message_t{},
-      std::nullopt, spot_node_runtime_t::default_actor_context ());
+    const auto entry_join =
+      runtime
+        .join_actor_to_entry_spot_erased (
+          draining_actor, node_rid_t::from_string ("draining-host-node"), zlink::message_t{},
+          std::nullopt, spot_node_runtime_t::default_actor_context ())
+        .result ();
     bool create_refused = false;
     try {
         (void) runtime.create_spot ("draining-room");
@@ -5005,9 +5010,10 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     auto second_future = second_promise->get_future ();
     owner.dispatch_wire_actor_join_admission (
       spot_id_t ("target-spot"),
-      [node, local_rid, second_actor, &serializers, second_promise] {
+      [node, local_rid, second_actor, &serializers, second_promise] () -> task_t<void> {
           second_promise->set_value (
             admit_wire_actor_join (node, local_rid, second_actor, std::nullopt, &serializers));
+          co_return;
       },
       [second_promise] { second_promise->set_value ({}); });
     node->actor_transfer_coordinator.fail_commit (transfer_id_for (4213), false);
@@ -5072,7 +5078,12 @@ bool verify_wire_join_requires_active_local_target ()
     std::atomic<int> unavailable{0};
     const auto receive = [&] (const char *target) {
         owner.dispatch_wire_actor_join_admission (
-          spot_id_t (target), [&] { ++accepted; }, [&] { ++unavailable; });
+          spot_id_t (target),
+          [&] () -> task_t<void> {
+              ++accepted;
+              co_return;
+          },
+          [&] { ++unavailable; });
     };
     receive ("cold-target");
     receive ("inactive-target");
@@ -5120,7 +5131,8 @@ bool verify_relocation_abort_does_not_hold_receive_worker ()
         owner.abort_relocation_materialization (
           {{.kind = runtime::stateful::object_kind_t::user_spot, .key = "abort-target"}});
         owner.dispatch_wire_actor_join_admission (
-          spot_id_t ("following-target"), [] {}, [&] { following_frame.set_value (); });
+          spot_id_t ("following-target"), [] () -> task_t<void> { co_return; },
+          [&] { following_frame.set_value (); });
     });
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool progressed =
@@ -5677,7 +5689,8 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     std::thread receiver ([&] {
         committed.store (owner.commit_relocation_materialization ({target}));
         owner.dispatch_wire_actor_join_admission (
-          spot_id_t ("following-target"), [] {}, [&] { following_frame.set_value (); });
+          spot_id_t ("following-target"), [] () -> task_t<void> { co_return; },
+          [&] { following_frame.set_value (); });
     });
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool progressed =
@@ -6239,8 +6252,10 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     // A duplicate internal finalize cannot reopen a completed target or
     // dispatch its retained backlog twice.
-    const auto duplicate = owner.finalize_remote_actor_to_spot (transfer_id, actor, target->spot_id,
-                                                                provider, nullptr, std::nullopt);
+    const auto duplicate = owner
+                             .finalize_remote_actor_to_spot (transfer_id, actor, target->spot_id,
+                                                             provider, nullptr, std::nullopt)
+                             .result ();
     if (duplicate || node->actor_transfer_coordinator.blocks_dispatch (key) || replayed.load () != 3
         || !owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
         return false;
@@ -6284,9 +6299,11 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     if (!combined_admitted || !combined_admitted.value ().accepted || !combined_bound)
         return false;
     auto combined = std::async (std::launch::async, [&] {
-        return owner.commit_remote_actor_to_spot (
-          combined_transfer_id, combined_actor, target->spot_id, zlink::message_t{},
-          gateway.actor_context (combined_actor), {}, &provider);
+        return owner
+          .commit_remote_actor_to_spot (combined_transfer_id, combined_actor, target->spot_id,
+                                        zlink::message_t{}, gateway.actor_context (combined_actor),
+                                        {}, &provider)
+          .result ();
     });
     const auto combined_delivery_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (1);
@@ -7070,12 +7087,25 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       .capacity_bundle = {.spot_slots = 1,
                           .spot_type = spot_type_capacity_delta_t{
                             placement_object_kind_t::user_spot, "actor.cutover.spot", 1}}};
+    const auto ready_spot_payload = [] (const object_reserve_request_t &request) {
+        return runtime::encode_user_spot_authority_payload (runtime::user_spot_authority_payload_t{
+          .stable_type = request.intent.stable_type,
+          .spot_id = request.key.global_id,
+          .owner_id = request.target.owner.owner_id,
+          .owner_lease_generation =
+            static_cast<std::uint64_t> (request.target.owner.lease_generation),
+          .mesh_name = request.target.mesh_name,
+          .node_rid = request.target.node_rid,
+          .node_generation = request.target.node_lifecycle_generation});
+    };
     const auto source_spot_reserved_value =
       locations->reserve (source_spot_reserve).result ().value ();
     const auto *source_spot_reserved = std::get_if<object_reserved_t> (&source_spot_reserved_value);
     if (!source_spot_reserved
         || !std::holds_alternative<object_committed_t> (
-          locations->commit ({source_spot_reserve.key, source_spot_reserved->fence, {}})
+          locations
+            ->commit ({source_spot_reserve.key, source_spot_reserved->fence,
+                       ready_spot_payload (source_spot_reserve)})
             .result ()
             .value ())) {
         std::cerr << "cutover production setup: source Spot authority failed\n";
@@ -7105,7 +7135,9 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     const auto *target_spot_reserved = std::get_if<object_reserved_t> (&target_spot_reserved_value);
     if (!target_spot_reserved
         || !std::holds_alternative<object_committed_t> (
-          locations->commit ({target_spot_reserve.key, target_spot_reserved->fence, {}})
+          locations
+            ->commit ({target_spot_reserve.key, target_spot_reserved->fence,
+                       ready_spot_payload (target_spot_reserve)})
             .result ()
             .value ())) {
         std::cerr << "cutover production setup: target Spot authority failed\n";
@@ -7236,10 +7268,19 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     // locally captured source membership for target-to-source OnLeave.
     const auto actor_committed_value =
       locations
-        ->commit ({actor_reserve.key, actor_reserved->fence,
-                   runtime::encode_actor_authority_payload (
-                     actor, source_native_entry_spot.spot_id (),
-                     source_native_entry_spot.status ().lifecycle_generation ())})
+        ->commit (
+          {actor_reserve.key, actor_reserved->fence,
+           runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
+             .stable_type = "actor.cutover.probe",
+             .actor_id = "actor-cutover-probe",
+             .current_spot_id = source_native_entry_spot.spot_id (),
+             .current_spot_generation = source.status ().lifecycle_generation (),
+             .current_spot_kind = runtime::actor_authority_spot_kind_t::entry,
+             .owner_id = source_owner.owner_id,
+             .owner_lease_generation = static_cast<std::uint64_t> (source_owner.lease_generation),
+             .mesh_name = "actor-cutover-mesh",
+             .node_rid = actor.node_rid (),
+             .node_generation = source.status ().lifecycle_generation ()})})
         .result ()
         .value ();
     if (!std::holds_alternative<object_committed_t> (actor_committed_value)) {

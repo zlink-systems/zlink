@@ -114,7 +114,8 @@ Ready owner가 종료되면 Framework는 다른 node를 새 owner로 선택하�
 owner에서 실행되지 않는가.
 
 - 시작 조건: Spot이 owner A에서 Ready이고 domain state는 external store에 저장되어 있다. 다른 node B는
-  같은 type을 제공하지만 이 Spot의 owner가 아니다.
+  같은 type을 제공하지만 이 Spot의 owner가 아니다. 이 type의 relocation 정책은 `Disabled`가 아니다
+  ([Location runtime §6.1](../spec/server/05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제 대상이 아니다).
 - 절차: A를 crash하고 public liveness·owner lease 상태가 invalid가 된 뒤 fresh fixture에서 single caller
   request와 두 caller의 concurrent requests를 각각 보낸다. Location Store authority record가 자동으로
   삭제되는지는 이 scenario의 판정 대상이 아니다.
@@ -180,7 +181,7 @@ instance를 준비해야 한다.
 **검증 질문:** 이전 owner 재개 뒤 request가 `Unavailable`로 끝나고 stale owner가 처리하지 않는가.
 
 - 시작 조건: Spot은 A에서 Ready이고 A를 pause한 뒤 public owner lease가 무효화된다. B는 같은 type을 제공하지만
-  이 Spot을 자동으로 소유하지 않는다.
+  이 Spot을 자동으로 소유하지 않는다. 이 type의 relocation 정책은 `Disabled`가 아니다.
 - 절차: A를 resume하고 고유 operation ID request와 timer 관찰 request를 보낸다.
 - 검증: Request는 `Unavailable`로 끝나고 A와 B 어느 쪽에도 신규 handler·timer evidence가 없다.
 - 계약 근거: [Failure와 failover](../spec/server/05-location-relocation/06-failure-failover-policy.ko.md)

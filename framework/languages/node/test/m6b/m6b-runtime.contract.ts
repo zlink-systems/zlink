@@ -2782,6 +2782,7 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
     targetNodeGeneration: 7n,
     targetSpotId: 'room',
     stableType: 'Room',
+    targetMeshName: 'mesh',
     descriptorVersion: '1'
   };
   const payload = {
@@ -2983,6 +2984,7 @@ test('target-owned Instance activation reserves before factory, commits before o
     targetNodeGeneration: 3n,
     targetSpotId: 'tenant-42',
     stableType: 'TenantWorker',
+    targetMeshName: 'mesh',
     descriptorVersion: 'descriptor-5'
   };
   const header = encodeInstanceSpotActivationHeader(
@@ -3117,6 +3119,7 @@ test('durable missing Instance authority discards a materialized orphan before r
             targetNodeGeneration: 3n,
             targetSpotId: 'tenant-orphan',
             stableType: 'TenantWorker',
+            targetMeshName: 'mesh',
             descriptorVersion: 'descriptor-orphan'
           },
           7n,
@@ -3238,6 +3241,7 @@ test('Instance activation joins a Creating authority when local materialization 
             targetNodeGeneration: 3n,
             targetSpotId: 'tenant-overlap',
             stableType: 'TenantWorker',
+            targetMeshName: 'mesh',
             descriptorVersion: 'descriptor-overlap'
           },
           7n,
@@ -3352,6 +3356,7 @@ test('Instance activation joins a Creating authority after local materialization
             targetNodeGeneration: 3n,
             targetSpotId: 'tenant-creating',
             stableType: 'TenantWorker',
+            targetMeshName: 'mesh',
             descriptorVersion: 'descriptor-creating'
           },
           7n,
@@ -3488,6 +3493,7 @@ test('Instance activation CAS loser does not invoke the local factory', async ()
       targetNodeGeneration: 3n,
       targetSpotId: 'tenant-42',
       stableType: 'TenantWorker',
+      targetMeshName: 'mesh',
       descriptorVersion: 'descriptor-5'
     },
     7n,
@@ -3604,6 +3610,7 @@ for (const scenario of [
               targetNodeGeneration: 3n,
               targetSpotId: 'tenant-redirect',
               stableType: 'TenantWorker',
+              targetMeshName: 'mesh',
               descriptorVersion: 'descriptor-loser'
             },
             7n,
@@ -3712,6 +3719,7 @@ test('Missing Instance activation refuses a concurrent reservation after the pri
             targetNodeGeneration: 3n,
             targetSpotId: 'tenant-close-race',
             stableType: 'TenantWorker',
+            targetMeshName: 'mesh',
             descriptorVersion: 'descriptor-close-race'
           },
           7n,
@@ -3783,6 +3791,7 @@ test('draining Instance owner rejects stale Missing activation before materializ
             targetNodeGeneration: 3n,
             targetSpotId: 'draining-spot',
             stableType: 'TenantWorker',
+            targetMeshName: 'mesh',
             descriptorVersion: 'descriptor-draining'
           },
           7n,
@@ -3884,6 +3893,7 @@ test('stale local Instance projection refuses a newer remote Ready authority', a
             targetNodeGeneration: 3n,
             targetSpotId: 'tenant-remote-ready',
             stableType: 'TenantWorker',
+            targetMeshName: 'mesh',
             descriptorVersion: 'descriptor-remote-ready'
           },
           7n,
@@ -3987,6 +3997,7 @@ test('stale local Instance projection reconciles a newer same-node Ready authori
             targetNodeGeneration: 3n,
             targetSpotId: 'tenant-same-node-ready',
             stableType: 'TenantWorker',
+            targetMeshName: 'mesh',
             descriptorVersion: 'descriptor-same-node-ready'
           },
           7n,
@@ -4109,6 +4120,7 @@ test('Promise authority resumes the retained activation envelope after Store com
       targetNodeGeneration: 3n,
       targetSpotId: 'tenant-async',
       stableType: 'TenantWorker',
+      targetMeshName: 'mesh',
       descriptorVersion: 'descriptor-5'
     },
     7n,
@@ -5665,6 +5677,7 @@ test('production Instance authority adapter writes schema ColdActivating then Re
     targetNodeGeneration: 1n,
     targetSpotId: 'tenant:42',
     stableType: 'TenantWorker',
+    targetMeshName: 'mesh',
     descriptorVersion: 'descriptor-v1'
   };
   assert.deepEqual(await authority.read(target), { kind: 'missing' });
@@ -5862,6 +5875,7 @@ test('production Instance Ready commit Store rejection is exposed as RequestFail
     targetNodeGeneration: 1n,
     targetSpotId: 'tenant:commit-fault',
     stableType: 'TenantWorker',
+    targetMeshName: 'mesh',
     descriptorVersion: 'descriptor-v1'
   };
   const reserved = await authority.reserve({
@@ -6395,6 +6409,7 @@ test('public SpotId call reaches production host Missing Instance placement with
   assert.deepEqual(submissions[0]?.target, {
     targetNodeRid: 'node-b',
     targetNodeGeneration: 7n,
+    targetMeshName: 'mesh',
     descriptorVersion: '11',
     targetSpotId: 'instance-42',
     stableType: 'chat-room'
@@ -6767,6 +6782,7 @@ test('Instance target-not-found completes once and a new call cold-activates Mis
         targetNodeGeneration: 8n,
         targetSpotId: 'instance-42',
         stableType: 'chat-room',
+        targetMeshName: 'mesh',
         descriptorVersion: '12'
       });
       return { high: 9n, low: 1n };

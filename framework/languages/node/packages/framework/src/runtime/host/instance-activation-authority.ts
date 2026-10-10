@@ -41,6 +41,7 @@ import { putNewRelocationBlob, relocationBlobReference } from '../locations/relo
 
 import {
   encodeInstanceActivationRecoveryEnvelope,
+  decodeInstanceActivationRecoveryEnvelope,
   type ServiceInstanceActivationRecoveryEnvelope
 } from '../foundation/service-instance-activation-recovery-codec';
 
@@ -57,6 +58,9 @@ interface PendingReservation {
 }
 
 export interface ZLinkInstanceActivationAuthorityOptions {
+  readonly relocationPolicy?: (
+    stableType: string
+  ) => import('../locations/internal-location-contracts').ZLinkObjectReserveRequest['actorRelocationPolicy'];
   readonly store: ZLinkObjectCreationStore & ZLinkAuthorityStore;
   readonly relocationStore?: ZLinkRelocationStore;
   readonly meshName: string;
@@ -73,9 +77,90 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
 
   constructor(private readonly options: ZLinkInstanceActivationAuthorityOptions) {}
 
-  async read(target: ServiceInstanceActivationTarget): Promise<ServiceInstanceAuthorityRead> {
-    const current = await this.options.store.readAuthority(authorityKey(target.targetSpotId));
-    return current.kind === 'snapshot' ? readyRead(current, target) : { kind: 'missing' };
+  async read(
+    target: ServiceInstanceActivationTarget,
+    instanceIntent?: true,
+    activation?: ServiceInstanceActivationRecoveryEnvelope
+  ): Promise<ServiceInstanceAuthorityRead> {
+    const key = authorityKey(target.targetSpotId);
+    const current = await this.options.store.readAuthority(key);
+    if (current.kind !== 'snapshot') return { kind: 'missing' };
+    if (
+      activation !== undefined &&
+      current.allocation.objectKind === 'instance_spot' &&
+      routingIdsEqual(current.allocation.descriptor.rid, target.targetNodeRid) &&
+      current.allocation.descriptorLifecycleGeneration === target.targetNodeGeneration
+    ) {
+      const ready = decodeServiceInstanceAuthorityPayload(current.payload);
+      const reference =
+        current.pendingCreation?.requestContentReference ?? ready?.activationRecovery?.reference;
+      if (reference !== undefined) {
+        const root = await this.options.relocationStore?.read(relocationBlobReference(reference));
+        if (root?.kind !== 'found') {
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.DataLost,
+            'Stored Instance activation is missing.'
+          );
+        }
+        let stored: ServiceInstanceActivationRecoveryEnvelope;
+        try {
+          stored = decodeInstanceActivationRecoveryEnvelope(root.bytes);
+        } catch (error) {
+          if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.ProtocolError,
+            'Stored Instance activation is invalid.'
+          );
+        }
+        if (
+          stored.operation.high === activation.operation.high &&
+          stored.operation.low === activation.operation.low &&
+          (stored.targetMeshName !== activation.targetMeshName ||
+            stored.target.stableType !== target.stableType ||
+            stored.target.descriptorVersion !== target.descriptorVersion ||
+            stored.deadlineUnixMs !== activation.deadlineUnixMs ||
+            (stored.metadataFrame === undefined) !== (activation.metadataFrame === undefined) ||
+            (stored.metadataFrame !== undefined &&
+              activation.metadataFrame !== undefined &&
+              Buffer.compare(stored.metadataFrame, activation.metadataFrame) !== 0))
+        ) {
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.ProtocolError,
+            'Instance route does not match the stored activation.'
+          );
+        }
+      }
+    }
+
+    if (
+      instanceIntent === true &&
+      current.allocation.state === 'active' &&
+      decodeServiceReadySpotAuthority(current.payload) !== undefined
+    ) {
+      if (
+        current.allocation.objectKind !== 'instance_spot' ||
+        current.allocation.stableType !== target.stableType
+      ) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.SpotTypeMismatch,
+          'Instance activation type does not match the current authority.'
+        );
+      }
+      const released = await this.options.store.releaseEndedReservation?.(
+        key,
+        current.storeVersion.value,
+        undefined,
+        {
+          key: { kind: 'instance_spot', globalId: target.targetSpotId },
+          intent: { stableType: target.stableType },
+          actorRelocationPolicy: this.options.relocationPolicy?.(target.stableType)
+        }
+      );
+      if (released === true) return { kind: 'missing' };
+      const refreshed = await this.options.store.readAuthority(key);
+      return refreshed.kind === 'snapshot' ? readyRead(refreshed, target) : { kind: 'missing' };
+    }
+    return readyRead(current, target);
   }
 
   async reserve(
@@ -117,6 +202,7 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
       reserved = await this.options.store.reserve(
         {
           key: { kind: 'instance_spot', globalId: target.targetSpotId },
+          actorRelocationPolicy: this.options.relocationPolicy?.(target.stableType),
           intent: {
             stableType: target.stableType,
             requestContentReference: stored.reference.value,

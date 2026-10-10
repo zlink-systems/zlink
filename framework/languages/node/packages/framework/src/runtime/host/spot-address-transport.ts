@@ -1,3 +1,4 @@
+import type { ServiceInstanceColdActivationTarget } from '../foundation/service-stateful-wire-codec';
 import { ZLinkFrameworkException, ZLinkSpotKind, type RoutingId } from '../../contracts';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
@@ -44,7 +45,11 @@ import type {
   ZLinkSpotAddressTransport,
   ZLinkSpotRoutedTransport
 } from '../spots/spot-outbound';
-import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import type {
+  ZLinkSpotRouteResolver,
+  ZLinkSpotRouteTarget,
+  ZLinkInstanceReactivationRoute
+} from '../spots/spot-routing-internal';
 
 export interface ZLinkHostSpotAddressTransportOptions {
   readonly resolver: () => ZLinkSpotRouteResolver | undefined;
@@ -65,13 +70,7 @@ export function hasObjectClientCapability(role: 'none' | 'client' | 'server' | u
 type MissingTarget = {
   readonly meshName: string;
   readonly node: ZLinkBackendMeshNode;
-  readonly target: {
-    readonly targetNodeRid: string;
-    readonly targetNodeGeneration: bigint;
-    readonly targetSpotId: string;
-    readonly stableType: string;
-    readonly descriptorVersion: string;
-  };
+  readonly target: ServiceInstanceColdActivationTarget;
 };
 
 type MissingTargetSelection =
@@ -106,7 +105,10 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     const activationDeadlineUnixMs = BigInt(
       Math.round(Date.now() + this.options.defaultRequestTimeoutMs)
     );
-    const existing = await this.resolveExisting(spotId);
+    const resolution = await this.resolveExisting(spotId, undefined, call);
+    const existing = resolution !== undefined && !('kind' in resolution) ? resolution : undefined;
+    if (resolution !== undefined && 'kind' in resolution)
+      call = this.reactivationCall(resolution, call);
     if (existing !== undefined) {
       this.validateExisting(existing, call);
       try {
@@ -166,7 +168,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     if (!call.instanceSpot) {
       return { status: ZLinkSubmitStatus.TargetNotFound };
     }
-    const selected = this.selectMissingTarget(spotId, call);
+    const selected = this.selectMissingTarget(spotId, call, resolution);
     if (selected.kind === 'unsupported') {
       this.traceInstanceAddress(
         ZLinkMessageFlowOutcome.Dropped,
@@ -252,10 +254,13 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     const timeoutMs = call.timeoutMs ?? this.options.defaultRequestTimeoutMs;
     const deadline = createSpotAddressDeadline(timeoutMs, call.signal);
     try {
-      const existing = await this.resolveExisting(spotId, deadline.signal);
+      const resolution = await this.resolveExisting(spotId, deadline.signal, call);
+      const existing = resolution !== undefined && !('kind' in resolution) ? resolution : undefined;
+      if (resolution !== undefined && 'kind' in resolution)
+        call = this.reactivationCall(resolution, call);
       deadline.requireRemaining();
       if (existing === undefined) {
-        return await this.requestToMissingInstance(spotId, request, call, deadline);
+        return await this.requestToMissingInstance(spotId, request, call, deadline, resolution);
       }
       this.validateExisting(existing, call);
       try {
@@ -351,7 +356,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     spotId: RoutingId,
     request: unknown,
     call: ZLinkSpotAddressCallOptions,
-    deadline: ZLinkSpotAddressDeadline
+    deadline: ZLinkSpotAddressDeadline,
+    current?: ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute
   ): Promise<TReply> {
     if (!call.instanceSpot) {
       throw createInternalFrameworkException(
@@ -359,7 +365,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         `Spot '${String(spotId)}' has no Ready authority.`
       );
     }
-    const selected = this.selectMissingTarget(spotId, call);
+    const selected = this.selectMissingTarget(spotId, call, current);
     if (selected.kind === 'capacity') {
       throw missingInstancePlacementCapacity(spotId, call.instanceSpotType);
     }
@@ -507,14 +513,20 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
 
   private async resolveExisting(
     spotId: RoutingId,
-    signal?: AbortSignal
-  ): Promise<import('../spots/spot-routing-internal').ZLinkSpotRouteTarget | undefined> {
+    signal?: AbortSignal,
+    call?: ZLinkSpotAddressCallOptions
+  ): Promise<ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute | undefined> {
     const resolver = this.options.resolver();
     if (resolver === undefined) {
       throw new Error('Global Spot address resolution requires a Location Store.');
     }
     try {
-      return await awaitWithAbort(resolver.resolve(spotId, signal), signal);
+      return await awaitWithAbort(
+        call?.instanceSpot === true
+          ? resolver.resolve(spotId, signal, true)
+          : resolver.resolve(spotId, signal),
+        signal
+      );
     } catch (error) {
       if (
         error instanceof ZLinkFrameworkException &&
@@ -526,9 +538,18 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     }
   }
 
+  private reactivationCall(
+    route: ZLinkInstanceReactivationRoute,
+    call: ZLinkSpotAddressCallOptions
+  ): ZLinkSpotAddressCallOptions {
+    this.validateExisting(route, call);
+    return { ...call, initialMeshName: route.meshName, instanceSpotType: route.stableType };
+  }
+
   private selectMissingTarget(
     spotId: RoutingId,
-    call: ZLinkSpotAddressCallOptions
+    call: ZLinkSpotAddressCallOptions,
+    current?: ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute
   ): MissingTargetSelection {
     const configuredMeshes = this.options.meshNames();
     if (
@@ -574,14 +595,15 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     const stableType =
       call.instanceSpotType ?? (distinctTypes.length === 1 ? distinctTypes[0] : undefined);
     if (stableType === undefined) {
-      if (distinctTypes.length === 0) return { kind: 'unsupported' };
+      if (distinctTypes.length === 0)
+        return { kind: current === undefined ? 'unsupported' : 'unavailable' };
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.InvalidOperation,
         'Instance Spot type is required when multiple types are registered.'
       );
     }
     if (canInspectPlacementTypes && !distinctTypes.includes(stableType)) {
-      return { kind: 'unsupported' };
+      return { kind: current === undefined ? 'unsupported' : 'unavailable' };
     }
     let unavailable = false;
     let capacity = false;
@@ -600,6 +622,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           node,
           target: {
             ...placement.target,
+            targetMeshName: meshName,
             targetSpotId: String(spotId),
             stableType
           }
@@ -611,12 +634,12 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     }
     if (unavailable) return { kind: 'unavailable' };
     if (capacity) return { kind: 'capacity' };
-    if (unsupported) return { kind: 'unsupported' };
+    if (unsupported) return { kind: current === undefined ? 'unsupported' : 'unavailable' };
     return { kind: 'unavailable' };
   }
 
   private validateExisting(
-    target: import('../spots/spot-routing-internal').ZLinkSpotRouteTarget,
+    target: Pick<ZLinkSpotRouteTarget, 'spotId' | 'spotKind' | 'stableType'>,
     call: ZLinkSpotAddressCallOptions
   ): void {
     if (!call.instanceSpot) return;

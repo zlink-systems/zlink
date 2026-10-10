@@ -90,6 +90,7 @@ import {
   type ServiceBoundSessionActorAuthority,
   type ServiceDirectSpotRouteFence,
   type ServiceInstanceActivationTarget,
+  type ServiceInstanceColdActivationTarget,
   type ServiceInstanceRouteFence,
   type ServiceMessageFollowRoute,
   type ServiceRetiredBoundSessionRouteFence,
@@ -313,7 +314,11 @@ export interface ServiceInstanceActivationAuthority {
  * operation completes; the binding callback itself never blocks.
  */
 export interface ServiceAsyncInstanceActivationAuthority {
-  read(target: ServiceInstanceActivationTarget): Promise<ServiceInstanceAuthorityRead>;
+  read(
+    target: ServiceInstanceActivationTarget,
+    instanceIntent?: true,
+    activation?: ServiceInstanceActivationRecoveryEnvelope
+  ): Promise<ServiceInstanceAuthorityRead>;
   reserve(
     activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>,
     signal?: AbortSignal
@@ -883,7 +888,7 @@ export class ServiceStatefulRuntime {
     const record = {
       kind: 'instanceSpot' as const,
       activation: 'missing' as const,
-      target,
+      target: { ...target, targetMeshName: envelope.targetMeshName },
       sourceNodeGeneration: envelope.sourceNodeGeneration,
       sourceNodeRid: envelope.sourceNodeRid,
       ...(envelope.sourceSpotId === undefined ? {} : { sourceSpotId: envelope.sourceSpotId }),
@@ -902,7 +907,7 @@ export class ServiceStatefulRuntime {
           sourceRoutingId: envelope.sourceNodeRid,
           parts: [
             encodeInstanceSpotActivationHeader(
-              target,
+              record.target,
               envelope.sourceNodeGeneration,
               envelope.sourceNodeRid,
               envelope.sourceSpotId,
@@ -1442,7 +1447,7 @@ export class ServiceStatefulRuntime {
   }
 
   async sendToMissingInstanceSpot(
-    target: ServiceInstanceActivationTarget,
+    target: ServiceInstanceColdActivationTarget,
     payload: ServiceApplicationPayload,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
@@ -1458,7 +1463,7 @@ export class ServiceStatefulRuntime {
   }
 
   async sendToMissingInstanceSpotFrame(
-    target: ServiceInstanceActivationTarget,
+    target: ServiceInstanceColdActivationTarget,
     payloadFrame: Buffer,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
@@ -1523,7 +1528,7 @@ export class ServiceStatefulRuntime {
   }
 
   requestToMissingInstanceSpot(
-    target: ServiceInstanceActivationTarget,
+    target: ServiceInstanceColdActivationTarget,
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     sourceSpotId?: string,
@@ -1541,7 +1546,7 @@ export class ServiceStatefulRuntime {
   }
 
   requestToMissingInstanceSpotFrame(
-    target: ServiceInstanceActivationTarget,
+    target: ServiceInstanceColdActivationTarget,
     payloadFrame: Buffer,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
@@ -2961,7 +2966,15 @@ export class ServiceStatefulRuntime {
         ...activation,
         stableType: record.target.stableType
       }));
-    const operation = ready.then((value) => {
+    const operation = ready.then(async (value) => {
+      if (pending !== undefined) {
+        await this.asyncInstanceAuthority?.read(record.target, undefined, {
+          ...record,
+          targetMeshName: record.target.targetMeshName,
+          ...(metadataFrame === undefined ? {} : { metadataFrame }),
+          applicationPayloadFrame: payloadFrame
+        });
+      }
       if (value.stableType !== record.target.stableType) {
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.TypeMismatch,
@@ -3011,7 +3024,13 @@ export class ServiceStatefulRuntime {
     }
 
     const local = this.registry.spot(target.targetSpotId);
-    const current = await authority.read(target);
+    const activationRequest = {
+      ...record,
+      targetMeshName: record.target.targetMeshName,
+      ...(metadataFrame === undefined ? {} : { metadataFrame }),
+      applicationPayloadFrame: payloadFrame
+    };
+    const current = await authority.read(target, true, activationRequest);
     if (
       current.kind === 'creating' &&
       current.authority?.allocation.state === 'active' &&
@@ -3113,21 +3132,7 @@ export class ServiceStatefulRuntime {
     const deadline = operationDeadline(record.deadlineUnixMs);
     let reserved: ServiceInstanceAuthorityReserve;
     try {
-      reserved = await authority.reserve(
-        {
-          target,
-          sourceNodeRid: record.sourceNodeRid,
-          sourceNodeGeneration: record.sourceNodeGeneration,
-          ...(record.sourceSpotId === undefined ? {} : { sourceSpotId: record.sourceSpotId }),
-          operationKind: record.operationKind,
-          operation: record.operation,
-          ...(record.replyRouteId === undefined ? {} : { replyRouteId: record.replyRouteId }),
-          deadlineUnixMs: record.deadlineUnixMs,
-          ...(metadataFrame === undefined ? {} : { metadataFrame }),
-          applicationPayloadFrame: payloadFrame
-        },
-        deadline.signal
-      );
+      reserved = await authority.reserve(activationRequest, deadline.signal);
     } finally {
       deadline.close();
     }

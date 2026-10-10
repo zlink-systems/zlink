@@ -359,6 +359,10 @@ class provider_location_repository_t final : public location_repository_t
             if (snapshot.store_version != expected_store_version)
                 co_return co_await authority_conflict (std::move (current));
 
+            const auto old_member =
+              snapshot.allocation.object_kind == placement_object_kind_t::actor
+                ? decode_direct_actor_authority_payload (snapshot.payload)
+                : std::nullopt;
             const auto *retarget = std::get_if<authority_retarget_t> (&mutation);
             const auto qualification_owner = retarget ? retarget->target.owner : snapshot.owner;
             store_write_request_t write_request;
@@ -490,6 +494,12 @@ class provider_location_repository_t final : public location_repository_t
                 }
                 write_request.mutations.push_back (
                   store_put_t{row_key, encode_authority (snapshot), std::nullopt});
+            }
+            if (snapshot.allocation.object_kind == placement_object_kind_t::actor) {
+                const auto membership_valid = co_await append_user_membership_conditions (
+                  old_member, snapshot.payload, write_request);
+                if (!membership_valid)
+                    co_return co_await authority_conflict (std::move (current));
             }
             auto written = co_await write_async (std::move (write_request));
             const auto *applied = std::get_if<store_write_applied_t> (&written);
@@ -632,6 +642,56 @@ class provider_location_repository_t final : public location_repository_t
         co_return co_await owner_is_live_async (owner);
     }
 
+    task_t<bool>
+    append_user_membership_conditions (const std::optional<actor_authority_payload_t> &old_member,
+                                       const std::vector<std::byte> &payload,
+                                       store_write_request_t &write_request)
+    {
+        const auto member = decode_direct_actor_authority_payload (payload);
+        if (member && member->current_spot_kind == actor_authority_spot_kind_t::user
+            && (!old_member || old_member->current_spot_kind != member->current_spot_kind
+                || old_member->current_spot_id != member->current_spot_id
+                || old_member->current_spot_generation != member->current_spot_generation)) {
+            const auto spot_key =
+              key_authority (spot_authority_key (member->current_spot_id).value);
+            const auto spot_read = co_await _store.read (spot_key);
+            const auto *spot_row = std::get_if<store_found_t> (&spot_read);
+            if (!spot_row)
+                co_return false;
+            const auto spot = decode_authority (spot_row->value.bytes, spot_row->value.version,
+                                                spot_row->value.store_now);
+            const auto ready = decode_ready_user_spot_authority_payload (spot.payload);
+            if (!ready || ready->spot_id != member->current_spot_id
+                || spot.allocation.object_kind != placement_object_kind_t::user_spot
+                || spot.allocation.state != placement_allocation_state_t::active
+                || spot.object_generation != member->current_spot_generation)
+                co_return false;
+            const auto owner_live = co_await owner_is_live_async (spot.owner);
+            if (!owner_live)
+                co_return false;
+            write_request.conditions.push_back (
+              version_condition (spot_key, spot_row->value.version));
+            auto required_owner = owner_condition (spot.owner);
+            const auto &owner_value = std::get<store_value_condition_t> (required_owner);
+            const auto existing_owner = std::find_if (
+              write_request.conditions.begin (), write_request.conditions.end (),
+              [&] (const auto &condition) {
+                  return std::visit (
+                    [&] (const auto &value) { return value.key.value == owner_value.key.value; },
+                    condition);
+              });
+            if (existing_owner == write_request.conditions.end ())
+                write_request.conditions.push_back (std::move (required_owner));
+            else {
+                const auto *existing_value =
+                  std::get_if<store_value_condition_t> (&*existing_owner);
+                if (!existing_value || existing_value->expected != owner_value.expected)
+                    co_return false;
+            }
+        }
+        co_return true;
+    }
+
     enum class stale_authority_reclaim_result_t
     {
         owner_live,
@@ -671,28 +731,25 @@ class provider_location_repository_t final : public location_repository_t
         if (const auto *found = std::get_if<store_found_t> (&authority)) {
             decoded_current =
               decode_authority (found->value.bytes, found->value.version, found->value.store_now);
-            if (decoded_current->allocation.object_kind != request.key.kind
-                || decoded_current->allocation.stable_type != request.intent.stable_type)
+            if (!authority_matches_creation_type (*decoded_current, request))
                 co_return object_reserve_result_t{
                   object_type_mismatch_t{std::move (*decoded_current)}};
         }
-        if (co_await authority_mutation_locked_async (object_key (request.key))) {
-            if (decoded_current
-                && decoded_current->allocation.state == placement_allocation_state_t::active)
-                co_return object_reserve_result_t{
-                  object_already_exists_t{std::move (*decoded_current)}};
-            auto current = co_await read_authority_value_async (object_key (request.key));
-            co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
+        if (!decoded_current
+            || decoded_current->allocation.state != placement_allocation_state_t::active) {
+            const auto mutation_locked =
+              co_await authority_mutation_locked_async (object_key (request.key));
+            if (mutation_locked) {
+                auto current = co_await read_authority_value_async (object_key (request.key));
+                co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
+            }
         }
         if (const auto *found = std::get_if<store_found_t> (&authority)) {
             auto current = std::move (*decoded_current);
             if (reclaim_version && found->value.version.value != reclaim_version->value)
                 co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
-            if (current.allocation.state == placement_allocation_state_t::active
-                && request.key.kind != placement_object_kind_t::actor)
-                co_return object_reserve_result_t{object_already_exists_t{std::move (current)}};
             const auto reclaim = co_await try_reclaim_reserved_authority_async (
-              authority_key, *found, current, &request);
+              authority_key, *found, current, &request, cancellation);
             if (reclaim == stale_authority_reclaim_result_t::reclaimed
                 || reclaim == stale_authority_reclaim_result_t::conflict) {
                 reclaim_version = reclaim == stale_authority_reclaim_result_t::conflict
@@ -806,14 +863,15 @@ class provider_location_repository_t final : public location_repository_t
     try_reclaim_reserved_authority_async (store_key_t authority_key,
                                           store_found_t stored_authority,
                                           authority_snapshot_t current,
-                                          const object_reserve_request_t *request = nullptr)
+                                          const object_reserve_request_t *request = nullptr,
+                                          std::stop_token cancellation = {})
     {
         const bool active = current.allocation.state == placement_allocation_state_t::active;
-        if (active && (!request || request->key.kind != placement_object_kind_t::actor))
+        if (active && !request)
             co_return stale_authority_reclaim_result_t::recovery_required;
         // Relocation authority retains its own recovery protocol.
         const auto actor = decode_direct_actor_authority_payload (current.payload);
-        if (actor && actor->has_relocation_state)
+        if (!active && actor && actor->has_relocation_state)
             co_return stale_authority_reclaim_result_t::recovery_required;
         const auto owner_key = key_owner (current.owner.owner_id);
         auto owner = co_await _store.read (owner_key);
@@ -831,9 +889,60 @@ class provider_location_repository_t final : public location_repository_t
         if (active) {
             if (owner_live)
                 co_return stale_authority_reclaim_result_t::owner_live;
-            if (request->actor_relocation_policy != detail::factory_relocation_kind_t::disabled)
+            const auto mutation_locked =
+              co_await authority_mutation_locked_async (object_key (request->key));
+            if ((actor && actor->has_relocation_state) || mutation_locked)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Actor owner lease is unavailable");
+                                             "Object authority requires relocation recovery");
+            if (request->relocation_policy != detail::factory_relocation_kind_t::disabled)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Object owner lease is unavailable");
+            if (current.allocation.object_kind == placement_object_kind_t::actor
+                && (!actor || actor->state != actor_authority_state_t::ready
+                    || actor->actor_id != request->key.global_id
+                    || actor->stable_type != request->intent.stable_type))
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Actor is not steady Ready");
+            if (current.allocation.object_kind == placement_object_kind_t::user_spot) {
+                const auto spot = decode_ready_user_spot_authority_payload (current.payload);
+                if (!spot || spot->spot_id != request->key.global_id
+                    || spot->stable_type != request->intent.stable_type)
+                    throw framework_exception_t (framework_error_kind_t::unavailable,
+                                                 "User Spot is not steady Ready");
+                std::optional<authority_scan_cursor_t> cursor;
+                do {
+                    if (request->operation_deadline != std::chrono::system_clock::time_point{}
+                        && std::chrono::system_clock::now () >= request->operation_deadline)
+                        throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                                     "User Spot membership scan deadline elapsed");
+                    auto scanned = co_await list_authorities ("", cursor, location_page_item_limit,
+                                                              cancellation);
+                    const auto *page = std::get_if<authority_page_t> (&scanned);
+                    if (!page) {
+                        cursor.reset ();
+                        continue;
+                    }
+                    for (const auto &entry : page->items) {
+                        const auto member =
+                          decode_direct_actor_authority_payload (entry.snapshot.payload);
+                        if (member && member->current_spot_kind == actor_authority_spot_kind_t::user
+                            && member->current_spot_id == spot->spot_id
+                            && member->current_spot_generation == current.object_generation)
+                            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                                         "User Spot still has membership");
+                    }
+                    cursor = page->next_cursor;
+                    if (!cursor)
+                        break;
+                } while (true);
+            } else if (current.allocation.object_kind == placement_object_kind_t::instance_spot) {
+                const auto spot = decode_instance_spot_authority_payload (current.payload);
+                if (!spot || spot->state != instance_spot_authority_state_t::ready
+                    || spot->activation_recovery || spot->spot_id != request->key.global_id
+                    || spot->stable_type != request->intent.stable_type)
+                    throw framework_exception_t (framework_error_kind_t::unavailable,
+                                                 "Instance Spot is not steady Ready");
+            }
         }
         const auto descriptor_key = key_mesh (
           current.allocation.target.mesh_name,
@@ -879,22 +988,31 @@ class provider_location_repository_t final : public location_repository_t
     }
 
   public:
-    task_t<bool> release_ended_reservation (authority_key_t key,
-                                            std::string expected_store_version,
-                                            std::stop_token cancellation = {}) override
+    task_t<bool> release_ended_reservation (
+      authority_key_t key,
+      std::string expected_store_version,
+      std::stop_token cancellation = {},
+      std::optional<object_reserve_request_t> request = std::nullopt) override
     {
         if (cancellation.stop_requested ())
             co_return co_await cancelled<bool> ();
         const auto row_key = key_authority (key.value);
-        if (co_await authority_mutation_locked_async (key.value))
-            co_return false;
         const auto read = co_await _store.read (row_key);
         const auto *found = std::get_if<store_found_t> (&read);
         if (!found || found->value.version.value != expected_store_version)
             co_return false;
         const auto current =
           decode_authority (found->value.bytes, found->value.version, found->value.store_now);
-        co_return co_await try_reclaim_reserved_authority_async (row_key, *found, current)
+        if (request && !authority_matches_creation_type (current, *request))
+            throw framework_exception_t (framework_error_kind_t::type_mismatch,
+                                         "Object type does not match the current authority");
+        if (current.allocation.state != placement_allocation_state_t::active) {
+            const auto locked = co_await authority_mutation_locked_async (key.value);
+            if (locked)
+                co_return false;
+        }
+        co_return co_await try_reclaim_reserved_authority_async (
+          row_key, *found, current, request ? &*request : nullptr, cancellation)
           == stale_authority_reclaim_result_t::reclaimed;
     }
 
@@ -1027,15 +1145,24 @@ class provider_location_repository_t final : public location_repository_t
             auto capacity = co_await read_capacity_async (request.fence.target);
             if (!adjust_capacity (capacity.record, request.fence.capacity_bundle, -1, 1))
                 co_return object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}};
-            snapshot.payload = std::move (request.ready_payload);
-            snapshot.allocation.state = placement_allocation_state_t::active;
-            snapshot.pending_creation.reset ();
             store_write_request_t write_request{
               {version_condition (authority_key, stored_authority->value.version),
                owner_condition (request.fence.target.owner),
                version_condition (target->key, target->provider_version), capacity.condition},
-              {store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
-               store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}};
+              {}};
+            if (snapshot.allocation.object_kind == placement_object_kind_t::actor) {
+                const auto membership_valid = co_await append_user_membership_conditions (
+                  std::nullopt, request.ready_payload, write_request);
+                if (!membership_valid)
+                    co_return object_commit_result_t{
+                      object_commit_conflict_t{std::move (snapshot)}};
+            }
+            snapshot.payload = std::move (request.ready_payload);
+            snapshot.allocation.state = placement_allocation_state_t::active;
+            snapshot.pending_creation.reset ();
+            write_request.mutations = {
+              store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
+              store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}};
             auto written =
               co_await write_async (std::move (write_request), terminal, terminal_store_now);
             const auto *applied = std::get_if<store_write_applied_t> (&written);

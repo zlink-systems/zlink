@@ -1729,6 +1729,10 @@ export class ZLinkFrameworkRuntimeHost
       activationNode.registerAsyncInstanceActivationAuthority?.(
         new ZLinkInstanceActivationAuthority({
           store: locationStore,
+          relocationPolicy: (stableType) =>
+            this.options.registration.spotNodes.get(meshName)?.instanceSpotFactoryRegistrations?.[
+              stableType
+            ]?.relocation.kind,
           relocationStore: this.options.registration.locations.relocationStoreInstance,
           meshName,
           owner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
@@ -2242,6 +2246,9 @@ export class ZLinkFrameworkRuntimeHost
     });
     const coordinator = (this.userSpotCoordinator = new ZLinkUserSpotCreationCoordinator({
       store: locationStore,
+      relocationPolicy: (meshName, stableType) =>
+        this.options.registration.spotNodes.get(meshName)?.spotFactoryRegistrations?.[stableType]
+          ?.relocation.kind,
       publishReadyRoute: (meshName, route) => {
         this.cachedLocationSpotRouteResolver?.invalidate?.(route.spot.spotId);
         this.spotNodeRuntime?.meshNode(meshName)?.rememberSpotRoute?.(route);

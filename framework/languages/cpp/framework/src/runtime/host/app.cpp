@@ -1704,7 +1704,6 @@ void app_t::_apply_zlink_framework ()
     }
     if (!mesh_nodes.empty ()) {
         auto provider = _state->services.build_provider ();
-        auto &location_store = provider.get_required<location_repository_t> ();
         auto &location_resolvers = provider.get_required<runtime::store_location_resolvers_t> ();
         auto operation_sequence = std::make_shared<std::atomic<std::uint64_t>> (1);
         struct selected_instance_target_t
@@ -1713,11 +1712,11 @@ void app_t::_apply_zlink_framework ()
             mesh_node_descriptor_t target;
             std::string stable_type;
         };
-        auto select_instance_target = [mesh_nodes, &location_store, &location_resolvers] (
+        auto select_instance_target = [mesh_nodes, &location_resolvers] (
                                         spot_id_t spot_id, detail::spot_activation_intent_t intent,
                                         std::optional<runtime::spot_address_t> cached_route = {})
           -> task_t<result_t<selected_instance_target_t>> {
-            if (cached_route) {
+            if (cached_route && cached_route->authority_owner_generation != 0) {
                 const auto source =
                   std::find_if (mesh_nodes.begin (), mesh_nodes.end (), [&] (const auto &mesh) {
                       return mesh->mesh_name () == cached_route->mesh_name;
@@ -1732,6 +1731,13 @@ void app_t::_apply_zlink_framework ()
                 target.mesh_name = cached_route->mesh_name;
                 co_return result_t<selected_instance_target_t>::success (
                   {*source, std::move (target), {}});
+            }
+            if (cached_route && !cached_route->stable_type.empty ()) {
+                if (intent.stable_type && *intent.stable_type != cached_route->stable_type)
+                    co_return result_t<selected_instance_target_t>::failure (
+                      framework_error_kind_t::type_mismatch, "Instance Spot type does not match");
+                intent.stable_type = cached_route->stable_type;
+                intent.mesh_name = cached_route->mesh_name;
             }
             std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> sources;
             for (const auto &mesh : mesh_nodes) {
@@ -1760,29 +1766,6 @@ void app_t::_apply_zlink_framework ()
                     || descriptor.object_role != object_role_t::server)
                     continue;
                 visible_targets.push_back (std::move (descriptor));
-            }
-            const auto authority =
-              co_await location_store.read_authority (runtime::spot_authority_key (spot_id));
-            if (const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
-                snapshot && snapshot->allocation.state == placement_allocation_state_t::active
-                && snapshot->allocation.object_kind == placement_object_kind_t::instance_spot
-                && snapshot->allocation.target.mesh_name == source->mesh_name ()
-                && (!intent.stable_type
-                    || *intent.stable_type == snapshot->allocation.stable_type)) {
-                const auto current = std::find_if (
-                  visible_targets.begin (), visible_targets.end (),
-                  [&] (const mesh_node_descriptor_t &candidate) {
-                      return candidate.rid.to_string ()
-                               == snapshot->allocation.target.node_rid.value ()
-                             && candidate.lifecycle_generation
-                                  == snapshot->allocation.target.node_lifecycle_generation;
-                  });
-                if (current != visible_targets.end ()) {
-                    co_return result_t<selected_instance_target_t>::success (
-                      {source, *current, snapshot->allocation.stable_type});
-                }
-                co_return result_t<selected_instance_target_t>::failure (
-                  framework_error_kind_t::unavailable, "Ready Instance Spot owner is unavailable");
             }
             std::set<std::string> stable_types;
             for (const auto &candidate : visible_targets)
@@ -1891,7 +1874,7 @@ void app_t::_apply_zlink_framework ()
               {operation_scope, operation},
               0,
               has_metadata};
-            if (cached_route) {
+            if (cached_route && cached_route->authority_owner_generation != 0) {
                 header.target.object_generation = cached_route->object_generation;
                 header.target.authority_owner_generation = cached_route->authority_owner_generation;
                 header.target.owner_id = cached_route->owner.owner_id;

@@ -1,3 +1,4 @@
+const { liveUserSpotAuthority } = require('../helpers/live-user-spot-authority');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -7,6 +8,7 @@ const framework = require('../../packages/framework/dist/internal');
 test('Core transfer-control phases drive durable prepare commit and activation', async () => {
   let nowMs = Date.UTC(2026, 6, 19, 0, 0, 0);
   const store = new framework.ZLinkInMemoryLocationStore(() => new Date(nowMs));
+  await liveUserSpotAuthority(store, 'game', 'room-a', 5n);
   await store.updateActor(actorLocation('alice'), framework.ZLinkLocationWriteIntent.NewClaim);
   const runtime = new framework.ZLinkActorTransferAuthorityRuntime({
     store: () => store,
@@ -41,6 +43,7 @@ test('Core transfer-control phases drive durable prepare commit and activation',
 test('successor resumes committed recovery only after the durable lease expires', async () => {
   let nowMs = Date.UTC(2026, 6, 19, 0, 0, 0);
   const store = new framework.ZLinkInMemoryLocationStore(() => new Date(nowMs));
+  await liveUserSpotAuthority(store, 'game', 'room-a', 5n);
   await store.updateActor(actorLocation('bob'), framework.ZLinkLocationWriteIntent.NewClaim);
   const control = transferControl('bob', 2n);
   const first = new framework.ZLinkActorTransferAuthorityRuntime({
@@ -86,6 +89,7 @@ test('framework host routes Core TransferControl records to the configured autho
   assert.ok(store);
   const sourceOwner = await store.claimOwnerLease('source-runtime', 30_000);
   assert.equal(sourceOwner.kind, 'claimed');
+  await liveUserSpotAuthority(store, 'game', 'room-a', 5n);
   await store.updateActor(
     actorLocation('carol', sourceOwner.token.leaseGeneration),
     framework.ZLinkLocationWriteIntent.NewClaim

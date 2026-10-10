@@ -297,6 +297,8 @@ internal static class ZLinkActorAuthorityPayloadCodec
         out ZLinkActorAuthorityPayload value
     )
     {
+        if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(encoded, out var canonical))
+            encoded = canonical.SteadyAuthorityPayload.Span;
         if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(encoded, out var relocation))
             encoded = relocation.ApplicationPayload.Span;
         if (ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(encoded, out var phase))

@@ -27,26 +27,61 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
     }
 
-    internal async ValueTask<ZLinkResolvedSpotHandle?> ResolveInstanceSpotHandleAsync(
+    internal async ValueTask<(
+        InstanceSpotIntentAddress Address,
+        ZLinkResolvedSpotHandle? Handle
+    )> ResolveInstanceSpotAsync(
         InstanceSpotIntentAddress address,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool instanceIntent = false
     )
     {
         ZLinkSpotId.RequireCallerProvided(address.SpotId, nameof(address.SpotId));
         var rows =
             Services.GetService(typeof(ZLinkStoreLocationResolvers)) as ZLinkStoreLocationResolvers;
         if (rows is null)
-            return null;
+            return (address, null);
         var resolution = await rows.ResolveSpotRowWithStatusAsync(
                 new ZLinkSpotLocationKey(address.SpotId),
                 cancellationToken
             )
             .ConfigureAwait(false);
         if (resolution.Kind == ZLinkLocationResolutionKind.KnownUnavailable)
+        {
+            if (
+                instanceIntent
+                && resolution.Authority is { } authority
+                && authority.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
+                && ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                    authority.Payload.Span,
+                    out var existing
+                )
+                && existing.State == ZLinkInstanceSpotAuthorityState.Ready
+            )
+                return (
+                    address with
+                    {
+                        MeshName = existing.MeshName,
+                        InstanceSpotType = existing.StableType,
+                    },
+                    null
+                );
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Instance Spot '{address.SpotId}' is currently unavailable."
             );
+        }
+        if (instanceIntent)
+        {
+            var source = ResolveActorCreationSource(
+                string.IsNullOrEmpty(address.MeshName) ? null : address.MeshName
+            );
+            address = address with
+            {
+                MeshName =
+                    source.Registration.SpotMeshChannelName ?? source.Registration.SpotNodeName,
+            };
+        }
         var row = resolution.Row;
         if (
             row is null
@@ -56,23 +91,26 @@ internal sealed partial class ZLinkFrameworkRuntime
                 && !string.Equals(row.SpotType, address.InstanceSpotType, StringComparison.Ordinal)
             )
         )
-            return null;
-        return new ZLinkResolvedSpotHandle(
-            new ZLinkSpotHandleSnapshot(
-                row.MeshName,
-                row.OwnerNodeRid,
-                row.SpotId,
-                row.SpotGeneration,
-                row.SpotKind,
+            return (address, null);
+        return (
+            address,
+            new ZLinkResolvedSpotHandle(
+                new ZLinkSpotHandleSnapshot(
+                    row.MeshName,
+                    row.OwnerNodeRid,
+                    row.SpotId,
+                    row.SpotGeneration,
+                    row.SpotKind,
+                    row.AuthorityOwnerGeneration,
+                    row.OwnerNodeGeneration,
+                    checked((ulong)row.LeaseGeneration),
+                    row.OwnerId,
+                    row.StoreVersion
+                ),
                 row.AuthorityOwnerGeneration,
-                row.OwnerNodeGeneration,
-                checked((ulong)row.LeaseGeneration),
-                row.OwnerId,
-                row.StoreVersion
-            ),
-            row.AuthorityOwnerGeneration,
-            _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null),
-            () => rows.InvalidateSpotRoute(new ZLinkSpotLocationKey(address.SpotId))
+                _ => ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(null),
+                () => rows.InvalidateSpotRoute(new ZLinkSpotLocationKey(address.SpotId))
+            )
         );
     }
 
@@ -86,13 +124,13 @@ internal sealed partial class ZLinkFrameworkRuntime
         ulong? activationDeadlineUnixMs = null
     )
     {
-        var source = ResolveActorCreationSource(address.MeshName);
         _ =
             Registration.Locations.ResolveStore()
             ?? throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "Instance Spot activation requires a Location Store."
             );
+        var source = ResolveActorCreationSource(address.MeshName);
         var resolver =
             Services.GetService(typeof(IZLinkMeshNodeLocationResolver))
                 as IZLinkMeshNodeLocationResolver

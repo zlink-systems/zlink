@@ -39,7 +39,10 @@ import type {
   ZLinkObjectCreationCompleteResult,
   ZLinkObjectReserveResult
 } from '../../contracts/Locations/Authority';
-import type { ZLinkObjectReserveRequest } from './internal-location-contracts';
+import type {
+  ZLinkObjectReserveRequest,
+  ZLinkEndedOwnerReleaseIntent
+} from './internal-location-contracts';
 
 /**
  * Framework-private domain repository. Provider implementations never
@@ -143,7 +146,8 @@ export interface ZLinkDomainLocationStore {
   releaseEndedReservation?(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    request?: ZLinkEndedOwnerReleaseIntent
   ): Promise<boolean>;
   abort(
     request: ZLinkObjectAbortRequest,

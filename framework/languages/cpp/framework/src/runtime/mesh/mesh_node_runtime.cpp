@@ -846,9 +846,10 @@ void mesh_node_runtime_t::start ()
           spot_node_runtime_t spot (spot_state);
           spot.dispatch_wire_actor_join_admission (
             spot_id_t (request.target_spot.spot_id),
-            [spot_state, routing_id, request, payload, serializers, completion] {
+            [spot_state, routing_id, request, payload, serializers, completion] () -> task_t<void> {
                 completion (
                   admit_wire_actor_join (spot_state, routing_id, request, payload, serializers));
+                co_return;
             },
             [completion] {
                 completion (actor_join_typed_terminal (framework_error_kind_t::unavailable));
