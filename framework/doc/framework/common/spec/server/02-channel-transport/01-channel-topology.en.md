@@ -656,7 +656,8 @@ kept from accepting one STREAM client connection until it closes.
 [Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) is a separate feature using an
 independent PUB/SUB socket. It doesn't participate in RouteMesh
 [full mesh](../00-foundation/02-glossary.en.md#full-mesh) or ChannelName membership, and doesn't
-require a MeshNode either.
+require a MeshNode either. Publisher configuration follows
+[Channel messaging §7](02-channel-messaging.en.md#7-the-boundary-with-classic-fanout-reserved-liveness-beacon-topic).
 
 RouteMesh and classic fanout can be used together in the same process. But the two
 features' endpoint, message delivery policy, and monitoring follow independent

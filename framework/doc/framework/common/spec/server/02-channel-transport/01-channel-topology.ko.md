@@ -606,7 +606,8 @@ listener의 `MaxMessageSize` 계약을 유지한다. StreamNode의 `64 KiB` 기�
 
 [Classic fanout](../00-foundation/02-glossary.ko.md#classic-fanout)은 독립 PUB/SUB socket을 사용하는
 별도 기능이다. RouteMesh [full mesh](../00-foundation/02-glossary.ko.md#full-mesh)와 ChannelName
-membership에 참여하지 않으며 MeshNode도 요구하지 않는다.
+membership에 참여하지 않으며 MeshNode도 요구하지 않는다. Publisher 설정은
+[Channel messaging §7](02-channel-messaging.ko.md#7-classic-fanout과의-경계liveness-beacon-topic-예약)을 따른다.
 
 같은 process에서 RouteMesh와 classic fanout을 함께 사용할 수 있다. 하지만 두 기능의
 endpoint, message 전달 정책과 monitoring은 서로 독립된 계약을 따른다. 한 기능의 설정이나

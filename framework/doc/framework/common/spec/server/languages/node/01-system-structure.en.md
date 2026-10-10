@@ -284,7 +284,6 @@ the registered Redis location store.
 | `addRouteMesh(meshName).listen(port?)` | The [owner](../../00-foundation/02-glossary.en.md#owner) MeshNode and ROUTER listener |
 | `channel(name).server()` | [Logical Multicast](../../00-foundation/02-glossary.en.md#logical-multicast) scope and [handler namespace](../../00-foundation/02-glossary.en.md#handler-namespace) |
 | `channel(name).client()` | Outbound [ChannelName](../../00-foundation/02-glossary.en.md#channelname) call with no server membership |
-| `configureSpotPublisher()` | Logical Multicast's ROUTER send configuration |
 | `addEntrySpot(TEntrySpot)` | The Entry Spot handler registry type |
 | `addSpotFactory(TSpot)` | The Spot type this node can create |
 | `addInstanceSpotFactory(type, TSpot, placement, relocation)` | The actor-free [Instance Spot](../../00-foundation/02-glossary.en.md#entry-user-instance-spot) type this node can activate |

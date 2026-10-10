@@ -465,23 +465,35 @@ The delivery targets, completion, and the guarantees before and after a connecti
 [Classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) are defined by
 [Interaction model §6](../00-foundation/04-interaction-model.en.md#6-classic-fanout). Classic
 fanout doesn't share a target set with RouteMesh ChannelName select-one or Spot Logical
-Multicast. This section defines only the boundary of HWM admission and the `NoDrop` setting,
-the subscriber's topic registration, and the liveness beacon topic reservation.
+Multicast. This section defines only publisher configuration, the boundary of HWM admission
+and `NoDrop`, the subscriber's topic registration, and the liveness beacon topic reservation.
+
+**The channel's fanout builder alone sets publisher configuration.** It can set two things,
+the send timeout and `NoDrop`, and root or MeshNode settings don't supplement or override
+them. Setting them on a channel without the publisher role fails startup. The other publisher
+socket settings are as follows.
+
+- The Framework doesn't set the send HWM. The Core value applies as is.
+- Linger is 0 on every publisher socket. Publish completes at admission, so shutdown doesn't
+  wait for remaining sends. It's applied at creation and isn't changed to another value at
+  shutdown.
+
+A publisher created by automatic discovery and a manually connected publisher use the same
+configuration. [Submit and completion §7](../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout)
+defines the send timeout's value rules and completion result, and the language-specific
+interfaces define the exact public types and member names.
 
 Classic fanout's default behavior is loss-tolerant delivery. If a subscriber's receipt is
 slow and the publisher's send queue reaches HWM, the message to that subscriber is dropped
 and publish ends successfully. Delivery to the remaining subscribers isn't affected. The
 publisher isn't stalled by one slow subscriber.
 
-`NoDrop` is a channel-scoped startup setting for the publisher role of a Classic fanout
-channel, and changes only this HWM admission behavior. It doesn't apply to the subscriber
+`NoDrop` changes only this HWM admission behavior. It doesn't apply to the subscriber
 role or to an individual publish call. When it is `true`, if even one subscriber pipe
 matching the topic isn't ready to accept a publish record, the publisher transport doesn't
 submit that record to any matching pipe. It submits the complete record only when all
 matching pipes can accept it. One slow subscriber can therefore delay completion of the
-publish call. The setting defaults to `false` when omitted. Setting it on a channel without the publisher
-role fails startup. The language-specific interfaces define the exact public types and member
-names.
+publish call. The setting defaults to `false` when omitted.
 
 The waiting and completion contract for Publish and the rules for handling events before a
 connection and during a disconnection follow

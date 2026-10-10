@@ -94,6 +94,7 @@ export interface ZLinkFanoutChannelBuilder {
  routingId(publisherRoutingId: RoutingId): this;
  setRoutingIdPrefix(prefix: string): this;
  setNoDrop(noDrop?: boolean): this;
+ setSendTimeout(timeoutMs: number): this;
  enableSubscriber(): this;
  subscribe(topic: string): this;
  connect(endpoint: string): this;
@@ -370,7 +371,7 @@ again. An already-used token is also handled as exceptional completion. A
 STREAM reply isn't given the client request timeout.
 
 Only the [Classic fanout](../../../00-foundation/02-glossary.en.md#classic-fanout) publisher uses
-`sendTimeoutMs`. Its value rules and default follow
+`setSendTimeout(timeoutMs)`. Its value rules and default follow
 [Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). The Node setting takes integer
 milliseconds and reports a rejection with `ZLinkConfigurationError`.
 
