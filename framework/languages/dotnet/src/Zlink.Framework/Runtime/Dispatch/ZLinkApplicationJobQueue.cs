@@ -1197,7 +1197,6 @@ internal sealed class ZLinkApplicationJobQueueRecordOwner : IDisposable
 internal static class ZLinkApplicationJobQueueInvocation
 {
     private static readonly AsyncLocal<Scope?> Current = new();
-    internal static ZLinkApplicationJobOrigin CurrentOrigin => Current.Value!.Origin;
 
     // Handler entry releases the queue permit, but the invocation still owns its turn.
     internal static bool IsActive => Current.Value is not null;
