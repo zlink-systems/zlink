@@ -253,7 +253,7 @@ export class ZLinkMeshDispatchPump {
   ): Promise<boolean> {
     let claimsDrained = 0;
     try {
-      for (;;) {
+      while (!this.disposed) {
         if (claimBudget !== undefined && claimsDrained >= claimBudget) {
           // Lifecycle work has priority, but a bounded turn lets application
           // work make progress when lifecycle records keep arriving.
@@ -282,19 +282,18 @@ export class ZLinkMeshDispatchPump {
               );
               const capacity =
                 owner.ordinaryIngressPreAdmitted === true ? MESH_DISPATCH_RECEIVE_CAPACITY : 1;
-              for (;;) {
-                let claimPermit =
-                  owner.terminalCompletion === true ||
-                  owner.ordinaryIngressPreAdmitted === true ||
-                  domain === ReadyDomain.Infrastructure
-                    ? undefined
-                    : await this.acquirePermit();
-                try {
-                  if (this.capacityStop.signal.aborted) return;
-                  ownerReceiveBatch.reset(capacity);
-                  const received = claim.recvBatch(ownerReceiveBatch, ZLINK_BACKEND_RECV_DONT_WAIT);
-                  if (!received.ok) break;
-                  // This owner keeps its claim while it drains, so its records stay in FIFO order.
+              let claimPermit =
+                owner.terminalCompletion === true ||
+                owner.ordinaryIngressPreAdmitted === true ||
+                domain === ReadyDomain.Infrastructure
+                  ? undefined
+                  : await this.acquirePermit();
+              try {
+                if (this.capacityStop.signal.aborted) return;
+                ownerReceiveBatch.reset(capacity);
+                const received = claim.recvBatch(ownerReceiveBatch, ZLINK_BACKEND_RECV_DONT_WAIT);
+                if (received.ok) {
+                  // The bounded batch stays in claim order until its records finish.
                   try {
                     for (const record of received.records) {
                       if (this.disposed) break;
@@ -327,8 +326,6 @@ export class ZLinkMeshDispatchPump {
                         if (permit === claimPermit) claimPermit = undefined;
                         await runWithApplicationJobPermit(permit, dispatch);
                       }
-                      const yieldTurn = this.yieldIfNeeded();
-                      if (yieldTurn !== undefined) await yieldTurn;
                     }
                   } finally {
                     // Batch ownership includes records whose dispatch never began,
@@ -338,14 +335,16 @@ export class ZLinkMeshDispatchPump {
                       record.releaseRetainedIngress?.();
                     }
                   }
-                } finally {
-                  claimPermit?.releaseAfterInternalProcessing();
                 }
+              } finally {
+                claimPermit?.releaseAfterInternalProcessing();
               }
             } finally {
               claim.release();
               if (receiveBatch === undefined) ownerReceiveBatch?.close();
             }
+            const yieldTurn = this.yieldIfNeeded();
+            if (yieldTurn !== undefined) await yieldTurn;
           };
           // An application worker drains the one owner it claimed. Infrastructure owners
           // drain independently, so a suspended owner does not hold the other claims.
@@ -364,12 +363,8 @@ export class ZLinkMeshDispatchPump {
         // Empty ready claims also count as work, so they cannot monopolize
         // the microtask queue without giving I/O and deadlines a turn.
         this.recordsSinceYield += 1;
-        const yieldTurn = this.yieldIfNeeded();
-        if (yieldTurn !== undefined) await yieldTurn;
-        if (!drained.hasResidue) {
-          return false;
-        }
       }
+      return false;
     } finally {
       readyBatch.reset();
     }
