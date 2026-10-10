@@ -1,3 +1,4 @@
+import { encodeServiceUserSpotAuthorityPayload } from '../../packages/framework/src/runtime/foundation/service-authority-payload-codec';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -1264,31 +1265,65 @@ async function createActorAuthority(
     nodeLifecycleGeneration: 1n,
     owner: owner('owner-a', 1n)
   };
-  const payload = encodeActorAuthorityIdentity({
-    actorType: 'player',
-    actor: {
-      actorId,
-      objectGeneration: 1n,
-      meshName: 'mesh',
-      nodeRid: 'node-a'
+  const spotKey = { kind: 'user_spot' as const, globalId: 'room-a' };
+  const spotReservation = await authority.reserve({
+    key: spotKey,
+    intent: {
+      stableType: 'room',
+      requestContentReference: 'request:room-a',
+      requestSha256: Buffer.alloc(32, 1),
+      requestEncodedSize: 1n
     },
-    meshName: 'mesh',
-    ownerNodeGeneration: 1n,
-    owner: target.owner,
-    spotId: 'room-a',
-    spotGeneration: 1n,
-    spotKind: ZLinkSpotKind.User
+    target,
+    creatingPayload: Buffer.of(1),
+    capacity: { actors: 0, spots: 1 }
   });
+  assert.equal(spotReservation.kind, 'reserved');
+  if (spotReservation.kind !== 'reserved') throw new Error('Spot reservation failed.');
+  const spot = await authority.commit({
+    key: spotKey,
+    reservationId: spotReservation.reservationId,
+    expectedStoreVersion: spotReservation.creating.storeVersion.value,
+    target,
+    readyPayload: encodeServiceUserSpotAuthorityPayload({
+      state: 'ready',
+      stableType: 'room',
+      spotId: 'room-a',
+      ownerId: target.owner.ownerId,
+      ownerLeaseGeneration: target.owner.leaseGeneration,
+      ownerMeshName: target.meshName,
+      ownerNodeRid: String(target.nodeRid),
+      ownerNodeGeneration: target.nodeLifecycleGeneration
+    })
+  });
+  assert.equal(spot.kind, 'committed');
+  if (spot.kind !== 'committed') throw new Error('Spot commit failed.');
+  const payload = (objectGeneration: bigint) =>
+    encodeActorAuthorityIdentity({
+      actorType: 'player',
+      actor: {
+        actorId,
+        objectGeneration,
+        meshName: 'mesh',
+        nodeRid: 'node-a'
+      },
+      meshName: 'mesh',
+      ownerNodeGeneration: 1n,
+      owner: target.owner,
+      spotId: 'room-a',
+      spotGeneration: spot.ready.objectGeneration,
+      spotKind: ZLinkSpotKind.User
+    });
   const reserved = await authority.reserve({
     key: { kind: 'actor', globalId: actorId },
     intent: {
       stableType: 'player',
       requestContentReference: `request:${actorId}`,
       requestSha256: Buffer.alloc(32, 2),
-      requestEncodedSize: BigInt(payload.byteLength)
+      requestEncodedSize: BigInt(payload(1n).byteLength)
     },
     target,
-    creatingPayload: payload,
+    creatingPayload: payload(1n),
     capacity: { actors: 1, spots: 0 }
   });
   assert.equal(reserved.kind, 'reserved');
@@ -1301,7 +1336,7 @@ async function createActorAuthority(
     target,
     completion: {
       kind: 'created',
-      readyPayload: payload,
+      readyPayload: payload(reserved.creating.objectGeneration),
       terminal: {
         operation: {
           sourceNodeRid: 'node-a',

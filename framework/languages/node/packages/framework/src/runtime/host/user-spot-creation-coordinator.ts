@@ -38,6 +38,10 @@ const DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS = 1_000;
 const DEFAULT_USER_SPOT_POLL_INTERVAL_MS = 10;
 
 export interface ZLinkUserSpotCreationCoordinatorOptions {
+  readonly relocationPolicy?: (
+    meshName: string,
+    stableType: string
+  ) => import('../locations/internal-location-contracts').ZLinkObjectReserveRequest['actorRelocationPolicy'];
   readonly store: ZLinkObjectCreationStore & ZLinkAuthorityStore;
   readonly target: (
     request: Pick<ZLinkUserSpotCreationRequest, 'meshName' | 'stableType'>,
@@ -169,6 +173,10 @@ export class ZLinkUserSpotCreationCoordinator {
         reserved = await this.options.store.reserve(
           {
             key: { kind: 'user_spot', globalId: String(request.spotId) },
+            actorRelocationPolicy: this.options.relocationPolicy?.(
+              target.meshName,
+              request.stableType
+            ),
             intent: {
               stableType: request.stableType,
               requestContentReference: contentReference,

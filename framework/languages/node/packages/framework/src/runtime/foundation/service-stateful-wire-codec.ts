@@ -14,6 +14,7 @@ import {
   encodeInstanceRouteV1,
   encodeSpotRequestCommand,
   encodeSpotSendCommand,
+  type InstanceRouteV1,
   type ServiceWireDecoderContext
 } from '../protocol/service_wire_codec.generated';
 import {
@@ -82,8 +83,6 @@ import {
 import { APPLICATION_PAYLOAD_VERSION, ServiceWireProtocolError } from './service-wire-m6a-codec';
 const MESSAGE_FOLLOW_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MESSAGE_FOLLOW_VERSION = 1;
-const INSTANCE_ROUTE_VERSION = 1;
-const INSTANCE_ACTIVATION_VERSION = 2;
 
 const PREFIX_SIZE = SERVICE_WIRE_PREFIX_SIZE;
 const MAGIC_0 = SERVICE_WIRE_MAGIC[0];
@@ -946,6 +945,10 @@ export interface ServiceInstanceActivationTarget {
   readonly descriptorVersion: string;
 }
 
+export interface ServiceInstanceColdActivationTarget extends ServiceInstanceActivationTarget {
+  readonly targetMeshName: string;
+}
+
 export interface ServiceUserSpotReservationFence {
   readonly reservationId: string;
   readonly expectedStoreVersion: string;
@@ -1105,7 +1108,7 @@ export type ServiceStatefulWireRecord =
   | {
       readonly kind: 'instanceSpot';
       readonly activation: 'missing';
-      readonly target: ServiceInstanceActivationTarget;
+      readonly target: ServiceInstanceColdActivationTarget;
       readonly sourceNodeGeneration: bigint;
       readonly sourceNodeRid: string;
       readonly sourceSpotId?: string;
@@ -1435,7 +1438,7 @@ export function encodeInstanceSpotHeader(
 }
 
 export function encodeInstanceSpotActivationHeader(
-  target: ServiceInstanceActivationTarget,
+  target: ServiceInstanceColdActivationTarget,
   sourceNodeGeneration: bigint,
   sourceNodeRid: string,
   sourceSpotId: string | undefined,
@@ -1454,25 +1457,28 @@ export function encodeInstanceSpotActivationHeader(
   if (operationKind === 'send' && replyRouteId !== undefined) {
     throw new RangeError('Instance Spot send must not carry a reply route.');
   }
-  const targetBody = concat(
-    rid(target.targetNodeRid, 'targetNodeRid'),
-    u64(target.targetNodeGeneration),
-    rid(target.targetSpotId, 'targetSpotId'),
-    text16(target.stableType, 'stableType'),
-    text16(target.descriptorVersion, 'descriptorVersion')
+  const encodedRoute = encodeInstanceRouteV1(
+    {
+      routeKind: 'coldActivation',
+      targetNodeRid: toGeneratedRoutingId(target.targetNodeRid, 'targetNodeRid'),
+      targetNodeGeneration: target.targetNodeGeneration,
+      targetSpotId: target.targetSpotId,
+      targetMeshName: target.targetMeshName,
+      stableType: target.stableType,
+      targetDescriptorVersion: target.descriptorVersion,
+      deadlineUnixMs
+    },
+    STATEFUL_MESSAGE_CONTEXT
   );
   return concat(
     prefix(M6bServiceWireCommand.instanceSpot, hasMetadata ? M6bServiceWireFlag.metadata : 0),
-    Buffer.of(INSTANCE_ACTIVATION_VERSION),
-    u16(targetBody.byteLength),
-    targetBody,
+    encodedRoute,
     u64Any(sourceNodeGeneration),
     rid(sourceNodeRid, 'sourceNodeRid'),
     optionalRid(sourceSpotId),
     Buffer.of(operationKind === 'send' ? 1 : 2),
     u64Any(operation.high),
     u64Any(operation.low),
-    u64(deadlineUnixMs),
     ...(operationKind === 'request' ? [u64(requirePositive(replyRouteId, 'replyRouteId'))] : [])
   );
 }
@@ -1741,53 +1747,31 @@ export function decodeStatefulHeader(
         fail(`Invalid command flags '${command.flags}'.`);
       }
       const routeStart = reader.offset;
-      const version = reader.u8('instanceRoute.version');
-      if (version !== INSTANCE_ROUTE_VERSION && version !== INSTANCE_ACTIVATION_VERSION)
-        fail('Unsupported Instance route version.');
+      reader.u8('instanceRoute.kind');
       const routeLength = reader.u16('instanceRoute.length');
       const routeEnd = reader.offset + routeLength;
-      const generatedReadyRoute =
-        version === INSTANCE_ROUTE_VERSION
-          ? decodeInstanceRouteV1(
-              reader.bytes.subarray(routeStart, routeEnd),
-              STATEFUL_MESSAGE_CONTEXT
-            )
+      const generatedRoute = decodeCanonicalInstanceRoute(
+        reader.bytes.subarray(routeStart, routeEnd)
+      );
+      const commonTarget = {
+        targetNodeRid: fromGeneratedRoutingId(generatedRoute.targetNodeRid, 'targetNodeRid'),
+        targetNodeGeneration: generatedRoute.targetNodeGeneration,
+        targetSpotId: generatedRoute.targetSpotId
+      };
+      const route =
+        generatedRoute.routeKind === 'ready'
+          ? { ...commonTarget, ...generatedRoute.authority }
           : undefined;
-      if (generatedReadyRoute !== undefined && generatedReadyRoute.routeKind !== 'ready') {
-        fail('Invalid Ready Instance route kind.');
-      }
-      const commonTarget =
-        generatedReadyRoute?.routeKind === 'ready'
-          ? {
-              targetNodeRid: fromGeneratedRoutingId(
-                generatedReadyRoute.targetNodeRid,
-                'targetNodeRid'
-              ),
-              targetNodeGeneration: generatedReadyRoute.targetNodeGeneration,
-              targetSpotId: generatedReadyRoute.targetSpotId
-            }
-          : {
-              targetNodeRid: reader.rid('targetNodeRid'),
-              targetNodeGeneration: reader.nonZeroU64('targetNodeGeneration'),
-              targetSpotId: reader.rid('targetSpotId')
-            };
-      const route: ServiceInstanceRouteFence | undefined =
-        generatedReadyRoute?.routeKind === 'ready'
+      const target =
+        generatedRoute.routeKind === 'coldActivation'
           ? {
               ...commonTarget,
-              ...generatedReadyRoute.authority
+              targetMeshName: generatedRoute.targetMeshName,
+              stableType: generatedRoute.stableType,
+              descriptorVersion: generatedRoute.targetDescriptorVersion
             }
           : undefined;
-      const target: ServiceInstanceActivationTarget | undefined =
-        version === INSTANCE_ACTIVATION_VERSION
-          ? {
-              ...commonTarget,
-              stableType: reader.text16('stableType'),
-              descriptorVersion: reader.text16('descriptorVersion')
-            }
-          : undefined;
-      if (generatedReadyRoute !== undefined) reader.offset = routeEnd;
-      if (reader.offset !== routeEnd) fail('Invalid Instance route body length.');
+      reader.offset = routeEnd;
       const sourceNodeGeneration = reader.nonZeroU64('sourceNodeGeneration');
       const sourceNodeRid = reader.rid('sourceNodeRid');
       const sourceSpotId = reader.optionalRid('sourceSpotId');
@@ -1799,21 +1783,21 @@ export function decodeStatefulHeader(
       };
       const operationKind = operationValue === 1 ? ('send' as const) : ('request' as const);
       if (
-        version === INSTANCE_ROUTE_VERSION &&
+        generatedRoute.routeKind === 'ready' &&
         ((operationKind === 'send' && (operation.high !== 0n || operation.low !== 0n)) ||
           (operationKind === 'request' && operation.high === 0n && operation.low === 0n))
       ) {
         fail('Invalid Instance operation identity.');
       }
       if (
-        version === INSTANCE_ACTIVATION_VERSION &&
+        generatedRoute.routeKind === 'coldActivation' &&
         operation.high === 0n &&
         operation.low === 0n
       ) {
         fail('Instance activation requires a non-zero operation identity.');
       }
       const deadlineUnixMs =
-        version === INSTANCE_ACTIVATION_VERSION ? reader.nonZeroU64('deadlineUnixMs') : undefined;
+        generatedRoute.routeKind === 'coldActivation' ? generatedRoute.deadlineUnixMs : undefined;
       const replyRouteId =
         operationKind === 'request' ? reader.nonZeroU64('replyRouteId') : undefined;
       reader.end();
@@ -1826,12 +1810,12 @@ export function decodeStatefulHeader(
         operation,
         ...(replyRouteId === undefined ? {} : { replyRouteId })
       };
-      return version === INSTANCE_ROUTE_VERSION
+      return generatedRoute.routeKind === 'ready'
         ? {
             ...common,
             activation: 'ready',
             route: route!,
-            instanceIntent: generatedReadyRoute!.instanceIntent === 'true'
+            instanceIntent: generatedRoute.instanceIntent === 'true'
           }
         : {
             ...common,
@@ -2387,11 +2371,6 @@ function text8(value: string, name: string): Buffer {
   return sized8(value, name);
 }
 
-function text16(value: string, name: string): Buffer {
-  const bytes = encodeCanonicalServiceWireText(value, name, 0xffff, outOfRange);
-  return concat(u16(bytes.byteLength), bytes);
-}
-
 function optionalRid(value: string | undefined): Buffer {
   return value === undefined ? Buffer.of(0) : rid(value, 'sourceSpotId');
 }
@@ -2446,6 +2425,15 @@ function requireFlags(actual: number, expected: number): void {
 
 function concat(...parts: readonly Uint8Array[]): Buffer {
   return Buffer.concat(parts.map((part) => Buffer.from(part)));
+}
+
+function decodeCanonicalInstanceRoute(bytes: Uint8Array): InstanceRouteV1 {
+  try {
+    return decodeInstanceRouteV1(bytes, STATEFUL_MESSAGE_CONTEXT);
+  } catch (error) {
+    if (error instanceof RangeError) throw new ServiceWireProtocolError(error.message);
+    throw error;
+  }
 }
 
 function fail(message: string): never {
@@ -3093,21 +3081,9 @@ class FrozenReader {
 
   private instanceRoute(): void {
     const start = this.offset;
-    const kind = this.u8('instanceRouteKind');
-    if (kind < 1 || kind > 2) fail('Invalid Instance route kind.');
-    const body = this.body16('Instance route');
-    if (kind === INSTANCE_ROUTE_VERSION) {
-      decodeInstanceRouteV1(this.bytes.subarray(start, this.offset), STATEFUL_MESSAGE_CONTEXT);
-      return;
-    }
-    body.rid8('targetNodeRid');
-    body.nonZeroU64('targetNodeGeneration');
-    body.text8('targetSpotId');
-    body.text8('targetMeshName');
-    body.text8('stableType');
-    body.text8('targetDescriptorVersion');
-    body.nonZeroU64('deadlineUnixMs');
-    body.end('Instance route');
+    this.u8('instanceRouteKind');
+    this.body16('Instance route');
+    decodeCanonicalInstanceRoute(this.bytes.subarray(start, this.offset));
   }
 
   private relocationObject(): void {

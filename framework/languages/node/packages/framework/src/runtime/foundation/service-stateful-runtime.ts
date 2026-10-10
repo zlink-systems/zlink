@@ -90,6 +90,7 @@ import {
   type ServiceBoundSessionActorAuthority,
   type ServiceDirectSpotRouteFence,
   type ServiceInstanceActivationTarget,
+  type ServiceInstanceColdActivationTarget,
   type ServiceInstanceRouteFence,
   type ServiceMessageFollowRoute,
   type ServiceRetiredBoundSessionRouteFence,
@@ -883,7 +884,7 @@ export class ServiceStatefulRuntime {
     const record = {
       kind: 'instanceSpot' as const,
       activation: 'missing' as const,
-      target,
+      target: { ...target, targetMeshName: envelope.targetMeshName },
       sourceNodeGeneration: envelope.sourceNodeGeneration,
       sourceNodeRid: envelope.sourceNodeRid,
       ...(envelope.sourceSpotId === undefined ? {} : { sourceSpotId: envelope.sourceSpotId }),
@@ -902,7 +903,7 @@ export class ServiceStatefulRuntime {
           sourceRoutingId: envelope.sourceNodeRid,
           parts: [
             encodeInstanceSpotActivationHeader(
-              target,
+              record.target,
               envelope.sourceNodeGeneration,
               envelope.sourceNodeRid,
               envelope.sourceSpotId,
@@ -1442,7 +1443,7 @@ export class ServiceStatefulRuntime {
   }
 
   async sendToMissingInstanceSpot(
-    target: ServiceInstanceActivationTarget,
+    target: ServiceInstanceColdActivationTarget,
     payload: ServiceApplicationPayload,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
@@ -1458,7 +1459,7 @@ export class ServiceStatefulRuntime {
   }
 
   async sendToMissingInstanceSpotFrame(
-    target: ServiceInstanceActivationTarget,
+    target: ServiceInstanceColdActivationTarget,
     payloadFrame: Buffer,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
@@ -1523,7 +1524,7 @@ export class ServiceStatefulRuntime {
   }
 
   requestToMissingInstanceSpot(
-    target: ServiceInstanceActivationTarget,
+    target: ServiceInstanceColdActivationTarget,
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     sourceSpotId?: string,
@@ -1541,7 +1542,7 @@ export class ServiceStatefulRuntime {
   }
 
   requestToMissingInstanceSpotFrame(
-    target: ServiceInstanceActivationTarget,
+    target: ServiceInstanceColdActivationTarget,
     payloadFrame: Buffer,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
