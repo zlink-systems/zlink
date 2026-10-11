@@ -433,6 +433,9 @@ struct instance_spot_activation_materializer_t
     std::function<std::optional<::zlink::framework::detail::factory_relocation_kind_t> (
       const std::string &)>
       relocation_policy;
+    std::function<bool (const protocol::instance_spot_activation_header_t &,
+                        const authority_snapshot_t &)>
+      matches_local;
 
     explicit operator bool () const noexcept
     {

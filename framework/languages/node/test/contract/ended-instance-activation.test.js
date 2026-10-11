@@ -32,7 +32,8 @@ const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 const {
-  encodeApplicationPayload
+  encodeApplicationPayload,
+  decodeApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
 async function fixture(
@@ -169,41 +170,47 @@ async function fixture(
       targetMeshName: 'mesh',
       descriptorVersion: '1'
     };
-    runtime.registerAsyncInstanceActivationAuthority(
-      new ZLinkInstanceActivationAuthority({
-        store,
-        relocationStore,
-        meshName: 'mesh',
-        owner: () => owners[rid],
-        relocationPolicy: () => policy ?? undefined
-      })
-    );
+    const authority = new ZLinkInstanceActivationAuthority({
+      store,
+      relocationStore,
+      meshName: 'mesh',
+      owner: () => owners[rid],
+      relocationPolicy: () => policy ?? undefined
+    });
+    runtime.registerAsyncInstanceActivationAuthority(authority);
     runtime.registerInstanceApplicationLifecycle({
       isMaterialized: () => false,
       async materialize() {
         factories++;
       },
-      async discard() {}
+      async discard() {},
+      beginTerminal() {},
+      async completeTerminal() {
+        return false;
+      }
     });
     const deadlineUnixMs = BigInt(Date.now() + 5000);
-    return () =>
-      runtime.runMissingInstanceActivation(
-        {
-          kind: 'instanceSpot',
-          activation: 'missing',
-          target,
-          sourceNodeRid: 'source',
-          sourceNodeGeneration: 1n,
-          operationKind: 'send',
-          operation: { high: 1n, low: rid === 'node-a' ? 1n : 2n },
-          deadlineUnixMs
-        },
-        encodeApplicationPayload({
-          packetName: 'Notice',
-          contentType: 'application/json',
-          payload: Buffer.from('{}')
-        })
-      );
+    const record = {
+      kind: 'instanceSpot',
+      activation: 'missing',
+      target,
+      sourceNodeRid: 'source',
+      sourceNodeGeneration: 1n,
+      operationKind: 'send',
+      operation: { high: 1n, low: rid === 'node-a' ? 1n : 2n },
+      deadlineUnixMs
+    };
+    const payload = encodeApplicationPayload({
+      packetName: 'Notice',
+      contentType: 'application/json',
+      payload: Buffer.from('{}')
+    });
+    return Object.assign(() => runtime.runMissingInstanceActivation(record, payload), {
+      runtime,
+      authority,
+      record,
+      payload
+    });
   }
   const resolver = new internal.ZLinkAuthoritySpotRouteResolver(store, (name) => name, undefined, {
     remainingOwnerTokenLeaseMs: async () => 0
@@ -267,6 +274,7 @@ async function fixture(
     resolver,
     transport,
     selected,
+    roots,
     get factories() {
       return factories;
     },
@@ -315,6 +323,89 @@ for (const provider of [false, true]) {
       f.close();
     }
   });
+  for (const pending of [false, true])
+    test(`${label}: Ready local admission survives recovery deletion after authority snapshot (pending=${pending})`, async () => {
+      const f = await fixture(provider);
+      const { runtime, record } = f.activate;
+      const request = { ...record, operationKind: 'request', replyRouteId: 1n };
+      const frame = (value) =>
+        encodeApplicationPayload({
+          packetName: 'Echo',
+          contentType: 'application/json',
+          payload: Buffer.from(JSON.stringify({ value }))
+        });
+      const firstPayload = frame('first');
+      const secondPayload = frame('second');
+      const echo = (payload) => JSON.parse(decodeApplicationPayload(payload).payload.toString());
+      let releaseHandler;
+      const heldHandler = new Promise((resolve) => {
+        releaseHandler = resolve;
+      });
+      let returnRead;
+      const heldRead = new Promise((resolve) => {
+        returnRead = resolve;
+      });
+      let snapshotRead;
+      const captured = new Promise((resolve) => {
+        snapshotRead = resolve;
+      });
+      let firstResponse;
+      try {
+        await runtime.activateMissingInstanceAsync(
+          request,
+          firstPayload,
+          undefined,
+          ({ route }) => {
+            firstResponse = heldHandler.then(async () => {
+              await runtime.completeRecoveredInstanceActivation(record.target, route);
+              return echo(firstPayload);
+            });
+          }
+        );
+        if (!pending) await new Promise((resolve) => setImmediate(resolve));
+        const originalRead = f.store.readAuthority.bind(f.store);
+        let hold = true;
+        f.store.readAuthority = async (key) => {
+          const snapshot = await originalRead(key);
+          if (hold && key.value === f.key.value) {
+            hold = false;
+            snapshotRead(snapshot);
+            await heldRead;
+          }
+          return snapshot;
+        };
+        let secondResponse;
+        const second = runtime.activateMissingInstanceAsync(
+          { ...request, operation: { high: 1575n, low: 2n }, replyRouteId: 2n },
+          secondPayload,
+          undefined,
+          () => {
+            secondResponse = echo(secondPayload);
+          }
+        );
+        // Attach failure observation before releasing the first handler.
+        const result = second.then(
+          () => ({ value: secondResponse }),
+          (error) => ({ error })
+        );
+        const snapshot = await captured;
+        const authority = internal.decodeServiceInstanceAuthorityPayload(snapshot.payload);
+        const reference = authority.activationRecovery.reference;
+        assert.equal(f.roots.has(reference), true);
+        releaseHandler();
+        assert.deepEqual(await firstResponse, { value: 'first' });
+        assert.equal(f.roots.has(reference), false);
+        returnRead();
+        const outcome = await result;
+        if (outcome.error !== undefined) throw outcome.error;
+        assert.deepEqual(outcome.value, { value: 'second' });
+        assert.equal(f.factories, 1);
+      } finally {
+        releaseHandler();
+        returnRead();
+        f.close();
+      }
+    });
   test(`${label}: a declined release uses a fresh authority read`, async () => {
     const f = await fixture(provider);
     try {

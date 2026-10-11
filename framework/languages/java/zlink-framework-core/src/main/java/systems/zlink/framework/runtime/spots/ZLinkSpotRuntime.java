@@ -2962,6 +2962,27 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 return CompletableFuture.completedFuture(read);
                             var authority =
                                     userSpotAuthorities.decode(snapshot.payload()).orElseThrow();
+                            var local = instanceSpotActivations.get(envelope.targetSpotId());
+                            if (authority.state()
+                                            == systems.zlink.framework.runtime.locations
+                                                    .ZLinkServiceAuthorityPayloadCodec.State.READY
+                                    && authority.instance().isPresent()
+                                    && authority.stableType().equals(envelope.stableType())
+                                    && authority.meshName().equals(envelope.targetMeshName())
+                                    && authority.nodeRid().equals(envelope.targetNodeRid())
+                                    && authority.nodeGeneration() == envelope.targetNodeGeneration()
+                                    && snapshot.allocation().state()
+                                            == systems.zlink.framework.runtime.internal.locations
+                                                    .ZLinkPlacementAllocationState.ACTIVE
+                                    && local != null
+                                    && local.backendSpot.lifecycleGeneration()
+                                            == snapshot.objectGeneration()
+                                    && local.authorityFenceMatches(
+                                            snapshot.ownerId(),
+                                            snapshot.ownerLeaseGeneration(),
+                                            snapshot.authorityOwnerGeneration())) {
+                                return CompletableFuture.completedFuture(read);
+                            }
                             String reference =
                                     snapshot.pendingCreation()
                                             .map(

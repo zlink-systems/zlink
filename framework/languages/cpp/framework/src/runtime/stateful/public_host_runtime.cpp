@@ -4465,7 +4465,13 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
           });
         return output;
     };
-    const auto join_existing = [&] (authority_read_result_t current) -> task_t<bool> {
+    const auto decode_current_authority = [] (const authority_read_result_t &read) {
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+        return snapshot ? decode_instance_spot_authority_payload (snapshot->payload) : std::nullopt;
+    };
+    const auto join_existing =
+      [&] (const authority_read_result_t &current,
+           std::optional<instance_spot_authority_payload_t> ready_state) -> task_t<bool> {
         const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
         if (request.target.authority_owner_generation != 0) {
             // Ready Instance direct의 object generation은 target 판정에 쓰지 않는다.
@@ -4501,7 +4507,6 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             co_return true;
         }
         if (snapshot->allocation.state == placement_allocation_state_t::active) {
-            auto ready_state = decode_instance_spot_authority_payload (snapshot->payload);
             if (!ready_state) {
                 if (const auto closing = decode_instance_closing_state (snapshot->payload);
                     closing && closing->stable_type == request.target.stable_type
@@ -4605,13 +4610,22 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         current = co_await run_blocking_step<authority_read_result_t> (
           [store, authority_key] { return store->read_authority (authority_key); });
     }
+    auto current_ready = decode_current_authority (current);
     if (request.target.authority_owner_generation == 0) {
         if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current)) {
-            const auto ready = decode_instance_spot_authority_payload (snapshot->payload);
+            const auto &ready = current_ready;
             const auto local = status ();
             if (snapshot->allocation.target.node_rid.value () == local.routing_id ().to_string ()
                 && snapshot->allocation.target.node_lifecycle_generation
                      == local.lifecycle_generation ()) {
+                if (snapshot->allocation.state == placement_allocation_state_t::active
+                    && snapshot->allocation.object_kind == placement_object_kind_t::instance_spot
+                    && ready && ready->state == instance_spot_authority_state_t::ready
+                    && instance_materializer->matches_local
+                    && instance_materializer->matches_local (request, *snapshot)) {
+                    (void) co_await join_existing (current, std::move (current_ready));
+                    co_return;
+                }
                 const auto reference =
                   snapshot->pending_creation ? snapshot->pending_creation->request_content_reference
                   : ready && ready->activation_recovery ? ready->activation_recovery->reference
@@ -4664,10 +4678,11 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                     current = authority_missing_t{};
                 else
                     current = co_await store->read_authority (authority_key);
+                current_ready = decode_current_authority (current);
             }
         }
     }
-    if (co_await join_existing (current)) {
+    if (co_await join_existing (current, std::move (current_ready))) {
         co_return;
     }
     if (previous_admission) {
@@ -4795,7 +4810,8 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     const auto *created = std::get_if<object_committed_t> (&committed);
     const auto *already = std::get_if<object_already_committed_t> (&committed);
     if (already) {
-        if (!(co_await join_existing (authority_read_result_t{already->ready})))
+        const authority_read_result_t ready = already->ready;
+        if (!(co_await join_existing (ready, decode_current_authority (ready))))
             reply_terminal (
               {105, static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
                std::nullopt});

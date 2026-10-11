@@ -269,6 +269,165 @@ final class InstanceSpotColdActivationTest {
         }
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void readyLocalRequestSurvivesRecoveryRootDeletionAfterAuthorityRead() throws Exception {
+        initialized = new AtomicInteger();
+        echoHandled = new CompletableFuture<>();
+        echoRelease = new CompletableFuture<>();
+        var recovery = new InMemoryRelocationStore();
+        var options = new DefaultZLinkFrameworkOptions();
+        options.configureDispatch()
+                .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRelocationStore(recovery);
+        options.addRouteMesh("cold-test")
+                .listen("inproc://ready-race-" + UUID.randomUUID())
+                .objects()
+                .server()
+                .addInstanceSpotFactory(
+                        "cold", Instance.class, factory -> factory.disableRelocation());
+        var captured = new CompletableFuture<ZLinkAuthoritySnapshot>();
+        var returnRead = new CompletableFuture<Void>();
+        String spotId = "ready-race-" + UUID.randomUUID();
+        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            var first =
+                    runtime.route()
+                            .requestToSpot(spotId, new Echo("first"))
+                            .instanceSpot("cold")
+                            .timeout(Duration.ofSeconds(5))
+                            .submit(Echo.class)
+                            .toCompletableFuture();
+            echoHandled.get(5, TimeUnit.SECONDS);
+            var host =
+                    (systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) runtime.spotManager();
+            var repositoryField = host.getClass().getDeclaredField("userSpotLocationStore");
+            repositoryField.setAccessible(true);
+            var original = (ZLinkLocationRepository) repositoryField.get(host);
+            var snapshot =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            original.read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false)
+                                    .toCompletableFuture()
+                                    .get(5, TimeUnit.SECONDS));
+            var pointer =
+                    new ZLinkServiceAuthorityPayloadCodec()
+                            .decode(snapshot.payload())
+                            .orElseThrow()
+                            .activationRecoveryState()
+                            .orElseThrow();
+            var root =
+                    assertInstanceOf(
+                            ZLinkRelocationFound.class,
+                            recovery.get(pointer.reference(), () -> false)
+                                    .toCompletableFuture()
+                                    .get(5, TimeUnit.SECONDS));
+            var envelope = new ZLinkInstanceActivationRecoveryCodec().decode(root.payload());
+            var hold = new java.util.concurrent.atomic.AtomicBoolean(true);
+            var observer =
+                    (ZLinkLocationRepository)
+                            java.lang.reflect.Proxy.newProxyInstance(
+                                    ZLinkLocationRepository.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkLocationRepository.class},
+                                    (proxy, method, arguments) -> {
+                                        Object result;
+                                        try {
+                                            result = method.invoke(original, arguments);
+                                        } catch (
+                                                java.lang.reflect.InvocationTargetException
+                                                        failure) {
+                                            throw failure.getCause();
+                                        }
+                                        if (method.getName().equals("read")
+                                                && arguments[0].equals(
+                                                        ZLinkAuthorityKeyCodec.spot(spotId))
+                                                && hold.compareAndSet(true, false)) {
+                                            return ((CompletionStage<ZLinkAuthorityReadResult>)
+                                                            result)
+                                                    .thenCompose(
+                                                            read -> {
+                                                                captured.complete(
+                                                                        assertInstanceOf(
+                                                                                ZLinkAuthoritySnapshot
+                                                                                        .class,
+                                                                                read));
+                                                                return returnRead.thenApply(
+                                                                        ignored -> read);
+                                                            });
+                                        }
+                                        return result;
+                                    });
+            repositoryField.set(host, observer);
+            var nodesField = host.getClass().getDeclaredField("routeMeshNodesByName");
+            nodesField.setAccessible(true);
+            var nodes =
+                    (java.util.Map<
+                                    String,
+                                    systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkInternalMeshNode>)
+                            nodesField.get(host);
+            var node = nodes.get("cold-test");
+            var parts =
+                    systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
+                            .decodeFrameworkMultipartFrame(
+                                    java.nio.ByteBuffer.wrap(envelope.applicationPayloadFrame()));
+            try {
+                var second =
+                        node.requestInstanceSpot(
+                                        new systems.zlink.framework.runtime.internal.service
+                                                .ZLinkServiceM6BWireCodec.InstanceColdActivation(
+                                                envelope.targetNodeRid(),
+                                                envelope.targetNodeGeneration(),
+                                                spotId,
+                                                "cold-test",
+                                                "cold",
+                                                envelope.descriptorVersion(),
+                                                envelope.deadlineUnixMs()),
+                                        "cold",
+                                        null,
+                                        envelope.metadataFrame(),
+                                        parts,
+                                        Duration.ofSeconds(5))
+                                .toCompletableFuture();
+                var held = captured.get(5, TimeUnit.SECONDS);
+                assertTrue(
+                        new ZLinkServiceAuthorityPayloadCodec()
+                                .decode(held.payload())
+                                .orElseThrow()
+                                .activationRecoveryState()
+                                .isPresent());
+                echoRelease.complete(null);
+                assertEquals(new Echo("first"), first.get(5, TimeUnit.SECONDS));
+                long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (recovery.get(pointer.reference(), () -> false)
+                                .toCompletableFuture()
+                                .get(5, TimeUnit.SECONDS)
+                        instanceof ZLinkRelocationFound) {
+                    assertTrue(
+                            System.nanoTime() < until,
+                            "first terminal must delete the recovery root");
+                    Thread.sleep(10);
+                }
+                returnRead.complete(null);
+                var replies = second.get(5, TimeUnit.SECONDS);
+                try {
+                    assertEquals("{\"value\":\"first\"}", replies.getLast().toUtf8String());
+                } finally {
+                    replies.forEach(systems.zlink.contracts.messaging.Message::close);
+                }
+                assertEquals(1, initialized.get());
+            } finally {
+                echoRelease.complete(null);
+                returnRead.complete(null);
+                repositoryField.set(host, original);
+                parts.forEach(systems.zlink.contracts.messaging.Message::close);
+            }
+        }
+    }
+
     public record Initial(String value) {}
 
     public record Echo(String value) {}
