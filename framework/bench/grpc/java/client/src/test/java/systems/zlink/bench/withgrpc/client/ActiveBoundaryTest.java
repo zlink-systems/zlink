@@ -22,6 +22,7 @@ public final class ActiveBoundaryTest {
         if (metrics.completed() + metrics.errors() + metrics.abandoned() != 3
                 || metrics.completed() != 1
                 || metrics.errors() != 0
+                || metrics.inFlight() != 2
                 || !metrics.errorSummary().isEmpty()) {
             throw new AssertionError(
                     "late terminal entered snapshot: "
