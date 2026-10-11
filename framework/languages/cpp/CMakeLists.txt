@@ -2089,6 +2089,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_application_job_queue.cpp
     "framework-unit;framework-regression;execution;admission")
   target_use_zlink_gtest_main(test_cpp_framework_application_job_queue)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_zlink_framework_test(
+      test_cpp_framework_client_receive_pressure
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_client_receive_pressure.cpp
+      "framework-unit;framework-contract;framework-client-server"
+      unit)
+    target_use_zlink_gtest_main(test_cpp_framework_client_receive_pressure)
+    target_include_directories(test_cpp_framework_client_receive_pressure PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_options(test_cpp_framework_client_receive_pressure PRIVATE
+      "LINKER:--wrap=zlink_socket_set_receive_flow_state")
+  endif()
   target_include_directories(test_cpp_framework_application_job_queue PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
