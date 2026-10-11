@@ -9124,31 +9124,44 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         foreach (var peer in peers)
         {
-            if (!peer.Admitted)
-                continue;
-            var liveness = peer.Liveness;
-            if (liveness is null)
-                continue;
-            if (liveness.IsExpired(now))
+            var activity = RunState(() =>
             {
-                var closed = RunState(() =>
-                    EndRouteAdmissionUnderLock(
+                (RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId) result =
+                    default;
+                if (
+                    !_peersByRid.TryGetValue(peer.RoutingId, out var current)
+                    || !ReferenceEquals(current, peer)
+                    || !current.Admitted
+                    || current.Liveness is not { } liveness
+                )
+                    return result;
+                if (liveness.IsExpired(now))
+                {
+                    var physicalRid = current.PhysicalRoutingId;
+                    result.Closed = EndRouteAdmissionUnderLock(
                         new RouterRoute(peer.RoutingId, peer.RouteGeneration)
-                    )
-                );
-                if (closed is { } closedRid)
-                    Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
-                continue;
-            }
-            if (liveness.TryGetProbe(now, out var probeId))
+                    );
+                    DisconnectTransport(current, physicalRid);
+                }
+                else if (liveness.TryGetProbe(now, out var probeId))
+                {
+                    result.Target = current.PhysicalRoutingId;
+                    result.Generation = current.RouteGeneration;
+                    result.ProbeId = probeId;
+                }
+                return result;
+            });
+            if (activity.Closed is { } closedRid)
+                Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
+            if (activity.ProbeId != 0)
             {
                 SendControl(
-                    peer.PhysicalRoutingId,
-                    RunState(() => peer.RouteGeneration),
+                    activity.Target,
+                    activity.Generation,
                     ServiceWireConstants.Command.LivenessProbe,
                     ZLinkServiceWireCodec.EncodeLiveness(
                         ServiceWireConstants.Command.LivenessProbe,
-                        probeId
+                        activity.ProbeId
                     )
                 );
             }
