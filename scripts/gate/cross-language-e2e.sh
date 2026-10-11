@@ -15,5 +15,5 @@ pkg_hash=$(sha256sum ".artifacts/wsl/nuget/Zlink.${DOTNET_BINDING_VER}.nupkg" | 
 TMPDIR=/dev/shm/zlink-tmp-dotnet flock -w7200 /tmp/zlink-samples-gate.lock flock -w7200 /tmp/zlink-dotnet-gate.lock flock -w7200 /tmp/zlink-node-gate.lock flock -w7200 /tmp/zlink-jvm-gate.lock framework/languages/cpp/cross-language/run_cross_language_smoke.sh > "$LOGS/cpp-all-stage.log" 2>&1; step cpp-all-stage $?
 TMPDIR=/dev/shm/zlink-tmp-node flock -w7200 /tmp/zlink-samples-gate.lock flock -w7200 /tmp/zlink-node-gate.lock flock -w7200 /tmp/zlink-dotnet-gate.lock framework/languages/node/cross-language/run_cross_language_smoke.sh > "$LOGS/node-smoke.log" 2>&1; step node-smoke $?
 TMPDIR=/dev/shm/zlink-tmp-java ZLINK_CPP_CROSS_LANGUAGE_STAGE=java-cross flock -w7200 /tmp/zlink-samples-gate.lock flock -w7200 /tmp/zlink-jvm-gate.lock flock -w7200 /tmp/zlink-node-gate.lock flock -w7200 /tmp/zlink-dotnet-gate.lock framework/languages/cpp/cross-language/run_cross_language_smoke.sh > "$LOGS/java-cross.log" 2>&1; step java-cross $?
-echo "XLANG_DONE $TAG"; awk '$2!=0{f=1; print "FAILED:", $1} END{exit f}' "$LOGS/results.txt" && echo "ALL GREEN"
-touch "$LOGS/xlang.done"
+echo "XLANG_DONE $TAG"
+finish_gate xlang.done

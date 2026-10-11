@@ -27,3 +27,12 @@ dotnet_env() {
   export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH="$CORE_LIB" ZLINK_LOCAL_PACKAGE_ROOT="$Z/.artifacts/wsl" UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
   local h; h=$(sha256sum "$Z/.artifacts/wsl/nuget/Zlink.$DOTNET_BINDING_VER.nupkg" | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${h:0:16}; mkdir -p "$TMPDIR"
 }
+
+# Prints the failed steps, marks the gate finished, and returns non-zero when any step failed.
+# The marker is written either way so a waiter can tell a finished gate from a running one.
+finish_gate() {
+  local status=0
+  awk '$2!=0{f=1; print "FAILED:", $1} END{exit f}' "$LOGS/results.txt" && echo "ALL GREEN" || status=1
+  touch "$LOGS/$1"
+  return "$status"
+}

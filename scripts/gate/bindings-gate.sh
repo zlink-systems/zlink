@@ -13,5 +13,5 @@ run java     bindings/java   env ZLINK_CORE_SOURCE=local ZLINK_CORE_INCLUDE_DIR=
 run node     bindings/node   env ZLINK_CORE_SOURCE=local ZLINK_LIBRARY_PATH="$LIB/libzlink.so.$CORE_VER" LD_LIBRARY_PATH="$LIB" bash tests/run_tests.sh
 run python   bindings/python env ZLINK_CORE_SOURCE=local ZLINK_LIBRARY_PATH="$LIB/libzlink.so" PYTHON_EXECUTABLE="${ZLINK_PYTHON:-/tmp/zlink-python-r3-venv/bin/python}" bash tests/run_tests.sh
 run rust     bindings/rust   env LD_LIBRARY_PATH="$LIB" bash tests/run_tests.sh
-echo "BINDINGS_DONE $TAG"; awk '$2!=0{f=1; print "FAILED:", $1} END{exit f}' "$LOGS/results.txt" && echo "ALL GREEN"
-touch "$LOGS/bindings.done"
+echo "BINDINGS_DONE $TAG"
+finish_gate bindings.done
