@@ -148,7 +148,9 @@ local_admission_host (const std::shared_ptr<queue_t> &queue)
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
                               .advertised_endpoint = "tcp://127.0.0.1:0"},
-               .application_jobs = queue},
+               .application_jobs = queue,
+               .runtime_failures =
+                 std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
       .object_stable_types = {"framework.spot", "player"}});
     native->configure_spot_route_fence_resolver (
       [] (auto, auto, auto) -> zlink::framework::task_t<std::optional<host::route_fence_t>> {

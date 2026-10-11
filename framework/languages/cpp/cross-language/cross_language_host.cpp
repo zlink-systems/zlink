@@ -345,6 +345,7 @@ int run_message_follow_host ()
     options.descriptor.security_identity = "default";
     options.descriptor.protocol_capabilities = {"framework-service-v12",
                                                 runtime::protocol::required_capability};
+    options.runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ();
 
     raw_mesh_node_owner_t owner (std::move (options));
     owner.start ();

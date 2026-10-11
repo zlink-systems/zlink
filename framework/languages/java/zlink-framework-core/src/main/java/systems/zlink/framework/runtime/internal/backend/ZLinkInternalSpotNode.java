@@ -457,6 +457,15 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
 
     void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout);
 
+    /**
+     * Completes when every Instance activation this node accepted has reached its terminal,
+     * including the first message's Store cleanup. Host shutdown waits for it inside its own drain
+     * deadline before it closes Spots.
+     */
+    default CompletionStage<Void> instanceActivationTerminals() {
+        return CompletableFuture.completedFuture(null);
+    }
+
     record BoundSessionRoute(
             RoutingId sessionOwnerNodeRid,
             long sessionOwnerNodeGeneration,

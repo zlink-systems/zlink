@@ -1908,8 +1908,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     public CompletionStage<Void> closeAsync() {
         beginClose();
-        return spotLifecycle
-                .closeAllAsync()
+        // Accepted Instance activations finish their first-message Store cleanup before Spots
+        // close; the host drain stage bounds this wait with its deadline.
+        return CompletableFuture.allOf(
+                        nodes.stream()
+                                .map(
+                                        node ->
+                                                node.instanceActivationTerminals()
+                                                        .toCompletableFuture())
+                                .toArray(CompletableFuture[]::new))
+                .thenCompose(ignored -> spotLifecycle.closeAllAsync())
                 .handle(
                         (ignored, failure) -> {
                             CompletionStage<Void> closing = CompletableFuture.completedFuture(null);

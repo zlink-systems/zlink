@@ -2189,13 +2189,15 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
     node->channel_runtime->serializers = &serializers;
 
     const auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
-      .mesh = {.descriptor = {
-                 .mesh_name = "bound-session-dispatch",
-                 .node_routing_id =
-                   zlink::routing_id_t::from (std::string ("bound-session-target")).to_bytes (),
-                 .lifecycle_generation = 7,
-                 .descriptor_revision = 1,
-                 .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+      .mesh = {.descriptor =
+                 {.mesh_name = "bound-session-dispatch",
+                  .node_routing_id =
+                    zlink::routing_id_t::from (std::string ("bound-session-target")).to_bytes (),
+                  .lifecycle_generation = 7,
+                  .descriptor_revision = 1,
+                  .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures =
+                 std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     node->native_node = native;
 
     auto spot = std::make_shared<spot_context_state_t> ();
@@ -3603,7 +3605,9 @@ int reconcile_deadline_fast_fails_without_target_commit (
                                 zlink::routing_id_t::from (std::string ("actor-a")).to_bytes (),
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
-                              .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures =
+                 std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     host::reply_token_t local_reply;
     local_reply.host = std::move (reply_host);
     local_reply.local_reply = [&local_reply_calls, &local_reply_was_unavailable] (
@@ -5537,7 +5541,9 @@ int parked_request_reply_case (const std::string &requester_rid,
                                 zlink::routing_id_t::from (std::string ("actor-a")).to_bytes (),
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
-                              .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures =
+                 std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     host::receive_record_t record{.kind = host::record_kind_t::actor_request,
                                   .domain = host::ready_domain_t::application};
     record.operation_id = host::call_id_t{41, 43};
@@ -5742,7 +5748,9 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
                                 zlink::routing_id_t::from (std::string ("actor-a")).to_bytes (),
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
-                              .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures =
+                 std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     node->native_node = local_host;
 
     const auto actor = test_actor_ref ("actor-a", "player", "moved-actor", 1);

@@ -3254,6 +3254,8 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<memory_authority_store_t> ();
     host::host_options_t options;
+    options.mesh.runtime_failures =
+      std::make_shared<framework::runtime::runtime_failure_collector_t> ();
     options.mesh.descriptor = {"production-relocation-mesh",
                                text_bytes ("settlement-target"),
                                1,
@@ -3277,14 +3279,14 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
     target.configure_session_route_owner (
       [] { return std::optional<framework::location_owner_token_t>{{"target-owner", 9}}; });
     target.start ();
-    mesh::raw_mesh_node_owner_t source (
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
       mesh::raw_mesh_node_options_t{{"production-relocation-mesh",
                                      text_bytes ("settlement-source"),
                                      1,
                                      1,
                                      "tcp://127.0.0.1:0",
                                      {},
-                                     mesh::service_node_state_t::preparing}});
+                                     mesh::service_node_state_t::preparing}}));
     source.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
     const auto target_descriptor = target.transport ().topology ().local_descriptor ();

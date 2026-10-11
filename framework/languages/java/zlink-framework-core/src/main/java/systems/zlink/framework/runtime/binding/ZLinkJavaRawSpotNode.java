@@ -1151,6 +1151,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         owner.close();
     }
 
+    @Override
+    public CompletionStage<Void> instanceActivationTerminals() {
+        return instanceSpots.terminals();
+    }
+
     void rekeySpot(ZLinkJavaRawSpot spot, String previous, String current) {
         if (previous.equals(current)) {
             return;
@@ -2448,8 +2453,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                             () ->
                                                                     instanceSpots.completed(
                                                                             cold.stableType(),
-                                                                            header),
-                                                            failure)))
+                                                                            header))))
                     .whenComplete(
                             (activation, activationFailure) -> {
                                 if (activationFailure != null) {
@@ -2595,14 +2599,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         }
     }
 
-    private static void completeRemoteInstanceHandler(
+    private static CompletionStage<Void> completeRemoteInstanceHandler(
             ZLinkJavaRawSpot target,
             ZLinkBackendReceived received,
-            java.util.function.Supplier<CompletionStage<Void>> completion,
-            Consumer<Throwable> failure) {
+            java.util.function.Supplier<CompletionStage<Void>> completion) {
         var admitted = new CompletableFuture<Void>();
         CompletionStage<Void> handler = target.enqueueRoute(received, admitted);
-        admitted.thenCompose(
+        return admitted.thenCompose(
                         admission ->
                                 handler.handle(
                                         (ignored, handlerFailure) ->
@@ -2619,11 +2622,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                                                         .<Void>
                                                                                                 failedFuture(
                                                                                                         handlerFailure))))
-                .thenCompose(java.util.function.Function.identity())
-                .whenComplete(
-                        (ignored, handlerFailure) -> {
-                            if (handlerFailure != null) failure.accept(handlerFailure);
-                        });
+                .thenCompose(java.util.function.Function.identity());
     }
 
     private static void closeRemoteInstancePayload(List<Message> parts) {
