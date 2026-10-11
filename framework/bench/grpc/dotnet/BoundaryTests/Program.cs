@@ -5,6 +5,24 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using WithGrpcBench.Client;
 using WithGrpcBench.Shared;
 
+var expectedNowNs = (long)((Int128)Stopwatch.GetTimestamp() * 1_000_000_000 / Stopwatch.Frequency);
+var actualNowNs = BenchMetricHeaders.NowNs();
+if (actualNowNs < expectedNowNs || actualNowNs - expectedNowNs > 1_000_000_000)
+    throw new InvalidOperationException("Nanosecond timestamp overflowed at the current uptime.");
+
+foreach (
+    var ticks in new[]
+    {
+        0L,
+        long.MaxValue / 1_000_000_000,
+        long.MaxValue / 1_000_000_000 + 1,
+        long.MaxValue,
+    }
+)
+{
+    if (BenchMetricHeaders.NowNs(ticks, 1_000_000_000) != ticks)
+        throw new InvalidOperationException($"Nanosecond boundary conversion failed: {ticks}");
+}
 var sourceMetrics = new SourceMetrics(10);
 sourceMetrics.Reset(Stopwatch.GetTimestamp() + Stopwatch.Frequency);
 sourceMetrics.Complete(sourceMetrics.Begin(), true);
