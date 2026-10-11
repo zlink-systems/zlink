@@ -26,7 +26,6 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
@@ -269,20 +268,11 @@ final class ZLinkSameTargetActivationTest {
         var first = registry.activate("spot", "room", 1, Long.MAX_VALUE, spot -> firstTerminal);
         var joined = registry.activate("spot", "room", 1).toCompletableFuture();
         assertTrue(joined.isDone(), "Ready join waited for the earlier Store terminal");
-        var closingEntered = new CompletableFuture<Void>();
-        var closing =
-                CompletableFuture.runAsync(
-                        () -> {
-                            closingEntered.complete(null);
-                            registry.closeAll();
-                        });
-        try {
-            closingEntered.get(2, TimeUnit.SECONDS);
-            assertThrows(TimeoutException.class, () -> closing.get(100, TimeUnit.MILLISECONDS));
-        } finally {
-            firstTerminal.complete(null);
-            closing.get(2, TimeUnit.SECONDS);
-        }
+        var terminals = registry.terminals().toCompletableFuture();
+        assertFalse(terminals.isDone(), "shutdown did not wait for the earlier Store terminal");
+        firstTerminal.complete(null);
+        terminals.get(2, TimeUnit.SECONDS);
+        registry.closeAll();
         assertSame(first.toCompletableFuture().join().spot(), joined.join().spot());
     }
 

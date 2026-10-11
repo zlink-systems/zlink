@@ -108,23 +108,12 @@ final class ZLinkInstanceActivationShutdownTest {
                             ignored -> {},
                             failure::complete));
             cleanupEntered.get(5, TimeUnit.SECONDS);
-            var closingEntered = new CompletableFuture<Void>();
-            var closing =
-                    CompletableFuture.runAsync(
-                            () -> {
-                                closingEntered.complete(null);
-                                spots.close();
-                                assertTrue(
-                                        cleanupFinished.isDone(),
-                                        "close completed before Store cleanup");
-                            });
-            try {
-                closingEntered.get(5, TimeUnit.SECONDS);
-                assertThrows(TimeoutException.class, () -> closing.get(100, TimeUnit.MILLISECONDS));
-            } finally {
-                cleanupRelease.complete(null);
-                closing.get(5, TimeUnit.SECONDS);
-            }
+            var terminals = spots.instanceActivationTerminals().toCompletableFuture();
+            assertFalse(terminals.isDone(), "shutdown can close before Store cleanup");
+            cleanupRelease.complete(null);
+            terminals.get(5, TimeUnit.SECONDS);
+            assertTrue(cleanupFinished.isDone(), "terminal completed before Store cleanup");
+            spots.close();
             assertFalse(failure.isDone());
         }
     }

@@ -1127,7 +1127,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     @Override
     public void close() {
-        instanceSpots.closeAll();
         spots.values().forEach(ZLinkJavaRawSpot::close);
         spots.clear();
         actors.clear();
@@ -1148,7 +1147,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         spotAuthorities.clear();
         actorAuthorities.clear();
         instanceAuthorities.clear();
+        instanceSpots.closeAll();
         owner.close();
+    }
+
+    @Override
+    public CompletionStage<Void> instanceActivationTerminals() {
+        return instanceSpots.terminals();
     }
 
     void rekeySpot(ZLinkJavaRawSpot spot, String previous, String current) {

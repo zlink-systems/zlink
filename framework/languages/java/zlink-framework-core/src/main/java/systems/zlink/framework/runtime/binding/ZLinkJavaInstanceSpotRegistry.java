@@ -286,12 +286,14 @@ final class ZLinkJavaInstanceSpotRegistry {
         return true;
     }
 
+    CompletionStage<Void> terminals() {
+        return CompletableFuture.allOf(
+                activations.values().stream()
+                        .map(operation -> operation.terminal)
+                        .toArray(CompletableFuture[]::new));
+    }
+
     void closeAll() {
-        CompletableFuture.allOf(
-                        activations.values().stream()
-                                .map(operation -> operation.terminal)
-                                .toArray(CompletableFuture[]::new))
-                .join();
         activations
                 .values()
                 .forEach(
