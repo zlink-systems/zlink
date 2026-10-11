@@ -203,7 +203,6 @@ def _complete_from_target_stats(source: Cell) -> None:
             )
 
 
-
 def read_run(run_dir: str) -> tuple[list[Cell], list[str]]:
     """Read every ``<run_dir>/*/results.json`` into normalized cells plus notes."""
     run = os.path.basename(os.path.normpath(run_dir))

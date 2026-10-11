@@ -87,7 +87,7 @@ SUMMARY_G5_PASS = {
     ("zlink-framework-dotnet", "send-saturation", 4096): 2.4,
     ("grpc-c", "request-window", 1024): 3.1, ("grpc-c", "request-window", 4096): 2.0,
     ("grpc-c", "send-saturation", 1024): 2.8, ("grpc-c", "send-saturation", 4096): 2.9,
-    ("zlink-c", "request-window", 1024): 5.6, ("zlink-c", "send-saturation", 4096): 1.6,
+    ("zlink-c", "request-window", 1024): 5.6,
 }
 SUMMARY_G5_FAIL = {
     ("zlink-framework-dotnet", "request-window", 1024): 29.6,
@@ -95,13 +95,21 @@ SUMMARY_G5_FAIL = {
     ("zlink-c", "request-window", 4096): 25.7,
     ("zlink-c", "request-serial", 1024): 23.5,
     ("zlink-c", "request-serial", 4096): 14.6,
-    ("zlink-c", "send-saturation", 1024): 20.9,
     ("grpc-c", "request-serial", 1024): 173.8,
     ("grpc-c", "request-serial", 4096): 165.0,
 }
 
 
 class AcceptanceTest(unittest.TestCase):
+    def test_failed_c_send_runs_are_correctness_evidence(self):
+        # README 5.2 excludes nonzero errors from throughput comparison.
+        # Preserve the historical fixture errors instead of making those runs valid.
+        for size in (1024, 4096):
+            row = self.row("zlink-c", "send-saturation", size)
+            self.assertEqual(row.run_count, 0)
+            self.assertIsNone(row.throughput)
+            self.assertEqual(len(row.excluded_runs), 3)
+
     @classmethod
     def setUpClass(cls):
         cls.run_set = read_runs(RUNS)

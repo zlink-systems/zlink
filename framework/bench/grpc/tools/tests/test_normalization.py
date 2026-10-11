@@ -40,6 +40,19 @@ def run_set_of(*cells):
 
 
 class ExclusionTest(unittest.TestCase):
+    def test_terminal_failures_do_not_enter_throughput_judgement(self):
+        for diagnostic in ({"abandoned": 159}, {"extra": {"errors": 88552}},
+                           {"target_errors": 1}):
+            with self.subTest(diagnostic=diagnostic):
+                failed = cell("zlink-dotnet", "request-backpressure", 4096,
+                              "failed", 5700.0, **diagnostic)
+                self.assertTrue(failed.excluded_from_aggregation)
+                self.assertEqual(run_set_of(failed).for_key(failed.key), [])
+        healthy = cell("zlink-dotnet", "request-backpressure", 4096,
+                       "healthy", 5700.0, abandoned=0, extra={"errors": 0},
+                       target_errors=0)
+        self.assertFalse(healthy.excluded_from_aggregation)
+
     def test_spread_is_the_widest_run_relative_to_the_median(self):
         self.assertAlmostEqual(spread_percent([387.9, 310.5, 230.8]), 25.66, places=1)
         self.assertIsNone(spread_percent([1.0]))
