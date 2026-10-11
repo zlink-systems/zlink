@@ -15,21 +15,19 @@ import systems.zlink.bench.withgrpc.shared.BenchMetricHeader
 /**
  * `grpc-kotlin` client: the grpc-kotlin coroutine stub, default channel configuration.
  *
- * <p>spec section 8.1 requires the coroutine stub for kotlin and allows the grpc-java
- * blocking stub only when the coroutine stub cannot be used, with the reason recorded.
- * It can be used here, so it is: `BenchServiceCoroutineStub.echo` and `.command` are
- * suspend functions, the same shape as the suspend calls the ZLink rows make.
+ * <p>spec section 8.1 requires the coroutine stub for kotlin and allows the grpc-java blocking stub
+ * only when the coroutine stub cannot be used, with the reason recorded. It can be used here, so it
+ * is: `BenchServiceCoroutineStub.echo` and `.command` are suspend functions, the same shape as the
+ * suspend calls the ZLink rows make.
  *
- * <p>The server is the java row's grpc-netty-shaded server on the kotlin port band. gRPC
- * is language-neutral on the wire and spec section 8.2 asks for the server configuration to
- * be recorded, not for it to be rewritten per language.
+ * <p>The server is the java row's grpc-netty-shaded server on the kotlin port band. gRPC is
+ * language-neutral on the wire and spec section 8.2 asks for the server configuration to be
+ * recorded, not for it to be rewritten per language.
  */
-class GrpcKotlinStack(options: BenchOptions, private val scope: CoroutineScope) :
-    AutoCloseable {
+class GrpcKotlinStack(options: BenchOptions, private val scope: CoroutineScope) : AutoCloseable {
 
-    private val channel: ManagedChannel = ManagedChannelBuilder.forTarget(options.grpcUrl)
-        .usePlaintext()
-        .build()
+    private val channel: ManagedChannel =
+        ManagedChannelBuilder.forTarget(options.targetEndpoint).usePlaintext().build()
     private val stub = BenchServiceGrpcKt.BenchServiceCoroutineStub(channel)
     private val runId = options.runId
 
@@ -38,9 +36,9 @@ class GrpcKotlinStack(options: BenchOptions, private val scope: CoroutineScope) 
             val reply = stub.echo(payload(payloadSize, phase, sequence))
             // G2: the reply's 29-byte header is validated, not assumed.
             val decoded = BenchMetricHeader.decode(reply.body.asReadOnlyByteBuffer())
-            check(
-                BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence),
-            ) { "grpc-kotlin echo reply header mismatch" }
+            check(BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
+                "grpc-kotlin echo reply header mismatch"
+            }
         }
     }
 
@@ -57,8 +55,8 @@ class GrpcKotlinStack(options: BenchOptions, private val scope: CoroutineScope) 
         BenchPayload.newBuilder()
             .setBody(
                 ByteString.copyFrom(
-                    BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence),
-                ),
+                    BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)
+                )
             )
             .build()
 

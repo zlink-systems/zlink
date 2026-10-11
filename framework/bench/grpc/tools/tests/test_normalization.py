@@ -40,6 +40,19 @@ def run_set_of(*cells):
 
 
 class ExclusionTest(unittest.TestCase):
+    def test_terminal_failures_do_not_enter_throughput_judgement(self):
+        for diagnostic in ({"abandoned": 159}, {"extra": {"errors": 88552}},
+                           {"target_errors": 1}):
+            with self.subTest(diagnostic=diagnostic):
+                failed = cell("zlink-dotnet", "request-backpressure", 4096,
+                              "failed", 5700.0, **diagnostic)
+                self.assertTrue(failed.excluded_from_aggregation)
+                self.assertEqual(run_set_of(failed).for_key(failed.key), [])
+        healthy = cell("zlink-dotnet", "request-backpressure", 4096,
+                       "healthy", 5700.0, abandoned=0, extra={"errors": 0},
+                       target_errors=0)
+        self.assertFalse(healthy.excluded_from_aggregation)
+
     def test_spread_is_the_widest_run_relative_to_the_median(self):
         self.assertAlmostEqual(spread_percent([387.9, 310.5, 230.8]), 25.66, places=1)
         self.assertIsNone(spread_percent([1.0]))
@@ -430,8 +443,8 @@ class RunLayoutTest(unittest.TestCase):
             path.write_text(text, encoding="utf-8")
         return run
 
-    def test_a_contaminated_cell_with_no_metrics_is_still_reported(self):
-        """FB-008: a contaminated cell was never measured but must stay visible."""
+    def test_a_contaminated_cell_with_no_rates_is_rejected(self):
+        """The producer must write rates even for an excluded cell."""
         payload = {
             "schema": "with-grpc-cell-v1",
             "cells": [
@@ -446,10 +459,8 @@ class RunLayoutTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             run = self._run(directory, {"zlink-node-request-serial-4096/results.json": json.dumps(payload)})
-            cells, _ = read_run(str(run))
-        self.assertEqual(len(cells), 1)
-        self.assertTrue(cells[0].contaminated)
-        self.assertIsNone(cells[0].throughput_per_second)
+            with self.assertRaisesRegex(ReportError, "throughput_per_second"):
+                read_run(str(run))
 
     def test_a_run_with_only_report_text_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

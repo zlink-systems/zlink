@@ -1,6 +1,7 @@
 """Contract checks for the shared server-driven runner steps."""
 
 import json
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,50 @@ COMMON = Path(__file__).resolve().parents[2] / "runner_common.sh"
 
 
 class RunnerCommonTest(unittest.TestCase):
+    def test_common_warmup_is_two_seconds(self):
+        result = subprocess.run(["bash", "-c", 'source "$1"; bench_init c grpc-c request-serial 1024; printf "%s" "$WARMUP_SECONDS"',
+                                 "_", str(COMMON)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "2")
+
+    def check_port(self, port):
+        return subprocess.run(["bash", "-c", 'source "$1"; check_ports_free "$2" "$2"',
+                               "_", str(COMMON), str(port)], capture_output=True).returncode
+
+    def test_bind_probe_accepts_free_port_and_rejects_listener(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+            listener.listen()
+            self.assertNotEqual(0, self.check_port(port))
+        self.assertEqual(0, self.check_port(port))
+
+    def test_bind_probe_rejects_listener_on_another_loopback_address(self):
+        # gRPC listeners bind all interfaces; a 127.0.0.1-only probe misses this listener.
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.2", 0))
+            listener.listen()
+            self.assertNotEqual(0, self.check_port(listener.getsockname()[1]))
+
+    def test_bind_probe_rejects_time_wait_without_reuse(self):
+        # The active closer leaves TIME_WAIT without SO_REUSEADDR. A later
+        # SO_REUSEADDR listener still cannot bind that local port.
+        with socket.socket() as listener, socket.socket() as client:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            client.connect(listener.getsockname())
+            connection, _ = listener.accept()
+            port = client.getsockname()[1]
+            client.shutdown(socket.SHUT_WR)
+            connection.recv(1)
+            connection.close()
+            client.recv(1)
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            with self.assertRaises(OSError):
+                probe.bind(("127.0.0.1", port))
+        self.assertNotEqual(0, self.check_port(port))
+
     def test_node_cell_without_submitted_still_checks_target_count(self):
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.json"
@@ -106,6 +151,7 @@ trigger_phase() {
   return 0
 }
 wait_for_idle() { return 0; }
+curl() { printf '%s\\n' '{"currentInFlight":0}'; }
 calls=0
 settle_and_capture() {
   calls=$((calls + 1))
@@ -129,6 +175,25 @@ bench_run_cell trigger source target run second grpc-java send-saturation 1024 1
             self.assertNotIn("contaminated", second)
             self.assertEqual(1, second["target_stats"]["received"])
 
+    def test_warmup_terminal_bound_records_abandoned_without_active(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = Path(directory) / "results.json"
+            script = '''
+source "$1"
+trigger_phase() { [[ "$6" == warmup ]]; }
+wait_for_idle() { return 0; }
+curl() { printf '%s\\n' '{"currentInFlight":7}'; }
+settle_and_capture() { return 1; }
+bench_run_cell trigger source target run cell grpc-java request-backpressure 1024 2000 "$2" /dev/null
+'''
+            subprocess.run(["bash", "-c", script, "_", str(COMMON), str(result)],
+                           check=True, capture_output=True, text=True)
+            cell = json.loads(result.read_text(encoding="utf-8"))["cells"][0]
+            self.assertTrue(cell["contaminated"])
+            self.assertEqual(cell["warmup_abandoned"], 7)
+            self.assertEqual(cell["throughput_per_second"], 0)
+            self.assertEqual(cell["bandwidth_mb_s"], 0)
+
     def test_warmup_bound_excludes_current_cell(self):
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.json"
@@ -136,6 +201,7 @@ bench_run_cell trigger source target run second grpc-java send-saturation 1024 1
 source "$1"
 trigger_phase() { [[ "$6" == warmup ]]; }
 wait_for_idle() { return 0; }
+curl() { printf '%s\\n' '{"currentInFlight":0}'; }
 settle_and_capture() { SETTLE_BOUND_HIT=true; SETTLE_MS=1; }
 bench_run_cell trigger source target run cell grpc-java request-serial 1024 1000 "$2" /dev/null
 '''

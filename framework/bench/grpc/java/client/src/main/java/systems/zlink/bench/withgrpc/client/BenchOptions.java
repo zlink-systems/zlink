@@ -2,9 +2,10 @@
 
 package systems.zlink.bench.withgrpc.client;
 
-import java.util.List;
 import systems.zlink.bench.withgrpc.shared.Args;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
+
+import java.util.List;
 
 /** Exact source-A cell configuration supplied by the runner. */
 public final class BenchOptions {
@@ -15,12 +16,7 @@ public final class BenchOptions {
     public final int sendConcurrency;
     public final int latencySampleLimit;
     public final double warmupSeconds;
-    public final double warmupSegmentSeconds;
-    public final int warmup;
-    public final double durationSeconds;
-    public final int commandSettleMs;
     public final int drainBoundMs;
-    public final int windowSettleMs;
     public final int requestTimeoutMs;
     public final int routeReadyMs;
     public final String triggerUrl;
@@ -28,13 +24,6 @@ public final class BenchOptions {
     public final String targetEndpoint;
     public final String targetCommandEndpoint;
     public final String targetStatsUrl;
-    public final String grpcUrl;
-    public final String grpcStatsUrl;
-    public final String zlinkEndpoint;
-    public final String zlinkStatsUrl;
-    public final String zlinkRawEndpoint;
-    public final String zlinkRawStatsUrl;
-    public final String zlinkRawCommandEndpoint;
     public final String rawSocket;
     public final String runIdText;
     public final String cellId;
@@ -50,13 +39,8 @@ public final class BenchOptions {
         requestWindow = Args.integer(argv, "--request-window", 100);
         sendConcurrency = Args.integer(argv, "--send-concurrency", 8);
         latencySampleLimit = Args.integer(argv, "--latency-sample-limit", 200_000);
-        warmupSeconds = Args.number(argv, "--warmup-seconds", 20.0);
-        warmupSegmentSeconds = Args.number(argv, "--warmup-segment-seconds", 2.0);
-        warmup = Args.integer(argv, "--warmup", 0);
-        durationSeconds = Args.number(argv, "--duration-seconds", 5.0);
-        commandSettleMs = Args.integer(argv, "--command-settle-ms", 200);
+        warmupSeconds = Args.number(argv, "--warmup-seconds", 2.0);
         drainBoundMs = Args.integer(argv, "--drain-bound-ms", 30_000);
-        windowSettleMs = drainBoundMs;
         requestTimeoutMs = Args.integer(argv, "--request-timeout-ms", 30_000);
         routeReadyMs = Args.integer(argv, "--route-ready-ms", 30_000);
         triggerUrl = Args.value(argv, "--trigger-url", "");
@@ -64,13 +48,6 @@ public final class BenchOptions {
         targetEndpoint = Args.value(argv, "--target-endpoint", "");
         targetCommandEndpoint = Args.value(argv, "--target-command-endpoint", "");
         targetStatsUrl = Args.value(argv, "--target-stats-url", "");
-        grpcUrl = targetEndpoint;
-        grpcStatsUrl = targetStatsUrl;
-        zlinkEndpoint = targetEndpoint;
-        zlinkStatsUrl = targetStatsUrl;
-        zlinkRawEndpoint = targetEndpoint;
-        zlinkRawStatsUrl = targetStatsUrl;
-        zlinkRawCommandEndpoint = targetCommandEndpoint;
         rawSocket = Args.value(argv, "--raw-socket", "router");
         runIdText = Args.value(argv, "--run-id", "");
         cellId = Args.value(argv, "--cell-id", "");
@@ -78,13 +55,17 @@ public final class BenchOptions {
         output = Args.value(argv, "--output", "log/latest");
         reportFile = Args.value(argv, "--report-file", "report.txt");
 
-        if (!List.of("request-serial", "request-window", "request-backpressure",
-            "send-saturation").contains(scenario)) {
+        if (!List.of("request-serial", "request-window", "request-backpressure", "send-saturation")
+                .contains(scenario)) {
             throw new IllegalArgumentException("unknown scenario: " + scenario);
         }
-        if (payload < BenchMetricHeader.HEADER_SIZE || requestWindow != 100
-            || sendConcurrency != 8 || latencySampleLimit <= 0 || drainBoundMs != 30_000
-            || requestTimeoutMs != 30_000 || routeReadyMs != 30_000) {
+        if (payload < BenchMetricHeader.HEADER_SIZE
+                || requestWindow != 100
+                || sendConcurrency != 8
+                || latencySampleLimit <= 0
+                || drainBoundMs != 30_000
+                || requestTimeoutMs != 30_000
+                || routeReadyMs != 30_000) {
             throw new IllegalArgumentException("fixed benchmark options are invalid");
         }
         if (!"router".equals(rawSocket)) {

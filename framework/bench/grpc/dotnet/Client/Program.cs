@@ -1,8 +1,7 @@
 using System.Diagnostics;
 using System.Net;
-using System.Net.Http.Json;
-using System.Runtime.InteropServices;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Google.Protobuf;
@@ -21,529 +20,60 @@ AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport
 
 var options = BenchOptions.Parse(args);
 options.Validate();
-ConfigureThreadPool(options.SendConcurrency);
+BenchMeasurement.ConfigureThreadPool(options.SendConcurrency);
 Directory.CreateDirectory(options.Output);
 
 await using var transport = await BenchTransport.CreateAsync(options);
 var metrics = new SourceMetrics(options.LatencySampleLimit);
+long warmupAbandoned = 0;
 BenchPhaseController? controller = null;
 controller = new BenchPhaseController(
     () => transport.Ready,
-    metrics.Snapshot,
+    () => metrics.Snapshot(),
     async (request, cancellationToken) =>
     {
         options.Validate(request);
+        metrics = new SourceMetrics(options.LatencySampleLimit);
+        var result = await BenchMeasurement.RunActiveAsync(
+            transport,
+            metrics,
+            options,
+            request,
+            cancellationToken
+        );
         if (request.phase == "warmup")
         {
-            await RunWarmupAsync(transport, options, request, cancellationToken);
+            warmupAbandoned = result.Abandoned;
             return;
         }
 
-        var result = await RunActiveAsync(transport, metrics, options, request, cancellationToken);
-        await WriteResultAsync(options, controller!.LastTrigger!, result);
-    });
+        await WriteResultAsync(
+            options,
+            controller!.LastTrigger!,
+            result with
+            {
+                WarmupAbandoned = warmupAbandoned,
+            }
+        );
+    }
+);
 
 var builder = BenchHttpApplication.Builder(options.TriggerUrl, options.StatsUrl);
 var app = builder.Build();
 BenchHttpApplication.MapSource(app, options.TriggerUrl, options.StatsUrl, controller);
 await app.RunAsync();
 
-static void ConfigureThreadPool(int sendConcurrency)
-{
-    ThreadPool.GetMinThreads(out var workers, out var completionPorts);
-    ThreadPool.SetMinThreads(
-        Math.Max(workers, sendConcurrency + Environment.ProcessorCount * 2),
-        completionPorts);
-}
-
-static async Task RunWarmupAsync(
-    IBenchTransport transport,
-    BenchOptions options,
-    BenchTriggerRequest trigger,
-    CancellationToken stopping)
-{
-    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
-    timeout.CancelAfter(options.Timeout);
-    var runId = HeaderRunId(trigger.runId);
-    for (var index = 0; index < options.Warmup; index++)
-    {
-        var payload = BenchMetricHeaders.CreatePayload(
-            trigger.payloadBytes,
-            runId,
-            BenchPhase.Warmup,
-            (ulong)index);
-        if (trigger.pattern == "send-saturation")
-        {
-            await transport.DriveAsync(
-                transport.SendAsync(index % trigger.sendConcurrency, payload, timeout.Token).AsTask());
-        }
-        else
-        {
-            var request = transport.RequestAsync(0, payload, timeout.Token).AsTask();
-            await transport.DriveAsync(request);
-            var reply = await request;
-            ValidateReply(reply, runId, BenchPhase.Warmup, trigger.payloadBytes, (ulong)index);
-        }
-    }
-}
-
-static async Task<BenchResult> RunActiveAsync(
-    IBenchTransport transport,
-    SourceMetrics metrics,
-    BenchOptions options,
-    BenchTriggerRequest trigger,
-    CancellationToken stopping)
-{
-    using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(stopping);
-    operationCancellation.CancelAfter(options.Timeout);
-    using var adminCancellation = CancellationTokenSource.CreateLinkedTokenSource(stopping);
-    adminCancellation.CancelAfter(options.Timeout);
-    using var http = new HttpClient { Timeout = options.Timeout };
-    using (var reset = await http.PostAsync($"{options.TargetStatsUrl}/bench/reset", null, adminCancellation.Token))
-    {
-        reset.EnsureSuccessStatusCode();
-    }
-
-    metrics.Reset();
-    var resources = ResourceSample.Start();
-    var deadline = Stopwatch.GetTimestamp()
-        + checked((long)(Stopwatch.Frequency * (trigger.durationMs / 1000.0)));
-    var send = trigger.pattern == "send-saturation";
-    var targetAtClose = send
-        ? CaptureTargetAtDeadlineAsync(http, options.TargetStatsUrl, deadline, adminCancellation.Token)
-        : null;
-    var runId = HeaderRunId(trigger.runId);
-    var next = new Sequence();
-
-    switch (trigger.pattern)
-    {
-        case "request-serial":
-            await RunRequestWorkersAsync(
-                transport, metrics, trigger, runId, next, deadline, 1, 0, operationCancellation.Token);
-            break;
-        case "request-window":
-            await RunRequestWorkersAsync(
-                transport,
-                metrics,
-                trigger,
-                runId,
-                next,
-                deadline,
-                trigger.requestWindow,
-                0,
-                operationCancellation.Token);
-            break;
-        case "request-backpressure":
-            if (transport is RawBenchTransport raw)
-            {
-                await RunRawRequestBackpressureAsync(
-                    raw, metrics, trigger, runId, next, deadline, operationCancellation,
-                    options.DrainBoundMs);
-            }
-            else
-            {
-                await RunRequestBackpressureAsync(
-                    transport, metrics, trigger, runId, next, deadline, operationCancellation,
-                    options.DrainBoundMs);
-            }
-            break;
-        case "send-saturation":
-            await RunSendWorkersAsync(
-                transport,
-                metrics,
-                trigger,
-                runId,
-                next,
-                deadline,
-                trigger.sendConcurrency,
-                operationCancellation.Token);
-            break;
-        default:
-            throw new InvalidOperationException($"Unsupported pattern {trigger.pattern}.");
-    }
-
-    var elapsedSeconds = trigger.durationMs / 1000.0;
-    var sourceResources = resources.Finish();
-    var receivedAtClose = targetAtClose is null ? (long?)null : (await targetAtClose).Received;
-    var target = await http.GetFromJsonAsync<BenchServerSnapshot>(
-                     $"{options.TargetStatsUrl}/bench/stats",
-                     adminCancellation.Token)
-                 ?? BenchServerSnapshot.Empty;
-    var snapshot = metrics.Result();
-    var completed = send ? target.Received : snapshot.Completed;
-    return new BenchResult(
-        $"{options.Implementation}-{trigger.pattern}",
-        send ? "KMSG/s" : "KOPS",
-        trigger.payloadBytes,
-        elapsedSeconds,
-        snapshot.Submitted,
-        completed,
-        snapshot.Errors,
-        target.Errors,
-        options.Warmup,
-        (send ? receivedAtClose!.Value : completed) / Math.Max(0.001, elapsedSeconds),
-        snapshot.MeanMicros,
-        snapshot.P95Micros,
-        snapshot.P99Micros,
-        send ? target.MeanMicros : null,
-        send ? target.P95Micros : null,
-        send ? target.P99Micros : null,
-        sourceResources.CpuSeconds,
-        sourceResources.WorkingSetMb,
-        target.CpuSeconds,
-        target.WorkingSetMb,
-        snapshot.PeakInFlight,
-        trigger.pattern == "request-window" ? trigger.requestWindow : null,
-        snapshot.Abandoned,
-        receivedAtClose,
-        snapshot.ErrorSummary,
-        snapshot.OtherErrors);
-}
-
-static async Task<BenchServerSnapshot> CaptureTargetAtDeadlineAsync(
-    HttpClient http,
-    string targetStatsUrl,
-    long deadline,
-    CancellationToken cancellationToken)
-{
-    var remaining = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), deadline);
-    if (remaining > TimeSpan.Zero)
-        await Task.Delay(remaining, cancellationToken);
-    return await http.GetFromJsonAsync<BenchServerSnapshot>(
-               $"{targetStatsUrl}/bench/stats", cancellationToken)
-           ?? throw new InvalidOperationException("Target stats were empty at the active boundary.");
-}
-
-static async Task RunRequestWorkersAsync(
-    IBenchTransport transport,
-    SourceMetrics metrics,
-    BenchTriggerRequest trigger,
-    uint runId,
-    Sequence next,
-    long deadline,
-    int workers,
-    int stream,
-    CancellationToken cancellationToken)
-{
-    var tasks = Enumerable.Range(0, workers).Select(_ => Task.Run(async () =>
-    {
-        while (Stopwatch.GetTimestamp() < deadline)
-        {
-            var sequence = next.Next();
-            await ExecuteRequestAsync(
-                transport, metrics, trigger, runId, stream, sequence, cancellationToken);
-        }
-    }, cancellationToken));
-    await transport.DriveAsync(Task.WhenAll(tasks));
-}
-
-static async Task RunRequestBackpressureAsync(
-    IBenchTransport transport,
-    SourceMetrics metrics,
-    BenchTriggerRequest trigger,
-    uint runId,
-    Sequence next,
-    long deadline,
-    CancellationTokenSource operationCancellation,
-    int drainBoundMs)
-{
-    var pending = new HashSet<Task>();
-    var issuedSincePump = 0;
-    while (Stopwatch.GetTimestamp() < deadline)
-    {
-        var sequence = next.Next();
-        pending.Add(ExecuteRequestAsync(
-            transport, metrics, trigger, runId, 0, sequence, operationCancellation.Token));
-        if (++issuedSincePump == 256)
-        {
-            pending.RemoveWhere(static task => task.IsCompleted);
-            issuedSincePump = 0;
-            await Task.Yield();
-        }
-    }
-
-    if (pending.Count == 0) return;
-    try
-    {
-        await Task.WhenAll(pending).WaitAsync(
-            TimeSpan.FromMilliseconds(drainBoundMs),
-            operationCancellation.Token);
-    }
-    catch (TimeoutException)
-    {
-        metrics.RecordAbandoned(metrics.Snapshot().currentInFlight);
-        operationCancellation.Cancel();
-        try
-        {
-            await Task.WhenAll(pending).WaitAsync(TimeSpan.FromSeconds(5));
-        }
-        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
-        {
-            // The drain-bound cancellation is already represented by abandoned.
-        }
-        catch (TimeoutException)
-        {
-            // The recorded abandoned count is the bounded observation result.
-        }
-    }
-}
-
-static async Task RunRawRequestBackpressureAsync(
-    RawBenchTransport transport,
-    SourceMetrics metrics,
-    BenchTriggerRequest trigger,
-    uint runId,
-    Sequence next,
-    long deadline,
-    CancellationTokenSource operationCancellation,
-    int drainBoundMs)
-{
-    var pendingReplies = new HashSet<Task>();
-    Task? pendingAdmission = null;
-    Task[] pending;
-
-    while (Stopwatch.GetTimestamp() < deadline)
-    {
-        var submitted = false;
-        if (pendingAdmission is null || pendingAdmission.IsCompleted)
-        {
-            pendingAdmission = null;
-            var sequence = next.Next();
-            var payload = BenchMetricHeaders.CreatePayload(
-                trigger.payloadBytes,
-                runId,
-                BenchPhase.Active,
-                sequence);
-            var started = metrics.Begin();
-            try
-            {
-                RawRequestSubmission submission = transport.SubmitRequest(
-                    payload, operationCancellation.Token);
-                pendingReplies.Add(ObserveRawRequestAsync(
-                    submission.Reply, metrics, trigger, runId, sequence,
-                    started, operationCancellation.Token));
-                submitted = true;
-                if (submission.Result == SubmitResult.Backpressured)
-                {
-                    // The reply observer is already running. Only this raw
-                    // socket waits for its writable admission completion.
-                    pendingAdmission = ObserveRawAdmissionAsync(
-                        submission.Admitted, operationCancellation.Token);
-                }
-                else if (submission.Result != SubmitResult.Ok)
-                {
-                    throw new InvalidOperationException(
-                        $"Raw request submit returned {submission.Result}.");
-                }
-            }
-            catch (OperationCanceledException)
-                when (operationCancellation.IsCancellationRequested)
-            {
-                metrics.Cancel(started);
-                throw;
-            }
-            catch (Exception error)
-            {
-                metrics.Complete(started, false, error);
-            }
-        }
-
-        pendingReplies.RemoveWhere(static task => task.IsCompleted);
-        var waitMs = submitted ? 0 : RemainingPollTimeoutMs(deadline);
-        transport.WaitRequestCompletion(waitMs);
-    }
-
-    pending = pendingAdmission is null
-        ? pendingReplies.ToArray()
-        : pendingReplies.Append(pendingAdmission).ToArray();
-    if (pending.Length == 0) return;
-    var allPending = Task.WhenAll(pending);
-    var drainDeadline = Stopwatch.GetTimestamp()
-        + checked((long)(Stopwatch.Frequency * (drainBoundMs / 1000.0)));
-    while (!allPending.IsCompleted && Stopwatch.GetTimestamp() < drainDeadline
-        && !operationCancellation.IsCancellationRequested)
-        transport.WaitRequestCompletion(RemainingPollTimeoutMs(drainDeadline));
-    try
-    {
-        await allPending.WaitAsync(TimeSpan.Zero, operationCancellation.Token);
-    }
-    catch (TimeoutException)
-    {
-        metrics.RecordAbandoned(metrics.Snapshot().currentInFlight);
-        operationCancellation.Cancel();
-        try
-        {
-            var cancellationDeadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
-            while (!allPending.IsCompleted && Stopwatch.GetTimestamp() < cancellationDeadline)
-                transport.WaitRequestCompletion(RemainingPollTimeoutMs(cancellationDeadline));
-            await allPending.WaitAsync(TimeSpan.Zero);
-        }
-        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
-        {
-            // The drain-bound cancellation is already represented by abandoned.
-        }
-        catch (TimeoutException)
-        {
-            // The recorded abandoned count is the bounded observation result.
-        }
-    }
-}
-
-static async Task ObserveRawRequestAsync(
-    Task<BenchPayload> replyTask,
-    SourceMetrics metrics,
-    BenchTriggerRequest trigger,
-    uint runId,
-    ulong sequence,
-    long started,
-    CancellationToken cancellationToken)
-{
-    try
-    {
-        var reply = await replyTask;
-        ValidateReply(reply, runId, BenchPhase.Active, trigger.payloadBytes, sequence);
-        metrics.Complete(started, true);
-    }
-    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-    {
-        metrics.Cancel(started);
-        throw;
-    }
-    catch (Exception error)
-    {
-        metrics.Complete(started, false, error);
-    }
-}
-
-static async Task ObserveRawAdmissionAsync(Task admission, CancellationToken cancellationToken)
-{
-    try
-    {
-        await admission;
-    }
-    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-    {
-        // Reply observation accounts for the cancelled request.
-    }
-    catch
-    {
-        // Reply observation accounts for the failed request.
-    }
-}
-
-static int RemainingPollTimeoutMs(long deadline)
-{
-    var remainingTicks = deadline - Stopwatch.GetTimestamp();
-    if (remainingTicks <= 0) return 0;
-    var remainingMs = remainingTicks * 1000.0 / Stopwatch.Frequency;
-    return Math.Min(
-        BenchPolling.CompletionPollIntervalMs,
-        Math.Max(1, (int)Math.Ceiling(remainingMs)));
-}
-
-static async Task RunSendWorkersAsync(
-    IBenchTransport transport,
-    SourceMetrics metrics,
-    BenchTriggerRequest trigger,
-    uint runId,
-    Sequence next,
-    long deadline,
-    int workers,
-    CancellationToken cancellationToken)
-{
-    var tasks = Enumerable.Range(0, workers).Select(stream => Task.Run(async () =>
-    {
-        while (Stopwatch.GetTimestamp() < deadline)
-        {
-            var sequence = next.Next();
-            var payload = BenchMetricHeaders.CreatePayload(
-                trigger.payloadBytes,
-                runId,
-                BenchPhase.Active,
-                sequence);
-            var started = metrics.Begin();
-            try
-            {
-                await transport.SendAsync(stream, payload, cancellationToken);
-                metrics.Complete(started, true);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                metrics.Cancel(started);
-                throw;
-            }
-            catch (Exception error)
-            {
-                metrics.Complete(started, false, error);
-            }
-        }
-    }, cancellationToken));
-    await transport.DriveAsync(Task.WhenAll(tasks));
-}
-
-static async Task ExecuteRequestAsync(
-    IBenchTransport transport,
-    SourceMetrics metrics,
-    BenchTriggerRequest trigger,
-    uint runId,
-    int stream,
-    ulong sequence,
-    CancellationToken cancellationToken)
-{
-    var payload = BenchMetricHeaders.CreatePayload(
-        trigger.payloadBytes,
-        runId,
-        BenchPhase.Active,
-        sequence);
-    var started = metrics.Begin();
-    try
-    {
-        var reply = await transport.RequestAsync(stream, payload, cancellationToken);
-        ValidateReply(reply, runId, BenchPhase.Active, trigger.payloadBytes, sequence);
-        metrics.Complete(started, true);
-    }
-    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-    {
-        metrics.Cancel(started);
-        throw;
-    }
-    catch (Exception error)
-    {
-        metrics.Complete(started, false, error);
-    }
-}
-
-static void ValidateReply(
-    BenchPayload reply,
-    uint runId,
-    BenchPhase phase,
-    int payloadBytes,
-    ulong sequence)
-{
-    BenchPayloads.Validate(reply, payloadBytes);
-    if (!BenchMetricHeaders.TryDecode(reply, out var header)
-        || !BenchMetricHeaders.IsExpected(header, runId, phase, payloadBytes, sequence))
-    {
-        throw new InvalidOperationException("Echo reply did not carry the expected metric header.");
-    }
-}
-
-static uint HeaderRunId(string runId)
-{
-    var hash = 2166136261U;
-    foreach (var value in Encoding.UTF8.GetBytes(runId))
-    {
-        hash = (hash ^ value) * 16777619U;
-    }
-    return hash == 0 ? 1U : hash;
-}
-
 static async Task WriteResultAsync(
     BenchOptions options,
     BenchTriggerObservation trigger,
-    BenchResult result)
+    BenchResult result
+)
 {
-    var streams = StreamDescription.For(trigger.pattern, trigger.requestWindow, trigger.sendConcurrency);
+    var streams = StreamDescription.For(
+        trigger.pattern,
+        trigger.requestWindow,
+        trigger.sendConcurrency
+    );
     var metadata = await BenchMetadata.CreateAsync(options, trigger);
     var cellTrigger = new BenchCellTrigger(
         trigger.runId,
@@ -553,8 +83,13 @@ static async Task WriteResultAsync(
         trigger.durationMs,
         options.Warmup,
         options.TriggerUrl,
-        trigger.receivedAtUnixMs);
-    var report = new BenchReport("with-grpc-cell-v1", metadata, [BenchCell.From(result, cellTrigger, streams)]);
+        trigger.receivedAtUnixMs
+    );
+    var report = new BenchReport(
+        "with-grpc-cell-v1",
+        metadata,
+        [BenchCell.From(result, cellTrigger, streams)]
+    );
     var json = JsonSerializer.Serialize(report, BenchJson.Options);
     await File.WriteAllTextAsync(Path.Combine(options.Output, "results.json"), json);
     var text = FormatText(result, metadata);
@@ -575,8 +110,10 @@ static string FormatText(BenchResult result, BenchMetadata metadata)
     {
         lines.AppendLine($"client_error: {error.Type}: {error.Message} ({error.Count})");
     }
-    if (result.OtherErrors != 0) lines.AppendLine($"client_error_other: {result.OtherErrors}");
-    foreach (var line in result.PerfLines) lines.AppendLine(line);
+    if (result.OtherErrors != 0)
+        lines.AppendLine($"client_error_other: {result.OtherErrors}");
+    foreach (var line in result.PerfLines)
+        lines.AppendLine(line);
     return lines.ToString();
 }
 
@@ -590,7 +127,11 @@ internal interface IBenchTransport : IAsyncDisposable
 {
     bool Ready { get; }
     ValueTask ProbeAsync(CancellationToken cancellationToken);
-    ValueTask<BenchPayload> RequestAsync(int stream, BenchPayload payload, CancellationToken cancellationToken);
+    ValueTask<BenchPayload> RequestAsync(
+        int stream,
+        BenchPayload payload,
+        CancellationToken cancellationToken
+    );
     ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken);
 
     /// <summary>
@@ -609,10 +150,13 @@ internal static class BenchTransport
         {
             "grpc-dotnet" => new GrpcBenchTransport(
                 options.TargetEndpoint,
-                options.Scenario == "send-saturation" ? options.SendConcurrency : 1),
+                options.Scenario == "send-saturation" ? options.SendConcurrency : 1
+            ),
             "zlink-dotnet" => new RawBenchTransport(options),
             "zlink-framework-dotnet" => await FrameworkBenchTransport.CreateAsync(options),
-            _ => throw new InvalidOperationException($"Unknown implementation {options.Implementation}.")
+            _ => throw new InvalidOperationException(
+                $"Unknown implementation {options.Implementation}."
+            ),
         };
         await WaitForRouteAsync(transport, options.Timeout);
         return transport;
@@ -636,7 +180,10 @@ internal static class BenchTransport
                 await Task.Delay(20, cancellation.Token);
             }
         }
-        throw new InvalidOperationException("Target route did not become ready before the timeout.", last);
+        throw new InvalidOperationException(
+            "Target route did not become ready before the timeout.",
+            last
+        );
     }
 }
 
@@ -646,9 +193,15 @@ internal static class TransportReady
     {
         switch (transport)
         {
-            case GrpcBenchTransport grpc: grpc.MarkReady(); break;
-            case RawBenchTransport raw: raw.MarkReady(); break;
-            case FrameworkBenchTransport framework: framework.MarkReady(); break;
+            case GrpcBenchTransport grpc:
+                grpc.MarkReady();
+                break;
+            case RawBenchTransport raw:
+                raw.MarkReady();
+                break;
+            case FrameworkBenchTransport framework:
+                framework.MarkReady();
+                break;
         }
     }
 }
@@ -658,37 +211,53 @@ internal sealed class GrpcBenchTransport : IBenchTransport
     private readonly SocketsHttpHandler handler = new()
     {
         EnableMultipleHttp2Connections = false,
-        MaxConnectionsPerServer = 1
+        MaxConnectionsPerServer = 1,
     };
     private readonly GrpcChannel channel;
     private readonly BenchService.BenchServiceClient[] clients;
 
     public GrpcBenchTransport(string endpoint, int streams)
     {
-        channel = GrpcChannel.ForAddress(endpoint, new GrpcChannelOptions { HttpHandler = handler });
-        clients = Enumerable.Range(0, Math.Max(1, streams))
+        channel = GrpcChannel.ForAddress(
+            endpoint,
+            new GrpcChannelOptions { HttpHandler = handler }
+        );
+        clients = Enumerable
+            .Range(0, Math.Max(1, streams))
             .Select(_ => new BenchService.BenchServiceClient(channel))
             .ToArray();
     }
 
     public bool Ready { get; private set; }
+
     public void MarkReady() => Ready = true;
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
         var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
         var reply = await RequestAsync(0, payload, cancellationToken);
-        if (!BenchMetricHeaders.TryDecode(reply, out var header)
-            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0))
+        if (
+            !BenchMetricHeaders.TryDecode(reply, out var header)
+            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0)
+        )
             throw new InvalidOperationException("gRPC target probe returned an invalid payload.");
     }
 
     public async ValueTask<BenchPayload> RequestAsync(
-        int stream, BenchPayload payload, CancellationToken cancellationToken) =>
-        await clients[stream % clients.Length].EchoAsync(payload, cancellationToken: cancellationToken);
+        int stream,
+        BenchPayload payload,
+        CancellationToken cancellationToken
+    ) =>
+        await clients[stream % clients.Length]
+            .EchoAsync(payload, cancellationToken: cancellationToken);
 
-    public async ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken) =>
-        await clients[stream % clients.Length].CommandAsync(payload, cancellationToken: cancellationToken);
+    public async ValueTask SendAsync(
+        int stream,
+        BenchPayload payload,
+        CancellationToken cancellationToken
+    ) =>
+        await clients[stream % clients.Length]
+            .CommandAsync(payload, cancellationToken: cancellationToken);
 
     public ValueTask DisposeAsync()
     {
@@ -711,15 +280,20 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
     }
 
     public bool Ready { get; private set; }
+
     public void MarkReady() => Ready = true;
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
         var payload = BenchMetricHeaders.CreatePayload(1024, 1, BenchPhase.Warmup, 0);
         var reply = await RequestAsync(0, payload, cancellationToken);
-        if (!BenchMetricHeaders.TryDecode(reply, out var header)
-            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0))
-            throw new InvalidOperationException("Framework target probe returned an invalid payload.");
+        if (
+            !BenchMetricHeaders.TryDecode(reply, out var header)
+            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0)
+        )
+            throw new InvalidOperationException(
+                "Framework target probe returned an invalid payload."
+            );
     }
 
     public static async Task<FrameworkBenchTransport> CreateAsync(BenchOptions options)
@@ -731,7 +305,8 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
         builder.Services.AddZLinkFramework(framework =>
         {
             framework.Codecs.Use(ZLinkProtobufCodec.Default);
-            var mesh = framework.AddRouteMesh("bench")
+            var mesh = framework
+                .AddRouteMesh("bench")
                 .Listen("tcp://127.0.0.1:0")
                 .SetRoutingId(RoutingId.From($"bench-source-{Environment.ProcessId}"));
             mesh.PeerConnections.Connect(Target, options.TargetEndpoint);
@@ -740,15 +315,22 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
         await host.StartAsync();
         return new FrameworkBenchTransport(
             host,
-            host.Services.GetRequiredService<IZLinkRouteClient>());
+            host.Services.GetRequiredService<IZLinkRouteClient>()
+        );
     }
 
     public async ValueTask<BenchPayload> RequestAsync(
-        int stream, BenchPayload payload, CancellationToken cancellationToken) =>
+        int stream,
+        BenchPayload payload,
+        CancellationToken cancellationToken
+    ) =>
         await client.RequestToNode("bench", Target, payload).Async<BenchPayload>(cancellationToken);
 
-    public async ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken) =>
-        await client.SendToNode("bench", Target, payload).Async();
+    public async ValueTask SendAsync(
+        int stream,
+        BenchPayload payload,
+        CancellationToken cancellationToken
+    ) => await client.SendToNode("bench", Target, payload).Async();
 
     public async ValueTask DisposeAsync()
     {
@@ -773,12 +355,16 @@ internal sealed class RawBenchTransport : IBenchTransport
             // RouteMesh node의 socket 하나를 쓴다. raw만 stream마다 ROUTER를 만들면
             // `zlink-framework-<lang> / zlink-<lang>`이 계층 비용이 아니라 연결 수 차이를
             // 재게 된다 (#317).
-            commands = [RawBenchSocket.Create(
-                context,
-                options.RawSocket,
-                RoutingId.From($"bench-send-{Environment.ProcessId}"),
-                RoutingId.From(BenchRoutingIds.RawCommandServer),
-                options.TargetCommandEndpoint!)];
+            commands =
+            [
+                RawBenchSocket.Create(
+                    context,
+                    options.RawSocket,
+                    RoutingId.From($"bench-send-{Environment.ProcessId}"),
+                    RoutingId.From(BenchRoutingIds.RawCommandServer),
+                    options.TargetCommandEndpoint!
+                ),
+            ];
         }
         else
         {
@@ -787,12 +373,14 @@ internal sealed class RawBenchTransport : IBenchTransport
                 options.RawSocket,
                 RoutingId.From($"bench-request-{Environment.ProcessId}"),
                 RoutingId.From(BenchRoutingIds.RawRequestServer),
-                options.TargetEndpoint);
+                options.TargetEndpoint
+            );
             commands = [];
         }
     }
 
     public bool Ready { get; private set; }
+
     public void MarkReady() => Ready = true;
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
@@ -806,19 +394,26 @@ internal sealed class RawBenchTransport : IBenchTransport
         var request = RequestAsync(0, payload, cancellationToken).AsTask();
         await DriveAsync(request);
         var reply = await request;
-        if (!BenchMetricHeaders.TryDecode(reply, out var header)
-            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0))
+        if (
+            !BenchMetricHeaders.TryDecode(reply, out var header)
+            || !BenchMetricHeaders.IsExpected(header, 1, BenchPhase.Warmup, 1024, 0)
+        )
             throw new InvalidOperationException("Raw target probe returned an invalid payload.");
     }
 
     public async ValueTask<BenchPayload> RequestAsync(
-        int stream, BenchPayload payload, CancellationToken cancellationToken)
+        int stream,
+        BenchPayload payload,
+        CancellationToken cancellationToken
+    )
     {
         return await SubmitRequest(payload, cancellationToken).Reply;
     }
 
     public RawRequestSubmission SubmitRequest(
-        BenchPayload payload, CancellationToken cancellationToken)
+        BenchPayload payload,
+        CancellationToken cancellationToken
+    )
     {
         Message? header = null;
         Message? body = null;
@@ -826,12 +421,12 @@ internal sealed class RawBenchTransport : IBenchTransport
         {
             header = Message.From(RawEnvelopeHeaders.Request);
             body = EncodeRawPayload(payload);
-            RequestSubmission submission = request!.SubmitRequest(
-                header, body, cancellationToken);
+            RequestSubmission submission = request!.SubmitRequest(header, body, cancellationToken);
             return new RawRequestSubmission(
                 submission.Result,
                 submission.Admitted,
-                DecodeRawReplyAsync(submission.Reply, header, body));
+                DecodeRawReplyAsync(submission.Reply, header, body)
+            );
         }
         catch
         {
@@ -851,7 +446,11 @@ internal sealed class RawBenchTransport : IBenchTransport
         return pending;
     }
 
-    public async ValueTask SendAsync(int stream, BenchPayload payload, CancellationToken cancellationToken)
+    public async ValueTask SendAsync(
+        int stream,
+        BenchPayload payload,
+        CancellationToken cancellationToken
+    )
     {
         Message? header = null;
         Message? body = null;
@@ -859,8 +458,8 @@ internal sealed class RawBenchTransport : IBenchTransport
         {
             header = Message.From(RawEnvelopeHeaders.Request);
             body = EncodeRawPayload(payload);
-            await commands[stream % commands.Length].SubmitSendAsync(
-                header, body, cancellationToken);
+            await commands[stream % commands.Length]
+                .SubmitSendAsync(header, body, cancellationToken);
         }
         finally
         {
@@ -872,7 +471,8 @@ internal sealed class RawBenchTransport : IBenchTransport
     public ValueTask DisposeAsync()
     {
         request?.Dispose();
-        foreach (var command in commands) command.Dispose();
+        foreach (var command in commands)
+            command.Dispose();
         context.Dispose();
         return ValueTask.CompletedTask;
     }
@@ -893,7 +493,10 @@ internal sealed class RawBenchTransport : IBenchTransport
     }
 
     private static async Task<BenchPayload> DecodeRawReplyAsync(
-        Task<IReadOnlyList<Message>> replyTask, Message header, Message body)
+        Task<IReadOnlyList<Message>> replyTask,
+        Message header,
+        Message body
+    )
     {
         IReadOnlyList<Message>? parts = null;
         try
@@ -901,13 +504,15 @@ internal sealed class RawBenchTransport : IBenchTransport
             parts = await replyTask;
             if (parts.Count == 0)
                 throw new InvalidOperationException("Raw request returned no reply parts.");
-            return RawWire.Decode(parts.Count == 1
-                ? parts[0].AsReadOnlySpan()
-                : parts[^1].AsReadOnlySpan());
+            return RawWire.Decode(
+                parts.Count == 1 ? parts[0].AsReadOnlySpan() : parts[^1].AsReadOnlySpan()
+            );
         }
         finally
         {
-            if (parts is not null) foreach (var part in parts) part.Dispose();
+            if (parts is not null)
+                foreach (var part in parts)
+                    part.Dispose();
             body.Dispose();
             header.Dispose();
         }
@@ -917,7 +522,8 @@ internal sealed class RawBenchTransport : IBenchTransport
 internal readonly record struct RawRequestSubmission(
     SubmitResult Result,
     Task Admitted,
-    Task<BenchPayload> Reply);
+    Task<BenchPayload> Reply
+);
 
 internal sealed class RawBenchSocket : IDisposable
 {
@@ -950,7 +556,8 @@ internal sealed class RawBenchSocket : IDisposable
         string mode,
         RoutingId self,
         RoutingId peer,
-        string endpoint)
+        string endpoint
+    )
     {
         if (mode == "dealer")
         {
@@ -982,28 +589,37 @@ internal sealed class RawBenchSocket : IDisposable
     }
 
     public RequestOperation Request() => router is null ? dealer!.Request() : router.Request(peer);
+
     public SendOperation Send() => router is null ? dealer!.Send() : router.Send(peer);
+
     public IZlinkSocket Socket => router is not null ? (IZlinkSocket)router : dealer!;
 
     public void WaitCompletion(int timeoutMs)
     {
-        _ = completionPoller.Wait(completionEvents,
-            TimeSpan.FromMilliseconds(timeoutMs));
+        _ = completionPoller.Wait(completionEvents, TimeSpan.FromMilliseconds(timeoutMs));
     }
 
     public RequestSubmission SubmitRequest(
-        Message header, Message body, CancellationToken cancellationToken)
+        Message header,
+        Message body,
+        CancellationToken cancellationToken
+    )
     {
         return Request().Message(header).Message(body).Async(cancellationToken);
     }
 
-    public async ValueTask SubmitSendAsync(Message header, Message body,
-        CancellationToken cancellationToken)
+    public async ValueTask SubmitSendAsync(
+        Message header,
+        Message body,
+        CancellationToken cancellationToken
+    )
     {
         await submissionGate.WaitAsync(cancellationToken);
         try
         {
-            SendSubmission submission = Send().Message(header).Message(body)
+            SendSubmission submission = Send()
+                .Message(header)
+                .Message(body)
                 .Async(cancellationToken);
             if (submission.Result == SubmitResult.Backpressured)
                 await submission.Admitted;
@@ -1032,19 +648,27 @@ internal sealed class SourceMetrics(int sampleLimit)
     private readonly Dictionary<(string Type, string Message), long> errorSummary = [];
     private long submitted;
     private long completed;
+    private long completedAtClose;
+    private long activeDeadline;
     private long errors;
     private long inFlight;
     private long peakInFlight;
-    private long abandoned;
+    private SourceResultSnapshot? terminalSnapshot;
     private long sampleCount;
     private long sampleSum;
     private long otherErrors;
 
-    public void Reset()
+    public BenchPhase Phase { get; private set; }
+
+    public void Reset(long deadline, BenchPhase phase = BenchPhase.Active)
     {
         lock (gate)
         {
-            submitted = completed = errors = inFlight = peakInFlight = abandoned = 0;
+            submitted = completed = errors = inFlight = peakInFlight = 0;
+            terminalSnapshot = null;
+            completedAtClose = 0;
+            activeDeadline = deadline;
+            Phase = phase;
             sampleCount = sampleSum = 0;
             samples.Clear();
             errorSummary.Clear();
@@ -1066,9 +690,16 @@ internal sealed class SourceMetrics(int sampleLimit)
 
     public void Complete(long started, bool success, Exception? error = null)
     {
-        var elapsed = (long)((Stopwatch.GetTimestamp() - started) * 1_000_000.0 / Stopwatch.Frequency);
+        Complete(started, success, error, Stopwatch.GetTimestamp());
+    }
+
+    internal void Complete(long started, bool success, Exception? error, long now)
+    {
+        var elapsed = (long)((now - started) * 1_000_000.0 / Stopwatch.Frequency);
         lock (gate)
         {
+            if (terminalSnapshot is not null)
+                return;
             inFlight--;
             if (success)
             {
@@ -1077,23 +708,26 @@ internal sealed class SourceMetrics(int sampleLimit)
             else
             {
                 errors++;
-                if (error is not null) RecordError(error);
+                if (error is not null)
+                    RecordError(error);
             }
-            sampleSum += elapsed;
-            sampleCount++;
-            if (samples.Count < sampleLimit) samples.Add(elapsed);
+            if (now < activeDeadline)
+            {
+                if (success)
+                    completedAtClose++;
+                sampleSum += elapsed;
+                sampleCount++;
+                if (samples.Count < sampleLimit)
+                    samples.Add(elapsed);
+            }
         }
     }
 
-    public void Cancel(long started)
+    public void Cancel()
     {
-        var elapsed = (long)((Stopwatch.GetTimestamp() - started) * 1_000_000.0 / Stopwatch.Frequency);
         lock (gate)
         {
             inFlight--;
-            sampleSum += elapsed;
-            sampleCount++;
-            if (samples.Count < sampleLimit) samples.Add(elapsed);
         }
     }
 
@@ -1101,7 +735,8 @@ internal sealed class SourceMetrics(int sampleLimit)
     {
         var type = error.GetType().FullName ?? error.GetType().Name;
         var message = error.Message.Replace('\r', ' ').Replace('\n', ' ');
-        if (message.Length > ErrorMessageLimit) message = message[..ErrorMessageLimit];
+        if (message.Length > ErrorMessageLimit)
+            message = message[..ErrorMessageLimit];
         var key = (type, message);
         if (errorSummary.TryGetValue(key, out var count))
         {
@@ -1117,54 +752,81 @@ internal sealed class SourceMetrics(int sampleLimit)
         }
     }
 
-    public void RecordAbandoned(long count)
+    public void FreezeTerminal()
     {
-        lock (gate) abandoned = Math.Max(abandoned, count);
+        lock (gate)
+            terminalSnapshot ??= Result() with { Abandoned = inFlight };
     }
 
     public BenchCounterSnapshot Snapshot()
     {
-        lock (gate) return new(submitted, completed, errors, 0, inFlight, peakInFlight);
+        lock (gate)
+        {
+            if (terminalSnapshot is { } terminal)
+                return new(
+                    terminal.Submitted,
+                    terminal.Completed,
+                    terminal.Errors,
+                    0,
+                    terminal.CurrentInFlight,
+                    terminal.PeakInFlight
+                );
+            return new(submitted, completed, errors, 0, inFlight, peakInFlight);
+        }
     }
 
     public SourceResultSnapshot Result()
     {
         lock (gate)
         {
+            if (terminalSnapshot is { } terminal)
+                return terminal;
             var sorted = samples.ToArray();
             Array.Sort(sorted);
             return new SourceResultSnapshot(
                 submitted,
                 completed,
+                completedAtClose,
                 errors,
                 inFlight,
                 peakInFlight,
-                abandoned,
-                errorSummary.Select(static entry => new ClientErrorSummary(
-                    entry.Key.Type, entry.Key.Message, entry.Value)).ToArray(),
+                0,
+                errorSummary
+                    .Select(static entry => new ClientErrorSummary(
+                        entry.Key.Type,
+                        entry.Key.Message,
+                        entry.Value
+                    ))
+                    .ToArray(),
                 otherErrors,
                 sampleCount == 0 ? 0 : (double)sampleSum / sampleCount,
                 Percentile(sorted, 0.95),
-                Percentile(sorted, 0.99));
+                Percentile(sorted, 0.99)
+            );
         }
     }
 
     private static long Percentile(long[] sorted, double percentile)
     {
-        if (sorted.Length == 0) return 0;
-        return sorted[Math.Clamp((int)Math.Ceiling(percentile * sorted.Length) - 1, 0, sorted.Length - 1)];
+        if (sorted.Length == 0)
+            return 0;
+        return sorted[
+            Math.Clamp((int)Math.Ceiling(percentile * sorted.Length) - 1, 0, sorted.Length - 1)
+        ];
     }
 }
 
 internal sealed class Sequence
 {
     private long value = -1;
+
     public ulong Next() => (ulong)Interlocked.Increment(ref value);
 }
 
 internal readonly record struct SourceResultSnapshot(
     long Submitted,
     long Completed,
+    long CompletedAtClose,
     long Errors,
     long CurrentInFlight,
     long PeakInFlight,
@@ -1173,40 +835,55 @@ internal readonly record struct SourceResultSnapshot(
     long OtherErrors,
     double MeanMicros,
     long P95Micros,
-    long P99Micros);
+    long P99Micros
+);
 
 internal sealed record ClientErrorSummary(string Type, string Message, long Count);
 
 internal readonly record struct ResourceSample(TimeSpan CpuStart)
 {
     public static ResourceSample Start() => new(Process.GetCurrentProcess().TotalProcessorTime);
+
     public ResourceResult Finish()
     {
         var process = Process.GetCurrentProcess();
         return new ResourceResult(
             Math.Max(0, (process.TotalProcessorTime - CpuStart).TotalSeconds),
-            process.WorkingSet64 / 1024.0 / 1024.0);
+            process.WorkingSet64 / 1024.0 / 1024.0
+        );
     }
 }
 
 internal readonly record struct ResourceResult(double CpuSeconds, double WorkingSetMb);
 
+internal sealed record ActiveSnapshot(ResourceResult Source, BenchServerSnapshot Target);
+
 internal sealed record StreamDescription(int count, int? inFlightPerStream, string implementation)
 {
-    public static StreamDescription For(string pattern, int requestWindow, int sendConcurrency) => pattern switch
-    {
-        "request-serial" => new(1, 1, ".NET Task; one sequential loop"),
-        "request-window" => new(1, requestWindow, ".NET Tasks sharing one logical-stream window"),
-        "request-backpressure" => new(1, null, ".NET submission/reply pump without an application in-flight cap"),
-        "send-saturation" => new(sendConcurrency, 1, ".NET Task per logical stream"),
-        _ => throw new InvalidOperationException($"Unknown pattern {pattern}.")
-    };
+    public static StreamDescription For(string pattern, int requestWindow, int sendConcurrency) =>
+        pattern switch
+        {
+            "request-serial" => new(1, 1, ".NET Task; one sequential loop"),
+            "request-window" => new(
+                1,
+                requestWindow,
+                ".NET Tasks sharing one logical-stream window"
+            ),
+            "request-backpressure" => new(
+                1,
+                null,
+                ".NET submission/reply pump without an application in-flight cap"
+            ),
+            "send-saturation" => new(sendConcurrency, 1, ".NET Task per logical stream"),
+            _ => throw new InvalidOperationException($"Unknown pattern {pattern}."),
+        };
 }
 
 internal sealed record BenchReport(
     string schema,
     BenchMetadata metadata,
-    IReadOnlyList<BenchCell> cells);
+    IReadOnlyList<BenchCell> cells
+);
 
 internal sealed record BenchCellTrigger(
     string runId,
@@ -1216,7 +893,8 @@ internal sealed record BenchCellTrigger(
     int durationMs,
     int warmup,
     string endpoint,
-    long receivedAtUnixMs);
+    long receivedAtUnixMs
+);
 
 internal sealed record BenchCell(
     string implementation,
@@ -1246,42 +924,52 @@ internal sealed record BenchCell(
     int? request_window,
     long abandoned,
     long? server_received_at_close,
+    long completed_at_close,
     IReadOnlyList<ClientErrorSummary> client_error_summary,
-    long client_error_other_count)
+    long client_error_other_count,
+    long warmup_abandoned
+)
 {
+    public double active_elapsed_ms => trigger.durationMs;
+
     public static BenchCell From(
         BenchResult result,
         BenchCellTrigger trigger,
-        StreamDescription streams) => new(
-        result.Implementation,
-        result.Pattern,
-        result.PayloadSize,
-        "source",
-        trigger,
-        streams,
-        null,
-        result.Submitted,
-        result.Completed,
-        result.Errors,
-        result.ServerErrors,
-        result.Throughput,
-        result.Throughput * result.PayloadSize / 1_000_000.0,
-        result.EffectiveMeanMicros / 1000.0,
-        result.EffectiveP95Micros / 1000.0,
-        result.EffectiveP99Micros / 1000.0,
-        result.CpuPercent(result.ClientCpuSeconds),
-        result.ClientWorkingSetMb,
-        result.CpuPercent(result.ServerCpuSeconds),
-        result.ServerWorkingSetMb,
-        result.ClientCores,
-        result.ClientParallelismCeiling,
-        "client_cores",
-        result.PeakInFlight,
-        result.RequestWindow,
-        result.Abandoned,
-        result.ServerReceivedAtClose,
-        result.ErrorSummary,
-        result.OtherErrors);
+        StreamDescription streams
+    ) =>
+        new(
+            result.Implementation,
+            result.Pattern,
+            result.PayloadSize,
+            "source",
+            trigger,
+            streams,
+            null,
+            result.Submitted,
+            result.Completed,
+            result.Errors,
+            result.ServerErrors,
+            result.Throughput,
+            result.Throughput * result.PayloadSize / 1_000_000.0,
+            result.EffectiveMeanMicros / 1000.0,
+            result.EffectiveP95Micros / 1000.0,
+            result.EffectiveP99Micros / 1000.0,
+            result.CpuPercent(result.ClientCpuSeconds),
+            result.ClientWorkingSetMb,
+            result.CpuPercent(result.ServerCpuSeconds),
+            result.ServerWorkingSetMb,
+            result.ClientCores,
+            result.ClientParallelismCeiling,
+            "client_cores",
+            result.PeakInFlight,
+            result.RequestWindow,
+            result.Abandoned,
+            result.ServerReceivedAtClose,
+            result.CompletedAtClose,
+            result.ErrorSummary,
+            result.OtherErrors,
+            result.WarmupAbandoned
+        );
 }
 
 internal sealed record BenchMetadata(
@@ -1308,38 +996,42 @@ internal sealed record BenchMetadata(
     string GrpcServerConfiguration,
     string RawSocket,
     string ResultJson,
-    string ReportText)
+    string ReportText
+)
 {
     public int LogicalCores => Environment.ProcessorCount;
     public int ClientParallelismCeiling => Environment.ProcessorCount;
 
     public static async Task<BenchMetadata> CreateAsync(
         BenchOptions options,
-        BenchTriggerObservation trigger) => new(
-        DateTimeOffset.UtcNow,
-        CpuName(),
-        RuntimeInformation.OSDescription,
-        await RunCommandAsync("dotnet", "--version"),
-        Environment.Version.ToString(),
-        InformationalVersion(typeof(GrpcChannel).Assembly),
-        typeof(Systems.Zlink.Zlink).Assembly.GetName().Version?.ToString() ?? "unknown",
-        await RunCommandAsync("git", "rev-parse", "--short", "HEAD"),
-        options.Configuration,
-        options.Implementation,
-        options.Warmup,
-        trigger.requestWindow,
-        trigger.sendConcurrency,
-        options.LatencySampleLimit,
-        options.DrainBoundMs,
-        options.TriggerUrl,
-        options.StatsUrl,
-        options.TargetEndpoint,
-        options.TargetCommandEndpoint,
-        options.TargetStatsUrl,
-        "ASP.NET Core gRPC on Kestrel HTTP/2 with language defaults; one channel/connection",
-        options.RawSocket,
-        Path.Combine(options.Output, "results.json"),
-        options.ReportPath);
+        BenchTriggerObservation trigger
+    ) =>
+        new(
+            DateTimeOffset.UtcNow,
+            CpuName(),
+            RuntimeInformation.OSDescription,
+            await RunCommandAsync("dotnet", "--version"),
+            Environment.Version.ToString(),
+            InformationalVersion(typeof(GrpcChannel).Assembly),
+            typeof(Systems.Zlink.Zlink).Assembly.GetName().Version?.ToString() ?? "unknown",
+            await RunCommandAsync("git", "rev-parse", "--short", "HEAD"),
+            options.Configuration,
+            options.Implementation,
+            options.Warmup,
+            trigger.requestWindow,
+            trigger.sendConcurrency,
+            options.LatencySampleLimit,
+            options.DrainBoundMs,
+            options.TriggerUrl,
+            options.StatsUrl,
+            options.TargetEndpoint,
+            options.TargetCommandEndpoint,
+            options.TargetStatsUrl,
+            "ASP.NET Core gRPC on Kestrel HTTP/2 with language defaults; one channel/connection",
+            options.RawSocket,
+            Path.Combine(options.Output, "results.json"),
+            options.ReportPath
+        );
 
     private static async Task<string> RunCommandAsync(string fileName, params string[] args)
     {
@@ -1348,11 +1040,13 @@ internal sealed record BenchMetadata(
             var info = new ProcessStartInfo(fileName)
             {
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
             };
-            foreach (var arg in args) info.ArgumentList.Add(arg);
+            foreach (var arg in args)
+                info.ArgumentList.Add(arg);
             using var process = Process.Start(info);
-            if (process is null) return "unknown";
+            if (process is null)
+                return "unknown";
             var output = await process.StandardOutput.ReadToEndAsync();
             await process.WaitForExitAsync();
             return process.ExitCode == 0 ? output.Trim() : "unknown";
@@ -1371,11 +1065,16 @@ internal sealed record BenchMetadata(
     private static string CpuName()
     {
         const string cpuInfo = "/proc/cpuinfo";
-        if (!File.Exists(cpuInfo)) return RuntimeInformation.ProcessArchitecture.ToString();
+        if (!File.Exists(cpuInfo))
+            return RuntimeInformation.ProcessArchitecture.ToString();
         var line = File.ReadLines(cpuInfo)
-            .FirstOrDefault(static value => value.StartsWith("model name", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(static value =>
+                value.StartsWith("model name", StringComparison.OrdinalIgnoreCase)
+            );
         var separator = line?.IndexOf(':') ?? -1;
-        return separator >= 0 ? line![(separator + 1)..].Trim() : RuntimeInformation.ProcessArchitecture.ToString();
+        return separator >= 0
+            ? line![(separator + 1)..].Trim()
+            : RuntimeInformation.ProcessArchitecture.ToString();
     }
 }
 
@@ -1404,19 +1103,22 @@ internal sealed record BenchResult(
     int? RequestWindow,
     long Abandoned,
     long? ServerReceivedAtClose,
+    long CompletedAtClose,
     IReadOnlyList<ClientErrorSummary> ErrorSummary,
-    long OtherErrors)
+    long OtherErrors
+)
 {
     public string Pattern => Scenario[(Implementation.Length + 1)..];
-    public string Implementation => Scenario.StartsWith("zlink-framework-dotnet-", StringComparison.Ordinal)
-        ? "zlink-framework-dotnet"
-        : Scenario.StartsWith("zlink-dotnet-", StringComparison.Ordinal)
-            ? "zlink-dotnet"
-            : "grpc-dotnet";
+    public string Implementation =>
+        Scenario.StartsWith("zlink-framework-dotnet-", StringComparison.Ordinal)
+            ? "zlink-framework-dotnet"
+        : Scenario.StartsWith("zlink-dotnet-", StringComparison.Ordinal) ? "zlink-dotnet"
+        : "grpc-dotnet";
     public double EffectiveMeanMicros => ServerMeanMicros ?? MeanMicros;
     public double EffectiveP95Micros => ServerP95Micros ?? P95Micros;
     public double EffectiveP99Micros => ServerP99Micros ?? P99Micros;
     public double ClientCores => ClientCpuSeconds / Math.Max(0.001, DurationSeconds);
+    public long WarmupAbandoned { get; init; }
     public int ClientParallelismCeiling => Environment.ProcessorCount;
 
     public IEnumerable<string> PerfLines
@@ -1437,6 +1139,7 @@ internal sealed record BenchResult(
 
     public double CpuPercent(double seconds) =>
         seconds / Math.Max(0.001, DurationSeconds) / Environment.ProcessorCount * 100.0;
+
     private string Line(string metric, double value) =>
         $"RESULT,current,{Scenario},local,{PayloadSize},{metric},{value:F3}";
 }
@@ -1459,90 +1162,145 @@ internal sealed record BenchOptions(
     string Output,
     string ReportFile,
     string Configuration,
-    TimeSpan Timeout)
+    TimeSpan Timeout
+)
 {
-    public string ReportPath => Path.IsPathRooted(ReportFile) ? ReportFile : Path.Combine(Output, ReportFile);
+    public string ReportPath =>
+        Path.IsPathRooted(ReportFile) ? ReportFile : Path.Combine(Output, ReportFile);
 
-    public static BenchOptions Parse(string[] args) => new(
-        Value(args, "--implementation") ?? throw new ArgumentException("--implementation is required."),
-        Value(args, "--scenario") ?? throw new ArgumentException("--scenario is required."),
-        ParseInt(Value(args, "--payload-size"), 1024),
-        ParseInt(Value(args, "--request-window"), 100),
-        ParseInt(Value(args, "--send-concurrency"), 8),
-        ParseInt(Value(args, "--latency-sample-limit"), 200_000),
-        ParseInt(Value(args, "--warmup"), 1000),
-        ParseInt(Value(args, "--drain-bound-ms"), 30_000),
-        Value(args, "--trigger-url") ?? throw new ArgumentException("--trigger-url is required."),
-        Value(args, "--stats-url") ?? throw new ArgumentException("--stats-url is required."),
-        Value(args, "--target-endpoint") ?? throw new ArgumentException("--target-endpoint is required."),
-        Value(args, "--target-command-endpoint"),
-        Value(args, "--target-stats-url") ?? throw new ArgumentException("--target-stats-url is required."),
-        Value(args, "--raw-socket") ?? Environment.GetEnvironmentVariable("RAW_SOCKET") ?? "router",
-        Value(args, "--output") ?? "log/latest",
-        Value(args, "--report-file") ?? "report.txt",
-        Value(args, "--configuration") ?? Environment.GetEnvironmentVariable("CONFIGURATION") ?? "Release",
-        TimeSpan.FromSeconds(ParseInt(Value(args, "--timeout-seconds"), 300)));
+    public static BenchOptions Parse(string[] args) =>
+        new(
+            Value(args, "--implementation")
+                ?? throw new ArgumentException("--implementation is required."),
+            Value(args, "--scenario") ?? throw new ArgumentException("--scenario is required."),
+            ParseInt(Value(args, "--payload-size"), 1024),
+            ParseInt(Value(args, "--request-window"), 100),
+            ParseInt(Value(args, "--send-concurrency"), 8),
+            ParseInt(Value(args, "--latency-sample-limit"), 200_000),
+            ParseInt(Value(args, "--warmup-seconds"), 2),
+            ParseInt(Value(args, "--drain-bound-ms"), 30_000),
+            Value(args, "--trigger-url")
+                ?? throw new ArgumentException("--trigger-url is required."),
+            Value(args, "--stats-url") ?? throw new ArgumentException("--stats-url is required."),
+            Value(args, "--target-endpoint")
+                ?? throw new ArgumentException("--target-endpoint is required."),
+            Value(args, "--target-command-endpoint"),
+            Value(args, "--target-stats-url")
+                ?? throw new ArgumentException("--target-stats-url is required."),
+            Value(args, "--raw-socket")
+                ?? Environment.GetEnvironmentVariable("RAW_SOCKET")
+                ?? "router",
+            Value(args, "--output") ?? "log/latest",
+            Value(args, "--report-file") ?? "report.txt",
+            Value(args, "--configuration")
+                ?? Environment.GetEnvironmentVariable("CONFIGURATION")
+                ?? "Release",
+            TimeSpan.FromSeconds(ParseInt(Value(args, "--timeout-seconds"), 300))
+        );
 
     public void Validate()
     {
         if (Implementation is not ("grpc-dotnet" or "zlink-dotnet" or "zlink-framework-dotnet"))
             throw new InvalidOperationException("Unknown implementation.");
-        if (Scenario is not ("request-serial" or "request-window" or "request-backpressure" or "send-saturation"))
+        if (
+            Scenario
+            is not (
+                "request-serial"
+                or "request-window"
+                or "request-backpressure"
+                or "send-saturation"
+            )
+        )
             throw new InvalidOperationException("Unknown scenario.");
-        if (PayloadSize < BenchMetricHeaders.HeaderSize || RequestWindow <= 0 || SendConcurrency <= 0
-            || LatencySampleLimit <= 0 || Warmup < 0 || DrainBoundMs <= 0 || Timeout <= TimeSpan.Zero)
+        if (
+            PayloadSize < BenchMetricHeaders.HeaderSize
+            || RequestWindow <= 0
+            || SendConcurrency <= 0
+            || LatencySampleLimit <= 0
+            || Warmup < 0
+            || DrainBoundMs <= 0
+            || Timeout <= TimeSpan.Zero
+        )
             throw new InvalidOperationException("Numeric benchmark options are invalid.");
-        if (RawSocket is not ("router" or "dealer")) throw new InvalidOperationException("RAW_SOCKET must be router or dealer.");
+        if (RawSocket is not ("router" or "dealer"))
+            throw new InvalidOperationException("RAW_SOCKET must be router or dealer.");
         ValidateHttp(TriggerUrl, nameof(TriggerUrl));
         ValidateHttp(StatsUrl, nameof(StatsUrl));
         ValidateHttp(TargetStatsUrl, nameof(TargetStatsUrl));
-        if (Implementation == "grpc-dotnet") ValidateHttp(TargetEndpoint, nameof(TargetEndpoint));
-        else ValidateTcp(TargetEndpoint, nameof(TargetEndpoint));
+        if (Implementation == "grpc-dotnet")
+            ValidateHttp(TargetEndpoint, nameof(TargetEndpoint));
+        else
+            ValidateTcp(TargetEndpoint, nameof(TargetEndpoint));
         if (Implementation == "zlink-dotnet")
         {
-            if (TargetCommandEndpoint is null) throw new InvalidOperationException("Raw target command endpoint is required.");
+            if (TargetCommandEndpoint is null)
+                throw new InvalidOperationException("Raw target command endpoint is required.");
             ValidateTcp(TargetCommandEndpoint, nameof(TargetCommandEndpoint));
         }
     }
 
     public void Validate(BenchTriggerRequest request)
     {
-        if (request.pattern != Scenario || request.payloadBytes != PayloadSize
-            || request.requestWindow != RequestWindow || request.sendConcurrency != SendConcurrency)
-            throw new InvalidOperationException("Trigger values do not match the runner-owned cell configuration.");
+        if (
+            request.pattern != Scenario
+            || request.payloadBytes != PayloadSize
+            || request.requestWindow != RequestWindow
+            || request.sendConcurrency != SendConcurrency
+        )
+            throw new InvalidOperationException(
+                "Trigger values do not match the runner-owned cell configuration."
+            );
     }
 
     private static string? Value(string[] args, string name)
     {
-        for (var index = 0; index < args.Length - 1; index++) if (args[index] == name) return args[index + 1];
+        for (var index = 0; index < args.Length - 1; index++)
+            if (args[index] == name)
+                return args[index + 1];
         return null;
     }
-    private static int ParseInt(string? value, int fallback) => int.TryParse(value, out var parsed) ? parsed : fallback;
+
+    private static int ParseInt(string? value, int fallback) =>
+        int.TryParse(value, out var parsed) ? parsed : fallback;
+
     private static void ValidateHttp(string value, string name)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != "http" || !IsLoopback(uri.Host))
+        if (
+            !Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || uri.Scheme != "http"
+            || !IsLoopback(uri.Host)
+        )
             throw new InvalidOperationException($"{name} must be an HTTP loopback URL.");
     }
+
     private static void ValidateTcp(string value, string name)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != "tcp" || !IsLoopback(uri.Host))
+        if (
+            !Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || uri.Scheme != "tcp"
+            || !IsLoopback(uri.Host)
+        )
             throw new InvalidOperationException($"{name} must be a TCP loopback endpoint.");
     }
-    private static bool IsLoopback(string host) => host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+
+    private static bool IsLoopback(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
         || IPAddress.TryParse(host, out var address) && IPAddress.IsLoopback(address);
 }
 
 internal static class BenchJson
 {
-    public static JsonSerializerOptions Options { get; } = new(JsonSerializerDefaults.Web)
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
+    public static JsonSerializerOptions Options { get; } =
+        new(JsonSerializerDefaults.Web)
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        };
 }
 
 internal static class RawEnvelopeHeaders
 {
     public static readonly byte[] Request = Encoding.UTF8.GetBytes(
-        "{\"kind\":1,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}");
+        "{\"kind\":1,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}"
+    );
 }

@@ -10,8 +10,6 @@ cd "${HERE}"
 select_java_home
 export PATH="${JAVA_HOME}/bin:${PATH}"
 
-WARMUP_SECONDS=20
-
 if [[ "${SKIP_BUILD}" != 1 ]]; then
   "${HERE}/build.sh"
 fi
@@ -57,7 +55,6 @@ for run in $(seq 1 "${RUNS}"); do
         cell_id="${impl}-${pattern}-${payload}"
         cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
         mkdir -p "${cell_dir}"
-        bench_measurement_load_gate
         target_log="${cell_dir}/target.log"
         source_log="${cell_dir}/source.log"
         target_stats_file="${cell_dir}/target-stats.json"

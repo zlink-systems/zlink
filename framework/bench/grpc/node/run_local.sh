@@ -12,7 +12,6 @@ cd "${HERE}"
 export NODE_PATH="${REPO}/framework/languages/node/node_modules${NODE_PATH:+:${NODE_PATH}}"
 
 # Requests sent before the measured window (README §8.2).
-WARMUP=1000
 NODE_PORT_LOW=5220
 NODE_PORT_HIGH=5239
 
@@ -64,7 +63,6 @@ for run in $(seq 1 "${RUNS}"); do
         cell_id="${impl}-${pattern}-${payload}"
         cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
         mkdir -p "${cell_dir}"
-        bench_measurement_load_gate
         target_log="${cell_dir}/target.log"
         source_log="${cell_dir}/source.log"
         target_stats_file="${cell_dir}/target-stats.json"
@@ -81,7 +79,7 @@ for run in $(seq 1 "${RUNS}"); do
           --request-window "${WINDOW}"
           --send-concurrency "${SEND_CONCURRENCY}"
           --latency-sample-limit "${LATENCY_SAMPLE_LIMIT}"
-          --warmup "${WARMUP}"
+          --warmup-seconds "${WARMUP_SECONDS}"
           --drain-bound-ms "${DRAIN_BOUND_MS}"
           --request-timeout-ms "${REQUEST_TIMEOUT_MS}"
           --route-ready-ms "${ROUTE_READY_MS}"
@@ -102,7 +100,7 @@ for run in $(seq 1 "${RUNS}"); do
 
         bench_run_cell "${trigger_url}" "${source_stats_url}" "${target_stats_url}" \
           "${run_id}" "${cell_id}" "${impl}" "${pattern}" "${payload}" \
-          "$((DURATION_SECONDS * 1000))" "${cell_dir}/results.json" "${target_stats_file}"
+          "$((WARMUP_SECONDS * 1000))" "${cell_dir}/results.json" "${target_stats_file}"
 
         cleanup_cell
         wait_for_ports_free "${NODE_PORT_LOW}" "${NODE_PORT_HIGH}"

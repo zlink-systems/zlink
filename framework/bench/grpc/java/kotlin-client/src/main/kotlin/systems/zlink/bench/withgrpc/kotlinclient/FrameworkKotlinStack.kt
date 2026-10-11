@@ -20,21 +20,21 @@ import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.awaitReply
 
 /**
- * `zlink-framework-kotlin` client: RouteMesh channel messaging through the suspend
- * interface of `zlink-framework-kotlin`.
+ * `zlink-framework-kotlin` client: RouteMesh channel messaging through the suspend interface of
+ * `zlink-framework-kotlin`.
  *
- * <p>spec section 8.1: the framework module is `zlink-framework-kotlin`, stood up through
- * its public host -- the Spring Boot starter -- with the same protobuf codec the java
- * row uses. No internal package is touched (G4).
+ * <p>spec section 8.1: the framework module is `zlink-framework-kotlin`, stood up through its
+ * public host -- the Spring Boot starter -- with the same protobuf codec the java row uses. No
+ * internal package is touched (G4).
  *
- * <p>The host configuration is the java row's, reused verbatim: the same
- * `@EnableZLinkFramework` application class, the same RouteMesh client channel, the same
- * manual peer connection. Rewriting it in kotlin would have changed the wiring as well
- * as the call API, and then a difference between the two rows could not be attributed.
- * What differs is the call itself: `awaitReply` and `await` from
- * `zlink-framework-kotlin`, not `CompletionStage`.
+ * <p>The host configuration is the java row's, reused verbatim: the same `@EnableZLinkFramework`
+ * application class, the same RouteMesh client channel, the same manual peer connection. Rewriting
+ * it in kotlin would have changed the wiring as well as the call API, and then a difference between
+ * the two rows could not be attributed. What differs is the call itself: `awaitReply` and `await`
+ * from `zlink-framework-kotlin`, not `CompletionStage`.
  */
-class FrameworkKotlinStack private constructor(
+class FrameworkKotlinStack
+private constructor(
     private val context: ConfigurableApplicationContext,
     private val route: ZLinkRouteClient,
     private val runId: Int,
@@ -44,18 +44,17 @@ class FrameworkKotlinStack private constructor(
 
     companion object {
         fun create(options: BenchOptions, scope: CoroutineScope): FrameworkKotlinStack {
-            val context = SpringApplicationBuilder(
-                FrameworkStack.BenchClientFrameworkApp::class.java,
-            )
-                .web(WebApplicationType.NONE)
-                .bannerMode(Banner.Mode.OFF)
-                .initializers({ applicationContext ->
-                    applicationContext.beanFactory.registerSingleton(
-                        "benchPeerEndpoint",
-                        FrameworkStack.PeerEndpoint(options.zlinkEndpoint),
-                    )
-                })
-                .run()
+            val context =
+                SpringApplicationBuilder(FrameworkStack.BenchClientFrameworkApp::class.java)
+                    .web(WebApplicationType.NONE)
+                    .bannerMode(Banner.Mode.OFF)
+                    .initializers({ applicationContext ->
+                        applicationContext.beanFactory.registerSingleton(
+                            "benchPeerEndpoint",
+                            FrameworkStack.PeerEndpoint(options.targetEndpoint),
+                        )
+                    })
+                    .run()
             val route = context.getBean(ZLinkRouteClient::class.java)
             return FrameworkKotlinStack(
                 context,
@@ -69,14 +68,18 @@ class FrameworkKotlinStack private constructor(
 
     fun request(): BenchOperation = BenchOperation { payloadSize, phase, sequence ->
         scope.benchFuture {
-            val reply: BenchPayload = route
-                .requestToChannel(BenchContract.CHANNEL_NAME, payload(payloadSize, phase, sequence))
-                .timeout(timeout)
-                .awaitReply(BenchPayload::class.java)
+            val reply: BenchPayload =
+                route
+                    .requestToChannel(
+                        BenchContract.CHANNEL_NAME,
+                        payload(payloadSize, phase, sequence),
+                    )
+                    .timeout(timeout)
+                    .awaitReply(BenchPayload::class.java)
             val decoded = BenchMetricHeader.decode(reply.body.asReadOnlyByteBuffer())
-            check(
-                BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence),
-            ) { "framework reply header mismatch" }
+            check(BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
+                "framework reply header mismatch"
+            }
         }
     }
 
@@ -93,8 +96,8 @@ class FrameworkKotlinStack private constructor(
         BenchPayload.newBuilder()
             .setBody(
                 UnsafeByteOperations.unsafeWrap(
-                    BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence),
-                ),
+                    BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)
+                )
             )
             .build()
 

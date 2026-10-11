@@ -43,13 +43,16 @@ class SourceMetrics {
     this.reset();
   }
 
-  reset() {
+  reset(deadline, phase = header.PHASE_ACTIVE) {
+    this.phase = phase;
+    this.deadline = deadline;
+    this.completedAtClose = 0;
     this.submitted = 0;
     this.completed = 0;
     this.errors = 0;
     this.inFlight = 0;
     this.peakInFlight = 0;
-    this.abandoned = 0;
+    this.terminalSnapshot = null;
     this.sampleCount = 0;
     this.sampleSumMicros = 0;
     this.samples = [];
@@ -58,23 +61,29 @@ class SourceMetrics {
   }
 
   begin() {
+    const now = header.nowNs();
     this.submitted += 1;
     this.inFlight += 1;
     this.peakInFlight = Math.max(this.peakInFlight, this.inFlight);
-    return header.nowNs();
+    return now;
   }
 
   complete(started, success, error = null) {
-    const micros = Number(header.nowNs() - started) / 1000;
+    if (this.terminalSnapshot !== null) return;
+    const now = header.nowNs();
+    const micros = Number(now - started) / 1000;
     this.inFlight -= 1;
     if (success) this.completed += 1;
     else {
       this.errors += 1;
       if (error !== null) this.recordError(error);
     }
-    this.sampleCount += 1;
-    this.sampleSumMicros += micros;
-    if (this.samples.length < this.sampleLimit) this.samples.push(micros);
+    if (now < this.deadline) {
+      if (success) this.completedAtClose += 1;
+      this.sampleCount += 1;
+      this.sampleSumMicros += micros;
+      if (this.samples.length < this.sampleLimit) this.samples.push(micros);
+    }
   }
 
   recordError(error) {
@@ -92,29 +101,32 @@ class SourceMetrics {
     }
   }
 
-  recordAbandoned(count) {
-    this.abandoned = Math.max(this.abandoned, count);
+  freezeTerminal() {
+    this.terminalSnapshot ??= { ...this.result(), abandoned: this.inFlight };
   }
 
   snapshot() {
+    const terminal = this.terminalSnapshot;
     return {
       submitted: this.submitted,
-      completed: this.completed,
-      errors: this.errors,
+      completed: terminal?.completed ?? this.completed,
+      errors: terminal?.errors ?? this.errors,
       received: 0,
-      inFlight: this.inFlight,
+      inFlight: terminal?.inFlight ?? this.inFlight,
       peakInFlight: this.peakInFlight
     };
   }
 
   result() {
+    if (this.terminalSnapshot !== null) return this.terminalSnapshot;
     const sorted = this.samples.slice().sort((a, b) => a - b);
     return {
       completed: this.completed,
+      completedAtClose: this.completedAtClose,
       errors: this.errors,
       inFlight: this.inFlight,
       peakInFlight: this.peakInFlight,
-      abandoned: this.abandoned,
+      abandoned: 0,
       clientErrorSummary: [...this.errorSummary.values()],
       clientErrorOtherCount: this.otherErrors,
       meanMicros: this.sampleCount === 0 ? 0 : this.sampleSumMicros / this.sampleCount,
@@ -168,7 +180,9 @@ async function waitForRouteReady(probe, timeoutMs) {
       await delay(20);
     }
   }
-  throw new Error(`target route did not become ready within ${timeoutMs}ms: ${last && last.message}`);
+  throw new Error(
+    `target route did not become ready within ${timeoutMs}ms: ${last && last.message}`
+  );
 }
 
 function headerRunId(runId) {
@@ -179,74 +193,85 @@ function headerRunId(runId) {
   return hash === 0 ? 1 : hash;
 }
 
-async function runWarmup(transport, options, trigger) {
-  const runId = headerRunId(trigger.runId);
-  for (let index = 0; index < options.warmup; index++) {
-    const stream = trigger.pattern === 'send-saturation'
-      ? index % trigger.sendConcurrency
-      : 0;
-    const payload = header.createPayloadBytes(
-      trigger.payloadBytes, runId, header.PHASE_WARMUP, index
-    );
-    if (trigger.pattern === 'send-saturation') await transport.send(stream, payload);
-    else {
-      const reply = await transport.request(stream, payload);
-      validateReply(reply, runId, header.PHASE_WARMUP, trigger.payloadBytes, index);
-    }
-  }
-}
-
 async function runActive(transport, metrics, options, trigger) {
   await resetTarget(options.targetStatsUrl);
-  metrics.reset();
   const resources = new ResourceSample();
   const deadline = header.nowNs() + BigInt(Math.round(trigger.durationMs * 1e6));
+  metrics.reset(deadline, trigger.phase === 'warmup' ? header.PHASE_WARMUP : header.PHASE_ACTIVE);
   const runId = headerRunId(trigger.runId);
   let sequence = 0;
   const nextSequence = () => sequence++;
+  const boundary = delay(Math.ceil(Number(deadline - header.nowNs()) / 1e6)).then(async () => {
+    const usage = resources.finish();
+    const target = await targetStats(options.targetStatsUrl);
+    return { usage, target };
+  });
 
+  let running;
   if (trigger.pattern === 'request-serial') {
-    await requestWorkers(1, transport, metrics, trigger, runId, nextSequence, deadline);
+    running = requestWorkers(1, transport, metrics, trigger, runId, nextSequence, deadline);
   } else if (trigger.pattern === 'request-window') {
-    await requestWorkers(
-      trigger.requestWindow, transport, metrics, trigger, runId, nextSequence, deadline
+    running = requestWorkers(
+      trigger.requestWindow,
+      transport,
+      metrics,
+      trigger,
+      runId,
+      nextSequence,
+      deadline
     );
   } else if (trigger.pattern === 'request-backpressure') {
-    await requestBackpressure(
-      transport, metrics, options, trigger, runId, nextSequence, deadline
+    running = requestBackpressure(
+      transport,
+      metrics,
+      options,
+      trigger,
+      runId,
+      nextSequence,
+      deadline
     );
   } else if (trigger.pattern === 'send-saturation') {
-    await sendWorkers(
-      trigger.sendConcurrency, transport, metrics, trigger, runId, nextSequence, deadline
+    running = sendWorkers(
+      trigger.sendConcurrency,
+      transport,
+      metrics,
+      trigger,
+      runId,
+      nextSequence,
+      deadline
     );
   } else {
     throw new Error(`unsupported pattern ${trigger.pattern}`);
   }
 
-  const usage = resources.finish();
-  const target = await targetStats(options.targetStatsUrl);
+  const terminal = running.then(() => metrics.freezeTerminal());
+  const [active] = await Promise.all([boundary, terminal]);
+  const { usage, target } = active;
   const source = metrics.result();
   const send = trigger.pattern === 'send-saturation';
-  const completed = send ? target.received : source.completed;
+  const completed = send ? target.received : source.completedAtClose;
   const seconds = trigger.durationMs / 1000;
   const meanMicros = send ? target.meanMicros : source.meanMicros;
   const p95Micros = send ? target.p95Micros : source.p95Micros;
   const p99Micros = send ? target.p99Micros : source.p99Micros;
   const throughput = completed / Math.max(0.001, seconds);
   return {
+    submitted: metrics.submitted,
     completed: source.completed,
+    completed_at_close: source.completedAtClose,
+    active_elapsed_ms: trigger.durationMs,
     errors: source.errors,
     client_error_summary: source.clientErrorSummary,
     client_error_other_count: source.clientErrorOtherCount,
     server_errors: target.errors,
     throughput_per_second: throughput,
-    bandwidth_mb_s: throughput * trigger.payloadBytes / 1_000_000,
+    bandwidth_mb_s: (throughput * trigger.payloadBytes) / 1_000_000,
     latency_mean_ms: meanMicros / 1000,
     latency_p95_ms: p95Micros / 1000,
     latency_p99_ms: p99Micros / 1000,
     client_cpu_percent: usage.cpuPercent,
     client_memory_mb: usage.memoryMb,
-    server_cpu_percent: target.cpuSeconds / Math.max(0.001, seconds) / LOGICAL_CORES * 100,
+    server_cpu_percent: (target.cpuSeconds / Math.max(0.001, seconds) / LOGICAL_CORES) * 100,
     server_memory_mb: target.workingSetMb,
     client_cores: usage.cores,
     client_parallelism_ceiling: CLIENT_PARALLELISM_CEILING,
@@ -260,16 +285,24 @@ async function runActive(transport, metrics, options, trigger) {
 }
 
 async function requestWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
-  const workers = Array.from({ length: count }, () => (async () => {
-    while (header.nowNs() < deadline) {
-      await executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
-    }
-  })());
+  const workers = Array.from({ length: count }, () =>
+    (async () => {
+      while (header.nowNs() < deadline) {
+        await executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
+      }
+    })()
+  );
   await Promise.all(workers);
 }
 
 async function requestBackpressure(
-  transport, metrics, options, trigger, runId, nextSequence, deadline
+  transport,
+  metrics,
+  options,
+  trigger,
+  runId,
+  nextSequence,
+  deadline
 ) {
   if (typeof transport.requestSubmission === 'function') {
     const pending = new Set();
@@ -282,7 +315,10 @@ async function requestBackpressure(
       if (blocked === null) {
         const sequence = nextSequence();
         const payload = header.createPayloadBytes(
-          trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
+          trigger.payloadBytes,
+          runId,
+          metrics.phase,
+          sequence
         );
         const started = metrics.begin();
         let submission;
@@ -295,7 +331,7 @@ async function requestBackpressure(
           const reply = (async () => {
             try {
               const value = await submission.reply;
-              validateReply(value, runId, header.PHASE_ACTIVE, trigger.payloadBytes, sequence);
+              validateReply(value, runId, metrics.phase, trigger.payloadBytes, sequence);
               metrics.complete(started, true);
             } catch (error) {
               metrics.complete(started, false, error);
@@ -305,7 +341,9 @@ async function requestBackpressure(
           reply.finally(() => pending.delete(reply));
           if (submission.result === transport.backpressuredResult) {
             blocked = submission.admitted.catch(() => {});
-            blocked.finally(() => { blocked = null; });
+            blocked.finally(() => {
+              blocked = null;
+            });
           }
         }
       }
@@ -320,7 +358,7 @@ async function requestBackpressure(
       completionPump.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
       await sleepImmediate();
     }
-    if (pending.size > 0 || blocked !== null) metrics.recordAbandoned(metrics.inFlight);
+    metrics.freezeTerminal();
     return;
   }
 
@@ -337,51 +375,50 @@ async function requestBackpressure(
     }
   }
   if (pending.size === 0) return;
-  let drained = false;
-  await Promise.race([
-    Promise.all([...pending]).then(() => { drained = true; }),
-    delay(options.drainBoundMs)
-  ]);
-  if (!drained) metrics.recordAbandoned(metrics.inFlight);
+  await Promise.race([Promise.all([...pending]), delay(options.drainBoundMs)]);
+  metrics.freezeTerminal();
 }
 
 async function sendWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
-  const workers = Array.from({ length: count }, (_, stream) => (async () => {
-    while (header.nowNs() < deadline) {
-      const sequence = nextSequence();
-      const payload = header.createPayloadBytes(
-        trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
-      );
-      const started = metrics.begin();
-      try {
-        if (typeof transport.sendSubmission === 'function') {
-          const submission = transport.sendSubmission(stream, payload);
-          if (submission.result === transport.backpressuredResult) {
-            await transport.awaitSendCompletion(submission.admitted);
+  const workers = Array.from({ length: count }, (_, stream) =>
+    (async () => {
+      while (header.nowNs() < deadline) {
+        const sequence = nextSequence();
+        const payload = header.createPayloadBytes(
+          trigger.payloadBytes,
+          runId,
+          metrics.phase,
+          sequence
+        );
+        const started = metrics.begin();
+        try {
+          if (typeof transport.sendSubmission === 'function') {
+            const submission = transport.sendSubmission(stream, payload);
+            if (submission.result === transport.backpressuredResult) {
+              await transport.awaitSendCompletion(submission.admitted);
+            }
+          } else {
+            await transport.send(stream, payload);
           }
-        } else {
-          await transport.send(stream, payload);
+          metrics.complete(started, true);
+        } catch (error) {
+          metrics.complete(started, false, error);
         }
-        metrics.complete(started, true);
-      } catch (error) {
-        metrics.complete(started, false, error);
+        // Keep all logical send streams and completion callbacks runnable when
+        // a normal submission does not otherwise await anything.
+        await sleepImmediate();
       }
-      // Keep all logical send streams and completion callbacks runnable when
-      // a normal submission does not otherwise await anything.
-      await sleepImmediate();
-    }
-  })());
+    })()
+  );
   await Promise.all(workers);
 }
 
 async function executeRequest(transport, metrics, trigger, runId, stream, sequence) {
-  const payload = header.createPayloadBytes(
-    trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
-  );
+  const payload = header.createPayloadBytes(trigger.payloadBytes, runId, metrics.phase, sequence);
   const started = metrics.begin();
   try {
     const reply = await transport.request(stream, payload);
-    validateReply(reply, runId, header.PHASE_ACTIVE, trigger.payloadBytes, sequence);
+    validateReply(reply, runId, metrics.phase, trigger.payloadBytes, sequence);
     metrics.complete(started, true);
   } catch (error) {
     metrics.complete(started, false, error);
@@ -410,7 +447,8 @@ function streamDescription(pattern, requestWindow, sendConcurrency) {
     return {
       count: 1,
       inFlightPerStream: null,
-      implementation: 'Node event loop; reply stages separate; pause only on BACKPRESSURED admission'
+      implementation:
+        'Node event loop; reply stages separate; pause only on BACKPRESSURED admission'
     };
   }
   if (pattern === 'send-saturation') {
@@ -434,7 +472,6 @@ module.exports = {
   pollTimeoutUntil,
   waitForRouteReady,
   headerRunId,
-  runWarmup,
   runActive,
   streamDescription
 };

@@ -29,3 +29,10 @@ val rawProgressTest by tasks.registering(JavaExec::class) {
     timeout.set(Duration.ofSeconds(40))
 }
 tasks.check { dependsOn(rawProgressTest) }
+
+val activeBoundaryTest by tasks.registering(JavaExec::class) {
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.client.ActiveBoundaryTest")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(activeBoundaryTest) }

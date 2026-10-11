@@ -183,7 +183,7 @@ class Cell:
     contamination_reason: str | None = None
 
     #: Runner-specific fields kept verbatim (submitted, completed, errors, ...).
-    #: Only ``errors`` is read, for the diagnostics table; never used for judgement.
+    #: ``errors`` also excludes failed cells from throughput judgement.
     extra: dict[str, float] = field(default_factory=dict)
 
     @property
@@ -246,7 +246,10 @@ class Cell:
     @property
     def excluded_from_aggregation(self) -> bool:
         """Whether this cell is omitted from every table and judgement."""
-        return self.contaminated or self.drain_bound_hit is True
+        return (self.contaminated or self.drain_bound_hit is True
+                or (self.abandoned or 0) != 0
+                or self.extra.get("errors", 0) != 0
+                or (self.target_errors or 0) != 0)
 
     @property
     def complete(self) -> bool:

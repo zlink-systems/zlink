@@ -160,6 +160,9 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
             cell_id=None if role is None else str(trigger["cellId"]),
             trigger=trigger,
         )
+        for name in ("throughput_per_second", "bandwidth_mb_s"):
+            if raw.get(name) is None:
+                raise ReportError(f"{origin}: {name} is required")
         for name in _CELL_FIELDS:
             if name in raw and raw[name] is not None:
                 setattr(cell, name, raw[name])
@@ -167,6 +170,7 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
             cell.streams = _streams(raw.get("streams"), origin)
         if "target_stats" in raw:
             cell.target_stats = _target_stats(raw.get("target_stats"), origin, key.pattern)
+            cell.target_errors = int(cell.target_stats["errors"])
         cell.extra.update(raw.get("extra", {}))
         if raw.get("errors") is not None:
             cell.extra["errors"] = float(raw["errors"])
@@ -188,7 +192,6 @@ def _complete_from_target_stats(source: Cell) -> None:
         source.incomplete_reason = "embedded target_stats is missing"
         return
 
-    source.target_errors = int(source.target_stats["errors"])
     source.drain_ms = float(source.target_stats["drainMs"])
     if source.key.pattern != "send-saturation":
         source.server_received_at_close = int(source.target_stats["received"])
@@ -198,15 +201,6 @@ def _complete_from_target_stats(source: Cell) -> None:
                 f"runId={source.run_id} cellId={source.cell_id}: "
                 "server_received_at_close is required for send-saturation"
             )
-        duration_ms = float(source.trigger["durationMs"])
-        if duration_ms <= 0:
-            raise ReportError(
-                f"runId={source.run_id} cellId={source.cell_id}: durationMs must be positive"
-            )
-        source.throughput_per_second = source.server_received_at_close * 1000.0 / duration_ms
-        source.bandwidth_mb_s = (
-            source.throughput_per_second * source.key.payload_size / 1_000_000.0
-        )
 
 
 def read_run(run_dir: str) -> tuple[list[Cell], list[str]]:

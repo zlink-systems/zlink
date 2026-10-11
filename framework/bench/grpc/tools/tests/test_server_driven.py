@@ -111,6 +111,25 @@ class ServerDrivenCellTest(unittest.TestCase):
         with open(path, encoding="utf-8") as handle:
             return json.load(handle)
 
+    def test_reader_preserves_producer_rates(self):
+        payload = self._source()
+        raw = payload["cells"][0]
+        raw["pattern"] = raw["trigger"]["pattern"] = "send-saturation"
+        raw["server_received_at_close"] = 240000
+        raw["throughput_per_second"] = 123.0
+        raw["bandwidth_mb_s"] = 0.456
+        cell = cells_from_cell_json(payload, "run1", "results.json")[0]
+        self.assertEqual(cell.throughput_per_second, 123.0)
+        self.assertEqual(cell.bandwidth_mb_s, 0.456)
+
+    def test_reader_rejects_missing_rates(self):
+        for name in ("throughput_per_second", "bandwidth_mb_s"):
+            with self.subTest(name=name):
+                payload = self._source()
+                payload["cells"][0].pop(name, None)
+                with self.assertRaisesRegex(ReportError, name):
+                    cells_from_cell_json(payload, "run1", "results.json")
+
     def test_trigger_fields_are_required_not_invented(self):
         payload = self._source()
         for name in ("warmup", "endpoint"):
