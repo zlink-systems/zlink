@@ -1,8 +1,9 @@
-using WithGrpcBench.Shared;
 using Systems.Zlink;
+using WithGrpcBench.Shared;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Channels;
+using Zlink.Framework.Contracts.Dispatch;
 
 var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5214";
 var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5215";
@@ -14,7 +15,10 @@ builder.Services.AddSingleton<BenchServerMetrics>();
 builder.Services.AddZLinkFramework(framework =>
 {
     framework.Codecs.Use(ZLinkProtobufCodec.Default);
-    var mesh = framework.AddRouteMesh("bench")
+    if (BenchDiagnostics.FlowTraceEnabled)
+        framework.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+    var mesh = framework
+        .AddRouteMesh("bench")
         .Listen(endpoint)
         .SetRoutingId(RoutingId.From("bench-server"));
     mesh.AddRouteRequestHandler<EchoHandler, BenchPayload, BenchPayload>("BenchPayload")
@@ -24,11 +28,14 @@ builder.Services.AddZLinkFramework(framework =>
 var app = builder.Build();
 var metrics = app.Services.GetRequiredService<BenchServerMetrics>();
 app.MapGet("/ready", () => Results.Ok("ready"));
-app.MapPost("/bench/reset", () =>
-{
-    metrics.Reset();
-    return Results.Ok();
-});
+app.MapPost(
+    "/bench/reset",
+    () =>
+    {
+        metrics.Reset();
+        return Results.Ok();
+    }
+);
 app.MapGet("/bench/stats", () => Results.Ok(metrics.Snapshot()));
 await app.RunAsync();
 
@@ -36,14 +43,17 @@ static void ConfigureQuietLogging(WebApplicationBuilder builder)
 {
     builder.Logging.ClearProviders();
     builder.Logging.AddConsole();
-    builder.Logging.SetMinimumLevel(LogLevel.Warning);
+    builder.Logging.SetMinimumLevel(
+        BenchDiagnostics.FlowTraceEnabled ? LogLevel.Information : LogLevel.Warning
+    );
 }
 
 static string? ArgValue(string[] args, string name)
 {
     for (var i = 0; i < args.Length - 1; i++)
     {
-        if (args[i] == name) return args[i + 1];
+        if (args[i] == name)
+            return args[i + 1];
     }
 
     return null;
@@ -55,19 +65,22 @@ internal sealed class EchoHandler(BenchServerMetrics metrics)
     public ValueTask<BenchPayload> HandleAsync(
         BenchPayload request,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         metrics.RecordReceived(request);
         return ValueTask.FromResult(request);
     }
 }
 
-internal sealed class CommandHandler(BenchServerMetrics metrics) : IZLinkRouteSendHandler<BenchPayload>
+internal sealed class CommandHandler(BenchServerMetrics metrics)
+    : IZLinkRouteSendHandler<BenchPayload>
 {
     public ValueTask HandleAsync(
         BenchPayload message,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         metrics.Record(message);
         return ValueTask.CompletedTask;
