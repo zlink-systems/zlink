@@ -154,3 +154,9 @@ add_executable(bench_cpp_raw_wire_test tests/raw_wire_test.cpp ${BENCH_PROTO_CC}
 target_include_directories(bench_cpp_raw_wire_test PRIVATE ${BENCH_PROTO_GEN_DIR})
 target_link_libraries(bench_cpp_raw_wire_test PRIVATE protobuf::libprotobuf)
 add_test(NAME bench_cpp_raw_wire_identity COMMAND bench_cpp_raw_wire_test)
+
+add_executable(bench_cpp_grpc_callback_test
+  tests/grpc_callback_test.cpp ${BENCH_PROTO_CC} ${BENCH_GRPC_CC})
+bench_target(bench_cpp_grpc_callback_test)
+bench_grpc_target(bench_cpp_grpc_callback_test)
+add_test(NAME bench_cpp_grpc_callback COMMAND bench_cpp_grpc_callback_test)

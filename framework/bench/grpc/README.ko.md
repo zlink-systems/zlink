@@ -500,7 +500,7 @@ warmup은 공용 `WARMUP_SECONDS`(기본값 2초) 동안 같은 패턴을 warmup
 
 | 항목 | 이유 |
 |------|------|
-| gRPC server 구성 | 언어마다 기본 server 구현이 다르다. gRPC 쪽은 각 언어의 기본 구성으로 두고 그 구성을 결과에 남긴다 |
+| gRPC server 구성 | 언어마다 기본 server 구현이 다르다. gRPC 쪽은 각 언어의 기본 구성으로 두고 그 구성을 결과에 남긴다. C++는 `CallbackService`와 기본 `ServerBuilder`를 사용한다. 호출별 동기 worker thread를 만들지 않는다. |
 | 런타임과 gRPC 라이브러리 version | SDK version, 런타임 version, gRPC 라이브러리 version을 셀 원본과 보고서에 함께 남긴다 |
 
 ## 9. 포트 대역

@@ -536,7 +536,7 @@ to leave the values used in the result.
 
 | Item | Reason |
 |------|------|
-| gRPC server configuration | The default server implementation differs per language. The gRPC side is left at each language's default configuration, and that configuration is recorded in the result |
+| gRPC server configuration | The default server implementation differs per language. The gRPC side is left at each language's default configuration, and that configuration is recorded in the result C++ uses `CallbackService` with default `ServerBuilder` settings, without a synchronous worker thread per call. |
 | Runtime and gRPC library version | The SDK version, runtime version, and gRPC library version are recorded in the cell's raw output and in the report |
 
 ## 9. Port Bands
