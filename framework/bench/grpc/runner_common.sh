@@ -207,7 +207,7 @@ settle_and_capture() {
     counts="$(python3 -c '
 import json,sys
 a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2])
-received=b["anyPhaseMessages"] if sys.argv[3] == "any" else b["received"]
+received=b[sys.argv[3]]
 print(a.get("completed",0), a.get("currentInFlight", a.get("inFlight",0)),
       received, b.get("errors",0), b.get("rejected"))
 ' "${source_body}" "${target_body}" "${target_counter}")"
@@ -340,11 +340,7 @@ bench_run_cell() {
       "warmup drain bound hit" "${warmup_abandoned}"
     return 0
   fi
-  if [[ -n "${reset_url}" ]]; then
-    settle_and_capture "${source_url}" "${target_url}" /dev/null any
-  else
-    settle_and_capture "${source_url}" "${target_url}" /dev/null
-  fi
+  settle_and_capture "${source_url}" "${target_url}" /dev/null allPhaseMessages
   if [[ "${SETTLE_BOUND_HIT}" == true ]]; then
     bench_record_contaminated_cell "${result_file}" "${implementation}" "${pattern}" "${payload}" \
       "warmup settle bound hit"

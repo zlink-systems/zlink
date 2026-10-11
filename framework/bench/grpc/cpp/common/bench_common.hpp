@@ -48,10 +48,9 @@ namespace zlink_cpp_bench
 // steady_clock difference for that reason.
 inline uint64_t now_ns ()
 {
-    return static_cast<uint64_t> (
-      std::chrono::duration_cast<std::chrono::nanoseconds> (
-        std::chrono::steady_clock::now ().time_since_epoch ())
-        .count ());
+    return static_cast<uint64_t> (std::chrono::duration_cast<std::chrono::nanoseconds> (
+                                    std::chrono::steady_clock::now ().time_since_epoch ())
+                                    .count ());
 }
 
 // ---------------------------------------------------------------------------
@@ -75,8 +74,7 @@ inline void write_u64_le (unsigned char *dst, uint64_t value)
 inline uint32_t read_u32_le (const unsigned char *src)
 {
     return static_cast<uint32_t> (src[0]) | (static_cast<uint32_t> (src[1]) << 8)
-           | (static_cast<uint32_t> (src[2]) << 16)
-           | (static_cast<uint32_t> (src[3]) << 24);
+           | (static_cast<uint32_t> (src[2]) << 16) | (static_cast<uint32_t> (src[3]) << 24);
 }
 
 inline uint64_t read_u64_le (const unsigned char *src)
@@ -96,8 +94,8 @@ enum phase_t : uint8_t
     phase_active = 1
 };
 
-inline bool stamp_payload (
-  void *payload, size_t payload_size, uint32_t run_id, phase_t phase, uint64_t seq)
+inline bool
+stamp_payload (void *payload, size_t payload_size, uint32_t run_id, phase_t phase, uint64_t seq)
 {
     if (!payload || payload_size < k_header_size)
         return false;
@@ -137,8 +135,8 @@ inline bool decode_payload (const void *payload, size_t payload_size, decoded_he
 
 // The raw transport serializes the same typed payload as gRPC and Framework.
 // Envelope headers below remain protocol constants.
-inline std::string encode_bench_payload (
-  const zlink::framework::bench::withgrpc::BenchPayload &payload)
+inline std::string
+encode_bench_payload (const zlink::framework::bench::withgrpc::BenchPayload &payload)
 {
     std::string encoded;
     if (!payload.SerializeToString (&encoded))
@@ -153,12 +151,18 @@ inline std::string encode_bench_payload (
 
 inline const char *request_envelope ()
 {
-    return "{\"kind\":1,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}";
+    return "{\"kind\":1,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":"
+           "\"application/"
+           "x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":"
+           "null,\"errorMessage\":null,\"source\":null}";
 }
 
 inline const char *response_envelope ()
 {
-    return "{\"kind\":2,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}";
+    return "{\"kind\":2,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":"
+           "\"application/"
+           "x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":"
+           "null,\"errorMessage\":null,\"source\":null}";
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +234,7 @@ inline long logical_cores ()
 
 inline double process_cpu_seconds_self ()
 {
-    rusage ru {};
+    rusage ru{};
     getrusage (RUSAGE_SELF, &ru);
     return static_cast<double> (ru.ru_utime.tv_sec)
            + static_cast<double> (ru.ru_utime.tv_usec) / 1e6
@@ -240,7 +244,7 @@ inline double process_cpu_seconds_self ()
 
 inline double thread_cpu_seconds_self ()
 {
-    timespec ts {};
+    timespec ts{};
     if (clock_gettime (CLOCK_THREAD_CPUTIME_ID, &ts) != 0)
         return 0.0;
     return static_cast<double> (ts.tv_sec) + static_cast<double> (ts.tv_nsec) / 1e9;
@@ -285,7 +289,10 @@ inline double rss_mb_pid (int pid)
            / 1024.0;
 }
 
-inline double rss_mb () { return rss_mb_pid (0); }
+inline double rss_mb ()
+{
+    return rss_mb_pid (0);
+}
 
 // Counts the threads the process currently has. Reported so that "process cores
 // exceeded the submit parallelism" can be read against how many threads existed
@@ -327,13 +334,13 @@ inline std::optional<std::string> http_request (const std::string &host,
     const int fd = ::socket (AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
         return std::nullopt;
-    timeval tv {};
+    timeval tv{};
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
     ::setsockopt (fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof (tv));
     ::setsockopt (fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof (tv));
 
-    sockaddr_in addr {};
+    sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons (static_cast<uint16_t> (port));
     if (::inet_pton (AF_INET, host.c_str (), &addr.sin_addr) != 1
@@ -375,7 +382,6 @@ inline std::optional<std::string> http_request (const std::string &host,
 struct server_snapshot_t
 {
     long long active_messages = 0;
-    long long any_phase_messages = 0;
     long long errors = 0;
     double mean_us = 0.0;
     double p95_us = 0.0;
@@ -400,7 +406,6 @@ inline std::optional<server_snapshot_t> fetch_stats (const std::string &host, in
         return std::nullopt;
     server_snapshot_t s;
     s.active_messages = static_cast<long long> (json_number (*body, "activeMessages"));
-    s.any_phase_messages = static_cast<long long> (json_number (*body, "anyPhaseMessages"));
     s.errors = static_cast<long long> (json_number (*body, "errors"));
     s.mean_us = json_number (*body, "meanMicros");
     s.p95_us = json_number (*body, "p95Micros");
@@ -417,7 +422,8 @@ inline bool reset_stats (const std::string &host, int port)
 
 inline bool wait_ready (const std::string &host, int port, int timeout_ms)
 {
-    const auto deadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms);
+    const auto deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms);
     while (std::chrono::steady_clock::now () < deadline) {
         if (http_request (host, port, "GET", "/ready", 500))
             return true;
@@ -477,10 +483,7 @@ struct cell_t
     bool contaminated = false;
     std::string contamination_reason;
 
-    std::string unit () const
-    {
-        return pattern == "send-saturation" ? "KMSG/s" : "KOPS";
-    }
+    std::string unit () const { return pattern == "send-saturation" ? "KMSG/s" : "KOPS"; }
 
     std::string scenario () const { return implementation + "-" + pattern; }
 };
@@ -542,8 +545,7 @@ inline void write_cells_json (const std::string &path,
         out << "      \"server_cpu_percent\": " << json_number_str (cell.server_cpu_percent)
             << ",\n";
         out << "      \"server_memory_mb\": " << json_number_str (cell.server_memory_mb) << ",\n";
-        out << "      \"client_saturation_metric\": \"" << cell.client_saturation_metric
-            << "\",\n";
+        out << "      \"client_saturation_metric\": \"" << cell.client_saturation_metric << "\",\n";
         out << "      \"submit_thread_cores\": " << json_number_str (cell.submit_thread_cores)
             << ",\n";
         out << "      \"client_cores\": " << json_number_str (cell.client_cores) << ",\n";
@@ -569,8 +571,7 @@ inline void write_cells_json (const std::string &path,
         out << "      \"errors\": " << cell.errors << ",\n";
         out << "      \"submitted\": " << cell.submitted << ",\n";
         out << "      \"completed\": " << cell.completed << ",\n";
-        out << "      \"header_validation_failures\": " << cell.header_validation_failures
-            << ",\n";
+        out << "      \"header_validation_failures\": " << cell.header_validation_failures << ",\n";
         out << "      \"warmup_segment_throughput\": [";
         for (size_t s = 0; s < cell.warmup_segment_throughput.size (); ++s)
             out << (s ? ", " : "") << json_number_str (cell.warmup_segment_throughput[s]);
@@ -589,8 +590,8 @@ inline void print_result_lines (std::FILE *out, const cell_t &cell)
     const size_t size = cell.payload_size;
     (void) s;
     auto line = [&] (const char *metric, double value) {
-        std::fprintf (out, "RESULT,current,%s,local,%zu,%s,%.3f\n", scenario.c_str (), size,
-                      metric, value);
+        std::fprintf (out, "RESULT,current,%s,local,%zu,%s,%.3f\n", scenario.c_str (), size, metric,
+                      value);
     };
     line ("throughput", cell.throughput_per_second);
     line ("bandwidth", cell.bandwidth_mb_s);
@@ -608,11 +609,10 @@ inline void print_table_row (std::FILE *out, const cell_t &cell)
     std::fprintf (out,
                   "      | %-26s | %-8zu | %10.3f %-7s | %9.3f MB/s | %10.3f ms | %10.3f ms |"
                   " %10.3f ms | %9.1f%% | %8.1f MB | %9.1f%% | %8.1f MB |\n",
-                  cell.scenario ().c_str (), cell.payload_size,
-                  cell.throughput_per_second / 1000.0, cell.unit ().c_str (),
-                  cell.bandwidth_mb_s, cell.latency_mean_ms, cell.latency_p95_ms,
-                  cell.latency_p99_ms, cell.client_cpu_percent, cell.client_memory_mb,
-                  cell.server_cpu_percent, cell.server_memory_mb);
+                  cell.scenario ().c_str (), cell.payload_size, cell.throughput_per_second / 1000.0,
+                  cell.unit ().c_str (), cell.bandwidth_mb_s, cell.latency_mean_ms,
+                  cell.latency_p95_ms, cell.latency_p99_ms, cell.client_cpu_percent,
+                  cell.client_memory_mb, cell.server_cpu_percent, cell.server_memory_mb);
 }
 
 // ---------------------------------------------------------------------------

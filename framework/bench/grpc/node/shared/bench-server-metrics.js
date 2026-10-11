@@ -9,29 +9,29 @@ const header = require('./bench-metric-header');
  *
  * spec section 5 / G3: `send-saturation` throughput is the number of messages the
  * SERVER received during the active phase, never the client's submit count.
- * That is why every server carries this and why the counter only advances for
- * payloads whose header says phase == active.
+ * Active receipts determine throughput; all-phase receipts determine warmup quiet.
  */
 class BenchServerMetrics {
   constructor() {
     this._activeMessages = 0;
+    this._allPhaseMessages = 0;
     this._errors = 0;
     this._latencyNs = [];
     this._latencyLimit = 500000;
     this._cpuStart = process.cpuUsage();
-    this._wallStartNs = header.nowNs();
   }
 
   reset() {
     this._activeMessages = 0;
+    this._allPhaseMessages = 0;
     this._errors = 0;
     this._latencyNs = [];
     this._cpuStart = process.cpuUsage();
-    this._wallStartNs = header.nowNs();
   }
 
   /** `payload` is the stamped body, not the protobuf envelope. */
   record(payload) {
+    this._allPhaseMessages += 1;
     const decoded = header.decode(payload);
     if (decoded === null || decoded.phase !== header.PHASE_ACTIVE) return;
     this._activeMessages += 1;
@@ -58,6 +58,7 @@ class BenchServerMetrics {
       inFlight: 0,
       peakInFlight: 0,
       activeMessages: this._activeMessages,
+      allPhaseMessages: this._allPhaseMessages,
       errors: this._errors,
       meanMicros: mean(samples) / 1000,
       p50Micros: percentile(samples, 0.5) / 1000,
