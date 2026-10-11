@@ -1,6 +1,7 @@
 """Contract checks for the shared server-driven runner steps."""
 
 import json
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,37 @@ COMMON = Path(__file__).resolve().parents[2] / "runner_common.sh"
 
 
 class RunnerCommonTest(unittest.TestCase):
+    def check_port(self, port):
+        return subprocess.run(["bash", "-c", 'source "$1"; check_ports_free "$2" "$2"',
+                               "_", str(COMMON), str(port)], capture_output=True).returncode
+
+    def test_bind_probe_accepts_free_port_and_rejects_listener(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+            listener.listen()
+            self.assertNotEqual(0, self.check_port(port))
+        self.assertEqual(0, self.check_port(port))
+
+    def test_bind_probe_rejects_time_wait_without_reuse(self):
+        # The active closer leaves TIME_WAIT without SO_REUSEADDR. A later
+        # SO_REUSEADDR listener still cannot bind that local port.
+        with socket.socket() as listener, socket.socket() as client:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            client.connect(listener.getsockname())
+            connection, _ = listener.accept()
+            port = client.getsockname()[1]
+            client.shutdown(socket.SHUT_WR)
+            connection.recv(1)
+            connection.close()
+            client.recv(1)
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            with self.assertRaises(OSError):
+                probe.bind(("127.0.0.1", port))
+        self.assertNotEqual(0, self.check_port(port))
+
     def test_node_cell_without_submitted_still_checks_target_count(self):
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.json"

@@ -404,11 +404,11 @@ zlink_c_bench::result_t run_send_saturation (void *dealer,
 int main ()
 {
     const std::string request_endpoint =
-      zlink_c_bench::env_string ("ZLINK_REQUEST_ENDPOINT", "tcp://127.0.0.1:6075");
+      zlink_c_bench::env_string ("ZLINK_REQUEST_ENDPOINT", zlink_c_bench::k_request_endpoint);
     const std::string send_endpoint =
-      zlink_c_bench::env_string ("ZLINK_SEND_ENDPOINT", "tcp://127.0.0.1:6077");
-    const std::string patterns = zlink_c_bench::env_string (
-      "PATTERNS", "request-serial,request-backpressure,send-saturation");
+      zlink_c_bench::env_string ("ZLINK_SEND_ENDPOINT", zlink_c_bench::k_send_endpoint);
+    const std::string patterns =
+      zlink_c_bench::env_string ("PATTERNS", "request-serial,request-backpressure,send-saturation");
     void *ctx = zlink_ctx_new ();
     void *request_router = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);
     void *send_router = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);

@@ -120,9 +120,9 @@ int main ()
     std::signal (SIGINT, on_signal);
     std::signal (SIGTERM, on_signal);
     const std::string request_endpoint =
-      zlink_c_bench::env_string ("ZLINK_REQUEST_ENDPOINT", "tcp://127.0.0.1:6075");
+      zlink_c_bench::env_string ("ZLINK_REQUEST_ENDPOINT", zlink_c_bench::k_request_endpoint);
     const std::string send_endpoint =
-      zlink_c_bench::env_string ("ZLINK_SEND_ENDPOINT", "tcp://127.0.0.1:6077");
+      zlink_c_bench::env_string ("ZLINK_SEND_ENDPOINT", zlink_c_bench::k_send_endpoint);
 
     void *ctx = zlink_ctx_new ();
     void *request_router = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);

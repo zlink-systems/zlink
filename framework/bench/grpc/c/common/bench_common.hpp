@@ -9,14 +9,20 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <sys/resource.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 namespace zlink_c_bench
 {
+
+inline constexpr const char *k_grpc_address = "127.0.0.1:6202";
+inline constexpr const char *k_request_endpoint = "tcp://127.0.0.1:6207";
+inline constexpr const char *k_send_endpoint = "tcp://127.0.0.1:6208";
 
 inline uint64_t now_ns ()
 {

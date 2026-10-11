@@ -145,14 +145,22 @@ select_java_home() {
 }
 
 check_ports_free() {
-  local low="$1" high="$2" used
-  used="$(ss -H -ltn | awk -v low="${low}" -v high="${high}" '
-    { endpoint=$4; sub(/^.*:/, "", endpoint)
-      if (endpoint ~ /^[0-9]+$/ && endpoint >= low && endpoint <= high) print $4 }')"
-  if [[ -n "${used}" ]]; then
-    echo "bench port range ${low}-${high} has active listeners: ${used}" >&2
-    return 1
-  fi
+  python3 - "$1" "$2" <<'PY'
+import socket
+import sys
+from contextlib import ExitStack
+
+with ExitStack() as sockets:
+    for port in range(int(sys.argv[1]), int(sys.argv[2]) + 1):
+        probe = sockets.enter_context(socket.socket())
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("127.0.0.1", port))
+            probe.listen()
+        except OSError as error:
+            print(f"bench port {port} cannot bind: {error}", file=sys.stderr)
+            sys.exit(1)
+PY
 }
 
 wait_for_ports_free() {

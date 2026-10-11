@@ -11,8 +11,11 @@
 
 namespace
 {
-std::atomic<bool> g_stop {false};
-void on_signal (int) { g_stop.store (true); }
+std::atomic<bool> g_stop{false};
+void on_signal (int)
+{
+    g_stop.store (true);
+}
 
 class BenchService final : public zlink::framework::bench::withgrpc::BenchService::Service
 {
@@ -37,7 +40,8 @@ int main ()
 {
     std::signal (SIGINT, on_signal);
     std::signal (SIGTERM, on_signal);
-    const std::string address = zlink_c_bench::env_string ("GRPC_ADDRESS", "0.0.0.0:6071");
+    const std::string address =
+      zlink_c_bench::env_string ("GRPC_ADDRESS", zlink_c_bench::k_grpc_address);
     BenchService service;
     grpc::ServerBuilder builder;
     builder.AddListeningPort (address, grpc::InsecureServerCredentials ());
