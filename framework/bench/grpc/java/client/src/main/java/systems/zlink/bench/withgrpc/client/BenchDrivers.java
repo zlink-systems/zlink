@@ -419,7 +419,7 @@ public final class BenchDrivers {
         }
     }
 
-    private static final class SourceMetrics {
+    static final class SourceMetrics {
         private static final int ERROR_KIND_LIMIT = 8;
         private static final int ERROR_MESSAGE_LIMIT = 200;
         private final AtomicLong submitted = new AtomicLong();
