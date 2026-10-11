@@ -56,6 +56,8 @@
 | Windows GoogleMock 실패가 test 결과에 반영되나 | 등록된 test 실행과 종료 코드 0 | gmock.dll과 gtest.dll의 registry가 다르면 필수 mock 호출을 생략해도 통과한다. 공용 harness의 registry를 통합하고 의도적인 mock 실패의 포착과 종료 코드 1을 확인한다 | #1571 |
 | C++ perf 단위 테스트가 assertion을 실행하나 | `perf_multi_metrics_test` 통과 | Release 구성의 `NDEBUG`가 `assert`를 지워 검사 없이 통과한다. test target에서 `NDEBUG`를 해제하고 수정 전 실패를 먼저 확인한다 | #1421 |
 | 두 Core 빌드의 처리량 차이가 코드 차이인가 | 번갈아 측정에서 한쪽이 7% 낮음 | 같은 머신에서 같은 코드도 회차마다 6~14% 다르게 측정된다. 두 `libzlink.so`의 `.text`를 먼저 대조하고, 같은 빌드 회차 간 차이보다 큰 차이만 회귀 후보로 둔다 | #1421 |
+| gate 스크립트가 실패한 단계를 종료 코드로 알리나 | gate 종료 코드 0 | 실패 집계 뒤에 `touch`가 실행되면 실패가 있어도 0으로 끝난다. 실패한 단계를 넣은 results 파일로 종료 코드가 0이 아닌지 확인하고, 판정은 results 파일로도 대조한다 | 0.30.0 gate |
+| bench 포트가 비어 있나 | LISTEN 목록에 없음 | TIME_WAIT 포트나 다른 loopback 주소의 listener는 LISTEN 조회에서 빠지지만 실제 bind는 실패한다. 실제 bind로 확인하고 TIME_WAIT·LISTEN·빈 포트 세 경우를 모두 시험한다 | #1390 |
 
 ## 4. 무엇이 실제로 답을 줬나
 
