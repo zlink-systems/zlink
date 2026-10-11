@@ -118,7 +118,6 @@ public sealed class RawPortCloseFailureTests
             null!,
             null!,
             CancellationToken.None,
-            null!,
             errors
         );
         var type = typeof(ZLinkClientServerClientRuntime).GetNestedType(

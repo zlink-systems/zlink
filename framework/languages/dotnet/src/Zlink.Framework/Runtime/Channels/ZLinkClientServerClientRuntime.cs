@@ -1,5 +1,4 @@
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
-using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
@@ -18,7 +17,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private readonly IZLinkMonitoringBackendAdapter _monitoring;
     private readonly IZLinkBackendRuntimeContext _context;
     private readonly IZLinkSocketConfig _socketConfig;
-    private readonly ZLinkApplicationJobQueue _applicationJobQueue;
     private readonly TimeProvider _time;
     private readonly CancellationToken _stopToken;
     private readonly ZLinkStateLane _lane = new();
@@ -44,7 +42,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         IZLinkBackendRuntimeContext context,
         IZLinkSocketConfig socketConfig,
         CancellationToken stopToken,
-        ZLinkApplicationJobQueue applicationJobQueue,
         IZLinkRuntimeFailureReporter errorSink,
         ZLinkMessageFlowTracer? flow = null,
         TimeProvider? timeProvider = null
@@ -55,7 +52,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         _context = context;
         _socketConfig = socketConfig;
         _stopToken = stopToken;
-        _applicationJobQueue = applicationJobQueue;
         _errorSink = errorSink;
         _flow = flow;
         _time = timeProvider ?? TimeProvider.System;
@@ -532,9 +528,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             try
             {
-                await created
-                    .PrepareAsync(_applicationJobQueue, _monitoring, _socketConfig)
-                    .ConfigureAwait(false);
+                created.Prepare(_monitoring, _socketConfig);
                 var committed = false;
                 try
                 {
@@ -851,7 +845,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private long _sentLivenessProbeCount;
         private ulong _physicalGeneration = 1;
         private ulong _admissionAttempt;
-        private IAsyncDisposable? _receiveFlowRegistration;
 
         internal Connection(
             string channelName,
@@ -1030,8 +1023,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             });
         }
 
-        internal async ValueTask PrepareAsync(
-            ZLinkApplicationJobQueue applicationJobQueue,
+        internal void Prepare(
             IZLinkMonitoringBackendAdapter monitoring,
             IZLinkSocketConfig socketConfig
         )
@@ -1047,9 +1039,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             Socket.Options.Probe = false;
             _monitor = monitoring.OpenSocketMonitor(Socket);
             _receivePoller = ZLinkBackendSocketPoller.Create(Socket);
-            _receiveFlowRegistration = await applicationJobQueue
-                .RegisterReceiveFlowSocketAsync(Socket)
-                .ConfigureAwait(false);
         }
 
         internal void Start()
@@ -1132,11 +1121,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 await failures
                     .CaptureAsync(() => new ValueTask(IgnoreCancellationAsync(monitorTask)))
                     .ConfigureAwait(false);
-            await failures
-                .CaptureAsync(() =>
-                    ZLinkReceiveFlowController.DisposeRegistrationAsync(_receiveFlowRegistration)
-                )
-                .ConfigureAwait(false);
             if (_monitor is not null)
                 await failures.CaptureAsync(_monitor.DisposeAsync).ConfigureAwait(false);
             if (_receivePoller is not null)

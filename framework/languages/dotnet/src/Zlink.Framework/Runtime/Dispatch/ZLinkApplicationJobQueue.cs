@@ -647,7 +647,7 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         _peakPermitsInUse = Math.Max(_peakPermitsInUse, PermitsInUseUnderLock());
     }
 
-    internal ValueTask<IAsyncDisposable> RegisterReceiveFlowSocketAsync(ISocket socket)
+    internal ValueTask<IAsyncDisposable> RegisterReceiveFlowSocketAsync(IRouterSocket socket)
     {
         ArgumentNullException.ThrowIfNull(socket);
         return RegisterReceiveFlowSocketAsync(socket, socket.SetReceiveFlowState);

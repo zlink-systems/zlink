@@ -22,10 +22,7 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
                 dealer,
                 dealer.Connect,
                 dealer.Disconnect,
-                socketRole: "client",
-                receiveFlowRegistration: await state
-                    .ApplicationJobQueue.RegisterReceiveFlowSocketAsync(dealer)
-                    .ConfigureAwait(false)
+                socketRole: "client"
             );
 
             bundle.OwnManualConnectionAttachment(
