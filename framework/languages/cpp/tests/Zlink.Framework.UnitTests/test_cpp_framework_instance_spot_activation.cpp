@@ -145,10 +145,12 @@ static void verify_same_target_activation_order (bool ready_request,
                               .node_routing_id = zlink::routing_id_t::from ("target").to_bytes (),
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
-                              .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}});
     std::vector<std::uint64_t> queued;
     target->configure_instance_spot_operations (
-      store, relocations, [owner] { return owner; },
+      // The host keeps finishing relocation cleanup after close(); it must also own the blob store.
+      store, relocations, [owner, blob_store] { return owner; },
       host::instance_spot_activation_materializer_t{
         [] (const auto &, const auto &) { return true; },
         [&] (auto command, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
@@ -239,6 +241,20 @@ static void verify_same_target_activation_order (bool ready_request,
     EXPECT_EQ (retransmission_mismatch ? std::vector<std::uint64_t>{1}
                                        : (std::vector<std::uint64_t>{1, 2}),
                queued);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, RawMeshOwnerRequiresRuntimeFailureCollector)
+{
+    namespace mesh = zlink::framework::runtime::mesh;
+    const mesh::raw_mesh_node_options_t options{
+      .descriptor = {.mesh_name = "collector-contract",
+                     .node_routing_id = zlink::routing_id_t::from ("target").to_bytes (),
+                     .lifecycle_generation = 1,
+                     .descriptor_revision = 1,
+                     .advertised_endpoint = "tcp://127.0.0.1:0"}};
+    EXPECT_THROW (mesh::raw_mesh_node_owner_t{options}, std::invalid_argument);
+    EXPECT_NO_THROW (
+      mesh::raw_mesh_node_owner_t{zlink::framework::test::runtime_failure_options (options)});
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation,
@@ -896,7 +912,8 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
                               .node_routing_id = zlink::routing_id_t::from ("target").to_bytes (),
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
-                              .advertised_endpoint = "tcp://127.0.0.1:0"}}};
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}};
     std::promise<fw::framework_error_kind_t> diagnostic_promise;
     auto diagnostic_future = diagnostic_promise.get_future ();
     int diagnostics = 0;
@@ -917,7 +934,7 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
     int prepares = 0;
     int handlers = 0;
     target->configure_instance_spot_operations (
-      store, relocations, [] { return fw::location_owner_token_t{"target-owner", 1}; },
+      store, relocations, [blob_store] { return fw::location_owner_token_t{"target-owner", 1}; },
       host::instance_spot_activation_materializer_t{
         [&] (const auto &, const auto &) {
             ++prepares;
@@ -1034,7 +1051,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, RecoveredRequestWithoutNativeTokenDo
                       .node_routing_id = {1},
                       .lifecycle_generation = 1,
                       .descriptor_revision = 1,
-                      .advertised_endpoint = "tcp://127.0.0.1:0"}});
+                      .advertised_endpoint = "tcp://127.0.0.1:0"},
+       .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()});
     target.start ();
     rt::mesh::service_mailbox_record_t recovered{
       "source", rt::mesh::service_mailbox_domain_t::infrastructure, {}, {2}, std::nullopt, 17};
@@ -1051,13 +1069,15 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ColdSendUsesServiceSendAdmissionBefo
                       .node_routing_id = {1},
                       .lifecycle_generation = 1,
                       .descriptor_revision = 1,
-                      .advertised_endpoint = "tcp://127.0.0.1:0"}});
+                      .advertised_endpoint = "tcp://127.0.0.1:0"},
+       .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()});
     rt::mesh::raw_mesh_node_owner_t source (
       {.descriptor = {.mesh_name = "cold-admission",
                       .node_routing_id = {2},
                       .lifecycle_generation = 2,
                       .descriptor_revision = 1,
-                      .advertised_endpoint = "tcp://127.0.0.1:0"}});
+                      .advertised_endpoint = "tcp://127.0.0.1:0"},
+       .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()});
     target.start ();
     source.start ();
     ASSERT_TRUE (source.connect_peer (target.endpoint ()));
@@ -1469,7 +1489,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, RetiredOwnerRequestCompletesWithUnav
                                 zlink::routing_id_t::from ("retired-owner-reply").to_bytes (),
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
-                              .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures =
+                 std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     std::vector<zlink::message_t> reply_parts;
     host::receive_record_t record{
       .kind = host::record_kind_t::spot_request,
@@ -1884,10 +1906,12 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                                           .node_routing_id = descriptor.rid.to_bytes (),
                                           .lifecycle_generation = 1,
                                           .descriptor_revision = 1,
-                                          .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+                                          .advertised_endpoint = "tcp://127.0.0.1:0"},
+                           .runtime_failures =
+                             std::make_shared<rt::runtime_failure_collector_t> ()}});
                 int factories = 0;
                 target->configure_instance_spot_operations (
-                  store, relocations, [owner] { return owner; },
+                  store, relocations, [owner, blob_store] { return owner; },
                   host::instance_spot_activation_materializer_t{
                     [&] (const auto &, const auto &) {
                         ++factories;
@@ -2138,12 +2162,13 @@ TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBefore
                  .value ()
                  .status,
                fw::location_write_status_t::stored);
-    auto target = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{.mesh = {.descriptor = {.mesh_name = "startup-mesh",
-                                                   .node_routing_id = descriptor.rid.to_bytes (),
-                                                   .lifecycle_generation = 2,
-                                                   .descriptor_revision = 1,
-                                                   .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+    auto target = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "startup-mesh",
+                              .node_routing_id = descriptor.rid.to_bytes (),
+                              .lifecycle_generation = 2,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}});
     target->configure_instance_spot_operations (
       store, roots, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
@@ -2247,7 +2272,8 @@ TEST (CppFrameworkInstanceSpotActivation, ReadyLocalAdmissionSurvivesRecoveryRoo
                               .node_routing_id = zlink::routing_id_t::from ("target").to_bytes (),
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
-                              .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}});
 
     fw::task_completion_source_t<host::instance_spot_activation_result_t> first_handler;
     std::atomic_int entered{0};
@@ -2262,7 +2288,7 @@ TEST (CppFrameworkInstanceSpotActivation, ReadyLocalAdmissionSurvivesRecoveryRoo
     auto local_spots = fw::detail::spot_node_runtime_t::from (builder, "same-target");
     ASSERT_TRUE (local_spots);
     target->configure_instance_spot_operations (
-      store, relocations, [owner] { return owner; },
+      store, relocations, [owner, blob_store] { return owner; },
       host::instance_spot_activation_materializer_t{
         [&] (const auto &request, const auto &snapshot) {
             const auto created = local_spots->get_or_create_spot (

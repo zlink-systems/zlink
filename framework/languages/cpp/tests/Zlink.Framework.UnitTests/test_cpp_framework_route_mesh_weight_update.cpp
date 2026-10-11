@@ -133,7 +133,10 @@ TEST (CppFrameworkRouteMeshWeightUpdate, SoleTargetStopsAndResumesAfterLiveWeigh
     source_descriptor.lifecycle_generation = 1;
     source_descriptor.descriptor_revision = 1;
     source_descriptor.advertised_endpoint = "inproc://weight-update-source";
-    mesh::raw_mesh_node_owner_t source ({std::move (source_descriptor)}, context);
+    mesh::raw_mesh_node_owner_t source (
+      zlink::framework::test::runtime_failure_options (
+        zlink::framework::runtime::mesh::raw_mesh_node_options_t{std::move (source_descriptor)}),
+      context);
     source.start ();
 
     const auto target_descriptor = target.topology ().local_descriptor ();
@@ -195,7 +198,10 @@ TEST (CppFrameworkRouteMeshWeightUpdate, ConcurrentWeightChangesReachPeerInRevis
     source_descriptor.descriptor_revision = 1;
     source_descriptor.advertised_endpoint = "inproc://weight-order-source";
     const auto source_routing_id = source_descriptor.node_routing_id;
-    mesh::raw_mesh_node_owner_t source ({std::move (source_descriptor)}, context);
+    mesh::raw_mesh_node_owner_t source (
+      zlink::framework::test::runtime_failure_options (
+        zlink::framework::runtime::mesh::raw_mesh_node_options_t{std::move (source_descriptor)}),
+      context);
     source.start ();
 
     const auto target_descriptor = target.topology ().local_descriptor ();

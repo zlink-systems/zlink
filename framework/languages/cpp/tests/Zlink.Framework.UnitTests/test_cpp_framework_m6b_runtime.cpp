@@ -2330,8 +2330,10 @@ mesh::service_node_descriptor_t descriptor (std::string rid)
 void verify_actor_create_replays_after_reciprocal_handover ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
-    mesh::raw_mesh_node_owner_t source ({descriptor ("Z-handover-source")});
-    mesh::raw_mesh_node_owner_t target ({descriptor ("A-handover-target")});
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{descriptor ("Z-handover-source")}));
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{descriptor ("A-handover-target")}));
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();

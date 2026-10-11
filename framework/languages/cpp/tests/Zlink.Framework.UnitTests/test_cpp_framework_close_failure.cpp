@@ -432,8 +432,6 @@ int main (int argc, char **argv)
             fail_socket = true;
         } else {
             zlink::framework::runtime::mesh::raw_mesh_node_options_t options;
-            options.runtime_failures =
-              std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
             options.descriptor = {"close-failure",     {'c'},           1, 1,
                                   "tcp://127.0.0.1:0", {{"alpha", 100}}};
             options.runtime_failures = failures;

@@ -357,8 +357,10 @@ void verify_actor_create_intent_removal_ends_operation ()
     // admitted by the binding. Neither transport loss nor forgetting an
     // expectation while an admitted peer remains is lifecycle termination.
     for (const int removal_order : {0, 1, 2}) {
-        mesh::raw_mesh_node_owner_t source ({descriptor ("intent-source")});
-        mesh::raw_mesh_node_owner_t target ({descriptor ("intent-target")});
+        mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+          zlink::framework::runtime::mesh::raw_mesh_node_options_t{descriptor ("intent-source")}));
+        mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+          zlink::framework::runtime::mesh::raw_mesh_node_options_t{descriptor ("intent-target")}));
         source.start ();
         target.start ();
         const auto local = source.topology ().local_descriptor ();
@@ -809,8 +811,10 @@ void verify_manual_object_client_pair_ends_not_required ()
     second_descriptor.object_role = mesh::service_object_role_t::client;
     second_descriptor.channels.clear ();
 
-    mesh::raw_mesh_node_owner_t first ({first_descriptor});
-    mesh::raw_mesh_node_owner_t second ({second_descriptor});
+    mesh::raw_mesh_node_owner_t first (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{first_descriptor}));
+    mesh::raw_mesh_node_owner_t second (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{second_descriptor}));
     first.start ();
     second.start ();
     assert (first.connect_peer (second.endpoint ()));
@@ -1174,8 +1178,14 @@ void verify_liveness_shared_record_contract ()
 void verify_completion_receipt_without_application_receive ()
 {
     const auto context = std::make_shared<zlink::context_t> ();
-    mesh::raw_mesh_node_owner_t requester ({descriptor ("receipt-requester")}, context);
-    mesh::raw_mesh_node_owner_t replier ({descriptor ("receipt-replier")}, context);
+    mesh::raw_mesh_node_owner_t requester (
+      zlink::framework::test::runtime_failure_options (
+        zlink::framework::runtime::mesh::raw_mesh_node_options_t{descriptor ("receipt-requester")}),
+      context);
+    mesh::raw_mesh_node_owner_t replier (
+      zlink::framework::test::runtime_failure_options (
+        zlink::framework::runtime::mesh::raw_mesh_node_options_t{descriptor ("receipt-replier")}),
+      context);
     requester.start ();
     replier.start ();
     const auto source = requester.topology ().local_descriptor ();
@@ -2683,8 +2693,12 @@ std::optional<mesh::service_mailbox_claim_t> claim_actor_join (mesh::raw_mesh_no
 void verify_actor_join_durable_replay ()
 {
     for (const bool handover : {false, true}) {
-        mesh::raw_mesh_node_owner_t source ({descriptor ("Z-join-replay-source")});
-        mesh::raw_mesh_node_owner_t target ({descriptor ("A-join-replay-target")});
+        mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+          zlink::framework::runtime::mesh::raw_mesh_node_options_t{
+            descriptor ("Z-join-replay-source")}));
+        mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+          zlink::framework::runtime::mesh::raw_mesh_node_options_t{
+            descriptor ("A-join-replay-target")}));
         source.start ();
         target.start ();
         const auto local = source.topology ().local_descriptor ();
@@ -2762,7 +2776,9 @@ void verify_actor_join_durable_replay ()
 
 void verify_actor_join_durable_terminals ()
 {
-    mesh::raw_mesh_node_owner_t source ({descriptor ("join-terminal-source")});
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{
+        descriptor ("join-terminal-source")}));
     source.start ();
     const auto local = source.topology ().local_descriptor ();
     const auto remote = descriptor ("join-terminal-target", "tcp://127.0.0.1:1");
@@ -2782,7 +2798,9 @@ void verify_actor_join_durable_terminals ()
     assert (pending.await_ready ());
     const auto ended = await_task (std::move (pending));
     assert (!ended.reply && ended.failure == mesh::actor_join_wire_failure_t::unavailable);
-    mesh::raw_mesh_node_owner_t target ({descriptor ("join-admitted-target")});
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{
+        descriptor ("join-admitted-target")}));
     target.start ();
     const auto target_descriptor = target.topology ().local_descriptor ();
     admit_pair (source, target, target_descriptor);
@@ -2814,12 +2832,14 @@ void verify_actor_join_durable_terminals ()
 
 void verify_actor_join_ends_after_unexpected_admitted_peer_loss (bool monitor_disconnect)
 {
-    mesh::raw_mesh_node_owner_t source (
-      {descriptor (monitor_disconnect ? "join-owner-loss-disconnect-source"
-                                      : "join-owner-loss-liveness-source")});
-    mesh::raw_mesh_node_owner_t target (
-      {descriptor (monitor_disconnect ? "join-owner-loss-disconnect-target"
-                                      : "join-owner-loss-liveness-target")});
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{
+        descriptor (monitor_disconnect ? "join-owner-loss-disconnect-source"
+                                       : "join-owner-loss-liveness-source")}));
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{
+        descriptor (monitor_disconnect ? "join-owner-loss-disconnect-target"
+                                       : "join-owner-loss-liveness-target")}));
     source.start ();
     target.start ();
     const auto local = source.topology ().local_descriptor ();

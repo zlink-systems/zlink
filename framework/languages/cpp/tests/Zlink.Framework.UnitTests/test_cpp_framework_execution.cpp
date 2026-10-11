@@ -2470,13 +2470,15 @@ bool verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
     const auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
-      .mesh = {.descriptor = {
-                 .mesh_name = "yield-idle-eviction",
-                 .node_routing_id =
-                   zlink::routing_id_t::from (std::string ("yield-idle-eviction-node")).to_bytes (),
-                 .lifecycle_generation = 3,
-                 .descriptor_revision = 1,
-                 .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+      .mesh = {.descriptor = {.mesh_name = "yield-idle-eviction",
+                              .node_routing_id =
+                                zlink::routing_id_t::from (std::string ("yield-idle-eviction-node"))
+                                  .to_bytes (),
+                              .lifecycle_generation = 3,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures =
+                 std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     node->native_node = native;
 
     auto context = std::make_shared<spot_context_state_t> ();
@@ -6000,7 +6002,9 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
                                   zlink::routing_id_t::from ("actor-finalize-node").to_bytes (),
                                 .lifecycle_generation = 1,
                                 .descriptor_revision = 1,
-                                .advertised_endpoint = "tcp://127.0.0.1:0"}},
+                                .advertised_endpoint = "tcp://127.0.0.1:0"},
+                 .runtime_failures =
+                   std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
         .object_stable_types = {"framework.spot"}});
     native->start ();
     owner.attach_native_node (native);

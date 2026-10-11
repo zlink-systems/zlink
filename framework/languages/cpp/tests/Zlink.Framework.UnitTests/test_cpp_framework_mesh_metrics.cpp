@@ -221,8 +221,9 @@ void admit_pair (mesh::raw_mesh_node_owner_t &source, mesh::raw_mesh_node_owner_
 void verify_topology_metrics_and_selection_reasons ()
 {
     constexpr std::string_view mesh_name = "metrics-topology";
-    mesh::raw_mesh_node_owner_t target ({descriptor (
-      std::string (mesh_name), "metrics-topology-target", {{"alpha", 100}, {"zero", 0}})});
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{descriptor (
+        std::string (mesh_name), "metrics-topology-target", {{"alpha", 100}, {"zero", 0}})}));
     target.start ();
 
     metric_test::provider_t provider;
@@ -367,13 +368,15 @@ void verify_not_required_peer_counts_as_configured ()
 {
     auto target_descriptor = descriptor ("metrics-not-required", "metrics-client-target");
     target_descriptor.object_role = mesh::service_object_role_t::client;
-    mesh::raw_mesh_node_owner_t target ({std::move (target_descriptor)});
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{std::move (target_descriptor)}));
     target.start ();
 
     metric_test::provider_t provider;
     auto source_descriptor = descriptor ("metrics-not-required", "metrics-client-source");
     source_descriptor.object_role = mesh::service_object_role_t::client;
-    mesh::raw_mesh_node_owner_t source ({std::move (source_descriptor)});
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{std::move (source_descriptor)}));
     source.start ();
     const auto remote = target.topology ().local_descriptor ();
     require (source.admit_peer (remote, bytes ("not-required-connection"),
@@ -459,8 +462,9 @@ void complete_remote_request (mesh::raw_mesh_node_owner_t &source,
 
 void verify_request_metrics_all_surfaces_and_late_reply ()
 {
-    mesh::raw_mesh_node_owner_t target (
-      {descriptor ("metrics-requests", "metrics-request-target", {{"work", 100}})});
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      zlink::framework::runtime::mesh::raw_mesh_node_options_t{
+        descriptor ("metrics-requests", "metrics-request-target", {{"work", 100}})}));
     target.start ();
 
     metric_test::provider_t provider;
