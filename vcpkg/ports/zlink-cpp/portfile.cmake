@@ -6,7 +6,7 @@ vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/zlink-systems/zlink/releases/download/cpp/v${VERSION}/zlink-cpp-${VERSION}.tar.gz"
     FILENAME "zlink-cpp-${VERSION}.tar.gz"
-    SHA512 9a80ba20db9838e6cca69e27ce39b30fc019bf931a1b717f65ead04b6ed3ba51df3ca658a81e2cae734d45f18d5b8f98b176ee5dc641ac310e5ec7316e1a672a
+    SHA512 865a8bb6589f5da4bc1ef36750e56d7a47b1a93b205ee603c8ce733e059b7203e4e327562fad931640d159e84aee138d077a54621d33f964058073e651330eea
 )
 vcpkg_extract_source_archive(SOURCE_PATH ARCHIVE "${ARCHIVE}")
 foreach(required_path CMakeLists.txt cmake/zlink_cppConfig.cmake.in src/Runtime/Core/context.cpp include/zlink.hpp LICENSE)
