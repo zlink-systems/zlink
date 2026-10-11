@@ -10,7 +10,6 @@ namespace zlink_c_bench
 // Control requests use the command socket outside the active submission loop.
 inline constexpr const char *k_send_stats_start = "bench-stats-start ";
 inline constexpr const char *k_send_stats_snapshot = "bench-stats-snapshot";
-inline constexpr size_t k_send_latency_samples = 200000;
 
 // The target receive thread owns both the live counters and the active snapshot.
 class send_metrics_t
@@ -20,7 +19,7 @@ class send_metrics_t
     {
         _deadline = deadline;
         _received = _errors = 0;
-        _latency = latency_sampler_t (k_send_latency_samples);
+        _latency = latency_sampler_t (k_latency_sample_limit);
         _boundary.reset ();
     }
 
