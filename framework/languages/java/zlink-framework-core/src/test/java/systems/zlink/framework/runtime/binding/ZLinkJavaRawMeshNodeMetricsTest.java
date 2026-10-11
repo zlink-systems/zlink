@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
@@ -41,6 +43,73 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 final class ZLinkJavaRawMeshNodeMetricsTest {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void receivedOwnerFenceRefusalRetainsFrameworkOrigin(boolean ownerRefusal) throws Exception {
+        try (Pair pair = new Pair();
+                Message packet = Message.from("Packet");
+                Message body = Message.from("body")) {
+            var spots = (ZLinkJavaRawSpotNode) pair.target.spotNode();
+            spots.setSpotAdmissionResolver(
+                    (spot, generation, instance, activation) ->
+                            CompletableFuture.completedFuture(
+                                    ownerRefusal
+                                            ? systems.zlink.framework.runtime.messaging
+                                                    .ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
+                                                    "old owner")
+                                            : new ZLinkFrameworkException(
+                                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                    "application unavailable")));
+            var invalidations = new java.util.concurrent.atomic.AtomicInteger();
+            var resolver =
+                    new systems.zlink.framework.runtime.internal.spots
+                            .SpotTransportAddressResolver() {
+                        public CompletionStage<
+                                        java.util.Optional<
+                                                systems.zlink.framework.runtime.internal.spots
+                                                        .SpotTransportAddress>>
+                                resolve(String spot) {
+                            return CompletableFuture.completedFuture(java.util.Optional.empty());
+                        }
+
+                        public void invalidate(String spot) {
+                            invalidations.incrementAndGet();
+                        }
+                    };
+            var submitted =
+                    resolver.observeTerminal(
+                            "stale",
+                            pair.source.requestInstanceSpot(
+                                    pair.instanceRoute("stale"),
+                                    "missing",
+                                    null,
+                                    new byte[0],
+                                    List.of(packet, body),
+                                    Duration.ofSeconds(2)));
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> submitted.toCompletableFuture().get(2, TimeUnit.SECONDS));
+            var error = (ZLinkFrameworkException) failure.getCause();
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, error.kind());
+            assertEquals(
+                    ownerRefusal,
+                    systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.isFramework(
+                            error));
+            assertEquals(ownerRefusal ? 1 : 0, invalidations.get());
+            assertEquals(
+                    ownerRefusal
+                            ? (int)
+                                    systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                            .FRAMEWORK_ERROR_SPOT_MOVING
+                            : (int)
+                                    systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                            .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED,
+                    systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping
+                            .causeCode(error));
+        }
+    }
+
     @Test
     void notMaterializedInstanceFailuresReportOncePerMessage() throws Exception {
         try (DispatchDiagnostics diagnostics = new DispatchDiagnostics();

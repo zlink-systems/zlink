@@ -83,6 +83,25 @@ final class ZLinkChannelSpotTerminalTest {
                         ZLinkFrameworkErrorKind.UNAVAILABLE, "owner unavailable"));
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void receivedUnavailableWithoutControlCodeKeepsTheReadyRoute(boolean request) {
+        verifyTerminal(
+                request,
+                true,
+                false,
+                false,
+                systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping
+                        .receivedFailure(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                "wire application failure",
+                                (int)
+                                        systems.zlink.framework.runtime.protocol
+                                                .ServiceWireConstants
+                                                .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED,
+                                java.util.Map.of()));
+    }
+
     private void verifyTerminal(
             boolean request,
             boolean instance,
