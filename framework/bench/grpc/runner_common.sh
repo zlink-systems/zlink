@@ -155,7 +155,7 @@ with ExitStack() as sockets:
         probe = sockets.enter_context(socket.socket())
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            probe.bind(("127.0.0.1", port))
+            probe.bind(("0.0.0.0", port))
             probe.listen()
         except OSError as error:
             print(f"bench port {port} cannot bind: {error}", file=sys.stderr)

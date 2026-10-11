@@ -24,6 +24,13 @@ class RunnerCommonTest(unittest.TestCase):
             self.assertNotEqual(0, self.check_port(port))
         self.assertEqual(0, self.check_port(port))
 
+    def test_bind_probe_rejects_listener_on_another_loopback_address(self):
+        # gRPC listeners bind all interfaces; a 127.0.0.1-only probe misses this listener.
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.2", 0))
+            listener.listen()
+            self.assertNotEqual(0, self.check_port(listener.getsockname()[1]))
+
     def test_bind_probe_rejects_time_wait_without_reuse(self):
         # The active closer leaves TIME_WAIT without SO_REUSEADDR. A later
         # SO_REUSEADDR listener still cannot bind that local port.
