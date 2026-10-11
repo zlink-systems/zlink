@@ -2728,3 +2728,22 @@ function messageRecord(topic) {
     }]
   };
 }
+
+test('channel backend exposes receive flow only on ROUTER sockets', async () => {
+  const channel = new backend.ZLinkNodeBackendAdapterFactory().createChannelAdapter();
+  const context = channel.createContext();
+  const dealer = channel.createDealerSocket(context);
+  const router = channel.createRouterSocket(context);
+  try {
+    assert.equal('setReceiveFlowState' in dealer, false);
+    const states = [];
+    router.nativeInstance.setReceiveFlowState = (state) => states.push(state);
+    router.setReceiveFlowState(zlink.ReceiveFlowState.PAUSED);
+    router.setReceiveFlowState(zlink.ReceiveFlowState.RUNNING);
+    assert.deepEqual(states, [zlink.ReceiveFlowState.PAUSED, zlink.ReceiveFlowState.RUNNING]);
+  } finally {
+    await router.dispose();
+    await dealer.dispose();
+    await context.dispose();
+  }
+});

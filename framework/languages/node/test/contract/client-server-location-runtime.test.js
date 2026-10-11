@@ -243,9 +243,6 @@ test('ClientServer pressure applies to Server ROUTER and never to Client DEALER'
     receiveHighWaterMark: 0,
     sendTimeoutMs: -1,
     maxMessageSize: -1,
-    setReceiveFlowState(state) {
-      calls.push(`${kind}:flow:${state}`);
-    },
     setChannelName() {},
     setRoutingId() {},
     bind() {
@@ -261,6 +258,7 @@ test('ClientServer pressure applies to Server ROUTER and never to Client DEALER'
   const connectionDealer = socket('connection-dealer');
   let socketsCreated = 0;
   const router = socket('router');
+  router.setReceiveFlowState = (state) => calls.push(`router:flow:${state}`);
   let now = 0;
   const queue = new ApplicationJobQueue(
     resolveApplicationJobQueueConfiguration(
@@ -302,6 +300,8 @@ test('ClientServer pressure applies to Server ROUTER and never to Client DEALER'
     onTransportUnavailable() {}
   });
   sockets.channelRouter('orders');
+  assert.equal('setReceiveFlowState' in dealer, false);
+  assert.equal('setReceiveFlowState' in connectionDealer, false);
   assert.deepEqual(
     calls.filter((call) => call.startsWith('router:')),
     ['router:flow:0', 'router:bind']

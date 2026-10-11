@@ -38,7 +38,6 @@ export interface ZLinkRawSocketPort {
   unbind(endpoint: string): void;
   connect(endpoint: string): void;
   disconnect(endpoint: string): void;
-  setReceiveFlowState(state: 'running' | 'paused'): void;
   monitor(): ZLinkRawMonitorPort;
   close(): void;
 }
@@ -56,6 +55,7 @@ export interface ZLinkRawRouterRoute {
 }
 
 export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
+  setReceiveFlowState(state: 'running' | 'paused'): void;
   /** Reports Core submit synchronously; admitted observes only pending admission. */
   submitSend(targetRid: string, parts: readonly Uint8Array[]): ZLinkRawSendSubmission;
   disconnectRid?(routingId: string): void;
