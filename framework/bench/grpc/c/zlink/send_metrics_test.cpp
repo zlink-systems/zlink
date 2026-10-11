@@ -1,4 +1,5 @@
 #include "send_metrics.hpp"
+#include "../common/bench_common.hpp"
 
 #include <cassert>
 
@@ -16,6 +17,28 @@ int main ()
     assert (result.completed == 1);
     assert (result.server_received == 2);
     assert (result.mean_us == 0.025);
+    const auto run_dir = std::filesystem::temp_directory_path ()
+                         / ("bench-c-send-metrics-" + std::to_string (getpid ()));
+    setenv ("BENCH_RUN_DIR", run_dir.c_str (), 1);
+    setenv ("DURATION_SECONDS", "5", 1);
+    result.implementation = "zlink-c";
+    result.pattern = "send-saturation";
+    result.size = 1024;
+    result.completed = 7;
+    result.submitted = 11;
+    result.server_received = 11;
+    result.elapsed_s = 5.5;
+    assert (zlink_c_bench::write_cell_json (result, ""));
+    const auto path = run_dir / "zlink-c-send-saturation-1024/results.json";
+    std::ifstream file (path);
+    const std::string json ((std::istreambuf_iterator<char> (file)), {});
+    assert (json.find ("\"throughput_per_second\": 1.400000") != std::string::npos);
+    result.completed = 12;
+    assert (!zlink_c_bench::write_cell_json (result, ""));
+    result.completed = 7;
+    result.server_received = 12;
+    assert (!zlink_c_bench::write_cell_json (result, ""));
+    std::filesystem::remove_all (run_dir);
     body[0] = 0;
     metrics.record (body, sizeof body, 130);
     assert (metrics.snapshot (130).server_errors == 1);

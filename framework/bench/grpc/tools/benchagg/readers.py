@@ -167,23 +167,12 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
             cell.streams = _streams(raw.get("streams"), origin)
         if "target_stats" in raw:
             cell.target_stats = _target_stats(raw.get("target_stats"), origin, key.pattern)
+            cell.target_errors = int(cell.target_stats["errors"])
         cell.extra.update(raw.get("extra", {}))
         if raw.get("errors") is not None:
             cell.extra["errors"] = float(raw["errors"])
         if role == "source":
             _complete_from_target_stats(cell)
-        elif key.implementation == "zlink-c" and key.pattern == "send-saturation" \
-                and cell.server_received_at_close is not None:
-            duration = float(payload.get("metadata", {}).get("durationSeconds", 0))
-            if duration <= 0 or not cell.target_stats:
-                raise ReportError(f"{origin}: C send metrics need duration and target_stats")
-            received = int(cell.target_stats["received"])
-            submitted = int(cell.extra.get("submitted", -1))
-            if not 0 <= cell.server_received_at_close <= received <= submitted:
-                raise ReportError(f"{origin}: C active/settled/submitted counts disagree")
-            cell.throughput_per_second = cell.server_received_at_close / duration
-            cell.bandwidth_mb_s = cell.throughput_per_second * key.payload_size / 1_000_000
-            cell.target_errors = int(cell.target_stats["errors"])
         cells.append(cell)
     return cells
 
@@ -200,7 +189,6 @@ def _complete_from_target_stats(source: Cell) -> None:
         source.incomplete_reason = "embedded target_stats is missing"
         return
 
-    source.target_errors = int(source.target_stats["errors"])
     source.drain_ms = float(source.target_stats["drainMs"])
     if source.key.pattern != "send-saturation":
         source.server_received_at_close = int(source.target_stats["received"])

@@ -388,7 +388,13 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
     const std::string cell_dir =
       run_dir + "/" + r.implementation + "-" + r.pattern + "-" + std::to_string (r.size);
     std::filesystem::create_directories (cell_dir);
-    const double ops_per_s = static_cast<double> (r.completed) / std::max (0.001, r.elapsed_s);
+    if (r.server_received
+        && (r.completed > r.server_received.value () || r.server_received.value () > r.submitted)) {
+        std::fprintf (stderr, "active/settled/submitted counts disagree\n");
+        return false;
+    }
+    const double rate_seconds = r.server_received ? duration_seconds () : r.elapsed_s;
+    const double ops_per_s = static_cast<double> (r.completed) / std::max (0.001, rate_seconds);
     std::ostringstream out;
     out << "{\n  \"schema\": \"with-grpc-cell-v1\",\n  \"metadata\": {\n"
         << "    \"language\": \"c\",\n"
