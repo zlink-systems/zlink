@@ -346,6 +346,35 @@ public final class GameQuestClientScenario {
                 connectorFactory.apply(options.apiBStreamEndpoint());
         try {
             reconnectedStream.connect().submit().toCompletableFuture().join();
+            // Spot address messaging section 5: API B can retain the closed owner's route.
+            // Preserve that query's stale terminal; the next independent query resolves
+            // the current owner before the new session joins.
+            Messages.GetQuestProgressRes reconnectedProjection;
+            try {
+                reconnectedProjection =
+                        reconnectedStream
+                                .request(new Messages.GetQuestProgressReq("player-alice"))
+                                .submit(Messages.GetQuestProgressRes.class)
+                                .toCompletableFuture()
+                                .join();
+            } catch (java.util.concurrent.CompletionException error) {
+                ensure(isUnavailable(error));
+                reconnectedProjection =
+                        reconnectedStream
+                                .request(new Messages.GetQuestProgressReq("player-alice"))
+                                .submit(Messages.GetQuestProgressRes.class)
+                                .toCompletableFuture()
+                                .join();
+            }
+            ensure(
+                    reconnectedProjection.activeQuests().stream()
+                            .anyMatch(
+                                    progress ->
+                                            progress.questId().equals(Messages.QuestIds.FirstHunt)
+                                                    && progress.status()
+                                                            .equals(
+                                                                    Messages.QuestStatuses
+                                                                            .RewardGranted)));
             Messages.JoinSessionRes reconnectedAlice =
                     reconnectedStream
                             .request(new Messages.JoinSessionReq("player-alice"))

@@ -2943,6 +2943,8 @@ final class ZLinkJavaRawMeshNode
                             //  via the authoritative ownership-aware translator
                             //  instead of collapsing to a generic rejection
                             //  (spec 32-framework-error-model:81-118, 99-108).
+                            //  spotMoving is a Framework admission control result. Its failed
+                            //  reply has no metadata frame, so preserve that origin locally.
                             throw ZLinkRequestFailureMapping.receivedFailure(
                                     ZLinkBackendRequestResult.fromWireTerminal(
                                                     header.terminalResult())
@@ -2952,7 +2954,11 @@ final class ZLinkJavaRawMeshNode
                                             + " failureCode="
                                             + header.failureCode(),
                                     header.failureCode(),
-                                    java.util.Map.of());
+                                    header.failureCode()
+                                                    == ServiceWireConstants
+                                                            .FRAMEWORK_ERROR_SPOT_MOVING
+                                            ? ZLinkFrameworkErrorOrigin.frameworkMetadata()
+                                            : java.util.Map.of());
                         }
                         if (replies.size() != 2) {
                             throw new ZLinkFrameworkException(

@@ -76,7 +76,8 @@ public interface SpotTransportAddressResolver {
             cause = cause.getCause();
         }
         return cause instanceof ZLinkFrameworkException error
-                && error.kind() == ZLinkFrameworkErrorKind.NOT_FOUND
+                && (error.kind() == ZLinkFrameworkErrorKind.NOT_FOUND
+                        || error.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE)
                 && ZLinkFrameworkErrorOrigin.isFramework(error);
     }
 }

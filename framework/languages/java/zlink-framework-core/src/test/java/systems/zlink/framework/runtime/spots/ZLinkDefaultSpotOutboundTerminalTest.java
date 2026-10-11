@@ -41,11 +41,11 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
 
     private void verifyTerminal(boolean request, boolean instance, boolean stale, boolean missing) {
         var terminal =
-                ZLinkFrameworkErrorOrigin.framework(
-                        stale
-                                ? ZLinkFrameworkErrorKind.NOT_FOUND
-                                : ZLinkFrameworkErrorKind.UNAVAILABLE,
-                        "first operation failed");
+                stale
+                        ? ZLinkFrameworkErrorOrigin.framework(
+                                ZLinkFrameworkErrorKind.NOT_FOUND, "first operation failed")
+                        : new systems.zlink.framework.errors.ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE, "application failure");
         var probe = new SpotTerminalProbe(terminal, missing);
         var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
         try (var operations =
@@ -132,7 +132,7 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
             assertSame(terminal, failure.getCause());
             assertEquals(missing ? 0 : 1, probe.submissions);
             assertEquals(1, probe.resolves);
-            assertEquals(stale && !missing ? 1 : 0, probe.invalidations);
+            assertEquals(stale && (request || !missing) ? 1 : 0, probe.invalidations);
             assertEquals(
                     missing ? 1 : 0,
                     probe.activations,
