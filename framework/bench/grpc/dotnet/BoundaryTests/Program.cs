@@ -90,8 +90,16 @@ stats.MapGet(
 );
 await stats.StartAsync();
 
-BenchMeasurement.ConfigureThreadPool(8);
-foreach (var pattern in args.DefaultIfEmpty("request-serial"))
+const int requestWindow = 100;
+const int sendConcurrency = 8;
+const int payloadBytes = 1024;
+const int latencySampleLimit = 200_000;
+BenchMeasurement.ConfigureThreadPool(sendConcurrency);
+foreach (
+    var pattern in args.Length == 0
+        ? ["request-serial", "request-window", "request-backpressure", "send-saturation"]
+        : args
+)
 {
     string[] optionsArgs =
     [
@@ -111,18 +119,18 @@ foreach (var pattern in args.DefaultIfEmpty("request-serial"))
         "2",
     ];
     var options = BenchOptions.Parse(optionsArgs);
-    var metrics = new SourceMetrics(200_000);
-    await using var transport = new GrpcBenchTransport(grpc.Urls.Single(), 8);
+    var metrics = new SourceMetrics(latencySampleLimit);
+    await using var transport = new GrpcBenchTransport(grpc.Urls.Single(), sendConcurrency);
     var warmupTrigger = new BenchTriggerRequest
     {
         runId = "boundary",
         cellId = "boundary",
         pattern = pattern,
-        payloadBytes = 1024,
+        payloadBytes = payloadBytes,
         phase = "warmup",
         durationMs = DelayedEcho.WarmupWindowMilliseconds,
-        requestWindow = 100,
-        sendConcurrency = 8,
+        requestWindow = requestWindow,
+        sendConcurrency = sendConcurrency,
     };
     var warmupResult = await BenchMeasurement.RunActiveAsync(
         transport,
@@ -139,17 +147,17 @@ foreach (var pattern in args.DefaultIfEmpty("request-serial"))
         throw new InvalidOperationException(
             "Warmup did not complete the selected pattern during the warmup window."
         );
-    metrics = new SourceMetrics(200_000);
+    metrics = new SourceMetrics(latencySampleLimit);
     var trigger = new BenchTriggerRequest
     {
         runId = "boundary",
         cellId = "boundary",
         pattern = pattern,
-        payloadBytes = 1024,
+        payloadBytes = payloadBytes,
         phase = "active",
         durationMs = 200,
-        requestWindow = 100,
-        sendConcurrency = 8,
+        requestWindow = requestWindow,
+        sendConcurrency = sendConcurrency,
     };
     var result = await BenchMeasurement.RunActiveAsync(
         transport,
@@ -164,13 +172,35 @@ foreach (var pattern in args.DefaultIfEmpty("request-serial"))
     var latency = result.MeanMicros;
     if (pattern == "send-saturation")
     {
-        if (completed != submitted || submitted != 8 || throughput != 5)
+        if (completed != submitted || submitted != trigger.sendConcurrency || throughput != 5)
             throw new InvalidOperationException(
                 "Source completion replaced by target snapshot: " + result
             );
     }
-    else if (completed != 1 || throughput != 0 || latency != 0)
-        throw new InvalidOperationException("Drain reply entered active metrics: " + result);
+    else
+    {
+        var requestLimit = StreamDescription
+            .For(pattern, trigger.requestWindow, trigger.sendConcurrency)
+            .inFlightPerStream;
+        var submissionCountMatches = requestLimit is int limit
+            ? submitted == limit
+            : submitted > trigger.requestWindow;
+        if (
+            !submissionCountMatches
+            || completed == 0
+            || completed + result.Errors + result.Abandoned != submitted
+            || result.PeakInFlight != submitted
+            || result.Errors != 0
+            || result.ServerErrors != 0
+            || result.CompletedAtClose != 0
+            || throughput != 0
+            || latency != 0
+            || result.P95Micros != 0
+            || result.P99Micros != 0
+            || (requestLimit is not null && result.Abandoned != 0)
+        )
+            throw new InvalidOperationException("Request boundary accounting failed: " + result);
+    }
     Console.WriteLine(
         $"{pattern}: completed={completed}, submitted={submitted}, active rate={throughput}, latency={latency} PASS"
     );
