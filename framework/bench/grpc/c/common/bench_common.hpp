@@ -393,7 +393,7 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
         std::fprintf (stderr, "active/settled/submitted counts disagree\n");
         return false;
     }
-    const double rate_seconds = r.server_received ? duration_seconds () : r.elapsed_s;
+    const double rate_seconds = duration_seconds ();
     const double ops_per_s = static_cast<double> (r.completed) / std::max (0.001, rate_seconds);
     std::ostringstream out;
     out << "{\n  \"schema\": \"with-grpc-cell-v1\",\n  \"metadata\": {\n"
@@ -426,7 +426,7 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
             << "      \"drain_bound_hit\": " << (r.drain_bound_hit ? "true" : "false") << ",\n";
     if (r.server_received)
         out << "      \"server_received_at_close\": " << r.completed << ",\n"
-            << "      \"active_elapsed_ms\": " << json_number (r.elapsed_s * 1000) << ",\n"
+            << "      \"active_elapsed_ms\": " << json_number (rate_seconds * 1000) << ",\n"
             << "      \"target_stats\": {\"received\": " << r.server_received.value ()
             << ", \"errors\": " << r.server_errors << ", \"drainMs\": " << json_number (r.drain_ms)
             << "},\n";
