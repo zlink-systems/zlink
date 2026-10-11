@@ -816,7 +816,8 @@ final class ZLinkChannelRuntimeTest {
                                 String contentType,
                                 Map<String, String> metadata,
                                 Duration timeout,
-                                SpotTransportAddress readyRoute) {
+                                SpotTransportAddress readyRoute,
+                                SpotTransportAddressResolver resolver) {
                             return CompletableFuture.completedFuture(
                                     backend.bridge.requestReplyParts);
                         }
@@ -1304,7 +1305,8 @@ final class ZLinkChannelRuntimeTest {
                                 String contentType,
                                 Map<String, String> metadata,
                                 Duration timeout,
-                                SpotTransportAddress readyRoute) {
+                                SpotTransportAddress readyRoute,
+                                SpotTransportAddressResolver resolver) {
                             activationAttempts.incrementAndGet();
                             return CompletableFuture.failedFuture(
                                     new ZLinkFrameworkException(
@@ -1423,7 +1425,8 @@ final class ZLinkChannelRuntimeTest {
                                 String contentType,
                                 Map<String, String> metadata,
                                 Duration timeout,
-                                SpotTransportAddress readyRoute) {
+                                SpotTransportAddress readyRoute,
+                                SpotTransportAddressResolver resolver) {
                             throw new AssertionError("request activation is not expected");
                         }
                     });

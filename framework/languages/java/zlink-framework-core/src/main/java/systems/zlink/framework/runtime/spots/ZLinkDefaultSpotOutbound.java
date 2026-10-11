@@ -624,9 +624,10 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                                                             .failedFuture(
                                                                                     new ZLinkConfigurationException(
                                                                                             "Instance Spot runtime is not configured"))
-                                                                    : activateRequest(replyType)
+                                                                    : activateRequest(
+                                                                            replyType, resolver)
                                                             : requestExisting(address, replyType);
-                                            return address != null
+                                            return !instanceIntent && address != null
                                                     ? resolver.observeTerminal(target, submitted)
                                                     : submitted;
                                         })
@@ -655,7 +656,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             return ZLinkSerialExecutionQueue.manageCurrent(result);
         }
 
-        private <TReply> CompletionStage<TReply> activateRequest(Class<TReply> replyType) {
+        private <TReply> CompletionStage<TReply> activateRequest(
+                Class<TReply> replyType, SpotTransportAddressResolver resolver) {
             return instanceSpots
                     .request(
                             target,
@@ -666,7 +668,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                             contentType,
                             metadata.values(),
                             timeout,
-                            null)
+                            null,
+                            resolver)
                     .thenApply(
                             parts -> {
                                 try {

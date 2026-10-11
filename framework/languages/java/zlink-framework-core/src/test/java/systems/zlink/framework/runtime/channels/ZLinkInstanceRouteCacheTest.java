@@ -112,7 +112,9 @@ final class ZLinkInstanceRouteCacheTest {
                                             case "activationDeadline" -> 0L;
                                             case "metricMeshName" -> "mesh";
                                             case "send", "request" -> {
-                                                assertEquals(9, args.length);
+                                                assertEquals(
+                                                        method.getName().equals("request") ? 10 : 9,
+                                                        args.length);
                                                 var ready =
                                                         assertInstanceOf(
                                                                 systems.zlink.framework.runtime

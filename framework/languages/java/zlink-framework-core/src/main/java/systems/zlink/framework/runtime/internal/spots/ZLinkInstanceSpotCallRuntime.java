@@ -36,5 +36,6 @@ public interface ZLinkInstanceSpotCallRuntime {
             String contentType,
             Map<String, String> metadata,
             Duration timeout,
-            SpotTransportAddress readyRoute);
+            SpotTransportAddress readyRoute,
+            SpotTransportAddressResolver resolver);
 }

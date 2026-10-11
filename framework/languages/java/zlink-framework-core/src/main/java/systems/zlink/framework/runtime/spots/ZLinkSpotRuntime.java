@@ -2505,8 +2505,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     String contentType,
                     Map<String, String> metadata,
                     Duration timeout,
-                    systems.zlink.framework.runtime.internal.spots.SpotTransportAddress
-                            readyRoute) {
+                    systems.zlink.framework.runtime.internal.spots.SpotTransportAddress readyRoute,
+                    SpotTransportAddressResolver resolver) {
                 Duration effective = timeout == null ? defaultRequestTimeout : timeout;
                 long deadline = System.currentTimeMillis() + effective.toMillis();
                 byte[] applicationMetadata =
@@ -2527,19 +2527,21 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 CompletionStage<List<Message>>>
                         attempt =
                                 route ->
-                                        resolveInstanceSpotRoute(
-                                                        spotId,
-                                                        stableType,
-                                                        meshName,
-                                                        deadline,
-                                                        route)
-                                                .thenCompose(
-                                                        activation ->
-                                                                requestInstanceSpot(
-                                                                        activation,
-                                                                        applicationMetadata,
-                                                                        parts,
-                                                                        deadline));
+                                        resolver.observeTerminal(
+                                                spotId,
+                                                resolveInstanceSpotRoute(
+                                                                spotId,
+                                                                stableType,
+                                                                meshName,
+                                                                deadline,
+                                                                route)
+                                                        .thenCompose(
+                                                                activation ->
+                                                                        requestInstanceSpot(
+                                                                                activation,
+                                                                                applicationMetadata,
+                                                                                parts,
+                                                                                deadline)));
                 //  Failover policy §4.4: after Close released the authority, the next Instance
                 //  intent message cold-activates. spotMoving is the owner fence refusal made
                 //  before admission, so one authority read decides: Missing continues as a cold

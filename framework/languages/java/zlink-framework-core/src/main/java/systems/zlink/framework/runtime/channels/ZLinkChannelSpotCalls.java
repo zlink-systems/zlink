@@ -623,7 +623,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                                                                             : submitExisting(
                                                                                     address,
                                                                                     replyType);
-                                                            return resolver != null
+                                                            return !instanceIntent
+                                                                            && resolver != null
                                                                     ? resolver.observeTerminal(
                                                                             target, submitted)
                                                                     : submitted;
@@ -665,7 +666,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         contentType,
                         metadata.values(),
                         timeout,
-                        readyRoute)
+                        readyRoute,
+                        resolver)
                 .thenApply(
                         parts -> {
                             try {

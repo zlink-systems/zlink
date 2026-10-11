@@ -132,7 +132,7 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
             assertSame(terminal, failure.getCause());
             assertEquals(missing ? 0 : 1, probe.submissions);
             assertEquals(1, probe.resolves);
-            assertEquals(stale && !missing ? 1 : 0, probe.invalidations);
+            assertEquals(stale && (request || !missing) ? 1 : 0, probe.invalidations);
             assertEquals(
                     missing ? 1 : 0,
                     probe.activations,

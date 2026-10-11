@@ -80,13 +80,17 @@ public final class SpotTerminalProbe
             String contentType,
             Map<String, String> metadata,
             Duration timeout,
-            SpotTransportAddress readyRoute) {
-        if (readyRoute != null)
-            return java.util.Objects.requireNonNull(readyRequest).apply(payload, timeout);
-        coordinatorCalls++;
-        if (!missing) return java.util.Objects.requireNonNull(readyRequest).apply(payload, timeout);
-        activations++;
-        payload.close();
-        return CompletableFuture.failedFuture(terminal);
+            SpotTransportAddress readyRoute,
+            SpotTransportAddressResolver resolver) {
+        CompletionStage<List<Message>> submitted;
+        if (readyRoute == null) coordinatorCalls++;
+        if (readyRoute != null || !missing) {
+            submitted = java.util.Objects.requireNonNull(readyRequest).apply(payload, timeout);
+        } else {
+            activations++;
+            payload.close();
+            submitted = CompletableFuture.failedFuture(terminal);
+        }
+        return resolver.observeTerminal(spotId, submitted);
     }
 }
