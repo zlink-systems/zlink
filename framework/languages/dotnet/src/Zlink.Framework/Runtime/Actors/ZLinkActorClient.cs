@@ -387,18 +387,12 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
     {
         return error.Result switch
         {
-            ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"{operationName} failed because the target route is not connected.",
-                ZLinkRetryAdvice.RetryAfterBackoff,
-                error
-            ),
             ZlinkSubmitException.ErrorCode.NotFound => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"{operationName} failed because the actor route was not found.",
                 innerException: error
             ),
-            _ => ZLinkRequestFailureMapper.CreateSubmitException(error, operationName),
+            _ => ZLinkSubmitFailureMapper.CreateException(error, operationName),
         };
     }
 
@@ -406,12 +400,6 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
     {
         return error.Result switch
         {
-            ZlinkRequestException.ErrorCode.NotConnected => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"{operationName} failed because the target route is not connected.",
-                ZLinkRetryAdvice.RetryAfterBackoff,
-                error
-            ),
             ZlinkRequestException.ErrorCode.NotFound => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"{operationName} failed because the actor route was not found.",
@@ -425,7 +413,8 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             ),
             _ => ZLinkRequestFailureMapper.CreateCompletionException(
                 (RequestResult)(int)error.Result,
-                operationName
+                operationName,
+                error
             ),
         };
     }
@@ -490,7 +479,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
 
     //  An application terminal from an actor reply may carry a fine failure code.
     //  When it refines the coarse terminal it wins over the actor-route special
-    //  cases below (spec 32-framework-error-model:81-118). The coarse fallbacks
+    //  cases (spec 32-framework-error-model:81-118). The coarse fallbacks
     //  keep a synthetic ZlinkRequestException inner so downstream terminal-shape
     //  probes (e.g. authority-transition conflict) continue to observe it.
     private static Exception MapRequestException(
@@ -507,31 +496,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         var inner = new ZlinkRequestException(
             (ZlinkRequestException.ErrorCode)(int)terminal.Result
         );
-        return terminal.Result switch
-        {
-            RequestResult.NotConnected => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"{operationName} failed because the target route is not connected.",
-                ZLinkRetryAdvice.RetryAfterBackoff,
-                inner
-            ),
-            RequestResult.NotFound => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"{operationName} failed because the actor route was not found.",
-                innerException: inner
-            ),
-            RequestResult.Conflict => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"{operationName} failed because the actor location is stale.",
-                ZLinkRetryAdvice.RetryAfterBackoff,
-                inner
-            ),
-            _ => ZLinkRequestFailureMapper.CreateCompletionException(
-                terminal.Result,
-                terminal.FailureErrno,
-                operationName
-            ),
-        };
+        return MapRequestException(inner, operationName);
     }
 
     private sealed class ZLinkActorSendCall<TMessage>(

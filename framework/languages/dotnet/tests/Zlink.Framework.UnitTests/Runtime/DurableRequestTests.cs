@@ -4,6 +4,28 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class DurableRequestTests
 {
+    [Fact]
+    public async Task CapacityRefusalWithoutWaitTokenDoesNotReplay()
+    {
+        var expected = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.Backpressured);
+        var attempts = 0;
+        var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(async () =>
+            await ZLinkDurableRequest.RequestAsync(
+                Array.Empty<ReadOnlyMemory<byte>>(),
+                Stopwatch.GetTimestamp(),
+                TimeSpan.FromSeconds(5),
+                (_, _, _) =>
+                {
+                    attempts++;
+                    return ValueTask.FromException<IReadOnlyList<Message>>(expected);
+                },
+                CancellationToken.None
+            )
+        );
+        Assert.Same(expected, failure);
+        Assert.Equal(1, attempts);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

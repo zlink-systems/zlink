@@ -1341,6 +1341,12 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             correlationId,
             (record, replyParts) =>
             {
+                if (record.SubmitFailure is { } submitFailure)
+                {
+                    ZLinkMessageParts.DisposeAll(replyParts);
+                    completion.TrySetException(submitFailure);
+                    return;
+                }
                 var result = ZLinkMeshCompletionTable.MapResult(
                     record.TerminalResult,
                     record.FailureErrno

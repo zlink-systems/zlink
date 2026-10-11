@@ -4914,11 +4914,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RequestResult result,
         int failure,
         IReadOnlyList<Message> parts,
-        MeshRecordPayload? kindData = null
+        MeshRecordPayload? kindData = null,
+        ZlinkSubmitException? submitFailure = null
     ) =>
         AwaitStateLane(
             new ValueTask(
-                CompleteManagedOperationAsync(operation, result, failure, parts, kindData)
+                CompleteManagedOperationAsync(
+                    operation,
+                    result,
+                    failure,
+                    parts,
+                    kindData,
+                    submitFailure
+                )
             )
         );
 
@@ -4927,7 +4935,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RequestResult result,
         int failure,
         IReadOnlyList<Message> parts,
-        MeshRecordPayload? kindData = null
+        MeshRecordPayload? kindData = null,
+        ZlinkSubmitException? submitFailure = null
     )
     {
         if (
@@ -4949,9 +4958,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (operation.AwaitedCompletion is { } awaitedCompletion)
         {
             if (
-                !awaitedCompletion.TrySetResult(
-                    new ManagedRequestCompletion(result, parts, failure)
-                )
+                submitFailure is not null
+                    ? !awaitedCompletion.TrySetException(submitFailure)
+                    : !awaitedCompletion.TrySetResult(
+                        new ManagedRequestCompletion(result, parts, failure)
+                    )
             )
                 DisposeParts(parts);
             return;
@@ -4963,7 +4974,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             failure,
             parts,
             kindData,
-            publishEvent: false
+            publishEvent: false,
+            submitFailure: submitFailure
         );
     }
 
@@ -4972,7 +4984,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkBackendRequestCallback callback
     )
     {
-        var completion = await completionTask.ConfigureAwait(false);
+        ManagedRequestCompletion completion;
+        try
+        {
+            completion = await completionTask.ConfigureAwait(false);
+        }
+        catch (ZlinkSubmitException error)
+        {
+            // The legacy backend callback accepts only a coarse terminal.
+            // Async application requests retain the typed failure instead.
+            completion = new ManagedRequestCompletion(
+                ZLinkSubmitFailureMapper.ToRequestResult(
+                    (SubmitResult)(int)error.Result,
+                    completionFailure: false
+                ),
+                Array.Empty<Message>()
+            );
+        }
         try
         {
             callback(completion.Result, completion.Parts);
@@ -9742,14 +9770,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             admission?.RecordReceived(Stopwatch.GetTimestamp());
             return reply;
         }
-        catch (ZlinkSubmitException error)
-            when (error.Result == ZlinkSubmitException.ErrorCode.Backpressured)
-        {
-            throw ZLinkRequestFailureMapper.CreateSubmitException(
-                error,
-                nameof(ZLinkManagedMeshNode)
-            );
-        }
         finally
         {
             if (!ownershipTransferred)
@@ -9900,18 +9920,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 .ConfigureAwait(false);
             CompleteNativeApplicationRequest(pending, RequestResult.Ok, replies);
         }
-        catch (ZLinkFrameworkException error)
-            when (error.Kind
-                    is ZLinkFrameworkErrorKind.Unavailable
-                        or ZLinkFrameworkErrorKind.DeadlineExceeded
-            )
+        catch (ZlinkSubmitException error)
         {
-            CompleteNativeApplicationRequest(
+            CompleteManagedOperation(
                 pending,
-                error.Kind == ZLinkFrameworkErrorKind.Unavailable
-                    ? RequestResult.NotConnected
-                    : RequestResult.TimedOut,
-                Array.Empty<Message>()
+                ZLinkSubmitFailureMapper.ToRequestResult(
+                    (SubmitResult)(int)error.Result,
+                    completionFailure: false
+                ),
+                0,
+                Array.Empty<Message>(),
+                submitFailure: error
             );
         }
         catch (ZlinkRequestException exception)
@@ -11002,7 +11021,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         int failure,
         IReadOnlyList<Message> parts,
         MeshRecordPayload? kindData = null,
-        bool publishEvent = true
+        bool publishEvent = true,
+        ZlinkSubmitException? submitFailure = null
     )
     {
         var completionRecord = new MeshReceiveRecord(
@@ -11021,7 +11041,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             parts.Count,
             result,
             failure,
-            kindData
+            kindData,
+            submitFailure: submitFailure
         );
         var terminal = Volatile.Read(ref _completionHandler);
         if (terminal is null || !terminal(completionRecord, parts))
