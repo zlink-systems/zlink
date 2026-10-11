@@ -11,6 +11,12 @@ import java.util.concurrent.CompletableFuture;
 /** A reply completed by drain remains a correctness count, not an active operation. */
 public final class ActiveBoundaryTest {
     public static void main(String[] args) throws Exception {
+        Class<?> source = Class.forName(BenchDrivers.class.getName() + "$SourceMetrics");
+        for (var constructor : source.getDeclaredConstructors()) {
+            if (constructor.getParameterCount() != 2) {
+                throw new AssertionError("SourceMetrics must require a measurement deadline");
+            }
+        }
         HttpServer stats = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         stats.createContext(
                 "/bench/",

@@ -1249,7 +1249,7 @@ internal sealed class SourceMetrics(int sampleLimit)
     private long sampleSum;
     private long otherErrors;
 
-    public void Reset(long deadline = long.MaxValue)
+    public void Reset(long deadline)
     {
         lock (gate)
         {
