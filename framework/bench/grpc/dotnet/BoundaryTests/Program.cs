@@ -1,9 +1,19 @@
+using System.Diagnostics;
 using System.Net;
-using System.Reflection;
 using Grpc.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using WithGrpcBench.Client;
 using WithGrpcBench.Shared;
+
+var sourceMetrics = new SourceMetrics(10);
+sourceMetrics.Reset(Stopwatch.GetTimestamp() + Stopwatch.Frequency);
+sourceMetrics.Complete(sourceMetrics.Begin(), true);
+if (sourceMetrics.Result().CompletedAtClose != 1)
+    throw new InvalidOperationException("A completion before the deadline was excluded.");
+sourceMetrics.Reset(Stopwatch.GetTimestamp());
+sourceMetrics.Complete(sourceMetrics.Begin(), true);
+if (sourceMetrics.Result().Completed != 1 || sourceMetrics.Result().CompletedAtClose != 0)
+    throw new InvalidOperationException("A completion after the deadline entered active metrics.");
 
 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 var grpcBuilder = WebApplication.CreateBuilder();
@@ -37,18 +47,9 @@ stats.MapGet(
 );
 await stats.StartAsync();
 
-var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
-var program = assembly.EntryPoint!.DeclaringType!;
-var runActive = program
-    .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
-    .Single(method => method.Name.Contains("g__RunActiveAsync|", StringComparison.Ordinal));
-var configure = program
-    .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
-    .Single(method => method.Name.Contains("g__ConfigureThreadPool|", StringComparison.Ordinal));
-configure.Invoke(null, [8]);
-foreach (var pattern in args.Skip(1).DefaultIfEmpty("request-serial"))
+BenchMeasurement.ConfigureThreadPool(8);
+foreach (var pattern in args.DefaultIfEmpty("request-serial"))
 {
-    var optionsType = assembly.GetType("BenchOptions", throwOnError: true)!;
     string[] optionsArgs =
     [
         "--implementation",
@@ -66,10 +67,9 @@ foreach (var pattern in args.Skip(1).DefaultIfEmpty("request-serial"))
         "--warmup",
         "0",
     ];
-    var options = optionsType.GetMethod("Parse")!.Invoke(null, [optionsArgs]);
-    var metrics = Activator.CreateInstance(assembly.GetType("SourceMetrics")!, [200_000]);
-    await using var transport = (IAsyncDisposable)
-        Activator.CreateInstance(assembly.GetType("GrpcBenchTransport")!, [grpc.Urls.Single(), 8])!;
+    var options = BenchOptions.Parse(optionsArgs);
+    var metrics = new SourceMetrics(200_000);
+    await using var transport = new GrpcBenchTransport(grpc.Urls.Single(), 8);
     var trigger = new BenchTriggerRequest
     {
         runId = "boundary",
@@ -81,14 +81,17 @@ foreach (var pattern in args.Skip(1).DefaultIfEmpty("request-serial"))
         requestWindow = 100,
         sendConcurrency = 8,
     };
-    var pending = (Task)
-        runActive.Invoke(null, [transport, metrics, options, trigger, CancellationToken.None])!;
-    await pending;
-    var result = pending.GetType().GetProperty("Result")!.GetValue(pending)!;
-    var completed = (long)result.GetType().GetProperty("Completed")!.GetValue(result)!;
-    var submitted = (long)result.GetType().GetProperty("Submitted")!.GetValue(result)!;
-    var throughput = (double)result.GetType().GetProperty("Throughput")!.GetValue(result)!;
-    var latency = (double)result.GetType().GetProperty("MeanMicros")!.GetValue(result)!;
+    var result = await BenchMeasurement.RunActiveAsync(
+        transport,
+        metrics,
+        options,
+        trigger,
+        CancellationToken.None
+    );
+    var completed = result.Completed;
+    var submitted = result.Submitted;
+    var throughput = result.Throughput;
+    var latency = result.MeanMicros;
     if (pattern == "send-saturation")
     {
         if (completed != submitted || submitted != 8 || throughput != 5)

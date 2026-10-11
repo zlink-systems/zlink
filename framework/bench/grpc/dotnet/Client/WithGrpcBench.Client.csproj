@@ -9,6 +9,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="WithGrpcBench.BoundaryTests"/>
         <FrameworkReference Include="Microsoft.AspNetCore.App"/>
         <PackageReference Include="Grpc.Net.Client"/>
         <PackageReference Include="Microsoft.Extensions.Hosting"/>
