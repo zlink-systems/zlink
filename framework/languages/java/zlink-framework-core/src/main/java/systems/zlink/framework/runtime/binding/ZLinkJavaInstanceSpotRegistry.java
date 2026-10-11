@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -29,8 +30,7 @@ final class ZLinkJavaInstanceSpotRegistry {
             new ConcurrentHashMap<>();
     private final Map<String, ActivationHook> hooks = new ConcurrentHashMap<>();
     private final Map<String, String> stableTypes = new ConcurrentHashMap<>();
-    private final Map<String, CompletableFuture<Activation>> activations =
-            new ConcurrentHashMap<>();
+    private final Map<String, ActivationOperation> activations = new ConcurrentHashMap<>();
 
     ZLinkJavaInstanceSpotRegistry(ZLinkStateLane ingressLane, Executor applicationExecutor) {
         this.ingressLane = Objects.requireNonNull(ingressLane, "ingressLane");
@@ -64,7 +64,12 @@ final class ZLinkJavaInstanceSpotRegistry {
 
     CompletionStage<Activation> activate(
             String spotId, String requestedType, long objectGeneration, long deadlineUnixMs) {
-        return activate(spotId, requestedType, objectGeneration, deadlineUnixMs, ignored -> {});
+        return activate(
+                spotId,
+                requestedType,
+                objectGeneration,
+                deadlineUnixMs,
+                ignored -> CompletableFuture.completedFuture(null));
     }
 
     CompletionStage<Activation> activate(
@@ -72,7 +77,7 @@ final class ZLinkJavaInstanceSpotRegistry {
             String requestedType,
             long objectGeneration,
             long deadlineUnixMs,
-            Consumer<ZLinkBackendSpot> restoreFirst) {
+            Function<ZLinkBackendSpot, CompletionStage<Void>> restoreFirst) {
         Objects.requireNonNull(spotId, "spotId");
         if (objectGeneration <= 0) {
             return CompletableFuture.failedFuture(
@@ -92,7 +97,7 @@ final class ZLinkJavaInstanceSpotRegistry {
             String requestedType,
             long deadlineUnixMs,
             Supplier<CompletionStage<Long>> generation,
-            Consumer<ZLinkBackendSpot> restoreFirst) {
+            Function<ZLinkBackendSpot, CompletionStage<Void>> restoreFirst) {
         Objects.requireNonNull(spotId, "spotId");
         String selected = selectType(spotId, requestedType);
         String recorded = stableTypes.putIfAbsent(spotId, selected);
@@ -101,19 +106,34 @@ final class ZLinkJavaInstanceSpotRegistry {
                     new IllegalStateException(
                             "Instance Spot stable type does not match authority"));
         }
-        CompletableFuture<Activation> candidate = new CompletableFuture<>();
+        ActivationOperation candidate = new ActivationOperation();
         return ingressLane
                 .runAsync(() -> activations.put(spotId, candidate))
                 .thenComposeAsync(
-                        current ->
-                                activateRegistered(
-                                        spotId,
-                                        selected,
-                                        deadlineUnixMs,
-                                        generation,
-                                        restoreFirst,
-                                        candidate,
-                                        current),
+                        current -> {
+                            CompletionStage<Activation> result =
+                                    activateRegistered(
+                                            spotId,
+                                            selected,
+                                            deadlineUnixMs,
+                                            generation,
+                                            restoreFirst,
+                                            candidate,
+                                            current);
+                            CompletableFuture.allOf(
+                                            current == null
+                                                    ? CompletableFuture.completedFuture(null)
+                                                    : current.terminal,
+                                            result.handle((value, failure) -> null)
+                                                    .toCompletableFuture())
+                                    .whenComplete(
+                                            (value, failure) -> {
+                                                if (candidate.isCompletedExceptionally())
+                                                    activations.remove(spotId, candidate);
+                                                candidate.terminal.complete(null);
+                                            });
+                            return result;
+                        },
                         applicationExecutor);
     }
 
@@ -122,9 +142,9 @@ final class ZLinkJavaInstanceSpotRegistry {
             String selected,
             long deadlineUnixMs,
             Supplier<CompletionStage<Long>> generation,
-            Consumer<ZLinkBackendSpot> restoreFirst,
-            CompletableFuture<Activation> candidate,
-            CompletableFuture<Activation> current) {
+            Function<ZLinkBackendSpot, CompletionStage<Void>> restoreFirst,
+            ActivationOperation candidate,
+            ActivationOperation current) {
         if (current != null) {
             var result = new CompletableFuture<Activation>();
             current.whenCompleteAsync(
@@ -132,12 +152,16 @@ final class ZLinkJavaInstanceSpotRegistry {
                         if (failure != null) {
                             result.completeExceptionally(failure);
                             candidate.completeExceptionally(failure);
-                            activations.remove(spotId, candidate);
                             return;
                         }
                         try {
-                            restoreFirst.accept(value.spot());
-                            result.complete(value);
+                            restoreFirst
+                                    .apply(value.spot())
+                                    .whenComplete(
+                                            (ignored, terminalFailure) -> {
+                                                if (terminalFailure == null) result.complete(value);
+                                                else result.completeExceptionally(terminalFailure);
+                                            });
                         } catch (RuntimeException | Error refusal) {
                             result.completeExceptionally(refusal);
                         } finally {
@@ -148,6 +172,7 @@ final class ZLinkJavaInstanceSpotRegistry {
                     applicationExecutor);
             return result;
         }
+        var firstTerminal = new CompletableFuture<Void>();
         try {
             Supplier<CompletionStage<Activation>> start =
                     () ->
@@ -176,7 +201,22 @@ final class ZLinkJavaInstanceSpotRegistry {
                                                                 objectGeneration,
                                                                 spot,
                                                                 deadlineUnixMs,
-                                                                restoreFirst)
+                                                                activated ->
+                                                                        restoreFirst
+                                                                                .apply(activated)
+                                                                                .whenComplete(
+                                                                                        (ignored,
+                                                                                                failure) -> {
+                                                                                            if (failure
+                                                                                                    == null)
+                                                                                                firstTerminal
+                                                                                                        .complete(
+                                                                                                                null);
+                                                                                            else
+                                                                                                firstTerminal
+                                                                                                        .completeExceptionally(
+                                                                                                                failure);
+                                                                                        }))
                                                         .whenComplete(
                                                                 (ignored, failure) -> {
                                                                     if (failure != null)
@@ -196,14 +236,12 @@ final class ZLinkJavaInstanceSpotRegistry {
                                     candidate.complete(value);
                                 } else {
                                     candidate.completeExceptionally(failure);
-                                    activations.remove(spotId, candidate);
                                 }
                             });
         } catch (RuntimeException | Error failure) {
             candidate.completeExceptionally(failure);
-            activations.remove(spotId, candidate);
         }
-        return candidate;
+        return candidate.thenCompose(value -> firstTerminal.thenApply(ignored -> value));
     }
 
     CompletionStage<Void> admitExisting(
@@ -249,6 +287,11 @@ final class ZLinkJavaInstanceSpotRegistry {
     }
 
     void closeAll() {
+        CompletableFuture.allOf(
+                        activations.values().stream()
+                                .map(operation -> operation.terminal)
+                                .toArray(CompletableFuture[]::new))
+                .join();
         activations
                 .values()
                 .forEach(
@@ -295,6 +338,10 @@ final class ZLinkJavaInstanceSpotRegistry {
                 || value.getBytes(StandardCharsets.UTF_8).length > 0xff) {
             throw new IllegalArgumentException("Instance Spot stable type must be text8");
         }
+    }
+
+    private static final class ActivationOperation extends CompletableFuture<Activation> {
+        final CompletableFuture<Void> terminal = new CompletableFuture<>();
     }
 
     record Activation(String stableType, ZLinkBackendSpot spot) {}

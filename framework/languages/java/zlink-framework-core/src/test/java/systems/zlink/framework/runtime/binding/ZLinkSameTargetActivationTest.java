@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
@@ -66,13 +67,19 @@ final class ZLinkSameTargetActivationTest {
                                     "room",
                                     1,
                                     Long.MAX_VALUE,
-                                    spot -> restoreThread.complete(Thread.currentThread()))
+                                    spot -> {
+                                        restoreThread.complete(Thread.currentThread());
+                                        return CompletableFuture.completedFuture(null);
+                                    })
                             : registry.activate(
                                     "spot",
                                     "room",
                                     Long.MAX_VALUE,
                                     () -> CompletableFuture.completedFuture(1L),
-                                    spot -> restoreThread.complete(Thread.currentThread()));
+                                    spot -> {
+                                        restoreThread.complete(Thread.currentThread());
+                                        return CompletableFuture.completedFuture(null);
+                                    });
             activation.toCompletableFuture().get(2, TimeUnit.SECONDS);
             assertNotSame(ingressThread, factoryThread.join(), "factory ran on the ingress thread");
             assertNotSame(ingressThread, hookThread.join(), "hook ran on the ingress thread");
@@ -210,9 +217,36 @@ final class ZLinkSameTargetActivationTest {
                     return backendSpot(generation);
                 },
                 (type, id, generation, spot) -> ready);
-        var event = registry.activate("spot", "room", 1, Long.MAX_VALUE, spot -> admitted.add(1));
-        var request = registry.activate("spot", "room", 1, Long.MAX_VALUE, spot -> admitted.add(2));
-        var later = registry.activate("spot", "room", 1, Long.MAX_VALUE, spot -> admitted.add(3));
+        var event =
+                registry.activate(
+                        "spot",
+                        "room",
+                        1,
+                        Long.MAX_VALUE,
+                        spot -> {
+                            admitted.add(1);
+                            return CompletableFuture.completedFuture(null);
+                        });
+        var request =
+                registry.activate(
+                        "spot",
+                        "room",
+                        1,
+                        Long.MAX_VALUE,
+                        spot -> {
+                            admitted.add(2);
+                            return CompletableFuture.completedFuture(null);
+                        });
+        var later =
+                registry.activate(
+                        "spot",
+                        "room",
+                        1,
+                        Long.MAX_VALUE,
+                        spot -> {
+                            admitted.add(3);
+                            return CompletableFuture.completedFuture(null);
+                        });
         assertTrue(admitted.isEmpty());
         ready.complete(null);
         assertSame(
@@ -224,6 +258,32 @@ final class ZLinkSameTargetActivationTest {
         assertEquals(1, created.get());
         assertEquals(List.of(1, 2, 3), admitted);
         registry.closeAll();
+    }
+
+    @Test
+    void shutdownWaitsForEarlierOperationWithoutDelayingReadyJoin() throws Exception {
+        var firstTerminal = new CompletableFuture<Void>();
+        var registry =
+                new ZLinkJavaInstanceSpotRegistry(new ZLinkStateLane(Runnable::run), Runnable::run);
+        registry.register("room", (id, generation) -> backendSpot(generation));
+        var first = registry.activate("spot", "room", 1, Long.MAX_VALUE, spot -> firstTerminal);
+        var joined = registry.activate("spot", "room", 1).toCompletableFuture();
+        assertTrue(joined.isDone(), "Ready join waited for the earlier Store terminal");
+        var closingEntered = new CompletableFuture<Void>();
+        var closing =
+                CompletableFuture.runAsync(
+                        () -> {
+                            closingEntered.complete(null);
+                            registry.closeAll();
+                        });
+        try {
+            closingEntered.get(2, TimeUnit.SECONDS);
+            assertThrows(TimeoutException.class, () -> closing.get(100, TimeUnit.MILLISECONDS));
+        } finally {
+            firstTerminal.complete(null);
+            closing.get(2, TimeUnit.SECONDS);
+        }
+        assertSame(first.toCompletableFuture().join().spot(), joined.join().spot());
     }
 
     private static ZLinkBackendSpot backendSpot(long generation) {
