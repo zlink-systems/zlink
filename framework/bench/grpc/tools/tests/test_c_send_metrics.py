@@ -13,7 +13,7 @@ class CSendMetricsTest(unittest.TestCase):
         return {"schema": "with-grpc-cell-v1", "metadata": {"durationSeconds": 5},
                 "cells": [{"implementation": "zlink-c", "pattern": "send-saturation",
                            "payload_size": 1024, "server_received_at_close": 7,
-                           "throughput_per_second": 2.2,
+                           "throughput_per_second": 2.2, "bandwidth_mb_s": 0.0022528,
                            "target_stats": {"received": 11, "errors": 3, "drainMs": 1},
                            "extra": {"submitted": 11, "completed": 7}}]}
 

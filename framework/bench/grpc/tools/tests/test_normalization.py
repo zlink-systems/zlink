@@ -430,8 +430,8 @@ class RunLayoutTest(unittest.TestCase):
             path.write_text(text, encoding="utf-8")
         return run
 
-    def test_a_contaminated_cell_with_no_metrics_is_still_reported(self):
-        """FB-008: a contaminated cell was never measured but must stay visible."""
+    def test_a_contaminated_cell_with_no_rates_is_rejected(self):
+        """The producer must write rates even for an excluded cell."""
         payload = {
             "schema": "with-grpc-cell-v1",
             "cells": [
@@ -446,10 +446,8 @@ class RunLayoutTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             run = self._run(directory, {"zlink-node-request-serial-4096/results.json": json.dumps(payload)})
-            cells, _ = read_run(str(run))
-        self.assertEqual(len(cells), 1)
-        self.assertTrue(cells[0].contaminated)
-        self.assertIsNone(cells[0].throughput_per_second)
+            with self.assertRaisesRegex(ReportError, "throughput_per_second"):
+                read_run(str(run))
 
     def test_a_run_with_only_report_text_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

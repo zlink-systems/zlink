@@ -251,6 +251,8 @@ the following in addition.
 | `streams` | A's logical stream count and the per-stream in-flight ceiling (§10.3) |
 | `target_stats` | Receive count, error count, and drain time the runner read from B's stats endpoint after settle |
 
+The cell producer owns throughput and bandwidth; the aggregator reads these required values unchanged.
+
 ## 5. Metrics
 
 The required output is the metrics below. The throughput unit is separated to match the pattern's

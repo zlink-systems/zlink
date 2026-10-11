@@ -234,6 +234,8 @@ server-driven 모델(§10)에서 `client_*`는 **source process A**, `server_*`�
 | `streams` | A의 logical stream 수와 stream당 in-flight 상한(§10.3) |
 | `target_stats` | settle 뒤 runner가 B의 stats endpoint에서 읽은 수신 수·오류 수·drain 시간 |
 
+처리량과 bandwidth는 셀 producer가 계산하며, aggregator는 필수 셀 값을 그대로 읽는다.
+
 ## 5. 메트릭
 
 필수 출력은 아래 메트릭이다. 처리량 단위는 패턴 성격에 맞춰 분리한다.

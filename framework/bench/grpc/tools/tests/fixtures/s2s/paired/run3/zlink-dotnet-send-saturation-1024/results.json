@@ -34,7 +34,9 @@
         "received": 245000,
         "errors": 0,
         "drainMs": 39.0
-      }
+      },
+      "throughput_per_second": 48400.0,
+      "bandwidth_mb_s": 49.5616
     }
   ]
 }
