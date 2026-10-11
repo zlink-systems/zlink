@@ -644,7 +644,7 @@ internal sealed class SourceMetrics(int sampleLimit)
     private long errors;
     private long inFlight;
     private long peakInFlight;
-    private long abandoned;
+    private SourceResultSnapshot? terminalSnapshot;
     private long sampleCount;
     private long sampleSum;
     private long otherErrors;
@@ -653,7 +653,8 @@ internal sealed class SourceMetrics(int sampleLimit)
     {
         lock (gate)
         {
-            submitted = completed = errors = inFlight = peakInFlight = abandoned = 0;
+            submitted = completed = errors = inFlight = peakInFlight = 0;
+            terminalSnapshot = null;
             completedAtClose = 0;
             activeDeadline = deadline;
             sampleCount = sampleSum = 0;
@@ -677,10 +678,16 @@ internal sealed class SourceMetrics(int sampleLimit)
 
     public void Complete(long started, bool success, Exception? error = null)
     {
-        var now = Stopwatch.GetTimestamp();
+        Complete(started, success, error, Stopwatch.GetTimestamp());
+    }
+
+    internal void Complete(long started, bool success, Exception? error, long now)
+    {
         var elapsed = (long)((now - started) * 1_000_000.0 / Stopwatch.Frequency);
         lock (gate)
         {
+            if (terminalSnapshot is not null)
+                return;
             inFlight--;
             if (success)
             {
@@ -733,22 +740,35 @@ internal sealed class SourceMetrics(int sampleLimit)
         }
     }
 
-    public void RecordAbandoned(long count)
+    public void FreezeTerminal()
     {
         lock (gate)
-            abandoned = Math.Max(abandoned, count);
+            terminalSnapshot ??= Result() with { Abandoned = inFlight };
     }
 
     public BenchCounterSnapshot Snapshot()
     {
         lock (gate)
+        {
+            if (terminalSnapshot is { } terminal)
+                return new(
+                    terminal.Submitted,
+                    terminal.Completed,
+                    terminal.Errors,
+                    0,
+                    terminal.CurrentInFlight,
+                    terminal.PeakInFlight
+                );
             return new(submitted, completed, errors, 0, inFlight, peakInFlight);
+        }
     }
 
     public SourceResultSnapshot Result()
     {
         lock (gate)
         {
+            if (terminalSnapshot is { } terminal)
+                return terminal;
             var sorted = samples.ToArray();
             Array.Sort(sorted);
             return new SourceResultSnapshot(
@@ -758,7 +778,7 @@ internal sealed class SourceMetrics(int sampleLimit)
                 errors,
                 inFlight,
                 peakInFlight,
-                abandoned,
+                0,
                 errorSummary
                     .Select(static entry => new ClientErrorSummary(
                         entry.Key.Type,

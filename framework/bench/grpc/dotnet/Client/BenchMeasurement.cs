@@ -165,6 +165,7 @@ internal static class BenchMeasurement
                 throw new InvalidOperationException($"Unsupported pattern {trigger.pattern}.");
         }
 
+        metrics.FreezeTerminal();
         var elapsedSeconds = trigger.durationMs / 1000.0;
         var boundary = await activeAtClose;
         var sourceResources = boundary.Source;
@@ -313,7 +314,7 @@ internal static class BenchMeasurement
         }
         catch (TimeoutException)
         {
-            metrics.RecordAbandoned(metrics.Snapshot().currentInFlight);
+            metrics.FreezeTerminal();
             operationCancellation.Cancel();
             try
             {
@@ -431,7 +432,7 @@ internal static class BenchMeasurement
         }
         catch (TimeoutException)
         {
-            metrics.RecordAbandoned(metrics.Snapshot().currentInFlight);
+            metrics.FreezeTerminal();
             operationCancellation.Cancel();
             try
             {

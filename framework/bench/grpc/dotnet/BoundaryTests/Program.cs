@@ -15,6 +15,23 @@ sourceMetrics.Complete(sourceMetrics.Begin(), true);
 if (sourceMetrics.Result().Completed != 1 || sourceMetrics.Result().CompletedAtClose != 0)
     throw new InvalidOperationException("A completion after the deadline entered active metrics.");
 
+sourceMetrics.Reset(10);
+var firstTerminal = sourceMetrics.Begin();
+var secondTerminal = sourceMetrics.Begin();
+var thirdTerminal = sourceMetrics.Begin();
+sourceMetrics.Complete(firstTerminal, true, null, 1);
+sourceMetrics.FreezeTerminal();
+sourceMetrics.Complete(secondTerminal, true, null, 20);
+sourceMetrics.Complete(thirdTerminal, false, new InvalidOperationException("late"), 21);
+var terminal = sourceMetrics.Result();
+if (
+    terminal.Completed + terminal.Errors + terminal.Abandoned != terminal.Submitted
+    || terminal.Completed != 1
+    || terminal.Errors != 0
+    || terminal.ErrorSummary.Count != 0
+)
+    throw new InvalidOperationException($"Late terminal entered snapshot: {terminal}");
+
 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 var grpcBuilder = WebApplication.CreateBuilder();
 grpcBuilder.Logging.ClearProviders();

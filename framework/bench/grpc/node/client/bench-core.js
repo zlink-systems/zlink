@@ -51,7 +51,7 @@ class SourceMetrics {
     this.errors = 0;
     this.inFlight = 0;
     this.peakInFlight = 0;
-    this.abandoned = 0;
+    this.terminalSnapshot = null;
     this.sampleCount = 0;
     this.sampleSumMicros = 0;
     this.samples = [];
@@ -68,6 +68,7 @@ class SourceMetrics {
   }
 
   complete(started, success, error = null) {
+    if (this.terminalSnapshot !== null) return;
     const now = header.nowNs();
     const micros = Number(now - started) / 1000;
     this.inFlight -= 1;
@@ -99,22 +100,24 @@ class SourceMetrics {
     }
   }
 
-  recordAbandoned(count) {
-    this.abandoned = Math.max(this.abandoned, count);
+  freezeTerminal() {
+    this.terminalSnapshot ??= { ...this.result(), abandoned: this.inFlight };
   }
 
   snapshot() {
+    const terminal = this.terminalSnapshot;
     return {
       submitted: this.submitted,
-      completed: this.completed,
-      errors: this.errors,
+      completed: terminal?.completed ?? this.completed,
+      errors: terminal?.errors ?? this.errors,
       received: 0,
-      inFlight: this.inFlight,
+      inFlight: terminal?.inFlight ?? this.inFlight,
       peakInFlight: this.peakInFlight
     };
   }
 
   result() {
+    if (this.terminalSnapshot !== null) return this.terminalSnapshot;
     const sorted = this.samples.slice().sort((a, b) => a - b);
     return {
       completed: this.completed,
@@ -122,7 +125,7 @@ class SourceMetrics {
       errors: this.errors,
       inFlight: this.inFlight,
       peakInFlight: this.peakInFlight,
-      abandoned: this.abandoned,
+      abandoned: 0,
       clientErrorSummary: [...this.errorSummary.values()],
       clientErrorOtherCount: this.otherErrors,
       meanMicros: this.sampleCount === 0 ? 0 : this.sampleSumMicros / this.sampleCount,
@@ -258,7 +261,8 @@ async function runActive(transport, metrics, options, trigger) {
     throw new Error(`unsupported pattern ${trigger.pattern}`);
   }
 
-  const [active] = await Promise.all([boundary, running]);
+  const terminal = running.then(() => metrics.freezeTerminal());
+  const [active] = await Promise.all([boundary, terminal]);
   const { usage, target } = active;
   const source = metrics.result();
   const send = trigger.pattern === 'send-saturation';
@@ -371,7 +375,7 @@ async function requestBackpressure(
       completionPump.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
       await sleepImmediate();
     }
-    if (pending.size > 0 || blocked !== null) metrics.recordAbandoned(metrics.inFlight);
+    metrics.freezeTerminal();
     return;
   }
 
@@ -388,14 +392,8 @@ async function requestBackpressure(
     }
   }
   if (pending.size === 0) return;
-  let drained = false;
-  await Promise.race([
-    Promise.all([...pending]).then(() => {
-      drained = true;
-    }),
-    delay(options.drainBoundMs)
-  ]);
-  if (!drained) metrics.recordAbandoned(metrics.inFlight);
+  await Promise.race([Promise.all([...pending]), delay(options.drainBoundMs)]);
+  metrics.freezeTerminal();
 }
 
 async function sendWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
@@ -433,12 +431,7 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
 }
 
 async function executeRequest(transport, metrics, trigger, runId, stream, sequence) {
-  const payload = header.createPayloadBytes(
-    trigger.payloadBytes,
-    runId,
-    header.PHASE_ACTIVE,
-    sequence
-  );
+  const payload = header.createPayloadBytes(trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence);
   const started = metrics.begin();
   try {
     const reply = await transport.request(stream, payload);

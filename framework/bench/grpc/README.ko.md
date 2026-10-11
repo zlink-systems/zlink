@@ -238,6 +238,8 @@ server-driven 모델(§10)에서 `client_*`는 **source process A**, `server_*`�
 
 ## 5. 메트릭
 
+collector는 drain 완료 또는 상한 시점의 terminal snapshot을 한 번 고정하며 completed·errors·오류 요약·abandoned(그 시점 in-flight)를 그 snapshot에서 읽는다. 이후 terminal은 결과에서 제외하고 completed + errors + abandoned = submitted를 유지한다.
+
 필수 출력은 아래 메트릭이다. 처리량 단위는 패턴 성격에 맞춰 분리한다.
 
 | 메트릭 | 의미 |

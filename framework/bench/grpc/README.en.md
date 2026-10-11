@@ -255,6 +255,8 @@ The cell producer owns throughput and bandwidth; the aggregator reads these requ
 
 ## 5. Metrics
 
+The collector freezes one terminal snapshot when drain completes or reaches its bound; completed, errors, error summary and abandoned (in-flight at that instant) come from that snapshot. Later terminals are excluded, preserving completed + errors + abandoned = submitted.
+
 The required output is the metrics below. The throughput unit is separated to match the pattern's
 character.
 

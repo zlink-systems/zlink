@@ -195,3 +195,30 @@ test('completion at the deadline is excluded even before the boundary timer runs
   assert.equal(result.completedAtClose, 1);
   assert.equal(result.meanMicros, 0.009);
 });
+
+test('terminal snapshot excludes late success and failure at the drain bound', () => {
+  const originalNow = header.nowNs;
+  let now = 1n;
+  header.nowNs = () => now;
+  try {
+    const metrics = new core.SourceMetrics(10);
+    metrics.reset(10n);
+    const first = metrics.begin();
+    const second = metrics.begin();
+    const third = metrics.begin();
+    metrics.complete(first, true);
+    now = 20n;
+    metrics.freezeTerminal();
+    now = 21n;
+    metrics.complete(second, true);
+    metrics.complete(third, false, new Error('late'));
+    const result = metrics.result();
+    assert.equal(result.completed + result.errors + result.abandoned, metrics.submitted);
+    assert.equal(result.completed, 1);
+    assert.equal(result.errors, 0);
+    assert.deepEqual(result.clientErrorSummary, []);
+    assert.equal(result.abandoned, 2);
+  } finally {
+    header.nowNs = originalNow;
+  }
+});

@@ -11,6 +11,49 @@ import java.util.concurrent.CompletableFuture;
 /** A reply completed by drain remains a correctness count, not an active operation. */
 public final class ActiveBoundaryTest {
     public static void main(String[] args) throws Exception {
+        var metrics = new BenchDrivers.SourceMetrics(10, 10);
+        long first = metrics.begin();
+        long second = metrics.begin();
+        long third = metrics.begin();
+        metrics.complete(first, null, 1);
+        metrics.freezeTerminal();
+        metrics.complete(second, null, 20);
+        metrics.complete(third, new IllegalStateException("late"), 21);
+        if (metrics.completed() + metrics.errors() + metrics.abandoned() != 3
+                || metrics.completed() != 1
+                || metrics.errors() != 0
+                || !metrics.errorSummary().isEmpty()) {
+            throw new AssertionError(
+                    "late terminal entered snapshot: "
+                            + metrics.completed()
+                            + "/"
+                            + metrics.errors()
+                            + "/"
+                            + metrics.abandoned());
+        }
+        var concurrent = new BenchDrivers.SourceMetrics(10, 0);
+        for (int index = 0; index < 4000; index++) concurrent.begin();
+        var failure = new IllegalStateException("early");
+        Thread[] completions = new Thread[4];
+        for (int index = 0; index < completions.length; index++) {
+            completions[index] =
+                    Thread.ofPlatform()
+                            .start(
+                                    () -> {
+                                        for (int count = 0; count < 1000; count++)
+                                            concurrent.complete(
+                                                    0, count % 2 == 0 ? failure : null, 20);
+                                    });
+        }
+        concurrent.freezeTerminal();
+        for (Thread completion : completions) completion.join();
+        long summarized =
+                concurrent.errorSummary().stream()
+                        .mapToLong(entry -> ((Number) entry.get("count")).longValue())
+                        .sum();
+        if (concurrent.completed() + concurrent.errors() + concurrent.abandoned() != 4000
+                || summarized != concurrent.errors())
+            throw new AssertionError("terminal counters and error summary diverged");
         HttpServer stats = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         stats.createContext(
                 "/bench/",

@@ -20,8 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicLongArray;
-import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
 /** Pattern-to-logical-stream implementation shared by the Java and Kotlin sources. */
@@ -79,6 +78,7 @@ public final class BenchDrivers {
         // (spec 5.2: abandoned; the cell is excluded from the throughput judgement), not a phase
         // failure. The .NET and C++ sources record the same way; grpc-java's unbounded
         // request-backpressure warmup reaches this with about a million open calls.
+        warmupMetrics.freezeTerminal();
         warmupAbandoned = warmupMetrics.abandoned();
         if (warmupAbandoned != 0) {
             System.err.println(
@@ -119,6 +119,7 @@ public final class BenchDrivers {
                         BenchMetricHeader.PHASE_ACTIVE,
                         activeMetrics,
                         resources);
+        activeMetrics.freezeTerminal();
         ActiveSnapshot active = activeAtClose.get();
         ClientResources.Usage usage = active.usage();
         StatsClient.ServerSnapshot boundary = active.target();
@@ -282,7 +283,7 @@ public final class BenchDrivers {
             // Per-operation callbacks own success/error accounting. A drain that
             // is not done in time is recorded below as abandoned work.
         }
-        source.recordAbandoned(source.inFlight());
+        source.freezeTerminal();
     }
 
     private void runWorkers(
@@ -365,7 +366,7 @@ public final class BenchDrivers {
         while (source.inFlight() > 0 && System.nanoTime() < settleDeadline) {
             Thread.sleep(1);
         }
-        source.recordAbandoned(source.inFlight());
+        source.freezeTerminal();
     }
 
     private void runBackpressure(
@@ -405,7 +406,7 @@ public final class BenchDrivers {
         while (!pending.isEmpty() && System.nanoTime() < settleDeadline) {
             Thread.sleep(1);
         }
-        source.recordAbandoned(source.inFlight());
+        source.freezeTerminal();
     }
 
     private void validateTrigger(BenchHttpApplication.Trigger trigger) {
@@ -423,38 +424,40 @@ public final class BenchDrivers {
         private static final int ERROR_KIND_LIMIT = 8;
         private static final int ERROR_MESSAGE_LIMIT = 200;
         private final AtomicLong submitted = new AtomicLong();
-        private final AtomicLong completed = new AtomicLong();
         private final AtomicLong activeCompleted = new AtomicLong();
         private final long activeDeadline;
-        private final AtomicLong errors = new AtomicLong();
-        private final AtomicInteger inFlight = new AtomicInteger();
         private final AtomicInteger peakInFlight = new AtomicInteger();
-        private final AtomicLong abandoned = new AtomicLong();
-        private final AtomicReferenceArray<ErrorKey> errorKeys =
-                new AtomicReferenceArray<>(ERROR_KIND_LIMIT);
-        private final AtomicLongArray errorCounts = new AtomicLongArray(ERROR_KIND_LIMIT);
-        private final AtomicLong otherErrors = new AtomicLong();
+        private final AtomicReference<TerminalSnapshot> terminal =
+                new AtomicReference<>(new TerminalSnapshot(0, 0, List.of(), 0, -1));
         private final Latencies latencies;
 
-        private SourceMetrics(int sampleLimit, long activeDeadline) {
+        SourceMetrics(int sampleLimit, long activeDeadline) {
             latencies = new Latencies(sampleLimit);
             this.activeDeadline = activeDeadline;
         }
 
-        private long begin() {
+        long begin() {
             submitted.incrementAndGet();
-            int depth = inFlight.incrementAndGet();
+            int depth = (int) inFlight();
             peakInFlight.accumulateAndGet(depth, Math::max);
             return BenchMetricHeader.nowNs();
         }
 
         private void complete(long started, Throwable error) {
-            long now = BenchMetricHeader.nowNs();
-            if (error == null) {
-                completed.incrementAndGet();
-            } else {
-                errors.incrementAndGet();
-                recordError(error);
+            complete(started, error, BenchMetricHeader.nowNs());
+        }
+
+        void complete(long started, Throwable error, long now) {
+            ErrorKey key = error == null ? null : errorKey(error);
+            for (; ; ) {
+                TerminalSnapshot current = terminal.get();
+                if (current.abandoned() >= 0) {
+                    return;
+                }
+                TerminalSnapshot next = current.complete(key);
+                if (terminal.compareAndSet(current, next)) {
+                    break;
+                }
             }
             if (now < activeDeadline) {
                 if (error == null) {
@@ -462,42 +465,16 @@ public final class BenchDrivers {
                 }
                 latencies.add((now - started) / 1000.0);
             }
-            inFlight.decrementAndGet();
         }
 
-        private void recordError(Throwable original) {
+        private static ErrorKey errorKey(Throwable original) {
             Throwable error = unwrap(original);
-            String type = error.getClass().getName();
             String message =
                     String.valueOf(error.getMessage()).replace('\r', ' ').replace('\n', ' ');
             if (message.length() > ERROR_MESSAGE_LIMIT) {
                 message = message.substring(0, ERROR_MESSAGE_LIMIT);
             }
-            ErrorKey key = new ErrorKey(type, message);
-            int start = Math.floorMod(key.hashCode(), ERROR_KIND_LIMIT);
-            for (; ; ) {
-                boolean retry = false;
-                for (int offset = 0; offset < ERROR_KIND_LIMIT; offset++) {
-                    int index = (start + offset) % ERROR_KIND_LIMIT;
-                    ErrorKey current = errorKeys.get(index);
-                    if (key.equals(current)) {
-                        errorCounts.incrementAndGet(index);
-                        return;
-                    }
-                    if (current == null) {
-                        if (errorKeys.compareAndSet(index, null, key)) {
-                            errorCounts.incrementAndGet(index);
-                            return;
-                        }
-                        retry = true;
-                        break;
-                    }
-                }
-                if (!retry) {
-                    otherErrors.incrementAndGet();
-                    return;
-                }
-            }
+            return new ErrorKey(error.getClass().getName(), message);
         }
 
         private static Throwable unwrap(Throwable error) {
@@ -509,24 +486,32 @@ public final class BenchDrivers {
             return current;
         }
 
-        private List<Map<String, Object>> errorSummary() {
+        List<Map<String, Object>> errorSummary() {
             List<Map<String, Object>> summary = new ArrayList<>();
-            for (int index = 0; index < ERROR_KIND_LIMIT; index++) {
-                ErrorKey key = errorKeys.get(index);
-                if (key == null) {
-                    continue;
-                }
-                Map<String, Object> entry = new LinkedHashMap<>();
-                entry.put("type", key.type());
-                entry.put("message", key.message());
-                entry.put("count", errorCounts.get(index));
-                summary.add(entry);
+            for (ErrorCount count : terminal.get().summary()) {
+                summary.add(
+                        Map.of(
+                                "type",
+                                count.key().type(),
+                                "message",
+                                count.key().message(),
+                                "count",
+                                count.count()));
             }
             return summary;
         }
 
-        private void recordAbandoned(long count) {
-            abandoned.accumulateAndGet(count, Math::max);
+        void freezeTerminal() {
+            terminal.updateAndGet(
+                    current ->
+                            current.abandoned() >= 0
+                                    ? current
+                                    : new TerminalSnapshot(
+                                            current.completed(),
+                                            current.errors(),
+                                            current.summary(),
+                                            current.otherErrors(),
+                                            submitted() - current.completed() - current.errors()));
         }
 
         private BenchHttpApplication.Counters snapshot() {
@@ -538,28 +523,31 @@ public final class BenchDrivers {
             return submitted.get();
         }
 
-        private long completed() {
-            return completed.get();
+        long completed() {
+            return terminal.get().completed();
         }
 
-        private long errors() {
-            return errors.get();
+        long errors() {
+            return terminal.get().errors();
         }
 
-        private long inFlight() {
-            return inFlight.get();
+        long inFlight() {
+            TerminalSnapshot current = terminal.get();
+            return current.abandoned() >= 0
+                    ? current.abandoned()
+                    : submitted() - current.completed() - current.errors();
         }
 
         private long peakInFlight() {
             return peakInFlight.get();
         }
 
-        private long abandoned() {
-            return abandoned.get();
+        long abandoned() {
+            return Math.max(0, terminal.get().abandoned());
         }
 
         private long otherErrors() {
-            return otherErrors.get();
+            return terminal.get().otherErrors();
         }
 
         private Latencies.Summary latencySummary() {
@@ -567,5 +555,41 @@ public final class BenchDrivers {
         }
 
         private record ErrorKey(String type, String message) {}
+
+        private record ErrorCount(ErrorKey key, long count) {}
+
+        private record TerminalSnapshot(
+                long completed,
+                long errors,
+                List<ErrorCount> summary,
+                long otherErrors,
+                long abandoned) {
+            TerminalSnapshot complete(ErrorKey key) {
+                if (key == null) {
+                    return new TerminalSnapshot(
+                            completed + 1, errors, summary, otherErrors, abandoned);
+                }
+                List<ErrorCount> updated = new ArrayList<>(summary);
+                for (int index = 0; index < updated.size(); index++) {
+                    ErrorCount count = updated.get(index);
+                    if (count.key().equals(key)) {
+                        updated.set(index, new ErrorCount(key, count.count() + 1));
+                        return new TerminalSnapshot(
+                                completed,
+                                errors + 1,
+                                List.copyOf(updated),
+                                otherErrors,
+                                abandoned);
+                    }
+                }
+                if (updated.size() < ERROR_KIND_LIMIT) {
+                    updated.add(new ErrorCount(key, 1));
+                    return new TerminalSnapshot(
+                            completed, errors + 1, List.copyOf(updated), otherErrors, abandoned);
+                }
+                return new TerminalSnapshot(
+                        completed, errors + 1, summary, otherErrors + 1, abandoned);
+            }
+        }
     }
 }
