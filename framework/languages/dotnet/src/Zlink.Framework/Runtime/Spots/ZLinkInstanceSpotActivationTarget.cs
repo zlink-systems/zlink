@@ -553,6 +553,21 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         var read = await authorityStore
             .ReadAuthorityAsync(key, cancellationToken)
             .ConfigureAwait(false);
+        ValidateTarget(operation);
+        if (!registration.InstanceSpotFactories.ContainsKey(operation.Target.StableType))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.TypeMismatch,
+                $"Instance Spot type '{operation.Target.StableType}' is not registered."
+            );
+
+        var requestSource = await ResolveRequestSourceAsync(
+                operation.Target.MeshName,
+                operation.SourceNodeRid,
+                operation.SourceNodeGeneration,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+
         if (
             read is ZLinkAuthorityReadResult.Found saved
             && saved.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
@@ -565,6 +580,38 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 saved.Snapshot.Payload.Span,
                 out var savedAuthority
             );
+            if (
+                saved.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
+                && savedAuthority is { } existing
+                && existing.NodeRid == node.RoutingId
+                && existing.NodeGeneration == node.MeshStatus().LifecycleGeneration
+            )
+            {
+                if (existing.StableType != operation.Target.StableType)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.TypeMismatch,
+                        "Instance Spot type does not match."
+                    );
+                var activation = await catalog
+                    .TryGetInstanceActivationAsync(
+                        existing.SpotId,
+                        existing.StableType,
+                        saved.Snapshot.ObjectGeneration
+                    )
+                    .ConfigureAwait(false);
+                if (activation is not null)
+                    return await AdmitMessageAsync(
+                            activation,
+                            operation,
+                            requestSource,
+                            saved.Snapshot,
+                            metadata,
+                            payload,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+            }
+
             var reference =
                 saved.Snapshot.ReservedCreation?.RequestContentReference
                 ?? savedAuthority?.ActivationRecovery?.Reference;
@@ -625,57 +672,6 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                         "Instance route does not match the stored activation."
                     );
             }
-        }
-
-        ValidateTarget(operation);
-        if (!registration.InstanceSpotFactories.ContainsKey(operation.Target.StableType))
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.TypeMismatch,
-                $"Instance Spot type '{operation.Target.StableType}' is not registered."
-            );
-
-        var requestSource = await ResolveRequestSourceAsync(
-                operation.Target.MeshName,
-                operation.SourceNodeRid,
-                operation.SourceNodeGeneration,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-
-        if (
-            read is ZLinkAuthorityReadResult.Found found
-            && found.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active
-            && ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                found.Snapshot.Payload.Span,
-                out var existing
-            )
-            && existing.NodeRid == node.RoutingId
-            && existing.NodeGeneration == node.MeshStatus().LifecycleGeneration
-        )
-        {
-            if (existing.StableType != operation.Target.StableType)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.TypeMismatch,
-                    "Instance Spot type does not match."
-                );
-            var activation = await catalog
-                .TryGetInstanceActivationAsync(
-                    existing.SpotId,
-                    existing.StableType,
-                    found.Snapshot.ObjectGeneration
-                )
-                .ConfigureAwait(false);
-            if (activation is not null)
-                return await AdmitMessageAsync(
-                        activation,
-                        operation,
-                        requestSource,
-                        found.Snapshot,
-                        metadata,
-                        payload,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
         }
 
         var envelope = ZLinkServiceWireCodec.EncodeInstanceSpotActivationRecovery(

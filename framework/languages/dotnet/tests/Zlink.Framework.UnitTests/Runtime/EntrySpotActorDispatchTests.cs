@@ -10525,7 +10525,9 @@ public sealed partial class EntrySpotActorDispatchTests
         if (instanceDispatchProbe is not null)
             serviceCollection
                 .AddSingleton(instanceDispatchProbe)
-                .AddTransient<ColdSendInstanceHandler>();
+                .AddTransient<ColdSendInstanceHandler>()
+                .AddTransient<RecoveryRaceEventHandler>()
+                .AddTransient<RecoveryRaceRequestHandler>();
         if (dispatchProbe is not null)
         {
             serviceCollection.AddSingleton(dispatchProbe);

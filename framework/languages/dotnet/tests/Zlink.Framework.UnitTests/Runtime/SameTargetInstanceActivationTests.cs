@@ -3,6 +3,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Configuration;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
@@ -12,6 +13,198 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Fact]
+    public async Task ReadyInstanceAdmissionSurvivesConcurrentRecoveryDeletion()
+    {
+        var probe = new ColdSendProbe();
+        var blobs = new ObservedActivationRelocationStore();
+        HeldRecoveryAuthorityStore? held = null;
+        var flowPath = Path.Combine(
+            Path.GetTempPath(),
+            "zlink-1575",
+            $"recovery-race-{Guid.NewGuid():N}.flow"
+        );
+        using var flows = new TestHostMessageFlowListener(flowPath);
+        Console.WriteLine($"Message flow file: {flowPath}");
+        var node = new JoinedActivationNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal,
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            instanceSpotType: typeof(RecoveryRaceSpot),
+            instanceDispatchProbe: probe,
+            relocationStore: blobs,
+            locationStoreWrapper: inner => held = new(inner)
+        );
+        try
+        {
+            var store = RequireLocationStore(runtime);
+            var descriptor = Assert.Single(
+                await store.ListAllMeshNodesAsync("entry", CancellationToken.None),
+                row => row.Rid == node.RoutingId
+            );
+            var target = new ZLinkInstanceSpotActivationTarget(
+                store,
+                new ZLinkProviderRelocationRepository(blobs),
+                runtime.GetSpotNodeRuntime("entry").Catalog,
+                node,
+                runtime.Registration.SpotNodes["entry"],
+                new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
+            );
+            InstanceSpotActivationOperation Operation(ulong id, bool request) =>
+                new(
+                    new InstanceSpotActivationTarget(
+                        "entry",
+                        node.RoutingId,
+                        descriptor.LifecycleGeneration,
+                        HeldRecoveryAuthorityStore.SpotId,
+                        "Tests.InstanceSpot",
+                        descriptor.DescriptorRevision.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture
+                        )
+                    ),
+                    node.RoutingId,
+                    descriptor.LifecycleGeneration,
+                    "",
+                    new MeshOperationId(1575, id),
+                    request,
+                    request ? id : 0,
+                    checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds())
+                );
+            IReadOnlyList<ReadOnlyMemory<byte>> Payload(bool request)
+            {
+                object message = request ? new ProbeRouteMessage("race") : new RecoveryRaceEvent();
+                var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
+                    ZLinkClientCallCodec.CreateEnvelope(
+                        request ? ZLinkMessageKind.Request : ZLinkMessageKind.Command,
+                        "entry",
+                        ZLinkMessageNameResolver.ResolveFromMessage(message)
+                    ),
+                    message,
+                    runtime.Registration.Codecs
+                );
+                var result = parts.Select(part => (ReadOnlyMemory<byte>)part.ToArray()).ToArray();
+                ZLinkMessageParts.DisposeAll(parts);
+                return result;
+            }
+            var first = target
+                .ActivateAsync(Operation(1, false), null, Payload(false), CancellationToken.None)
+                .AsTask();
+            if (await Task.WhenAny(first, probe.Message.Task) == first)
+                await first;
+            await probe.Message.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            held!.HoldNextRead = true;
+            var second = target
+                .ActivateAsync(Operation(2, true), null, Payload(true), CancellationToken.None)
+                .AsTask();
+            await held.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            probe.Release.TrySetResult();
+            await blobs.Deleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            held.Release.TrySetResult();
+            Assert.Equal(RequestResult.Ok, (await first).Result);
+            var terminal = await second.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(RequestResult.Ok, terminal.Result);
+            Assert.Equal(
+                "race-reply",
+                ZLinkClientCallCodec
+                    .DecodeEnvelopeReplyAndDispose<ProbeReply>(
+                        terminal.ReplyParts.Select(Message.From).ToArray(),
+                        "empty",
+                        "failed",
+                        runtime.Registration.Codecs
+                    )
+                    .Value
+            );
+            Assert.Equal(1, probe.HandlerCalls);
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            held!.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class HeldRecoveryAuthorityStore(IZLinkLocationStore inner) : IZLinkLocationStore
+    {
+        internal const string SpotId = "recovery-read-race";
+        internal bool HoldNextRead;
+        internal TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var result = await inner.ReadAsync(key, cancellationToken);
+            if (
+                HoldNextRead
+                && key
+                    == ZLinkProviderLocationRepository.AuthorityMetaKey(
+                        ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(SpotId)
+                    )
+            )
+            {
+                HoldNextRead = false;
+                Entered.TrySetResult();
+                await Release.Task.WaitAsync(cancellationToken);
+            }
+            return result;
+        }
+
+        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.WriteAsync(request, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
+    }
+
+    private sealed class RecoveryRaceSpot(IZLinkInstanceSpotContext context) : IZLinkInstanceSpot
+    {
+        public IZLinkInstanceSpotContext Context { get; } = context;
+
+        public void Configure()
+        {
+            Context.Handlers.AddPacket<RecoveryRaceEventHandler>();
+            Context.Handlers.AddPacket<RecoveryRaceRequestHandler>();
+        }
+    }
+
+    private sealed record RecoveryRaceEvent;
+
+    private sealed class RecoveryRaceEventHandler(ColdSendProbe probe)
+        : IZLinkSpotPacketHandler<RecoveryRaceSpot, RecoveryRaceEvent>
+    {
+        public async ValueTask HandleAsync(
+            RecoveryRaceSpot spot,
+            RecoveryRaceEvent message,
+            CancellationToken cancellationToken
+        )
+        {
+            Interlocked.Increment(ref probe.HandlerCalls);
+            probe.Message.TrySetResult("entered");
+            await probe.Release.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    private sealed class RecoveryRaceRequestHandler
+        : IZLinkSpotRequestHandler<RecoveryRaceSpot, ProbeRouteMessage, ProbeReply>
+    {
+        public ValueTask<ProbeReply> HandleAsync(
+            RecoveryRaceSpot spot,
+            ProbeRouteMessage message,
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(new ProbeReply(message.Value + "-reply"));
+    }
+
     [Fact]
     public async Task ReadyInstanceIntentDoesNotReadStoreOutsideResolver()
     {
