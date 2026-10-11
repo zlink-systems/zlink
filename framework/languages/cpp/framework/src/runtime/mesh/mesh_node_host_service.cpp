@@ -1993,6 +1993,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         return found == registration->spot_state->spot_factory_relocations.end ()
                                  ? std::nullopt
                                  : std::make_optional (found->second.kind);
+                    },
+                    [registration] (const protocol::instance_spot_activation_header_t &request,
+                                    const authority_snapshot_t &snapshot) {
+                        return detail::spot_node_runtime_t (registration->spot_state)
+                          .matches_instance_activation (
+                            request.target.spot_id, request.target.stable_type,
+                            request.target.mesh_name, snapshot.object_generation,
+                            snapshot.authority_owner_generation);
                     }});
             }
         }

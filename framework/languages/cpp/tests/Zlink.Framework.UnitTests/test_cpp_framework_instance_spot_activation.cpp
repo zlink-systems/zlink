@@ -2160,3 +2160,227 @@ TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBefore
     target->recover_instance_spot_activations ();
     EXPECT_FALSE (roots->exists);
 }
+
+TEST (CppFrameworkInstanceSpotActivation, ReadyLocalAdmissionSurvivesRecoveryRootDeletion)
+{
+    using namespace std::chrono_literals;
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    namespace host = rt::host;
+    class held_read_t final : public rt::in_memory_location_repository_t
+    {
+      public:
+        fw::task_t<fw::authority_read_result_t> read_authority (fw::authority_key_t key,
+                                                                std::stop_token stop = {}) override
+        {
+            auto result = co_await rt::in_memory_location_repository_t::read_authority (key, stop);
+            if (hold.exchange (false)) {
+                EXPECT_TRUE (std::holds_alternative<fw::authority_snapshot_t> (result));
+                captured.store (true);
+                co_await release.task ();
+            }
+            co_return result;
+        }
+        std::atomic_bool hold{false};
+        std::atomic_bool captured{false};
+        fw::task_completion_source_t<void> release;
+    };
+    auto store = std::make_shared<held_read_t> ();
+    const auto owner = std::get<fw::owner_lease_claimed_t> (
+                         store->claim_owner_lease ("owner", 60s).result ().value ())
+                         .token;
+    fw::mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "same-target";
+    descriptor.rid = zlink::routing_id_t::from ("target");
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7101";
+    descriptor.security_identity = "test-owner";
+    descriptor.owner_id = owner.owner_id;
+    descriptor.lease_generation = owner.lease_generation;
+    descriptor.object_role = fw::object_role_t::server;
+    descriptor.state = fw::framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back ({fw::placement_object_kind_t::instance_spot,
+                                               "room-type", fw::maintenance_policy_kind_t::disabled,
+                                               false, 1});
+    descriptor.capacity.spots.limit = 1;
+    descriptor.capacity.spot_types.push_back (
+      {fw::placement_object_kind_t::instance_spot, "room-type", {0, 0, 1}});
+    ASSERT_EQ (fw::location_write_status_t::stored,
+               store->update_mesh_node (descriptor, fw::location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status);
+    auto blob_store = std::make_shared<rt::in_memory_relocation_store_t> ();
+    auto blobs = std::make_shared<rt::provider_relocation_repository_t> (*blob_store);
+
+    class observed_roots_t final : public rt::stateful::relocation_store_port_t
+    {
+      public:
+        explicit observed_roots_t (std::shared_ptr<fw::relocation_repository_t> value) :
+            inner (std::move (value))
+        {
+        }
+        rt::stateful::relocation_stored_t
+        put (const std::vector<std::uint8_t> &bytes,
+             std::chrono::hours retention,
+             std::chrono::steady_clock::time_point deadline) override
+        {
+            return inner.put (bytes, retention, deadline);
+        }
+        std::optional<std::vector<std::uint8_t>> get (const std::string &reference) override
+        {
+            return inner.get (reference);
+        }
+        void remove (const std::string &reference) override
+        {
+            inner.remove (reference);
+            deleted.store (true);
+        }
+        rt::stateful::public_relocation_store_adapter_t inner;
+        std::atomic_bool deleted{false};
+    };
+    auto relocations = std::make_shared<observed_roots_t> (blobs);
+
+    auto target = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "same-target",
+                              .node_routing_id = zlink::routing_id_t::from ("target").to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"}}});
+
+    fw::task_completion_source_t<host::instance_spot_activation_result_t> first_handler;
+    std::atomic_int entered{0};
+    fw::zlink_builder_t builder = fw::test::runtime_failure_builder ();
+    auto mesh = builder.add_route_mesh ("same-target");
+    mesh.add_instance_spot_factory<traced_instance_spot_t> (
+      "room-type",
+      [] (fw::instance_spot_context_t context) {
+          return std::make_shared<traced_instance_spot_t> (std::move (context));
+      },
+      [] (auto &factory) { factory.disable_relocation (); });
+    auto local_spots = fw::detail::spot_node_runtime_t::from (builder, "same-target");
+    ASSERT_TRUE (local_spots);
+    target->configure_instance_spot_operations (
+      store, relocations, [owner] { return owner; },
+      host::instance_spot_activation_materializer_t{
+        [&] (const auto &request, const auto &snapshot) {
+            const auto created = local_spots->get_or_create_spot (
+              request.target.stable_type, fw::spot_id_t (request.target.spot_id),
+              zlink::message_t{}, snapshot.object_generation, request.target.mesh_name,
+              snapshot.authority_owner_generation);
+            return created.state == fw::spot_create_state_t::created
+                   || created.state == fw::spot_create_state_t::existing;
+        },
+        [&] (auto command, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+            ++entered;
+            if (command->activation.operation.low == 1)
+                co_return co_await first_handler.task ();
+            co_return host::instance_spot_activation_result_t{
+              0, 0, rt::protocol::application_payload_t{"reply", "application/json", {'2'}}};
+        },
+        {},
+        {},
+        [&] (const auto &request, const auto &snapshot) {
+            return local_spots->matches_instance_activation (
+              request.target.spot_id, request.target.stable_type, request.target.mesh_name,
+              snapshot.object_generation, snapshot.authority_owner_generation);
+        }});
+
+    target->start ();
+    struct cleanup_t
+    {
+        std::function<void ()> finish;
+        ~cleanup_t () { finish (); }
+    } cleanup{[&] {
+        first_handler.complete (
+          fw::result_t<host::instance_spot_activation_result_t>::success ({}));
+        store->release.complete (fw::result_t<void>::success ());
+        target->close ();
+    }};
+    const auto deadline =
+      static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                    (std::chrono::system_clock::now () + 3s).time_since_epoch ())
+                                    .count ());
+    rt::protocol::instance_spot_activation_header_t request{
+      {target->status ().routing_id ().to_bytes (), target->status ().lifecycle_generation (),
+       "room", "same-target", "room-type", "1", deadline},
+      target->status ().lifecycle_generation (),
+      target->status ().routing_id ().to_bytes (),
+      std::nullopt,
+      true,
+      {1575, 1},
+      1,
+      false};
+    const rt::protocol::application_payload_t payload{"probe", "application/json", {1}};
+    std::promise<
+      std::pair<rt::protocol::reply_header_t, std::optional<rt::protocol::application_payload_t>>>
+      first_reply, second_reply;
+    auto first = first_reply.get_future ();
+    auto second = second_reply.get_future ();
+    ASSERT_TRUE (target
+                   ->activate_instance_spot_remote (target->status ().routing_id (), request,
+                                                    std::nullopt, payload, 3s,
+                                                    [&] (auto, auto header, auto reply) {
+                                                        first_reply.set_value ({header, reply});
+                                                    })
+                   .result ());
+    const auto until = std::chrono::steady_clock::now () + 3s;
+    auto pump = [&] {
+        ASSERT_TRUE (
+          target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
+    };
+    while (entered.load () == 0 && std::chrono::steady_clock::now () < until)
+        pump ();
+    ASSERT_EQ (1, entered.load ());
+    const auto active = std::get<fw::authority_snapshot_t> (
+      store->read_authority (rt::spot_authority_key ("room")).result ().value ());
+    EXPECT_TRUE (local_spots->matches_instance_activation ("room", "room-type", "same-target",
+                                                           active.object_generation,
+                                                           active.authority_owner_generation));
+    EXPECT_FALSE (local_spots->matches_instance_activation ("room", "room-type", "same-target",
+                                                            active.object_generation + 1,
+                                                            active.authority_owner_generation));
+    EXPECT_FALSE (local_spots->matches_instance_activation ("room", "room-type", "same-target",
+                                                            active.object_generation,
+                                                            active.authority_owner_generation + 1));
+    EXPECT_FALSE (local_spots->matches_instance_activation ("room", "other-type", "same-target",
+                                                            active.object_generation,
+                                                            active.authority_owner_generation));
+    EXPECT_FALSE (local_spots->matches_instance_activation ("room", "room-type", "other-mesh",
+                                                            active.object_generation,
+                                                            active.authority_owner_generation));
+    store->hold.store (true);
+    request.operation.low = 2;
+    request.reply_route_id = 2;
+    ASSERT_TRUE (target
+                   ->activate_instance_spot_remote (target->status ().routing_id (), request,
+                                                    std::nullopt, payload, 3s,
+                                                    [&] (auto, auto header, auto reply) {
+                                                        second_reply.set_value ({header, reply});
+                                                    })
+                   .result ());
+    while (!store->captured.load () && std::chrono::steady_clock::now () < until)
+        pump ();
+    ASSERT_TRUE (store->captured.load ());
+    first_handler.complete (fw::result_t<host::instance_spot_activation_result_t>::success (
+      {0, 0, rt::protocol::application_payload_t{"reply", "application/json", {'1'}}}));
+    while (!relocations->deleted.load () && std::chrono::steady_clock::now () < until)
+        pump ();
+    ASSERT_TRUE (relocations->deleted.load ());
+    store->release.complete (fw::result_t<void>::success ());
+    while ((first.wait_for (0ms) != std::future_status::ready
+            || second.wait_for (0ms) != std::future_status::ready)
+           && std::chrono::steady_clock::now () < until)
+        pump ();
+    ASSERT_EQ (std::future_status::ready, first.wait_for (0ms));
+    ASSERT_EQ (std::future_status::ready, second.wait_for (0ms));
+    const auto [first_header, first_payload] = first.get ();
+    const auto [second_header, second_payload] = second.get ();
+    EXPECT_EQ (0u, first_header.terminal_result);
+    EXPECT_EQ (0u, second_header.terminal_result);
+    ASSERT_TRUE (first_payload);
+    ASSERT_TRUE (second_payload);
+    EXPECT_EQ (std::vector<std::uint8_t>{'1'}, first_payload->payload_bytes ());
+    EXPECT_EQ (std::vector<std::uint8_t>{'2'}, second_payload->payload_bytes ());
+}

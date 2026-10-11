@@ -1606,6 +1606,11 @@ class spot_node_runtime_t
       std::shared_ptr<const instance_spot_retained_message_t> retained_message = {},
       std::shared_ptr<detail::deferred_barrier_t> *activation_terminal = nullptr);
     std::optional<spot_info_t> find_spot (spot_id_t spot_id) const;
+    bool matches_instance_activation (const std::string &spot_id,
+                                      const std::string &stable_type,
+                                      const std::string &mesh_name,
+                                      std::uint64_t object_generation,
+                                      std::uint64_t authority_owner_generation) const;
     std::vector<spot_info_t> list_spots () const;
     task_t<bool> close_spot (spot_id_t spot_id);
     // Runs a remote User Spot Close (command 48) for the local owner activation.

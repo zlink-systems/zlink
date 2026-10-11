@@ -13273,6 +13273,27 @@ std::optional<spot_info_t> spot_node_runtime_t::find_spot (spot_id_t spot_id) co
     return std::nullopt;
 }
 
+bool spot_node_runtime_t::matches_instance_activation (
+  const std::string &spot_id,
+  const std::string &stable_type,
+  const std::string &mesh_name,
+  std::uint64_t object_generation,
+  std::uint64_t authority_owner_generation) const
+{
+    return _state->lane
+      .run ([&] {
+          const auto found = _state->spot_contexts_by_id.find (spot_id);
+          if (found == _state->spot_contexts_by_id.end ())
+              return false;
+          const auto &local = *found->second._state;
+          return local.node == _state && local.lifecycle_domain.is_instance ()
+                 && local.spot_name == stable_type && local.mesh_name == mesh_name
+                 && local.object_generation == object_generation
+                 && local.authority_owner_generation == authority_owner_generation;
+      })
+      .get ();
+}
+
 std::vector<spot_info_t> spot_node_runtime_t::list_spots () const
 {
     return _state->lane
