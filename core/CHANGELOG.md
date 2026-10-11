@@ -12,6 +12,20 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.19.0]
+
+### Fixed
+
+- Fixed `zlink_socket_set_receive_flow_state` writing controls to pipe send ends
+  after releasing the socket turn. A send on another thread could overlap with
+  the control writer, causing assertions at `pipe.cpp:795/798` or a SIGSEGV.
+  The socket turn now remains held through the last control write and deferred
+  control flush (#1622, PR #1623).
+
+### Changed
+
+- Updated the Conan/vcpkg recipes for Core 1.18.0 release assets and checksums.
+
 ## [1.18.0]
 
 ### Changed
