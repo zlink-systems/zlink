@@ -18,5 +18,8 @@ subprojects {
         tasks.withType<JavaCompile>().configureEach {
             options.encoding = "UTF-8"
         }
+        // Bench tests are standalone mains run by JavaExec tasks wired into check;
+        // the JUnit test task would discover nothing and fail the build.
+        tasks.withType<Test>().configureEach { enabled = false }
     }
 }

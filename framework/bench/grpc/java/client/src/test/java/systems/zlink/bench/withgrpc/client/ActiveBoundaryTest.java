@@ -93,9 +93,11 @@ public final class ActiveBoundaryTest {
                                         "http://127.0.0.1:" + stats.getAddress().getPort()
                             });
             BenchDrivers driver = new BenchDrivers(options);
+            // The window must outlast a cold JVM starting the serial worker, and the one
+            // request it starts must complete after the window closes.
             var trigger =
                     new BenchHttpApplication.Trigger(
-                            "boundary", "boundary", "request-serial", 1024, "active", 20, 100, 8);
+                            "boundary", "boundary", "request-serial", 1024, "active", 500, 100, 8);
             var result =
                     driver.runActive(
                             trigger,
@@ -103,7 +105,7 @@ public final class ActiveBoundaryTest {
                                     CompletableFuture.runAsync(
                                             () -> {
                                                 try {
-                                                    Thread.sleep(100);
+                                                    Thread.sleep(1_000);
                                                 } catch (InterruptedException error) {
                                                     Thread.currentThread().interrupt();
                                                     throw new IllegalStateException(error);
