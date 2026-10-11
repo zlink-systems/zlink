@@ -68,8 +68,8 @@ enum phase_t : uint8_t
     phase_active = 1
 };
 
-inline bool stamp_payload (
-  void *payload, size_t payload_size, uint32_t run_id, phase_t phase, uint64_t seq)
+inline bool
+stamp_payload (void *payload, size_t payload_size, uint32_t run_id, phase_t phase, uint64_t seq)
 {
     if (!payload || payload_size < k_header_size)
         return false;
@@ -123,7 +123,7 @@ inline std::vector<size_t> parse_sizes ()
             break;
         p = end + 1;
     }
-    return sizes.empty () ? std::vector<size_t> {1024, 4096} : sizes;
+    return sizes.empty () ? std::vector<size_t>{1024, 4096} : sizes;
 }
 
 inline int env_int (const char *name, int fallback)
@@ -170,15 +170,19 @@ class latency_sampler_t
 
     double mean_us () const { return _count == 0 ? 0.0 : _sum / static_cast<double> (_count); }
 
-    double percentile (double q) const
+    std::pair<double, double> percentiles () const
     {
         if (_samples.empty ())
-            return mean_us ();
+            return {mean_us (), mean_us ()};
         std::vector<double> sorted = _samples;
         std::sort (sorted.begin (), sorted.end ());
-        const size_t index = static_cast<size_t> (std::min<double> (
-          static_cast<double> (sorted.size () - 1), q * static_cast<double> (sorted.size () - 1)));
-        return sorted[index];
+        const auto quantile = [&sorted] (double q) {
+            const size_t index =
+              static_cast<size_t> (std::min<double> (static_cast<double> (sorted.size () - 1),
+                                                     q * static_cast<double> (sorted.size () - 1)));
+            return sorted[index];
+        };
+        return {quantile (0.95), quantile (0.99)};
     }
 
   private:
@@ -224,16 +228,18 @@ inline double process_cpu_seconds_pid (int pid)
 
 inline double process_cpu_seconds_self ()
 {
-    rusage ru {};
+    rusage ru{};
     getrusage (RUSAGE_SELF, &ru);
-    return static_cast<double> (ru.ru_utime.tv_sec) + static_cast<double> (ru.ru_utime.tv_usec) / 1e6
+    return static_cast<double> (ru.ru_utime.tv_sec)
+           + static_cast<double> (ru.ru_utime.tv_usec) / 1e6
            + static_cast<double> (ru.ru_stime.tv_sec)
            + static_cast<double> (ru.ru_stime.tv_usec) / 1e6;
 }
 
 inline double rss_mb_pid (int pid)
 {
-    const std::string path = pid > 0 ? "/proc/" + std::to_string (pid) + "/statm" : "/proc/self/statm";
+    const std::string path =
+      pid > 0 ? "/proc/" + std::to_string (pid) + "/statm" : "/proc/self/statm";
     std::ifstream statm (path);
     long pages = 0;
     long resident = 0;
@@ -242,7 +248,10 @@ inline double rss_mb_pid (int pid)
     return static_cast<double> (resident) * static_cast<double> (page_size) / 1024.0 / 1024.0;
 }
 
-inline double rss_mb () { return rss_mb_pid (0); }
+inline double rss_mb ()
+{
+    return rss_mb_pid (0);
+}
 
 inline int env_pid (const char *name)
 {
@@ -255,8 +264,8 @@ inline int env_pid (const char *name)
 inline resource_sample_t resource_start ()
 {
     const int server_pid = env_pid ("SERVER_PID");
-    return resource_sample_t {process_cpu_seconds_self (), server_pid,
-                              process_cpu_seconds_pid (server_pid)};
+    return resource_sample_t{process_cpu_seconds_self (), server_pid,
+                             process_cpu_seconds_pid (server_pid)};
 }
 
 inline double cpu_percent (const resource_sample_t &start, double elapsed_s)
@@ -285,7 +294,10 @@ static const uint64_t k_drain_bound_ms = 30000;
 static const int k_route_ready_ms = 30000;
 static const size_t k_latency_sample_limit = 200000;
 
-inline int duration_seconds () { return env_int ("DURATION_SECONDS", 5); }
+inline int duration_seconds ()
+{
+    return env_int ("DURATION_SECONDS", 5);
+}
 
 struct result_t
 {
@@ -294,6 +306,8 @@ struct result_t
     size_t size = 0;
     uint64_t completed = 0;
     uint64_t errors = 0;
+    std::optional<uint64_t> server_received;
+    uint64_t server_errors = 0;
     double elapsed_s = 0.0;
     double mean_us = 0.0;
     double p95_us = 0.0;
@@ -325,11 +339,13 @@ inline void capture_active_close (result_t *r,
                                   const latency_sampler_t *latency)
 {
     r->completed = completed;
-    r->elapsed_s = std::chrono::duration<double> (std::chrono::steady_clock::now () - start).count ();
+    r->elapsed_s =
+      std::chrono::duration<double> (std::chrono::steady_clock::now () - start).count ();
     if (latency) {
         r->mean_us = latency->mean_us ();
-        r->p95_us = latency->percentile (0.95);
-        r->p99_us = latency->percentile (0.99);
+        const auto percentiles = latency->percentiles ();
+        r->p95_us = percentiles.first;
+        r->p99_us = percentiles.second;
     }
     r->cpu_percent = cpu_percent (resources, r->elapsed_s);
     r->mem_mb = rss_mb ();
@@ -376,7 +392,8 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
     std::ostringstream out;
     out << "{\n  \"schema\": \"with-grpc-cell-v1\",\n  \"metadata\": {\n"
         << "    \"language\": \"c\",\n"
-        << "    \"coreVersion\": \"" << json_escape (env_string ("BENCH_CORE_VERSION", "")) << "\",\n"
+        << "    \"coreVersion\": \"" << json_escape (env_string ("BENCH_CORE_VERSION", ""))
+        << "\",\n"
         << "    \"compiler\": \"" << json_escape (__VERSION__) << "\",\n"
         << "    \"durationSeconds\": " << duration_seconds () << ",\n"
         << "    \"warmup\": \"none\"";
@@ -401,6 +418,12 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
         out << "      \"abandoned\": " << r.abandoned << ",\n"
             << "      \"drain_ms\": " << json_number (r.drain_ms) << ",\n"
             << "      \"drain_bound_hit\": " << (r.drain_bound_hit ? "true" : "false") << ",\n";
+    if (r.server_received)
+        out << "      \"server_received_at_close\": " << r.completed << ",\n"
+            << "      \"active_elapsed_ms\": " << json_number (r.elapsed_s * 1000) << ",\n"
+            << "      \"target_stats\": {\"received\": " << r.server_received.value ()
+            << ", \"errors\": " << r.server_errors << ", \"drainMs\": " << json_number (r.drain_ms)
+            << "},\n";
     out << "      \"errors\": " << r.errors << ",\n"
         << "      \"contaminated\": false,\n"
         << "      \"extra\": {\"submitted\": " << r.submitted << ", \"completed\": " << r.completed

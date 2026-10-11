@@ -172,6 +172,18 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
             cell.extra["errors"] = float(raw["errors"])
         if role == "source":
             _complete_from_target_stats(cell)
+        elif key.implementation == "zlink-c" and key.pattern == "send-saturation" \
+                and cell.server_received_at_close is not None:
+            duration = float(payload.get("metadata", {}).get("durationSeconds", 0))
+            if duration <= 0 or not cell.target_stats:
+                raise ReportError(f"{origin}: C send metrics need duration and target_stats")
+            received = int(cell.target_stats["received"])
+            submitted = int(cell.extra.get("submitted", -1))
+            if not 0 <= cell.server_received_at_close <= received <= submitted:
+                raise ReportError(f"{origin}: C active/settled/submitted counts disagree")
+            cell.throughput_per_second = cell.server_received_at_close / duration
+            cell.bandwidth_mb_s = cell.throughput_per_second * key.payload_size / 1_000_000
+            cell.target_errors = int(cell.target_stats["errors"])
         cells.append(cell)
     return cells
 

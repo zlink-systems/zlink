@@ -68,6 +68,9 @@ set_target_properties(bench_c_with_grpc_zlink_client PROPERTIES
     BUILD_RPATH "${ZLINK_C_CORE_RUNTIME_DIR}")
 
 enable_testing()
+add_executable(bench_c_send_metrics_test EXCLUDE_FROM_ALL zlink/send_metrics_test.cpp)
+target_compile_features(bench_c_send_metrics_test PRIVATE cxx_std_17)
+add_test(NAME bench_c_send_metrics_test COMMAND bench_c_send_metrics_test)
 foreach(role client server)
     set(wire_test "bench_c_raw_wire_${role}_test")
     add_executable(${wire_test} EXCLUDE_FROM_ALL zlink/raw_wire_test.cpp)
