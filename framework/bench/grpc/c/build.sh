@@ -24,6 +24,7 @@ if [[ ! -d "${ZLINK_C_CORE_DEFAULT_PREFIX}" && -z "${ZLINK_CORE_PACKAGE_PREFIX:-
 fi
 bench_require_low_load
 cmake -S "${HERE}" -B "${BUILD_DIR}" \
+  -DCMAKE_BUILD_TYPE=Release \
   -DZLINK_C_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ZLINK_C_CORE_DEFAULT_PREFIX}}"
 cmake --build "${BUILD_DIR}" --target \
   bench_c_with_grpc_zlink_server bench_c_with_grpc_zlink_client \
