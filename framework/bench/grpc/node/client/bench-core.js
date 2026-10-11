@@ -44,6 +44,7 @@ class SourceMetrics {
   }
 
   reset() {
+    this.boundary = null;
     this.submitted = 0;
     this.completed = 0;
     this.errors = 0;
@@ -58,14 +59,18 @@ class SourceMetrics {
   }
 
   begin() {
+    const now = header.nowNs();
+    this.closeWindow(now);
     this.submitted += 1;
     this.inFlight += 1;
     this.peakInFlight = Math.max(this.peakInFlight, this.inFlight);
-    return header.nowNs();
+    return now;
   }
 
   complete(started, success, error = null) {
-    const micros = Number(header.nowNs() - started) / 1000;
+    const now = header.nowNs();
+    this.closeWindow(now);
+    const micros = Number(now - started) / 1000;
     this.inFlight -= 1;
     if (success) this.completed += 1;
     else {
@@ -97,6 +102,7 @@ class SourceMetrics {
   }
 
   snapshot() {
+    this.closeWindow(header.nowNs());
     return {
       submitted: this.submitted,
       completed: this.completed,
@@ -121,6 +127,10 @@ class SourceMetrics {
       p95Micros: percentile(sorted, 0.95),
       p99Micros: percentile(sorted, 0.99)
     };
+  }
+
+  closeWindow(now) {
+    this.boundary?.(now);
   }
 }
 
@@ -168,7 +178,9 @@ async function waitForRouteReady(probe, timeoutMs) {
       await delay(20);
     }
   }
-  throw new Error(`target route did not become ready within ${timeoutMs}ms: ${last && last.message}`);
+  throw new Error(
+    `target route did not become ready within ${timeoutMs}ms: ${last && last.message}`
+  );
 }
 
 function headerRunId(runId) {
@@ -182,11 +194,12 @@ function headerRunId(runId) {
 async function runWarmup(transport, options, trigger) {
   const runId = headerRunId(trigger.runId);
   for (let index = 0; index < options.warmup; index++) {
-    const stream = trigger.pattern === 'send-saturation'
-      ? index % trigger.sendConcurrency
-      : 0;
+    const stream = trigger.pattern === 'send-saturation' ? index % trigger.sendConcurrency : 0;
     const payload = header.createPayloadBytes(
-      trigger.payloadBytes, runId, header.PHASE_WARMUP, index
+      trigger.payloadBytes,
+      runId,
+      header.PHASE_WARMUP,
+      index
     );
     if (trigger.pattern === 'send-saturation') await transport.send(stream, payload);
     else {
@@ -204,28 +217,63 @@ async function runActive(transport, metrics, options, trigger) {
   const runId = headerRunId(trigger.runId);
   let sequence = 0;
   const nextSequence = () => sequence++;
+  let resolveBoundary;
+  let rejectBoundary;
+  const boundary = new Promise((resolve, reject) => {
+    resolveBoundary = resolve;
+    rejectBoundary = reject;
+  });
+  metrics.boundary = (now) => {
+    if (now < deadline) return;
+    metrics.boundary = null;
+    const usage = resources.finish();
+    const source = metrics.result();
+    targetStats(options.targetStatsUrl).then(
+      (target) => resolveBoundary({ usage, source, target }),
+      rejectBoundary
+    );
+  };
 
+  let running;
   if (trigger.pattern === 'request-serial') {
-    await requestWorkers(1, transport, metrics, trigger, runId, nextSequence, deadline);
+    running = requestWorkers(1, transport, metrics, trigger, runId, nextSequence, deadline);
   } else if (trigger.pattern === 'request-window') {
-    await requestWorkers(
-      trigger.requestWindow, transport, metrics, trigger, runId, nextSequence, deadline
+    running = requestWorkers(
+      trigger.requestWindow,
+      transport,
+      metrics,
+      trigger,
+      runId,
+      nextSequence,
+      deadline
     );
   } else if (trigger.pattern === 'request-backpressure') {
-    await requestBackpressure(
-      transport, metrics, options, trigger, runId, nextSequence, deadline
+    running = requestBackpressure(
+      transport,
+      metrics,
+      options,
+      trigger,
+      runId,
+      nextSequence,
+      deadline
     );
   } else if (trigger.pattern === 'send-saturation') {
-    await sendWorkers(
-      trigger.sendConcurrency, transport, metrics, trigger, runId, nextSequence, deadline
+    running = sendWorkers(
+      trigger.sendConcurrency,
+      transport,
+      metrics,
+      trigger,
+      runId,
+      nextSequence,
+      deadline
     );
   } else {
     throw new Error(`unsupported pattern ${trigger.pattern}`);
   }
 
-  const usage = resources.finish();
-  const target = await targetStats(options.targetStatsUrl);
-  const source = metrics.result();
+  const [active] = await Promise.all([boundary, running]);
+  const { usage, source, target } = active;
+  const settled = metrics.result();
   const send = trigger.pattern === 'send-saturation';
   const completed = send ? target.received : source.completed;
   const seconds = trigger.durationMs / 1000;
@@ -234,19 +282,22 @@ async function runActive(transport, metrics, options, trigger) {
   const p99Micros = send ? target.p99Micros : source.p99Micros;
   const throughput = completed / Math.max(0.001, seconds);
   return {
-    completed: source.completed,
-    errors: source.errors,
-    client_error_summary: source.clientErrorSummary,
-    client_error_other_count: source.clientErrorOtherCount,
+    submitted: metrics.submitted,
+    completed: settled.completed,
+    completed_at_close: source.completed,
+    active_elapsed_ms: trigger.durationMs,
+    errors: settled.errors,
+    client_error_summary: settled.clientErrorSummary,
+    client_error_other_count: settled.clientErrorOtherCount,
     server_errors: target.errors,
     throughput_per_second: throughput,
-    bandwidth_mb_s: throughput * trigger.payloadBytes / 1_000_000,
+    bandwidth_mb_s: (throughput * trigger.payloadBytes) / 1_000_000,
     latency_mean_ms: meanMicros / 1000,
     latency_p95_ms: p95Micros / 1000,
     latency_p99_ms: p99Micros / 1000,
     client_cpu_percent: usage.cpuPercent,
     client_memory_mb: usage.memoryMb,
-    server_cpu_percent: target.cpuSeconds / Math.max(0.001, seconds) / LOGICAL_CORES * 100,
+    server_cpu_percent: (target.cpuSeconds / Math.max(0.001, seconds) / LOGICAL_CORES) * 100,
     server_memory_mb: target.workingSetMb,
     client_cores: usage.cores,
     client_parallelism_ceiling: CLIENT_PARALLELISM_CEILING,
@@ -254,22 +305,31 @@ async function runActive(transport, metrics, options, trigger) {
     event_loop_utilization: usage.eventLoopUtilization,
     peak_in_flight: source.peakInFlight,
     request_window: trigger.pattern === 'request-window' ? trigger.requestWindow : null,
-    abandoned: source.abandoned,
+    abandoned: settled.abandoned,
     server_received_at_close: send ? target.received : null
   };
 }
 
 async function requestWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
-  const workers = Array.from({ length: count }, () => (async () => {
-    while (header.nowNs() < deadline) {
-      await executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
-    }
-  })());
+  const workers = Array.from({ length: count }, () =>
+    (async () => {
+      while (header.nowNs() < deadline) {
+        await executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
+      }
+    })()
+  );
   await Promise.all(workers);
+  metrics.closeWindow(header.nowNs());
 }
 
 async function requestBackpressure(
-  transport, metrics, options, trigger, runId, nextSequence, deadline
+  transport,
+  metrics,
+  options,
+  trigger,
+  runId,
+  nextSequence,
+  deadline
 ) {
   if (typeof transport.requestSubmission === 'function') {
     const pending = new Set();
@@ -282,7 +342,10 @@ async function requestBackpressure(
       if (blocked === null) {
         const sequence = nextSequence();
         const payload = header.createPayloadBytes(
-          trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
+          trigger.payloadBytes,
+          runId,
+          header.PHASE_ACTIVE,
+          sequence
         );
         const started = metrics.begin();
         let submission;
@@ -305,7 +368,9 @@ async function requestBackpressure(
           reply.finally(() => pending.delete(reply));
           if (submission.result === transport.backpressuredResult) {
             blocked = submission.admitted.catch(() => {});
-            blocked.finally(() => { blocked = null; });
+            blocked.finally(() => {
+              blocked = null;
+            });
           }
         }
       }
@@ -315,6 +380,7 @@ async function requestBackpressure(
       await sleepImmediate();
     }
 
+    metrics.closeWindow(header.nowNs());
     const drainDeadline = header.nowNs() + BigInt(options.drainBoundMs) * 1_000_000n;
     while ((pending.size > 0 || blocked !== null) && header.nowNs() < drainDeadline) {
       completionPump.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
@@ -336,47 +402,59 @@ async function requestBackpressure(
       await new Promise((resolve) => setImmediate(resolve));
     }
   }
+  metrics.closeWindow(header.nowNs());
   if (pending.size === 0) return;
   let drained = false;
   await Promise.race([
-    Promise.all([...pending]).then(() => { drained = true; }),
+    Promise.all([...pending]).then(() => {
+      drained = true;
+    }),
     delay(options.drainBoundMs)
   ]);
   if (!drained) metrics.recordAbandoned(metrics.inFlight);
 }
 
 async function sendWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
-  const workers = Array.from({ length: count }, (_, stream) => (async () => {
-    while (header.nowNs() < deadline) {
-      const sequence = nextSequence();
-      const payload = header.createPayloadBytes(
-        trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
-      );
-      const started = metrics.begin();
-      try {
-        if (typeof transport.sendSubmission === 'function') {
-          const submission = transport.sendSubmission(stream, payload);
-          if (submission.result === transport.backpressuredResult) {
-            await transport.awaitSendCompletion(submission.admitted);
+  const workers = Array.from({ length: count }, (_, stream) =>
+    (async () => {
+      while (header.nowNs() < deadline) {
+        const sequence = nextSequence();
+        const payload = header.createPayloadBytes(
+          trigger.payloadBytes,
+          runId,
+          header.PHASE_ACTIVE,
+          sequence
+        );
+        const started = metrics.begin();
+        try {
+          if (typeof transport.sendSubmission === 'function') {
+            const submission = transport.sendSubmission(stream, payload);
+            if (submission.result === transport.backpressuredResult) {
+              await transport.awaitSendCompletion(submission.admitted);
+            }
+          } else {
+            await transport.send(stream, payload);
           }
-        } else {
-          await transport.send(stream, payload);
+          metrics.complete(started, true);
+        } catch (error) {
+          metrics.complete(started, false, error);
         }
-        metrics.complete(started, true);
-      } catch (error) {
-        metrics.complete(started, false, error);
+        // Keep all logical send streams and completion callbacks runnable when
+        // a normal submission does not otherwise await anything.
+        await sleepImmediate();
       }
-      // Keep all logical send streams and completion callbacks runnable when
-      // a normal submission does not otherwise await anything.
-      await sleepImmediate();
-    }
-  })());
+    })()
+  );
   await Promise.all(workers);
+  metrics.closeWindow(header.nowNs());
 }
 
 async function executeRequest(transport, metrics, trigger, runId, stream, sequence) {
   const payload = header.createPayloadBytes(
-    trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
+    trigger.payloadBytes,
+    runId,
+    header.PHASE_ACTIVE,
+    sequence
   );
   const started = metrics.begin();
   try {
@@ -410,7 +488,8 @@ function streamDescription(pattern, requestWindow, sendConcurrency) {
     return {
       count: 1,
       inFlightPerStream: null,
-      implementation: 'Node event loop; reply stages separate; pause only on BACKPRESSURED admission'
+      implementation:
+        'Node event loop; reply stages separate; pause only on BACKPRESSURED admission'
     };
   }
   if (pattern === 'send-saturation') {

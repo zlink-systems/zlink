@@ -2,6 +2,9 @@
 
 package systems.zlink.bench.withgrpc.client;
 
+import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
+import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -20,8 +23,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.locks.LockSupport;
-import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
-import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 
 /** Pattern-to-logical-stream implementation shared by the Java and Kotlin sources. */
 public final class BenchDrivers {
@@ -37,11 +38,6 @@ public final class BenchDrivers {
         this.options = options;
     }
 
-    /** Compatibility constructor retained for the Kotlin module's compiled call site. */
-    public BenchDrivers(BenchOptions options, StatsClient ignored) {
-        this(options);
-    }
-
     public BenchHttpApplication.Counters counters() {
         return metrics.snapshot();
     }
@@ -51,8 +47,8 @@ public final class BenchDrivers {
         Exception last = null;
         while (System.nanoTime() < deadline) {
             try {
-                CompletableFuture<Void> completion = operation.invoke(
-                    payloadSize, BenchMetricHeader.PHASE_WARMUP, 0);
+                CompletableFuture<Void> completion =
+                        operation.invoke(payloadSize, BenchMetricHeader.PHASE_WARMUP, 0);
                 if (!operation.await(completion, Duration.ofMillis(options.requestTimeoutMs))) {
                     throw new TimeoutException("route probe timed out");
                 }
@@ -62,12 +58,12 @@ public final class BenchDrivers {
                 Thread.sleep(20);
             }
         }
-        throw new IllegalStateException("route not ready within " + options.routeReadyMs
-            + "ms: " + last, last);
+        throw new IllegalStateException(
+                "route not ready within " + options.routeReadyMs + "ms: " + last, last);
     }
 
     public void runWarmup(BenchHttpApplication.Trigger trigger, BenchOperation operation)
-        throws Exception {
+            throws Exception {
         validateTrigger(trigger);
         SourceMetrics warmupMetrics = new SourceMetrics(options.latencySampleLimit);
         metrics = warmupMetrics;
@@ -78,42 +74,50 @@ public final class BenchDrivers {
         // request-backpressure warmup reaches this with about a million open calls.
         warmupAbandoned = warmupMetrics.abandoned();
         if (warmupAbandoned != 0) {
-            System.err.println("warmup left " + warmupAbandoned + " operations abandoned (recorded)");
+            System.err.println(
+                    "warmup left " + warmupAbandoned + " operations abandoned (recorded)");
         }
     }
 
     public Map<String, Object> runActive(
-        BenchHttpApplication.Trigger trigger, BenchOperation operation) throws Exception {
+            BenchHttpApplication.Trigger trigger, BenchOperation operation) throws Exception {
         validateTrigger(trigger);
         stats.reset(options.targetStatsUrl);
-        SourceMetrics activeMetrics = new SourceMetrics(options.latencySampleLimit);
+        long deadline = BenchMetricHeader.nowNs() + trigger.durationMs() * 1_000_000L;
+        SourceMetrics activeMetrics = new SourceMetrics(options.latencySampleLimit, deadline);
         metrics = activeMetrics;
         ClientResources resources = new ClientResources();
         boolean send = "send-saturation".equals(trigger.pattern());
-        CompletableFuture<StatsClient.ServerSnapshot> targetAtClose = send
-            ? new CompletableFuture<>() : null;
-        if (targetAtClose != null) {
-            long boundaryDeadline = BenchMetricHeader.nowNs()
-                + trigger.durationMs() * 1_000_000L;
-            Thread.ofVirtual().start(() -> {
-                try {
-                    long remaining;
-                    while ((remaining = boundaryDeadline - BenchMetricHeader.nowNs()) > 0) {
-                        LockSupport.parkNanos(remaining);
-                    }
-                    targetAtClose.complete(stats.stats(options.targetStatsUrl));
-                } catch (Exception error) {
-                    targetAtClose.completeExceptionally(error);
-                }
-            });
-        }
-        int submitParallelism = runPattern(
-            trigger, operation, BenchMetricHeader.PHASE_ACTIVE, activeMetrics, resources);
-        ClientResources.Usage usage = resources.finish();
-        StatsClient.ServerSnapshot boundary = targetAtClose == null ? null : targetAtClose.get();
+        CompletableFuture<ActiveSnapshot> activeAtClose = new CompletableFuture<>();
+        Thread.ofVirtual()
+                .start(
+                        () -> {
+                            try {
+                                long remaining;
+                                while ((remaining = deadline - BenchMetricHeader.nowNs()) > 0) {
+                                    LockSupport.parkNanos(remaining);
+                                }
+                                ClientResources.Usage usage = resources.finish();
+                                activeAtClose.complete(
+                                        new ActiveSnapshot(
+                                                usage, stats.stats(options.targetStatsUrl)));
+                            } catch (Exception error) {
+                                activeAtClose.completeExceptionally(error);
+                            }
+                        });
+        int submitParallelism =
+                runPattern(
+                        trigger,
+                        operation,
+                        BenchMetricHeader.PHASE_ACTIVE,
+                        activeMetrics,
+                        resources);
+        ActiveSnapshot active = activeAtClose.get();
+        ClientResources.Usage usage = active.usage();
+        StatsClient.ServerSnapshot boundary = active.target();
         StatsClient.ServerSnapshot target = stats.stats(options.targetStatsUrl);
         Latencies.Summary latency = activeMetrics.latencySummary();
-        long rateCount = send ? boundary.received() : activeMetrics.completed();
+        long rateCount = send ? boundary.received() : activeMetrics.activeCompleted.get();
         double seconds = Math.max(0.001, trigger.durationMs() / 1000.0);
         double throughput = rateCount / seconds;
 
@@ -126,17 +130,16 @@ public final class BenchDrivers {
         result.put("server_errors", target.errors());
         result.put("throughput_per_second", throughput);
         result.put("bandwidth_mb_s", throughput * trigger.payloadBytes() / 1_000_000.0);
-        result.put("latency_mean_ms",
-            (send ? target.meanMicros() : latency.meanMicros()) / 1000.0);
-        result.put("latency_p95_ms",
-            (send ? target.p95Micros() : latency.p95Micros()) / 1000.0);
-        result.put("latency_p99_ms",
-            (send ? target.p99Micros() : latency.p99Micros()) / 1000.0);
+        result.put(
+                "latency_mean_ms", (send ? boundary.meanMicros() : latency.meanMicros()) / 1000.0);
+        result.put("latency_p95_ms", (send ? boundary.p95Micros() : latency.p95Micros()) / 1000.0);
+        result.put("latency_p99_ms", (send ? boundary.p99Micros() : latency.p99Micros()) / 1000.0);
         result.put("client_cpu_percent", usage.cpuPercent());
         result.put("client_memory_mb", usage.memoryMb());
-        result.put("server_cpu_percent",
-            target.cpuSeconds() / seconds / ClientResources.LOGICAL_CORES * 100.0);
-        result.put("server_memory_mb", target.workingSetMb());
+        result.put(
+                "server_cpu_percent",
+                boundary.cpuSeconds() / seconds / ClientResources.LOGICAL_CORES * 100.0);
+        result.put("server_memory_mb", boundary.workingSetMb());
         result.put("client_saturation_metric", ClientResources.CLIENT_SATURATION_METRIC);
         result.put("jvm_thread_cores", usage.submitCores());
         result.put("client_parallelism_ceiling", submitParallelism);
@@ -144,23 +147,29 @@ public final class BenchDrivers {
         result.put("jvm_all_thread_cores", usage.jvmAllThreadCores());
         result.put("logical_cores", ClientResources.LOGICAL_CORES);
         result.put("peak_in_flight", activeMetrics.peakInFlight());
-        result.put("request_window",
-            "request-window".equals(trigger.pattern()) ? trigger.requestWindow() : null);
+        result.put(
+                "request_window",
+                "request-window".equals(trigger.pattern()) ? trigger.requestWindow() : null);
         result.put("abandoned", activeMetrics.abandoned());
         result.put("warmup_abandoned", warmupAbandoned);
         result.put("latency_samples", latency.count());
-        result.put("server_received_at_close", send ? boundary.received() : target.received());
+        result.put("completed_at_close", activeMetrics.activeCompleted.get());
+        result.put("active_elapsed_ms", trigger.durationMs());
+        result.put("server_received_at_close", boundary.received());
         return result;
     }
 
+    private record ActiveSnapshot(ClientResources.Usage usage, StatsClient.ServerSnapshot target) {}
+
     private int runPattern(
-        BenchHttpApplication.Trigger trigger,
-        BenchOperation operation,
-        byte headerPhase,
-        SourceMetrics source,
-        ClientResources resources) throws Exception {
+            BenchHttpApplication.Trigger trigger,
+            BenchOperation operation,
+            byte headerPhase,
+            SourceMetrics source,
+            ClientResources resources)
+            throws Exception {
         if (!"request-serial".equals(trigger.pattern())
-            && operation instanceof RawStack.RawOperation raw) {
+                && operation instanceof RawStack.RawOperation raw) {
             runRaw(trigger, raw, headerPhase, source, resources);
             return 1;
         }
@@ -178,8 +187,13 @@ public final class BenchDrivers {
                 yield 1;
             }
             case "send-saturation" -> {
-                runWorkers(trigger.sendConcurrency(), trigger, operation, headerPhase,
-                    source, resources);
+                runWorkers(
+                        trigger.sendConcurrency(),
+                        trigger,
+                        operation,
+                        headerPhase,
+                        source,
+                        resources);
                 yield trigger.sendConcurrency();
             }
             default -> throw new IllegalArgumentException("unknown pattern " + trigger.pattern());
@@ -187,28 +201,32 @@ public final class BenchDrivers {
     }
 
     /**
-     * Request turns submit once, then let the public poller drain completions,
-     * as in PerfMultiSocketReqRep at 31c5e4f7f0 (Issue #12's reference).
-     * Only admission backpressure gates submission; reply depth has no cap.
+     * Request turns submit once, then let the public poller drain completions, as in
+     * PerfMultiSocketReqRep at 31c5e4f7f0 (Issue #12's reference). Only admission backpressure
+     * gates submission; reply depth has no cap.
      */
     private void runRaw(
-        BenchHttpApplication.Trigger trigger,
-        RawStack.RawOperation operation,
-        byte phase,
-        SourceMetrics source,
-        ClientResources resources) throws InterruptedException {
-        long deadline = BenchMetricHeader.nowNs()
-            + trigger.durationMs() * 1_000_000L;
+            BenchHttpApplication.Trigger trigger,
+            RawStack.RawOperation operation,
+            byte phase,
+            SourceMetrics source,
+            ClientResources resources)
+            throws InterruptedException {
+        long deadline = source.deadline(trigger);
         long sequence = 0;
-        long cpuStart = ClientResources.currentThreadCpuNs();
+        long cpuStart =
+                resources == null ? ClientResources.currentThreadCpuNs() : resources.beginSubmit();
         Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
         CompletableFuture<Void> admissionPending = null;
         while (BenchMetricHeader.nowNs() < deadline) {
             if (admissionPending != null) {
                 try {
-                    if (!operation.await(admissionPending, Duration.ofNanos(Math.min(
-                        COMPLETION_POLL_INTERVAL_NS, Math.max(1L,
-                            deadline - BenchMetricHeader.nowNs()))))) {
+                    if (!operation.await(
+                            admissionPending,
+                            Duration.ofNanos(
+                                    Math.min(
+                                            COMPLETION_POLL_INTERVAL_NS,
+                                            Math.max(1L, deadline - BenchMetricHeader.nowNs()))))) {
                         continue;
                     }
                 } catch (ExecutionException failed) {
@@ -219,8 +237,7 @@ public final class BenchDrivers {
             long started = source.begin();
             RawStack.RawSubmission submission;
             try {
-                submission = operation.submitRaw(
-                    trigger.payloadBytes(), phase, sequence++);
+                submission = operation.submitRaw(trigger.payloadBytes(), phase, sequence++);
             } catch (RuntimeException error) {
                 source.complete(started, error);
                 continue;
@@ -228,18 +245,16 @@ public final class BenchDrivers {
 
             CompletableFuture<Void> completion = submission.completion();
             pending.add(completion);
-            completion.whenComplete((ignored, error) -> {
-                source.complete(started, error);
-                pending.remove(completion);
-            });
+            completion.whenComplete(
+                    (ignored, error) -> {
+                        source.complete(started, error);
+                        pending.remove(completion);
+                    });
 
-            if (submission.result()
-                == systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
+            if (submission.result() == systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
                 admissionPending = submission.admitted();
-            } else if (submission.result()
-                != systems.zlink.contracts.sockets.SubmitResult.OK) {
-                throw new IllegalStateException(
-                    "raw submit returned " + submission.result());
+            } else if (submission.result() != systems.zlink.contracts.sockets.SubmitResult.OK) {
+                throw new IllegalStateException("raw submit returned " + submission.result());
             }
             try {
                 operation.await(completion, Duration.ZERO);
@@ -248,16 +263,15 @@ public final class BenchDrivers {
             }
         }
         if (resources != null) {
-            resources.addSubmitCpuNs(
-                ClientResources.currentThreadCpuNs() - cpuStart);
+            resources.addSubmitCpuNs(ClientResources.currentThreadCpuNs() - cpuStart);
         }
 
         List<CompletableFuture<Void>> outstanding = new ArrayList<>(pending);
         if (admissionPending != null) {
             outstanding.add(admissionPending);
         }
-        CompletableFuture<Void> settled = CompletableFuture.allOf(
-            outstanding.toArray(CompletableFuture[]::new));
+        CompletableFuture<Void> settled =
+                CompletableFuture.allOf(outstanding.toArray(CompletableFuture[]::new));
         try {
             operation.await(settled, Duration.ofMillis(options.drainBoundMs));
         } catch (ExecutionException ignored) {
@@ -268,36 +282,50 @@ public final class BenchDrivers {
     }
 
     private void runWorkers(
-        int count,
-        BenchHttpApplication.Trigger trigger,
-        BenchOperation operation,
-        byte phase,
-        SourceMetrics source,
-        ClientResources resources) throws InterruptedException {
-        long deadline = BenchMetricHeader.nowNs() + trigger.durationMs() * 1_000_000L;
+            int count,
+            BenchHttpApplication.Trigger trigger,
+            BenchOperation operation,
+            byte phase,
+            SourceMetrics source,
+            ClientResources resources)
+            throws InterruptedException {
+        long deadline = source.deadline(trigger);
         AtomicLong sequence = new AtomicLong();
         List<Thread> workers = new ArrayList<>(count);
         for (int index = 0; index < count; index++) {
-            Thread worker = Thread.ofPlatform().name("bench-stream-" + index).start(() -> {
-                long cpuStart = ClientResources.currentThreadCpuNs();
-                while (BenchMetricHeader.nowNs() < deadline) {
-                    long value = sequence.getAndIncrement();
-                    long started = source.begin();
-                    try {
-                        if (!operation.await(
-                            operation.invoke(trigger.payloadBytes(), phase, value),
-                            Duration.ofMillis(options.requestTimeoutMs))) {
-                            throw new TimeoutException("request timed out");
-                        }
-                        source.complete(started, null);
-                    } catch (Exception error) {
-                        source.complete(started, error);
-                    }
-                }
-                if (resources != null) {
-                    resources.addSubmitCpuNs(ClientResources.currentThreadCpuNs() - cpuStart);
-                }
-            });
+            Thread worker =
+                    Thread.ofPlatform()
+                            .name("bench-stream-" + index)
+                            .start(
+                                    () -> {
+                                        long cpuStart =
+                                                resources == null
+                                                        ? ClientResources.currentThreadCpuNs()
+                                                        : resources.beginSubmit();
+                                        while (BenchMetricHeader.nowNs() < deadline) {
+                                            long value = sequence.getAndIncrement();
+                                            long started = source.begin();
+                                            try {
+                                                if (!operation.await(
+                                                        operation.invoke(
+                                                                trigger.payloadBytes(),
+                                                                phase,
+                                                                value),
+                                                        Duration.ofMillis(
+                                                                options.requestTimeoutMs))) {
+                                                    throw new TimeoutException("request timed out");
+                                                }
+                                                source.complete(started, null);
+                                            } catch (Exception error) {
+                                                source.complete(started, error);
+                                            }
+                                        }
+                                        if (resources != null) {
+                                            resources.addSubmitCpuNs(
+                                                    ClientResources.currentThreadCpuNs()
+                                                            - cpuStart);
+                                        }
+                                    });
             workers.add(worker);
         }
         for (Thread worker : workers) {
@@ -306,27 +334,30 @@ public final class BenchDrivers {
     }
 
     private void runWindow(
-        BenchHttpApplication.Trigger trigger,
-        BenchOperation operation,
-        byte phase,
-        SourceMetrics source,
-        ClientResources resources) throws InterruptedException {
-        long deadline = BenchMetricHeader.nowNs() + trigger.durationMs() * 1_000_000L;
+            BenchHttpApplication.Trigger trigger,
+            BenchOperation operation,
+            byte phase,
+            SourceMetrics source,
+            ClientResources resources)
+            throws InterruptedException {
+        long deadline = source.deadline(trigger);
         Semaphore slots = new Semaphore(trigger.requestWindow());
         long sequence = 0;
-        long cpuStart = ClientResources.currentThreadCpuNs();
+        long cpuStart =
+                resources == null ? ClientResources.currentThreadCpuNs() : resources.beginSubmit();
         while (BenchMetricHeader.nowNs() < deadline) {
             if (!slots.tryAcquire(1, TimeUnit.MILLISECONDS)) {
                 continue;
             }
             long started = source.begin();
             try {
-                CompletableFuture<Void> future = operation.invoke(
-                    trigger.payloadBytes(), phase, sequence++);
-                future.whenComplete((ignored, error) -> {
-                    source.complete(started, error);
-                    slots.release();
-                });
+                CompletableFuture<Void> future =
+                        operation.invoke(trigger.payloadBytes(), phase, sequence++);
+                future.whenComplete(
+                        (ignored, error) -> {
+                            source.complete(started, error);
+                            slots.release();
+                        });
             } catch (Throwable error) {
                 source.complete(started, error);
                 slots.release();
@@ -343,15 +374,17 @@ public final class BenchDrivers {
     }
 
     private void runBackpressure(
-        BenchHttpApplication.Trigger trigger,
-        BenchOperation operation,
-        byte phase,
-        SourceMetrics source,
-        ClientResources resources) throws InterruptedException {
-        long deadline = BenchMetricHeader.nowNs() + trigger.durationMs() * 1_000_000L;
+            BenchHttpApplication.Trigger trigger,
+            BenchOperation operation,
+            byte phase,
+            SourceMetrics source,
+            ClientResources resources)
+            throws InterruptedException {
+        long deadline = source.deadline(trigger);
         long sequence = 0;
         int issuedSinceYield = 0;
-        long cpuStart = ClientResources.currentThreadCpuNs();
+        long cpuStart =
+                resources == null ? ClientResources.currentThreadCpuNs() : resources.beginSubmit();
         Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
         while (BenchMetricHeader.nowNs() < deadline) {
             long started = source.begin();
@@ -363,10 +396,11 @@ public final class BenchDrivers {
                 continue;
             }
             pending.add(future);
-            future.whenComplete((ignored, error) -> {
-                source.complete(started, error);
-                pending.remove(future);
-            });
+            future.whenComplete(
+                    (ignored, error) -> {
+                        source.complete(started, error);
+                        pending.remove(future);
+                    });
             if (++issuedSinceYield == 256) {
                 issuedSinceYield = 0;
                 Thread.yield();
@@ -384,11 +418,11 @@ public final class BenchDrivers {
 
     private void validateTrigger(BenchHttpApplication.Trigger trigger) {
         if (!options.runIdText.equals(trigger.runId())
-            || !options.cellId.equals(trigger.cellId())
-            || !options.scenario.equals(trigger.pattern())
-            || options.payloadSizes.get(0) != trigger.payloadBytes()
-            || trigger.requestWindow() != options.requestWindow
-            || trigger.sendConcurrency() != options.sendConcurrency) {
+                || !options.cellId.equals(trigger.cellId())
+                || !options.scenario.equals(trigger.pattern())
+                || options.payloadSizes.get(0) != trigger.payloadBytes()
+                || trigger.requestWindow() != options.requestWindow
+                || trigger.sendConcurrency() != options.sendConcurrency) {
             throw new IllegalArgumentException("trigger does not match the configured cell");
         }
     }
@@ -398,18 +432,25 @@ public final class BenchDrivers {
         private static final int ERROR_MESSAGE_LIMIT = 200;
         private final AtomicLong submitted = new AtomicLong();
         private final AtomicLong completed = new AtomicLong();
+        private final AtomicLong activeCompleted = new AtomicLong();
+        private final long activeDeadline;
         private final AtomicLong errors = new AtomicLong();
         private final AtomicInteger inFlight = new AtomicInteger();
         private final AtomicInteger peakInFlight = new AtomicInteger();
         private final AtomicLong abandoned = new AtomicLong();
         private final AtomicReferenceArray<ErrorKey> errorKeys =
-            new AtomicReferenceArray<>(ERROR_KIND_LIMIT);
+                new AtomicReferenceArray<>(ERROR_KIND_LIMIT);
         private final AtomicLongArray errorCounts = new AtomicLongArray(ERROR_KIND_LIMIT);
         private final AtomicLong otherErrors = new AtomicLong();
         private final Latencies latencies;
 
         private SourceMetrics(int sampleLimit) {
+            this(sampleLimit, Long.MAX_VALUE);
+        }
+
+        private SourceMetrics(int sampleLimit, long activeDeadline) {
             latencies = new Latencies(sampleLimit);
+            this.activeDeadline = activeDeadline;
         }
 
         private long begin() {
@@ -419,28 +460,40 @@ public final class BenchDrivers {
             return BenchMetricHeader.nowNs();
         }
 
+        private long deadline(BenchHttpApplication.Trigger trigger) {
+            return activeDeadline == Long.MAX_VALUE
+                    ? BenchMetricHeader.nowNs() + trigger.durationMs() * 1_000_000L
+                    : activeDeadline;
+        }
+
         private void complete(long started, Throwable error) {
+            long now = BenchMetricHeader.nowNs();
             if (error == null) {
                 completed.incrementAndGet();
             } else {
                 errors.incrementAndGet();
                 recordError(error);
             }
-            latencies.add((BenchMetricHeader.nowNs() - started) / 1000.0);
+            if (now < activeDeadline) {
+                if (error == null) {
+                    activeCompleted.incrementAndGet();
+                }
+                latencies.add((now - started) / 1000.0);
+            }
             inFlight.decrementAndGet();
         }
 
         private void recordError(Throwable original) {
             Throwable error = unwrap(original);
             String type = error.getClass().getName();
-            String message = String.valueOf(error.getMessage())
-                .replace('\r', ' ').replace('\n', ' ');
+            String message =
+                    String.valueOf(error.getMessage()).replace('\r', ' ').replace('\n', ' ');
             if (message.length() > ERROR_MESSAGE_LIMIT) {
                 message = message.substring(0, ERROR_MESSAGE_LIMIT);
             }
             ErrorKey key = new ErrorKey(type, message);
             int start = Math.floorMod(key.hashCode(), ERROR_KIND_LIMIT);
-            for (;;) {
+            for (; ; ) {
                 boolean retry = false;
                 for (int offset = 0; offset < ERROR_KIND_LIMIT; offset++) {
                     int index = (start + offset) % ERROR_KIND_LIMIT;
@@ -468,7 +521,7 @@ public final class BenchDrivers {
         private static Throwable unwrap(Throwable error) {
             Throwable current = error;
             while ((current instanceof CompletionException || current instanceof ExecutionException)
-                && current.getCause() != null) {
+                    && current.getCause() != null) {
                 current = current.getCause();
             }
             return current;
@@ -496,19 +549,41 @@ public final class BenchDrivers {
 
         private BenchHttpApplication.Counters snapshot() {
             return new BenchHttpApplication.Counters(
-                submitted(), completed(), errors(), inFlight(), peakInFlight());
+                    submitted(), completed(), errors(), inFlight(), peakInFlight());
         }
 
-        private long submitted() { return submitted.get(); }
-        private long completed() { return completed.get(); }
-        private long errors() { return errors.get(); }
-        private long inFlight() { return inFlight.get(); }
-        private long peakInFlight() { return peakInFlight.get(); }
-        private long abandoned() { return abandoned.get(); }
-        private long otherErrors() { return otherErrors.get(); }
-        private Latencies.Summary latencySummary() { return latencies.summary(); }
-
-        private record ErrorKey(String type, String message) {
+        private long submitted() {
+            return submitted.get();
         }
+
+        private long completed() {
+            return completed.get();
+        }
+
+        private long errors() {
+            return errors.get();
+        }
+
+        private long inFlight() {
+            return inFlight.get();
+        }
+
+        private long peakInFlight() {
+            return peakInFlight.get();
+        }
+
+        private long abandoned() {
+            return abandoned.get();
+        }
+
+        private long otherErrors() {
+            return otherErrors.get();
+        }
+
+        private Latencies.Summary latencySummary() {
+            return latencies.summary();
+        }
+
+        private record ErrorKey(String type, String message) {}
     }
 }
