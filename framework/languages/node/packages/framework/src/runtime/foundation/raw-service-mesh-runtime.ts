@@ -1043,7 +1043,7 @@ export class RawServiceMeshRuntime {
     for (const nodeRoutingId of result.timedOutNodes) {
       const peer = this.topology.peer(nodeRoutingId);
       if (peer === undefined) continue;
-      // Liveness timeout is a semantic peer removal of the admitted route.
+      this.requireStarted().disconnectRid!(nodeRoutingId);
       this.removePeer(peer);
     }
     return result;
