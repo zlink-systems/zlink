@@ -5,13 +5,13 @@
 
 #include <zlink/Contracts/Errors/errors.hpp>
 #include <zlink/Contracts/Sockets/socket_options.hpp>
+#include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
 
 namespace zlink::framework::runtime
 {
 
-template <typename TSocket>
-receive_flow_state_apply_result_t
-apply_application_job_receive_flow_state (TSocket &socket,
+inline receive_flow_state_apply_result_t
+apply_application_job_receive_flow_state (zlink::router_socket_t &socket,
                                           application_job_queue_pressure_state_t state) noexcept
 {
     try {

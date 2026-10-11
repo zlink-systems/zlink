@@ -6,7 +6,7 @@ import type {
   ZLinkBackendReceived,
   ZLinkBackendTopicMessage
 } from '../runtime-values';
-import type { CoreHwmBudgetSnapshot } from '@zlink-systems/zlink';
+import type { CoreHwmBudgetSnapshot, ReceiveFlowState } from '@zlink-systems/zlink';
 import { type ZLinkBackendRecvFlags, type ZLinkBackendSendFlags } from '../runtime-values';
 export * from '../runtime-values';
 type MessageLike = ZLinkBackendMessageLike;
@@ -467,7 +467,6 @@ export interface ZLinkBackendSocket extends ZLinkBackendObject {
   readonly lastEndpoint?: string;
   bind(endpoint: string): void;
   setChannelName(channelName: string): void;
-  setReceiveFlowState?(state: 0 | 1): void;
   dispose(): Promise<void>;
 }
 
@@ -478,7 +477,6 @@ export interface ZLinkBackendConnectableSocket extends ZLinkBackendSocket {
 
 export interface ZLinkBackendDealerSocket extends ZLinkBackendConnectableSocket {
   receiveAdmission?: import('../../foundation/service-liveness-registry').ServiceLivenessConnection;
-  setReceiveFlowState(state: 0 | 1): void;
   setRoutingId(routingId: RoutingId): void;
   peerWeight: number;
   sendHighWaterMark: number;
@@ -507,7 +505,7 @@ export interface ZLinkBackendRequestOperation {
 }
 
 export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket {
-  setReceiveFlowState(state: 0 | 1): void;
+  setReceiveFlowState(state: ReceiveFlowState): void;
   /** Enables the native probe handshake for manually configured routes. */
   setProbe(enabled: boolean): void;
   peerWeight: number;

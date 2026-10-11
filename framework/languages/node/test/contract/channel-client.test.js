@@ -5694,7 +5694,6 @@ function fakeBackpressuredDealer() {
     requestAttempts: 0,
     sentParts: undefined,
     replyParts: undefined,
-    setReceiveFlowState() {},
     setChannelName(channelName) {
       this.channelName = channelName;
     },

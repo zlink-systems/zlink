@@ -154,3 +154,20 @@ test('raw binding port keeps its socket-lifetime event-loop poller on handler re
     assert.equal(registered.mock.callCount(), 0);
   } finally { host.close(); }
 });
+
+test('raw binding port exposes receive flow only on ROUTER sockets', (t) => {
+  const host = new ZLinkNodeRawBindingPort().createHost();
+  try {
+    const dealer = host.createDealer();
+    const router = host.createRouter();
+    assert.equal('setReceiveFlowState' in dealer, false);
+    const apply = t.mock.method(router.socket, 'setReceiveFlowState', () => {});
+    router.setReceiveFlowState('paused');
+    router.setReceiveFlowState('running');
+    const { ReceiveFlowState } = require('@zlink-systems/zlink');
+    assert.deepEqual(apply.mock.calls.map((call) => call.arguments[0]), [
+      ReceiveFlowState.PAUSED,
+      ReceiveFlowState.RUNNING
+    ]);
+  } finally { host.close(); }
+});

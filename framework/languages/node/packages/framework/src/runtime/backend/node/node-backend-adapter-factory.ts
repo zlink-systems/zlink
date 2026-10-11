@@ -1,4 +1,9 @@
-import type { Context, CoreHwmBudgetSnapshot, TopicMessage } from '@zlink-systems/zlink';
+import type {
+  Context,
+  CoreHwmBudgetSnapshot,
+  ReceiveFlowState,
+  TopicMessage
+} from '@zlink-systems/zlink';
 import type { ZLinkCoreHwmOptions } from '../../../contracts/Configuration';
 import type {
   ZLinkBackendAdapterFactory,
@@ -60,10 +65,12 @@ class ZLinkNodeChannelBackendAdapter implements ZLinkChannelBackendAdapter {
   }
 
   createRouterSocket(context: ZLinkBackendContext): ZLinkBackendRouterSocket {
-    return wrapSocket(
-      zlink.createRouterSocket(asNodeContext(context)),
-      true
-    ) as unknown as ZLinkBackendRouterSocket;
+    const socket = zlink.createRouterSocket(asNodeContext(context));
+    const adapter = wrapSocket(socket, true);
+    adapter.setReceiveFlowState = (state: ReceiveFlowState): void => {
+      socket.setReceiveFlowState(state);
+    };
+    return adapter as unknown as ZLinkBackendRouterSocket;
   }
 
   createPublisherSocket(context: ZLinkBackendContext): ZLinkBackendPublisherSocket {

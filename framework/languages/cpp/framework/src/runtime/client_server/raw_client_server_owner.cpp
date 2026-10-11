@@ -821,7 +821,6 @@ task_t<void> raw_client_server_client_t::start_task (transport_turn_t transport_
     std::unique_ptr<zlink::dealer_socket_t> dealer;
     std::unique_ptr<zlink::socket_monitor_t> monitor;
     decltype (_port) port;
-    application_job_queue_t::receive_flow_registration_t receive_flow_registration;
     const bool starting = co_await _lane.run_task ([&] {
         if (_port) {
             return false;
@@ -839,12 +838,6 @@ task_t<void> raw_client_server_client_t::start_task (transport_turn_t transport_
                    + std::to_string (dealer->options ().max_message_size ().bytes ());
         });
         dealer->set_routing_id (zlink::routing_id_t::from (_options.client_routing_id));
-        if (_options.application_jobs) {
-            receive_flow_registration = _options.application_jobs->register_receive_flow_socket (
-              [socket = dealer.get ()] (application_job_queue_pressure_state_t state) {
-                  return apply_application_job_receive_flow_state (*socket, state);
-              });
-        }
         monitor = std::make_unique<zlink::socket_monitor_t> (dealer->monitor_open (
           zlink::monitor_event::connection_ready | zlink::monitor_event::disconnected));
         dealer->connect (_options.expected_server.advertised_endpoint);
@@ -868,7 +861,6 @@ task_t<void> raw_client_server_client_t::start_task (transport_turn_t transport_
         _port = std::move (port);
         _monitor = std::move (monitor);
         _dealer = std::move (dealer);
-        _receive_flow_registration = std::move (receive_flow_registration);
         return true;
     });
 }
@@ -882,7 +874,6 @@ task_t<void> raw_client_server_client_t::close_task (transport_turn_t transport_
 {
     std::tuple<decltype (_port), decltype (_monitor), decltype (_dealer)> resources;
     co_await _lane.run_task ([this, &resources] {
-        _receive_flow_registration.close ();
         resources = std::tuple{std::move (_port), std::move (_monitor), std::move (_dealer)};
         return true;
     });

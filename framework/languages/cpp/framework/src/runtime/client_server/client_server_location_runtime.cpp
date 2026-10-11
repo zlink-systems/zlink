@@ -1130,7 +1130,6 @@ task_t<void> client_server_location_runtime_t::reconcile_channel_task (
         options.transport_poller = _transport_poller.get ();
         options.transport_poller_slot = next_transport_poller_slot ();
         options.transport_monitor_slot = next_transport_poller_slot ();
-        options.application_jobs = _application_jobs;
         options.runtime_failures = _channel_runtime.runtime_failures ();
         options.control_reply_parked = [wake = _wake_timer] { wake->signal (); };
         auto raw = std::make_shared<raw_client_server_client_t> (std::move (options),

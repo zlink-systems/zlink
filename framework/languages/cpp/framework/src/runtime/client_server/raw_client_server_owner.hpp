@@ -174,7 +174,6 @@ struct raw_client_server_client_options_t
     std::uintptr_t transport_poller_slot = 0;
     // The socket monitor's own source slot on transport_poller.
     std::uintptr_t transport_monitor_slot = 0;
-    std::shared_ptr<application_job_queue_t> application_jobs;
     std::shared_ptr<runtime_failure_collector_t> runtime_failures;
     // Called after a control reply (admission or liveness probe) is parked. The reply
     // completes outside a pump turn, so the turn owner needs this signal to apply it.
@@ -238,7 +237,6 @@ class raw_client_server_client_t
     std::shared_ptr<std::mutex> _socket_mutex = std::make_shared<std::mutex> ();
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::dealer_socket_t> _dealer;
-    application_job_queue_t::receive_flow_registration_t _receive_flow_registration;
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
     std::shared_ptr<detail::backend::raw_dealer_port_t> _port;
     std::shared_ptr<control_reply_state_t> _control_replies;

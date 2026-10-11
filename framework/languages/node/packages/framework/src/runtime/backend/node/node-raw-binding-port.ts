@@ -172,13 +172,6 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
     this.endpoints.delete(`connect\0${endpoint}`);
   }
 
-  setReceiveFlowState(state: 'running' | 'paused'): void {
-    this.requireOpen();
-    this.socket.setReceiveFlowState(
-      state === 'paused' ? ReceiveFlowState.PAUSED : ReceiveFlowState.RUNNING
-    );
-  }
-
   monitor(): ZLinkRawMonitorPort {
     this.requireOpen();
     const nativeMonitor = this.socket.monitorOpen();
@@ -233,6 +226,14 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
 
 class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLinkRawRouterPort {
   private nextIncomingRequestSequence = 1n;
+
+  setReceiveFlowState(state: 'running' | 'paused'): void {
+    this.requireOpen();
+    this.socket.setReceiveFlowState(
+      state === 'paused' ? ReceiveFlowState.PAUSED : ReceiveFlowState.RUNNING
+    );
+  }
+
   disconnectRid(routingId: string): void {
     this.requireOpen();
     (

@@ -78,11 +78,6 @@ export function wrapSocket<T extends { close(): void }>(
         .setChannelName;
       setChannelName?.call(nativeInstance, channelName);
     },
-    setReceiveFlowState(state: 0 | 1): void {
-      (nativeInstance as T & { setReceiveFlowState(value: 0 | 1): void }).setReceiveFlowState(
-        state
-      );
-    },
     setProbe(enabled: boolean): void {
       requireSocketOptions(socket).probe = enabled;
     },
