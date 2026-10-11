@@ -130,8 +130,6 @@ interface FanoutPublisherConnection {
   deadlineAt?: number;
 }
 
-type ReceiveFlowSocket = ZLinkBackendDealerSocket | ZLinkBackendRouterSocket;
-
 export class ZLinkChannelSocketRegistry {
   private readonly clientDealers = new Map<string, ZLinkBackendDealerSocket>();
   private readonly channelRouters = new Map<string, ZLinkBackendRouterSocket>();
@@ -223,9 +221,7 @@ export class ZLinkChannelSocketRegistry {
       ...this.publishers.values(),
       ...this.routeRouters.values()
     ];
-    for (const socket of new Set<ReceiveFlowSocket>([
-      ...this.clientDealers.values(),
-      ...clientServerConnections.map((value) => value.dealer),
+    for (const socket of new Set<ZLinkBackendRouterSocket>([
       ...this.channelRouters.values(),
       ...this.routeRouters.values()
     ]))
@@ -291,7 +287,6 @@ export class ZLinkChannelSocketRegistry {
 
     const dealer = this.adapter.createDealerSocket(this.context);
     this.clientDealers.set(channelName, dealer);
-    this.registerReceiveFlowSocket(dealer);
     dealer.setChannelName(channelName);
     if (channel?.routingId !== undefined && channel.routingId.length > 0) {
       dealer.setRoutingId(deriveRoutingId(channel.routingId, 'dealer'));
@@ -446,7 +441,6 @@ export class ZLinkChannelSocketRegistry {
     )[] = [dealer];
     try {
       this.clientServerConnections.set(connectionId, connection);
-      this.registerReceiveFlowSocket(dealer);
       dealer.setChannelName(channelName);
       dealer.setRoutingId(`cs-client-${randomUUID()}`);
       applySocketConfig(dealer, {
@@ -497,7 +491,6 @@ export class ZLinkChannelSocketRegistry {
       return dealer;
     } catch (error) {
       this.clientServerConnections.delete(connectionId);
-      this.unregisterReceiveFlowSocket(dealer);
       void Promise.allSettled(
         created.map(async (resource) => {
           await resource.dispose();
@@ -557,7 +550,6 @@ export class ZLinkChannelSocketRegistry {
     } catch {
       // The socket close below releases an endpoint that is already disconnected.
     }
-    this.unregisterReceiveFlowSocket(current.dealer);
     if (current.readablePoller !== undefined) {
       current.readablePoller.dispose();
       this.ownedResources.delete(current.readablePoller);
@@ -1748,7 +1740,7 @@ export class ZLinkChannelSocketRegistry {
     router.peerWeight = rawAvailabilityWeight(weight);
   }
 
-  private registerReceiveFlowSocket(socket: ReceiveFlowSocket): void {
+  private registerReceiveFlowSocket(socket: ZLinkBackendRouterSocket): void {
     this.applicationJobQueue?.registerReceiveFlowTarget(
       socket,
       (state) => socket.setReceiveFlowState(state === 'paused' ? 1 : 0),
@@ -1756,7 +1748,7 @@ export class ZLinkChannelSocketRegistry {
     );
   }
 
-  private unregisterReceiveFlowSocket(socket: ReceiveFlowSocket): void {
+  private unregisterReceiveFlowSocket(socket: ZLinkBackendRouterSocket): void {
     this.applicationJobQueue?.unregisterReceiveFlowTarget(socket);
   }
 

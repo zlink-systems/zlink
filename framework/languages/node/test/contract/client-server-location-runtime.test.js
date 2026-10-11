@@ -225,7 +225,7 @@ test('ClientServer socket identity defaults a wildcard bind to loopback with the
   await sockets.dispose();
 });
 
-test('paired ClientServer DEALER and ROUTER sockets receive absolute queue pressure state', async () => {
+test('ClientServer pressure applies to Server ROUTER and never to Client DEALER', async () => {
   const registration = internal.createFrameworkRegistration({
     channels: {
       orders: {
@@ -243,54 +243,92 @@ test('paired ClientServer DEALER and ROUTER sockets receive absolute queue press
     receiveHighWaterMark: 0,
     sendTimeoutMs: -1,
     maxMessageSize: -1,
-    setReceiveFlowState(state) { calls.push(`${kind}:flow:${state}`); },
+    setReceiveFlowState(state) {
+      calls.push(`${kind}:flow:${state}`);
+    },
     setChannelName() {},
     setRoutingId() {},
-    bind() { calls.push(`${kind}:bind`); },
+    bind() {
+      calls.push(`${kind}:bind`);
+    },
     connect() {},
     disconnect() {},
-    async dispose() { calls.push(`${kind}:dispose`); }
+    async dispose() {
+      calls.push(`${kind}:dispose`);
+    }
   });
   const dealer = socket('dealer');
+  const connectionDealer = socket('connection-dealer');
+  let socketsCreated = 0;
   const router = socket('router');
   let now = 0;
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration({
-      maxQueuedApplicationJobs: 5n,
-      pauseThresholdPercent: 80,
-      resumeThresholdPercent: 40
-    }, () => 1n),
+    resolveApplicationJobQueueConfiguration(
+      {
+        maxQueuedApplicationJobs: 5n,
+        pauseThresholdPercent: 80,
+        resumeThresholdPercent: 40
+      },
+      () => 1n
+    ),
     () => now
   );
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
-      createDealerSocket() { return dealer; },
-      createRouterSocket() { return router; }
+      createDealerSocket() {
+        return socketsCreated++ === 0 ? dealer : connectionDealer;
+      },
+      createRouterSocket() {
+        return router;
+      },
+      createReadablePoller() {
+        return { async dispose() {} };
+      }
     },
     {},
-    undefined,
+    {
+      openSocketMonitor() {
+        return { onEvent() {}, async dispose() {} };
+      }
+    },
     undefined,
     queue
   );
 
   sockets.clientDealer('orders');
+  sockets.openClientServerConnection('orders', 'pressure-connection', 'tcp://127.0.0.1:9404', {
+    onTransportReady() {},
+    onTransportUnavailable() {}
+  });
   sockets.channelRouter('orders');
-  assert.deepEqual(calls.slice(0, 3), ['dealer:flow:0', 'router:flow:0', 'router:bind']);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('router:')),
+    ['router:flow:0', 'router:bind']
+  );
   const permits = [];
   for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire(undefined, 'remote'));
-  assert.deepEqual(calls.slice(-2), ['dealer:flow:1', 'router:flow:1']);
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('dealer:flow:')),
+    []
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith('connection-dealer:flow:')),
+    []
+  );
+  assert.equal(calls.at(-1), 'router:flow:1');
   permits.pop().releaseAfterInternalProcessing();
   assert.equal(queue.pressureState(), 'paused');
   permits.pop().releaseAfterInternalProcessing();
   assert.equal(queue.pressureState(), 'running');
-  assert.deepEqual(calls.slice(-2), ['dealer:flow:0', 'router:flow:0']);
+  assert.equal(calls.at(-1), 'router:flow:0');
   for (const permit of permits) permit.releaseAfterInternalProcessing();
 
   await sockets.dispose();
   const callCountAfterDispose = calls.length;
   const afterDispose = [];
-  for (let index = 0; index < 4; index += 1) afterDispose.push(await queue.acquire(undefined, 'remote'));
+  for (let index = 0; index < 4; index += 1)
+    afterDispose.push(await queue.acquire(undefined, 'remote'));
   assert.equal(calls.length, callCountAfterDispose);
   for (const permit of afterDispose) permit.releaseAfterInternalProcessing();
 });
@@ -298,21 +336,30 @@ test('paired ClientServer DEALER and ROUTER sockets receive absolute queue press
 test('queue-owned receive-flow transitions serialize reentrant listeners without duplicate native calls', async () => {
   const registration = internal.createFrameworkRegistration({
     channels: {
-      orders: { client: { manualConnections: ['tcp://127.0.0.1:9490'] } },
-      payments: { client: { manualConnections: ['tcp://127.0.0.1:9491'] } }
+      orders: {
+        server: { bind: 'tcp://127.0.0.1:9490' },
+        sendHandlers: [{ packetName: 'notice', handler: { handle() {} } }]
+      },
+      payments: {
+        server: { bind: 'tcp://127.0.0.1:9491' },
+        sendHandlers: [{ packetName: 'notice', handler: { handle() {} } }]
+      }
     }
   });
   const calls = [];
   const permits = [];
   let releaseDuringPause = true;
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration({
-      maxQueuedApplicationJobs: 5n,
-      pauseThresholdPercent: 80,
-      resumeThresholdPercent: 40
-    }, () => 1n)
+    resolveApplicationJobQueueConfiguration(
+      {
+        maxQueuedApplicationJobs: 5n,
+        pauseThresholdPercent: 80,
+        resumeThresholdPercent: 40
+      },
+      () => 1n
+    )
   );
-  const dealer = (kind, reentrant) => ({
+  const router = (kind, reentrant) => ({
     nativeInstance: {},
     sendHighWaterMark: 0,
     receiveHighWaterMark: 0,
@@ -328,21 +375,26 @@ test('queue-owned receive-flow transitions serialize reentrant listeners without
     },
     setChannelName() {},
     setRoutingId() {},
+    bind() {},
     connect() {},
     disconnect() {},
     async dispose() {}
   });
-  const dealers = [dealer('orders', true), dealer('payments', false)];
+  const routers = [router('orders', true), router('payments', false)];
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
-    { createDealerSocket() { return dealers.shift(); } },
+    {
+      createRouterSocket() {
+        return routers.shift();
+      }
+    },
     {},
     undefined,
     undefined,
     queue
   );
-  sockets.clientDealer('orders');
-  sockets.clientDealer('payments');
+  sockets.channelRouter('orders');
+  sockets.channelRouter('payments');
   for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire(undefined, 'remote'));
 
   assert.equal(queue.pressureState(), 'running');
@@ -355,7 +407,12 @@ test('queue-owned receive-flow transitions serialize reentrant listeners without
 
 test('initial receive-flow configuration failures are counted and prevent socket exposure', () => {
   const registration = internal.createFrameworkRegistration({
-    channels: { orders: { client: { manualConnections: ['tcp://127.0.0.1:9401'] } } }
+    channels: {
+      orders: {
+        server: { bind: 'tcp://127.0.0.1:9401' },
+        sendHandlers: [{ packetName: 'notice', handler: { handle() {} } }]
+      }
+    }
   });
   const queue = new ApplicationJobQueue(
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 5n }, () => 1n)
@@ -364,22 +421,27 @@ test('initial receive-flow configuration failures are counted and prevent socket
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
-      createDealerSocket() {
+      createRouterSocket() {
         return {
           nativeInstance: {},
-          setReceiveFlowState() { throw new Error('flow config failed'); },
+          setReceiveFlowState() {
+            throw new Error('flow config failed');
+          },
           async dispose() {}
         };
       }
     },
     {},
     undefined,
-    ( error ) => failures.push(error),
+    (error) => failures.push(error),
     queue
   );
-  assert.throws(() => sockets.clientDealer('orders'), /flow config failed/);
+  assert.throws(() => sockets.channelRouter('orders'), /flow config failed/);
   assert.equal(queue.snapshot().flowStateConfigFailureCount, 1n);
-  assert.deepEqual(failures.map(( error ) => error.message), ['flow config failed']);
+  assert.deepEqual(
+    failures.map((error) => error.message),
+    ['flow config failed']
+  );
 });
 
 test('receive-flow controller fences reentrant disposal during initial state apply', () => {
