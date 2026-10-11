@@ -75,7 +75,8 @@ struct event_t
 };
 
 static void verify_same_target_activation_order (bool ready_request,
-                                                 bool retransmission_mismatch = false)
+                                                 bool retransmission_mismatch = false,
+                                                 bool close_during_terminal = false)
 {
     using namespace std::chrono_literals;
     namespace fw = zlink::framework;
@@ -105,6 +106,23 @@ static void verify_same_target_activation_order (bool ready_request,
                 co_await release.task ();
             co_return result;
         }
+        fw::task_t<fw::authority_compare_exchange_result_t>
+        compare_exchange_authority (fw::authority_key_t key,
+                                    std::string version,
+                                    fw::authority_mutation_t mutation,
+                                    std::stop_token stop = {}) override
+        {
+            if (hold_terminal) {
+                terminal_entered.set_value ();
+                co_await terminal_release.task ();
+                hold_terminal = false;
+            }
+            co_return co_await rt::in_memory_location_repository_t::compare_exchange_authority (
+              std::move (key), std::move (version), std::move (mutation), stop);
+        }
+        bool hold_terminal = false;
+        std::promise<void> terminal_entered;
+        fw::task_completion_source_t<void> terminal_release;
         bool hold_commit = false;
         std::atomic_int reserves{0};
         std::atomic_int commits{0};
@@ -112,6 +130,7 @@ static void verify_same_target_activation_order (bool ready_request,
     };
     auto store = std::make_shared<held_reservation_t> ();
     store->hold_commit = ready_request;
+    store->hold_terminal = close_during_terminal;
     const auto owner = std::get<fw::owner_lease_claimed_t> (
                          store->claim_owner_lease ("owner", 60s).result ().value ())
                          .token;
@@ -229,6 +248,27 @@ static void verify_same_target_activation_order (bool ready_request,
     EXPECT_EQ (1, store->reserves);
     EXPECT_TRUE (queued.empty ());
     store->release.complete (fw::result_t<void>::success ());
+    if (close_during_terminal) {
+        auto entered = store->terminal_entered.get_future ();
+        while (entered.wait_for (0ms) != std::future_status::ready
+               && std::chrono::steady_clock::now () < until)
+            pump ();
+        if (entered.wait_for (0ms) != std::future_status::ready) {
+            store->terminal_release.complete (fw::result_t<void>::success ());
+            FAIL () << "Store terminal did not start";
+        }
+        std::promise<void> closing_entered;
+        auto closing = std::async (std::launch::async, [&] {
+            closing_entered.set_value ();
+            target->close ();
+        });
+        closing_entered.get_future ().wait ();
+        EXPECT_EQ (std::future_status::timeout, closing.wait_for (100ms));
+        store->terminal_release.complete (fw::result_t<void>::success ());
+        ASSERT_EQ (std::future_status::ready, closing.wait_for (3s));
+        closing.get ();
+        return;
+    }
     while (result.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < until)
         pump ();
@@ -265,6 +305,11 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
 TEST (ZLinkFrameworkInstanceSpotActivation, SameTargetRetransmissionMismatchIsRejectedBeforeJoin)
 {
     verify_same_target_activation_order (false, true);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, HostCloseWaitsForAcceptedActivationStoreTerminal)
+{
+    verify_same_target_activation_order (false, true, true);
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation, ReadyOperationJoinsBeforeDurableFirstRecordAdmission)

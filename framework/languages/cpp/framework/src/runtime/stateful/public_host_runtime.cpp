@@ -1042,14 +1042,6 @@ void public_host_runtime_t::close () noexcept
         if (!closing_started)
             return;
     }
-    const auto instance_admissions =
-      _lifecycle_configuration_lane
-        .run ([&] { return std::exchange (_instance_spot_activation_admissions, {}); })
-        .get ();
-    for (const auto &[spot_id, admission] : instance_admissions) {
-        admission->complete (result_t<instance_activation_admission_t>::failure (
-          framework_error_kind_t::shutting_down, "Instance Spot activation target stopped"));
-    }
     if (maintenance_closing) {
         try {
             maintenance_closing ();
@@ -2972,9 +2964,18 @@ task_t<void> public_host_runtime_t::seal_relocation_targets ()
             return result;
         })
         .get ();
+    auto activations =
+      _lifecycle_configuration_lane
+        .run ([this] { return std::exchange (_instance_spot_activation_admissions, {}); })
+        .get ();
+    for (const auto &[spot_id, operation] : activations)
+        operation->admission.complete (result_t<instance_activation_admission_t>::failure (
+          framework_error_kind_t::shutting_down, "Instance Spot activation target stopped"));
     discard_unverified_relocation_targets ();
     for (auto &terminal : terminals)
         co_await terminal;
+    for (const auto &[spot_id, operation] : activations)
+        co_await operation->terminal.task ();
 }
 
 void public_host_runtime_t::discard_relocation_target_attempts (
@@ -4252,40 +4253,54 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
 {
     auto lifetime = shared_from_this ();
     const auto spot_id = command.activation.target.spot_id;
-    std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> admission;
-    const auto previous_admission =
+    std::shared_ptr<instance_activation_operation_t> operation;
+    std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> previous_admission;
+    const auto previous =
       _lifecycle_configuration_lane
         .run ([&] {
-            if (_closing || !_started)
+            if (_closing || !_started
+                || _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
                 throw framework_exception_t (framework_error_kind_t::shutting_down,
                                              "Instance Spot activation target stopped");
-            if (command.activation.target.authority_owner_generation != 0
-                && !_instance_spot_activation_admissions.contains (spot_id))
-                return std::shared_ptr<task_completion_source_t<instance_activation_admission_t>>{};
-            admission =
-              std::make_shared<task_completion_source_t<instance_activation_admission_t>> ();
-            return std::exchange (_instance_spot_activation_admissions[spot_id], admission);
+            const auto found = _instance_spot_activation_admissions.find (spot_id);
+            const auto pending = found != _instance_spot_activation_admissions.end ()
+                                 && !found->second->admission.task ().await_ready ();
+            if (command.activation.target.authority_owner_generation != 0 && !pending)
+                return std::shared_ptr<instance_activation_operation_t>{};
+            operation = std::make_shared<instance_activation_operation_t> ();
+            auto previous =
+              std::exchange (_instance_spot_activation_admissions[spot_id], operation);
+            if (pending)
+                previous_admission =
+                  std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> (
+                    previous, &previous->admission);
+            return previous;
         })
         .get ();
-    auto running = std::make_shared<task_t<void>> (
+    if (!operation) {
+        co_await dispatch_instance_spot_activation_core (
+          std::move (command), std::move (mailbox_record), std::move (done), nullptr, nullptr);
+        co_return;
+    }
+    auto admission = std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> (
+      operation, &operation->admission);
+    const auto result = co_await runtime::await_result (
       dispatch_instance_spot_activation_core (std::move (command), std::move (mailbox_record),
                                               std::move (done), admission, previous_admission));
-    detail::observe_task_terminal (*running, [lifetime, running, admission,
-                                              spot_id] (const result_t<void> &result) {
-        if (result || !admission)
-            return;
-        lifetime->_lifecycle_configuration_lane
-          .run ([&] {
-              const auto found = lifetime->_instance_spot_activation_admissions.find (spot_id);
-              if (found != lifetime->_instance_spot_activation_admissions.end ()
-                  && found->second == admission)
-                  lifetime->_instance_spot_activation_admissions.erase (found);
-          })
-          .get ();
+    if (!result)
         admission->complete (
           detail::result_access_t::failure<instance_activation_admission_t> (result.exception ()));
-    });
-    co_await *running;
+    if (previous)
+        co_await previous->terminal.task ();
+    _lifecycle_configuration_lane
+      .run ([&] {
+          const auto found = _instance_spot_activation_admissions.find (spot_id);
+          if (found != _instance_spot_activation_admissions.end () && found->second == operation)
+              _instance_spot_activation_admissions.erase (found);
+      })
+      .get ();
+    operation->terminal.complete (result_t<void>::success ());
+    result.value ();
 }
 
 task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
@@ -4311,20 +4326,10 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
           instance_owner_resolver = _instance_spot_owner;
       })
       .get ();
-    const auto finish_admission = [lifetime, admission, spot_id = request.target.spot_id] (
-                                    instance_activation_admission_t result) {
-        if (!admission)
-            return;
-        lifetime->_lifecycle_configuration_lane
-          .run ([&] {
-              const auto found = lifetime->_instance_spot_activation_admissions.find (spot_id);
-              if (found != lifetime->_instance_spot_activation_admissions.end ()
-                  && found->second == admission)
-                  lifetime->_instance_spot_activation_admissions.erase (found);
-          })
-          .get ();
-        admission->complete (
-          result_t<instance_activation_admission_t>::success (std::move (result)));
+    const auto finish_admission = [admission] (instance_activation_admission_t result) {
+        if (admission)
+            admission->complete (
+              result_t<instance_activation_admission_t>::success (std::move (result)));
     };
     const auto reply_terminal = [lifetime, owned_command, transport = _transport, mailbox_record,
                                  done,
