@@ -785,7 +785,8 @@ internal struct MeshReceiveRecord
         ulong deadlineUnixMs = 0,
         Func<RequestResult, uint, SubmitResult>? terminalReply = null,
         ZLinkMultipartPayloadView? applicationPayloadView = null,
-        bool instanceIntent = false
+        bool instanceIntent = false,
+        ZlinkSubmitException? submitFailure = null
     )
     {
         Kind = kind;
@@ -815,6 +816,7 @@ internal struct MeshReceiveRecord
         DeadlineUnixMs = deadlineUnixMs;
         ApplicationPayloadView = applicationPayloadView;
         InstanceIntent = instanceIntent;
+        SubmitFailure = submitFailure;
     }
 
     public MeshRecordKind Kind { get; }
@@ -832,6 +834,7 @@ internal struct MeshReceiveRecord
     public int PartCount { get; }
     public int TerminalResult { get; }
     public int FailureErrno { get; }
+    internal ZlinkSubmitException? SubmitFailure { get; }
     public ulong TargetNodeGeneration { get; }
     public ulong AuthorityOwnerGeneration { get; }
     public ulong OwnerLeaseGeneration { get; }

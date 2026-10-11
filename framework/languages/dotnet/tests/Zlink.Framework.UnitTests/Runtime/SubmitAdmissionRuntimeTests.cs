@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
@@ -7,6 +8,249 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class SubmitAdmissionRuntimeTests
 {
+    [Theory]
+    [InlineData(ZlinkSubmitException.ErrorCode.Backpressured, false)]
+    [InlineData(ZlinkSubmitException.ErrorCode.Backpressured, true)]
+    [InlineData(ZlinkSubmitException.ErrorCode.NotConnected, false)]
+    [InlineData(ZlinkSubmitException.ErrorCode.NotConnected, true)]
+    public async Task NativeCompletion_PreservesTypedAdmissionFailure(
+        ZlinkSubmitException.ErrorCode code,
+        bool awaited
+    )
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "typed-completion");
+        var expected = new ZlinkSubmitException(code);
+        var socket = new RefusedRequestSocket(expected);
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var nodeType = typeof(ZLinkManagedMeshNode);
+        var socketField = nodeType.GetField("_socket", flags)!;
+        socketField.SetValue(node, socket);
+        nodeType
+            .GetField("_activeSocketGeneration", flags)!
+            .SetValue(node, nodeType.GetField("_lifecycleGeneration", flags)!.GetValue(node));
+        MeshReceiveRecord? terminal = null;
+        node.SetCompletionHandlerCore(
+            (record, parts) =>
+            {
+                Assert.Empty(parts);
+                terminal = record;
+                return true;
+            }
+        );
+        var create = nodeType
+            .GetMethods(flags)
+            .Single(method =>
+                method.Name == "CreateOperation" && method.GetParameters().Length == 5
+            );
+        object?[] arguments =
+        [
+            MeshOperationKind.ActorRequest,
+            node.AllocateOperationId(),
+            0UL,
+            null,
+            awaited,
+        ];
+        create.Invoke(node, arguments);
+        var pending = arguments[3]!;
+        try
+        {
+            await (Task)
+                nodeType
+                    .GetMethod("CompleteNativeApplicationRequestAsync", flags)!
+                    .Invoke(
+                        node,
+                        [
+                            RoutingId.From("peer"),
+                            pending,
+                            new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
+                            TimeSpan.FromSeconds(5),
+                            default(CancellationToken),
+                        ]
+                    )!;
+            if (awaited)
+            {
+                var completion = pending
+                    .GetType()
+                    .GetProperty("AwaitedCompletion", flags)!
+                    .GetValue(pending)!;
+                var task = (Task)completion.GetType().GetProperty("Task")!.GetValue(completion)!;
+                var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => task);
+                Assert.Same(expected, failure);
+                Assert.Null(terminal);
+                var callbacks = 0;
+                await (Task)
+                    nodeType
+                        .GetMethod("DeliverRequestCompletionAsync", flags)!
+                        .Invoke(
+                            node,
+                            [
+                                task,
+                                (ZLinkBackendRequestCallback)(
+                                    (_, parts) =>
+                                    {
+                                        callbacks++;
+                                        Assert.Empty(parts);
+                                    }
+                                ),
+                            ]
+                        )!;
+                Assert.Equal(1, callbacks);
+            }
+            else
+            {
+                Assert.True(terminal.HasValue);
+                Assert.Same(expected, terminal.Value.SubmitFailure);
+            }
+            Assert.Equal(1, socket.Submissions);
+        }
+        finally
+        {
+            socketField.SetValue(node, null);
+        }
+    }
+
+    [Theory]
+    [InlineData(ZlinkSubmitException.ErrorCode.Backpressured, false)]
+    [InlineData(ZlinkSubmitException.ErrorCode.Backpressured, true)]
+    [InlineData(ZlinkSubmitException.ErrorCode.NotConnected, false)]
+    [InlineData(ZlinkSubmitException.ErrorCode.NotConnected, true)]
+    public async Task NativeRequest_PreservesTypedAdmissionFailure(
+        ZlinkSubmitException.ErrorCode code,
+        bool encodedWire
+    )
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "typed-admission");
+        var expected = new ZlinkSubmitException(code);
+        var socket = new RefusedRequestSocket(expected);
+        // Access only Framework state. The socket double implements the public
+        // binding contracts and never accesses binding implementation details.
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var nodeType = typeof(ZLinkManagedMeshNode);
+        var socketField = nodeType.GetField("_socket", flags)!;
+        socketField.SetValue(node, socket);
+        nodeType
+            .GetField("_activeSocketGeneration", flags)!
+            .SetValue(node, nodeType.GetField("_lifecycleGeneration", flags)!.GetValue(node));
+        using var payload = Message.From("request");
+        try
+        {
+            var method = nodeType.GetMethod(
+                "RequestDirectWireAsync",
+                flags,
+                [
+                    typeof(RoutingId),
+                    encodedWire
+                        ? typeof(IReadOnlyList<ReadOnlyMemory<byte>>)
+                        : typeof(IReadOnlyList<Message>),
+                    typeof(TimeSpan),
+                    typeof(CancellationToken),
+                    typeof(ZLinkServiceLiveness),
+                ]
+            )!;
+            var request =
+                (ValueTask<IReadOnlyList<Message>>)
+                    method.Invoke(
+                        node,
+                        [
+                            RoutingId.From("peer"),
+                            encodedWire
+                                ? new ReadOnlyMemory<byte>[] { "request"u8.ToArray() }
+                                : new[] { payload },
+                            TimeSpan.FromSeconds(5),
+                            default(CancellationToken),
+                            null,
+                        ]
+                    )!;
+            var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => request.AsTask());
+            Assert.Same(expected, failure);
+            Assert.Equal(1, socket.Submissions);
+            Assert.Throws<ObjectDisposedException>(() => _ = socket.Payload!.Size);
+        }
+        finally
+        {
+            socketField.SetValue(node, null);
+        }
+    }
+
+    private sealed class RefusedRequestSocket(ZlinkSubmitException failure)
+        : IRouterSocket,
+            RequestOperation,
+            RequestSubmitOperation
+    {
+        internal Message? Payload { get; private set; }
+        internal int Submissions { get; private set; }
+
+        public RequestOperation Request(RoutingId peerRid) => this;
+
+        public RequestSubmitOperation Message(Message message)
+        {
+            Payload = message;
+            return this;
+        }
+
+        public RequestSubmitOperation Timeout(TimeSpan timeout) => this;
+
+        public IReadOnlyList<Message> Submit() => throw new NotSupportedException();
+
+        public RequestSubmission Async(CancellationToken cancellationToken = default)
+        {
+            Submissions++;
+            throw failure;
+        }
+
+        public RouterSocketOptions Options => throw new NotSupportedException();
+        CommonSocketOptions ISocket.Options => Options;
+
+        public void Bind(string address) => throw new NotSupportedException();
+
+        public void Unbind(string address) => throw new NotSupportedException();
+
+        public void Connect(string address) => throw new NotSupportedException();
+
+        public void Disconnect(string address) => throw new NotSupportedException();
+
+        public void DisconnectRid(RoutingId routingId) => throw new NotSupportedException();
+
+        public void SetRoutingId(RoutingId routingId) => throw new NotSupportedException();
+
+        public RoutingId GetRoutingId() => throw new NotSupportedException();
+
+        public SendOperation Send(RoutingId routingId) => throw new NotSupportedException();
+
+        public ReplyOperation Reply(RoutingId rid, ReplyToken replyToken) =>
+            throw new NotSupportedException();
+
+        public IReadOnlyList<RouterRoute> RoutesSnapshot() => throw new NotSupportedException();
+
+        public bool Recv(Received result, RecvFlags flags = RecvFlags.None) =>
+            throw new NotSupportedException();
+
+        public ISocketMonitor MonitorOpen(SocketEvent events = SocketEvent.All) =>
+            throw new NotSupportedException();
+
+        public ISocketMonitor MonitorOpen(SocketEvent events, ulong monitorHwmBytes) =>
+            throw new NotSupportedException();
+
+        public void SetTlsServer(string certPath, string keyPath, bool requireClientCert = false) =>
+            throw new NotSupportedException();
+
+        public void SetTlsClient(string caCertPath, string hostname, bool trustSystem = false) =>
+            throw new NotSupportedException();
+
+        public void SetReceiveFlowState(ReceiveFlowState state) =>
+            throw new NotSupportedException();
+
+        public void Close() { }
+
+        public void Dispose() { }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     [Fact]
     public void OkSubmission_DoesNotReadAdmissionOrAllocateACompletion()
     {

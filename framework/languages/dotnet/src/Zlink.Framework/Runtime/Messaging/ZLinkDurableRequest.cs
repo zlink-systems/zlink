@@ -54,18 +54,7 @@ internal static class ZLinkDurableRequest
 
     private static bool CanReplay(Exception error, out bool admitted)
     {
-        // mapper가 phase를 확정한 Backpressured terminal은 그대로 전달한다.
-        // 그 외 typed binding 오류의 기존 replay 분류는 유지한다.
-        if (
-            error is ZLinkFrameworkException
-            {
-                InnerException: { } cause
-                    and not ZlinkSubmitException
-                    {
-                        Result: ZlinkSubmitException.ErrorCode.Backpressured
-                    }
-            }
-        )
+        if (error is ZLinkFrameworkException { InnerException: { } cause })
             error = cause;
         admitted = error is ZlinkRequestException;
         return error
@@ -78,7 +67,6 @@ internal static class ZLinkDurableRequest
                 {
                     Result: ZlinkSubmitException.ErrorCode.NotConnected
                         or ZlinkSubmitException.ErrorCode.NotFound
-                        or ZlinkSubmitException.ErrorCode.Backpressured
                         or ZlinkSubmitException.ErrorCode.NotAdmitted
                 };
     }

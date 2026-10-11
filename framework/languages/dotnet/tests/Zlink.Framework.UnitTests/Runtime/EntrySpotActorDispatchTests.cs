@@ -7243,6 +7243,37 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
+    [Theory]
+    [InlineData(ZlinkSubmitException.ErrorCode.Backpressured, "submission capacity is unavailable")]
+    [InlineData(ZlinkSubmitException.ErrorCode.NotConnected, "target route is not connected")]
+    public async Task Actor_Request_Preserves_Submit_Cause(
+        ZlinkSubmitException.ErrorCode code,
+        string expectedReason
+    )
+    {
+        var failure = new ZlinkSubmitException(code);
+        var node = new CapturingSpotNode { ActorRequestHandler = _ => throw failure };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await new ZLinkActorClient(runtime)
+                    .RequestToActor(actor.ActorId, new ProbeRouteMessage("request"))
+                    .Async<ProbeReply>()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            Assert.Contains(expectedReason, error.Message);
+            Assert.Same(failure, error.InnerException);
+            Assert.Single(node.ActorRequests);
+            if (code == ZlinkSubmitException.ErrorCode.Backpressured)
+                Assert.DoesNotContain("not connected", error.Message);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task Retained_BoundSession_First_Application_Send_Creates_One_Wire_Flow_And_Emits_Sent()
     {
