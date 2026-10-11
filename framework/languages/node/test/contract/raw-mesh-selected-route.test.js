@@ -4,6 +4,9 @@ const { RawServiceMeshRuntime } = require('../../packages/framework/dist/runtime
 const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
 const { RequestResult, SubmitResult, ZLinkBackendResultError } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+const zlink = require('@zlink-systems/zlink');
+const { ZLinkNodeRawBindingPort } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
+const { setImmediate: turn } = require('node:timers/promises');
 
 //  Core ROUTER §10.1 selects one route per RID; the Framework observes that
 //  selection through its snapshot (transport liveness §5).
@@ -24,11 +27,14 @@ function descriptor(nodeRoutingId) {
 function selectedRouteRuntime(routes) {
   const sent = [];
   const requested = [];
+  const disconnected = [];
+  const admissionsEnded = [];
   let monitorOpened = false;
   const router = {
     setRoutingId() {}, setReceiveFlowState() {}, setReadableHandler() {}, bind() {},
     localEndpoint: () => 'inproc://selected-route-local',
-    connect() {}, connectToRoutingId() {}, disconnect() {}, disconnectRid() {},
+    connect() {}, connectToRoutingId() {}, disconnect() {},
+    disconnectRid(rid) { disconnected.push(rid); routes.delete(rid); },
     monitor() {
       monitorOpened = true;
       return { drain: () => 0, statusReady: () => true, close() {} };
@@ -51,12 +57,13 @@ function selectedRouteRuntime(routes) {
   };
   const runtime = new RawServiceMeshRuntime({
     descriptor: descriptor('local'),
+    onPeerDisconnected: rid => admissionsEnded.push(rid),
     applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
     bindingPort: { createHost: () => ({ createRouter: () => router, shutdown() {}, close() {} }) }
   });
   runtime.start();
   return {
-    runtime, sent, requested,
+    runtime, sent, requested, disconnected, admissionsEnded,
     monitorOpened: () => monitorOpened,
     processReceived: record => runtime.processReceived(
       { ...record, sourceRoute: Buffer.from(record.sourceRid), close() {} },
@@ -113,6 +120,126 @@ test('RouteMesh admission follows the observed Core selected route (FW01)', asyn
   } finally {
     runtime.close();
   }
+});
+
+test('liveness expiry ends admission and removes the physical target once', () => {
+  const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+  try {
+    assert.equal(h.runtime.admitPeer(descriptor('peer'), 11n, 0), 'admitted');
+    assert.deepEqual(h.runtime.tickLiveness(15000).timedOutNodes, ['peer']);
+    assert.equal(h.runtime.topology.peer('peer'), undefined);
+    assert.deepEqual(h.admissionsEnded, ['peer']);
+    assert.deepEqual(h.disconnected, ['peer']);
+    h.runtime.tickLiveness(15001);
+    assert.deepEqual(h.admissionsEnded, ['peer']);
+    assert.deepEqual(h.disconnected, ['peer']);
+  } finally { h.runtime.close(); }
+});
+
+test('current receive refreshes liveness without removing the target', () => {
+  const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+  try {
+    h.runtime.admitPeer(descriptor('peer'), 11n, 0);
+    h.runtime.topology.peer('peer').liveness.recordReceived(14000);
+    assert.deepEqual(h.runtime.tickLiveness(15000).timedOutNodes, []);
+    assert.ok(h.runtime.topology.peer('peer'));
+    assert.deepEqual(h.disconnected, []);
+    assert.deepEqual(h.admissionsEnded, []);
+  } finally { h.runtime.close(); }
+});
+
+test('expiry notification can admit a replacement without closing its target', () => {
+  const routes = new Map([['peer', 11n]]);
+  const h = selectedRouteRuntime(routes);
+  try {
+    h.runtime.admitPeer(descriptor('peer'), 11n, 0);
+    h.runtime.onPeerDisconnected = () => {
+      routes.set('peer', 12n);
+      h.runtime.admitPeer(descriptor('peer'), 12n, 14000);
+    };
+    h.runtime.tickLiveness(15000);
+    assert.equal(routes.get('peer'), 12n);
+    assert.equal(h.runtime.topology.peer('peer').connectionId, 'route:12');
+    assert.deepEqual(h.disconnected, ['peer']);
+  } finally { h.runtime.close(); }
+});
+
+test('native target removal settles pending admission once on liveness expiry', async () => {
+  const context = zlink.createContext();
+  context.options.autoHwmEnabled = false;
+  const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+  let admissionEnds = 0;
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: descriptor('local'), applicationJobQueue: queue,
+    onPeerDisconnected: () => admissionEnds++,
+    bindingPort: new ZLinkNodeRawBindingPort(context)
+  });
+  const target = zlink.createDealerSocket(context);
+  let monitor;
+  try {
+    runtime.start();
+    const router = runtime.router;
+    const recordBytes = 65536;
+    const recordHwm = BigInt(recordBytes + 64);
+    router.socket.options.sendHwm = recordHwm;
+    target.setRoutingId(zlink.RoutingId.from('peer'));
+    target.options.recvHwm = recordHwm;
+    target.setReceiveFlowState(zlink.ReceiveFlowState.PAUSED);
+    monitor = router.monitor();
+    target.connect(router.localEndpoint());
+    const selectedBy = performance.now() + 2000;
+    let route;
+    while (!route && performance.now() < selectedBy) {
+      route = router.routesSnapshot().find(value => value.routingId === 'peer');
+      await turn();
+    }
+    assert.ok(route);
+    assert.equal(runtime.admitPeer(descriptor('peer'), route.routeGeneration, 0), 'admitted');
+    const pending = [];
+    let terminal;
+    let terminalCount = 0;
+    for (let record = 0; record < 16; record++) {
+      const submission = router.submitSend('peer', [Buffer.alloc(recordBytes)]);
+      // Observe every filler, including faults from the same target removal.
+      pending.push(submission.admitted.then(() => 'admitted', error => error));
+    }
+    pending.at(-1).then(value => { terminal = value; terminalCount++; });
+    await turn();
+    assert.equal(terminalCount, 0, 'fixture must retain a native admission');
+    runtime.tickLiveness(15000);
+    runtime.tickLiveness(15001);
+    const settledBy = performance.now() + 2000;
+    while (terminalCount === 0 && performance.now() < settledBy) await turn();
+    assert.equal(terminalCount, 1);
+    assert.ok(terminal instanceof ZLinkBackendResultError);
+    assert.equal(terminal.result, SubmitResult.NotFound);
+    assert.equal(admissionEnds, 1);
+    let physicalEnds = 0;
+    while (physicalEnds === 0 && performance.now() < settledBy) {
+      monitor.drain(event => { if (event.event === zlink.MonitorEventType.Disconnected) physicalEnds++; });
+      await turn();
+    }
+    assert.equal(physicalEnds, 1);
+    await Promise.all(pending);
+  } finally {
+    monitor?.close();
+    target.close();
+    runtime.close();
+    context.close();
+  }
+});
+
+test('a retired liveness receipt cannot expire the replacement admission', () => {
+  const h = selectedRouteRuntime(new Map([['peer', 12n]]));
+  try {
+    h.runtime.admitPeer(descriptor('peer'), 11n, 0);
+    const retired = h.runtime.topology.peer('peer').liveness;
+    h.runtime.admitPeer(descriptor('peer'), 12n, 14000);
+    assert.equal(retired.isExpired(15000), true);
+    assert.deepEqual(h.runtime.tickLiveness(15000).timedOutNodes, []);
+    assert.equal(h.runtime.topology.peer('peer').connectionId, 'route:12');
+    assert.deepEqual(h.disconnected, []);
+  } finally { h.runtime.close(); }
 });
 
 test('a direct RID request selects only the logical target and leaves route acceptance to Core (FW02)', async () => {

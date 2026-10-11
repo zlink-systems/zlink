@@ -7244,8 +7244,10 @@ final class ZLinkJavaRawMeshNode
         tick.timedOutNodes()
                 .forEach(
                         peer -> {
-                            if (disconnectAdmitted(peer, admittedConnectionId(peer)))
+                            if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
+                                requireStarted().disconnectRid(peer);
                                 signalStateChanged(peer);
+                            }
                         });
     }
 

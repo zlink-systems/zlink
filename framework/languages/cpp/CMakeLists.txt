@@ -1176,6 +1176,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework
     Threads::Threads)
   zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_liveness_physical_close
+    COMMAND test_cpp_framework_m6a_runtime --liveness-physical-close
+    LABELS "framework-unit;liveness"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_m6a_runtime
     COMMAND test_cpp_framework_m6a_runtime
     LABELS "framework-unit;framework-m6-runtime;topology;mailbox;liveness;raw-binding"
