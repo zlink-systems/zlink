@@ -3537,26 +3537,38 @@ std::size_t raw_mesh_node_owner_t::apply_route_snapshot ()
 task_t<service_liveness_tick_t>
 raw_mesh_node_owner_t::tick_liveness (service_liveness_registry_t::clock_t::time_point now)
 {
-    const auto result =
+    const auto [result, port] =
       _lane
         .run ([this, now] {
             std::lock_guard lifecycle_lock (_lifecycle_mutex);
             auto tick = _liveness.tick (now);
             if (!_router)
-                return tick;
+                return std::pair{std::move (tick), _port};
             for (const auto &timed_out : tick.timed_out_nodes) {
                 const auto peer = _topology.peer (timed_out);
                 if (!peer)
                     continue;
                 const auto removed = _topology.disconnect (timed_out, peer->connection_id);
                 if (removed) {
-                    _router->disconnect_rid (zlink::routing_id_t::from (timed_out));
+                    {
+                        std::lock_guard socket_lock (*_socket_mutex);
+                        try {
+                            _router->disconnect_rid (zlink::routing_id_t::from (timed_out));
+                        }
+                        catch (const zlink::connect_error_t &error) {
+                            // Core may already have removed the selected route.
+                            if (error.result () != zlink::connect_result_t::not_found)
+                                throw;
+                        }
+                    }
                     end_peer_operations_if_disconnected_locked (timed_out);
                 }
             }
-            return tick;
+            return std::pair{std::move (tick), _port};
         })
         .get ();
+    if (!port)
+        co_return result;
     for (const auto &probe : result.probes) {
         (void) submit_header_only (
           probe.node_routing_id,

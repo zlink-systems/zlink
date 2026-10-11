@@ -3336,9 +3336,29 @@ void verify_liveness_physical_close (bool receive, bool replacement)
     source.close ();
 }
 
+void verify_liveness_without_selected_route ()
+{
+    mesh::raw_mesh_node_owner_t source ({descriptor ("liveness-missing-source")});
+    source.start ();
+    const auto remote = descriptor ("liveness-missing-target");
+    const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+    assert (source.admit_peer (remote, bytes ("missing-route"), now)
+            == mesh::peer_admission_result_t::admitted);
+    // Admission can outlive the Core selected route. Its absence is the
+    // binding's typed connect NotFound, rather than a failed liveness turn.
+    const auto expired = await_task (source.tick_liveness (now + 15s));
+    assert (expired.timed_out_nodes
+            == std::vector<std::vector<std::uint8_t>>{remote.node_routing_id});
+    assert (!source.topology ().peer (remote.node_routing_id));
+    assert (await_task (source.tick_liveness (now + 16s)).timed_out_nodes.empty ());
+    assert (source.pending_operation_count () == 0);
+    source.close ();
+}
+
 int main (int argc, char **argv)
 {
     if (argc == 2 && std::string_view (argv[1]) == "--liveness-physical-close") {
+        verify_liveness_without_selected_route ();
         verify_liveness_physical_close (true, false);
         verify_liveness_physical_close (false, true);
         verify_liveness_physical_close (false, false);
