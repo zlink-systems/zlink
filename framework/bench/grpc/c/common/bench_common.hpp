@@ -442,11 +442,11 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
             << "      \"drain_bound_hit\": " << (r.drain_bound_hit ? "true" : "false") << ",\n";
     if (r.server_received)
         out << "      \"server_received_at_close\": " << r.completed << ",\n"
-            << "      \"active_elapsed_ms\": " << json_number (rate_seconds * 1000) << ",\n"
             << "      \"target_stats\": {\"received\": " << r.server_received.value ()
             << ", \"errors\": " << r.server_errors << ", \"drainMs\": " << json_number (r.drain_ms)
             << "},\n";
-    out << "      \"warmup_abandoned\": " << r.warmup_abandoned << ",\n"
+    out << "      \"active_elapsed_ms\": " << json_number (rate_seconds * 1000) << ",\n"
+        << "      \"warmup_abandoned\": " << r.warmup_abandoned << ",\n"
         << "      \"errors\": " << r.errors << ",\n"
         << "      \"contaminated\": " << (r.warmup_abandoned != 0 ? "true" : "false") << ",\n"
         << "      \"extra\": {\"submitted\": " << r.submitted << ", \"completed\": " << r.completed

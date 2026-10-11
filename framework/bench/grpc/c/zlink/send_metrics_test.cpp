@@ -52,6 +52,7 @@ int main ()
     std::ifstream request_file (run_dir / "zlink-c-request-serial-1024/results.json");
     const std::string request_json ((std::istreambuf_iterator<char> (request_file)), {});
     assert (request_json.find ("\"throughput_per_second\": 1.400000") != std::string::npos);
+    assert (request_json.find ("\"active_elapsed_ms\": 5000.000000") != std::string::npos);
     result.pattern = "send-saturation";
     result.server_received = 11;
     result.completed = 12;
