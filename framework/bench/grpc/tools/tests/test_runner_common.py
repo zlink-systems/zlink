@@ -12,6 +12,12 @@ COMMON = Path(__file__).resolve().parents[2] / "runner_common.sh"
 
 
 class RunnerCommonTest(unittest.TestCase):
+    def test_common_warmup_is_two_seconds(self):
+        result = subprocess.run(["bash", "-c", 'source "$1"; bench_init c grpc-c request-serial 1024; printf "%s" "$WARMUP_SECONDS"',
+                                 "_", str(COMMON)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "2")
+
     def check_port(self, port):
         return subprocess.run(["bash", "-c", 'source "$1"; check_ports_free "$2" "$2"',
                                "_", str(COMMON), str(port)], capture_output=True).returncode
@@ -145,6 +151,7 @@ trigger_phase() {
   return 0
 }
 wait_for_idle() { return 0; }
+curl() { printf '%s\\n' '{"currentInFlight":0}'; }
 calls=0
 settle_and_capture() {
   calls=$((calls + 1))
@@ -168,6 +175,25 @@ bench_run_cell trigger source target run second grpc-java send-saturation 1024 1
             self.assertNotIn("contaminated", second)
             self.assertEqual(1, second["target_stats"]["received"])
 
+    def test_warmup_terminal_bound_records_abandoned_without_active(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = Path(directory) / "results.json"
+            script = '''
+source "$1"
+trigger_phase() { [[ "$6" == warmup ]]; }
+wait_for_idle() { return 0; }
+curl() { printf '%s\\n' '{"currentInFlight":7}'; }
+settle_and_capture() { return 1; }
+bench_run_cell trigger source target run cell grpc-java request-backpressure 1024 2000 "$2" /dev/null
+'''
+            subprocess.run(["bash", "-c", script, "_", str(COMMON), str(result)],
+                           check=True, capture_output=True, text=True)
+            cell = json.loads(result.read_text(encoding="utf-8"))["cells"][0]
+            self.assertTrue(cell["contaminated"])
+            self.assertEqual(cell["warmup_abandoned"], 7)
+            self.assertEqual(cell["throughput_per_second"], 0)
+            self.assertEqual(cell["bandwidth_mb_s"], 0)
+
     def test_warmup_bound_excludes_current_cell(self):
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.json"
@@ -175,6 +201,7 @@ bench_run_cell trigger source target run second grpc-java send-saturation 1024 1
 source "$1"
 trigger_phase() { [[ "$6" == warmup ]]; }
 wait_for_idle() { return 0; }
+curl() { printf '%s\\n' '{"currentInFlight":0}'; }
 settle_and_capture() { SETTLE_BOUND_HIT=true; SETTLE_MS=1; }
 bench_run_cell trigger source target run cell grpc-java request-serial 1024 1000 "$2" /dev/null
 '''
