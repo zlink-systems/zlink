@@ -243,3 +243,13 @@ test('warmup runs the selected pattern for its duration with warmup headers', as
   assert.equal(warmup.completed, sent);
   assert.equal(warmup.abandoned, 0);
 });
+
+test('warmup receipts advance only all-phase stats and reset together', () => {
+  const { BenchServerMetrics } = require('../shared/bench-server-metrics');
+  const metrics = new BenchServerMetrics();
+  metrics.record(header.createPayloadBytes(4096, 1, header.PHASE_WARMUP, 0));
+  assert.equal(metrics.snapshot().allPhaseMessages, 1);
+  assert.equal(metrics.snapshot().received, 0);
+  metrics.reset();
+  assert.equal(metrics.snapshot().allPhaseMessages, 0);
+});

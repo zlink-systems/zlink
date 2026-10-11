@@ -15,6 +15,7 @@ using WithGrpcBench.Shared;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Channels;
+using Zlink.Framework.Contracts.Dispatch;
 
 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 
@@ -301,10 +302,14 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
         var builder = Host.CreateApplicationBuilder(Array.Empty<string>());
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        builder.Logging.SetMinimumLevel(
+            BenchDiagnostics.FlowTraceEnabled ? LogLevel.Information : LogLevel.Warning
+        );
         builder.Services.AddZLinkFramework(framework =>
         {
             framework.Codecs.Use(ZLinkProtobufCodec.Default);
+            if (BenchDiagnostics.FlowTraceEnabled)
+                framework.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             var mesh = framework
                 .AddRouteMesh("bench")
                 .Listen("tcp://127.0.0.1:0")

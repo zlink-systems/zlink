@@ -7,7 +7,7 @@ namespace WithGrpcBench.Shared;
 public enum BenchPhase : byte
 {
     Warmup = 0,
-    Active = 1
+    Active = 1,
 }
 
 public readonly record struct BenchMetricHeader(
@@ -15,29 +15,43 @@ public readonly record struct BenchMetricHeader(
     BenchPhase Phase,
     int PayloadSize,
     ulong Sequence,
-    long SentTimestampNs);
+    long SentTimestampNs
+);
 
 public static class BenchMetricHeaders
 {
     public const int HeaderSize = 29;
     private const uint Magic = 0x5A4C4E4B; // "ZLNK"
 
-    public static BenchPayload CreatePayload(int payloadSize, uint runId, BenchPhase phase, ulong sequence)
+    public static BenchPayload CreatePayload(
+        int payloadSize,
+        uint runId,
+        BenchPhase phase,
+        ulong sequence
+    )
     {
         return new BenchPayload
         {
-            Body = UnsafeByteOperations.UnsafeWrap(CreatePayloadBytes(payloadSize, runId, phase, sequence))
+            Body = UnsafeByteOperations.UnsafeWrap(
+                CreatePayloadBytes(payloadSize, runId, phase, sequence)
+            ),
         };
     }
 
-    public static byte[] CreatePayloadBytes(int payloadSize, uint runId, BenchPhase phase, ulong sequence)
+    public static byte[] CreatePayloadBytes(
+        int payloadSize,
+        uint runId,
+        BenchPhase phase,
+        ulong sequence
+    )
     {
         if (payloadSize < HeaderSize)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(payloadSize),
                 payloadSize,
-                $"Payload size must be at least {HeaderSize} bytes.");
+                $"Payload size must be at least {HeaderSize} bytes."
+            );
         }
 
         var bytes = BenchPayloads.CreateBytes(payloadSize);
@@ -52,7 +66,8 @@ public static class BenchMetricHeaders
             throw new ArgumentOutOfRangeException(
                 nameof(payload),
                 payload.Length,
-                $"Payload size must be at least {HeaderSize} bytes.");
+                $"Payload size must be at least {HeaderSize} bytes."
+            );
         }
 
         payload.Fill(0xab);
@@ -69,7 +84,8 @@ public static class BenchMetricHeaders
         uint runId,
         BenchPhase phase,
         int payloadSize,
-        ulong sequence)
+        ulong sequence
+    )
     {
         return header.RunId == runId
             && header.Phase == phase
@@ -79,7 +95,12 @@ public static class BenchMetricHeaders
 
     public static long NowNs()
     {
-        return Stopwatch.GetTimestamp() * 1_000_000_000L / Stopwatch.Frequency;
+        return NowNs(Stopwatch.GetTimestamp(), Stopwatch.Frequency);
+    }
+
+    public static long NowNs(long timestamp, long frequency)
+    {
+        return checked((long)((Int128)timestamp * 1_000_000_000 / frequency));
     }
 
     private static void Stamp(
@@ -88,7 +109,8 @@ public static class BenchMetricHeaders
         BenchPhase phase,
         int payloadSize,
         ulong sequence,
-        long sentTimestampNs)
+        long sentTimestampNs
+    )
     {
         BinaryPrimitives.WriteUInt32LittleEndian(payload[0..4], Magic);
         BinaryPrimitives.WriteUInt32LittleEndian(payload[4..8], runId);
@@ -117,7 +139,8 @@ public static class BenchMetricHeaders
             (BenchPhase)payload[8],
             (int)BinaryPrimitives.ReadUInt32LittleEndian(payload[9..13]),
             BinaryPrimitives.ReadUInt64LittleEndian(payload[13..21]),
-            BinaryPrimitives.ReadInt64LittleEndian(payload[21..29]));
+            BinaryPrimitives.ReadInt64LittleEndian(payload[21..29])
+        );
         return true;
     }
 }

@@ -4,7 +4,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../runner_common.sh
 source "${HERE}/../runner_common.sh"
-bench_init kotlin "grpc-kotlin,zlink-framework-kotlin" "request-backpressure" "1024"
+bench_init kotlin "grpc-kotlin,zlink-framework-kotlin" \
+  "request-backpressure,send-saturation" "1024,4096" "request-backpressure" "1024"
 cd "${HERE}"
 
 select_java_home

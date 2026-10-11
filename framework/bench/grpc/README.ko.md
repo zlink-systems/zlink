@@ -500,7 +500,7 @@ warmup은 공용 `WARMUP_SECONDS`(기본값 2초) 동안 같은 패턴을 warmup
 
 | 항목 | 이유 |
 |------|------|
-| gRPC server 구성 | 언어마다 기본 server 구현이 다르다. gRPC 쪽은 각 언어의 기본 구성으로 두고 그 구성을 결과에 남긴다 |
+| gRPC server 구성 | 언어마다 기본 server 구현이 다르다. gRPC 쪽은 각 언어의 기본 구성으로 두고 그 구성을 결과에 남긴다. C++는 `CallbackService`와 기본 `ServerBuilder`를 사용한다. 호출별 동기 worker thread를 만들지 않는다. |
 | 런타임과 gRPC 라이브러리 version | SDK version, 런타임 version, gRPC 라이브러리 version을 셀 원본과 보고서에 함께 남긴다 |
 
 ## 9. 포트 대역
@@ -614,8 +614,9 @@ runner는 여섯 개다: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local
 | `SKIP_BUILD` | `0` | `0`이면 측정 전에 그 언어의 `<lang>/build.sh`로 빌드하고, `1`이면 이미 빌드된 산출물을 쓴다 |
 
 - `<lang>`은 `c`, `cpp`, `dotnet`, `java`, `kotlin`, `node` 중 하나다.
-- Kotlin runner는 §10.5의 보조 셀만 측정한다. 이 runner에서 `PATTERNS`와 `PAYLOAD_SIZES`의
-  기본값은 `request-backpressure`와 `1024`이며, 다른 값은 거부한다.
+- Kotlin runner의 기본값은 §10.5의 보조 셀인 `request-backpressure`와 `1024`다.
+  개별 검증에서는 `PATTERNS=request-backpressure,send-saturation`,
+  `PAYLOAD_SIZES=1024,4096` 범위에서 선택할 수 있다.
 - 값이 위 범위를 벗어나면 runner는 측정을 시작하기 전에 거부한다.
 
 위 표 밖의 값은 입력이 아니다. send concurrency 8과 drain 상한 30초(§3), 포트(§9)는

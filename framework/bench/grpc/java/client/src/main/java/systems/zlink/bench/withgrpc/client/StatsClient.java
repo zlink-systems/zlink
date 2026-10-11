@@ -2,50 +2,53 @@
 
 package systems.zlink.bench.withgrpc.client;
 
+import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
+
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 
 /** Polls a bench server's stats endpoint: reset, snapshot, and the settle drain. */
 public final class StatsClient {
-    private final HttpClient http = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(5))
-        .build();
+    private final HttpClient http =
+            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
     public void reset(String statsUrl) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(statsUrl + "/bench/reset"))
-            .POST(HttpRequest.BodyPublishers.noBody())
-            .timeout(Duration.ofSeconds(10))
-            .build();
+        HttpRequest request =
+                HttpRequest.newBuilder(URI.create(statsUrl + "/bench/reset"))
+                        .POST(HttpRequest.BodyPublishers.noBody())
+                        .timeout(Duration.ofSeconds(10))
+                        .build();
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) {
             throw new IllegalStateException(
-                "reset " + statsUrl + " failed: " + response.statusCode());
+                    "reset " + statsUrl + " failed: " + response.statusCode());
         }
     }
 
     public ServerSnapshot stats(String statsUrl) throws Exception {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(statsUrl + "/bench/stats"))
-            .GET()
-            .timeout(Duration.ofSeconds(10))
-            .build();
+        HttpRequest request =
+                HttpRequest.newBuilder(URI.create(statsUrl + "/bench/stats"))
+                        .GET()
+                        .timeout(Duration.ofSeconds(10))
+                        .build();
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) {
             throw new IllegalStateException(
-                "stats " + statsUrl + " failed: " + response.statusCode());
+                    "stats " + statsUrl + " failed: " + response.statusCode());
         }
         return ServerSnapshot.parse(response.body());
     }
 
     public String info(String statsUrl) {
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(statsUrl + "/bench/info"))
-                .GET()
-                .timeout(Duration.ofSeconds(5))
-                .build();
+            HttpRequest request =
+                    HttpRequest.newBuilder(URI.create(statsUrl + "/bench/info"))
+                            .GET()
+                            .timeout(Duration.ofSeconds(5))
+                            .build();
             return http.send(request, HttpResponse.BodyHandlers.ofString()).body();
         } catch (Exception error) {
             return "{}";
@@ -53,12 +56,12 @@ public final class StatsClient {
     }
 
     /**
-     * spec section 3 / FB-008 settle: no fixed sleep. Poll the server's received count
-     * until it stops moving, bounded. A bound expiry excludes this cell; the next cell
-     * starts with a new server pair.
+     * spec section 3 / FB-008 settle: no fixed sleep. Poll the server's received count until it
+     * stops moving, bounded. A bound expiry excludes this cell; the next cell starts with a new
+     * server pair.
      */
     public DrainOutcome waitForServerDrain(String statsUrl, long quietMs, long boundMs)
-        throws Exception {
+            throws Exception {
         long startNs = BenchMetricHeader.nowNs();
         ServerSnapshot latest = null;
         long lastCount = -1;
@@ -81,30 +84,29 @@ public final class StatsClient {
         }
     }
 
-    public record DrainOutcome(ServerSnapshot snapshot, double drainMs, boolean boundHit) {
-    }
+    public record DrainOutcome(ServerSnapshot snapshot, double drainMs, boolean boundHit) {}
 
     public record ServerSnapshot(
-        long received,
-        long totalMessages,
-        long errors,
-        double meanMicros,
-        double p95Micros,
-        double p99Micros,
-        double cpuSeconds,
-        double workingSetMb) {
+            long received,
+            long errors,
+            double meanMicros,
+            double p95Micros,
+            double p99Micros,
+            double cpuSeconds,
+            double workingSetMb) {
 
         static ServerSnapshot parse(String json) {
             return new ServerSnapshot(
-                (long) field(json, json.contains("\"received\":")
-                    ? "received" : "activeMessages"),
-                (long) field(json, "totalMessages"),
-                (long) field(json, "errors"),
-                field(json, "meanMicros"),
-                field(json, "p95Micros"),
-                field(json, "p99Micros"),
-                field(json, "cpuSeconds"),
-                field(json, "workingSetMb"));
+                    (long)
+                            field(
+                                    json,
+                                    json.contains("\"received\":") ? "received" : "activeMessages"),
+                    (long) field(json, "errors"),
+                    field(json, "meanMicros"),
+                    field(json, "p95Micros"),
+                    field(json, "p99Micros"),
+                    field(json, "cpuSeconds"),
+                    field(json, "workingSetMb"));
         }
 
         public long activeMessages() {

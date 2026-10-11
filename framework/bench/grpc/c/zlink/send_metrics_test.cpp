@@ -2,6 +2,7 @@
 #include "../common/bench_common.hpp"
 
 #include <cassert>
+#include <thread>
 
 int main ()
 {
@@ -11,11 +12,13 @@ int main ()
     zlink_c_bench::stamp_payload (body, sizeof body, 1, zlink_c_bench::phase_active, 0);
     zlink_c_bench::write_u64_le (reinterpret_cast<unsigned char *> (body) + 21, 50);
     metrics.record (body, sizeof body, 75);
+    metrics.record (body, sizeof body, 125);
+    metrics.record (body, sizeof body, 75);
     metrics.close (100);
     metrics.record (body, sizeof body, 125);
     auto result = metrics.snapshot (125);
-    assert (result.completed == 1);
-    assert (result.server_received == 2);
+    assert (result.completed == 2);
+    assert (result.server_received == 4);
     assert (result.mean_us == 0.025);
     zlink_c_bench::send_metrics_t warmup;
     warmup.start (100, zlink_c_bench::phase_warmup);
@@ -26,6 +29,36 @@ int main ()
     metrics.start (200);
     metrics.record (body, sizeof body, 125);
     assert (metrics.snapshot (200).completed == 0);
+    zlink_c_bench::send_metrics_t concurrent;
+    concurrent.start (100);
+    zlink_c_bench::stamp_payload (body, sizeof body, 1, zlink_c_bench::phase_active, 0);
+    zlink_c_bench::write_u64_le (reinterpret_cast<unsigned char *> (body) + 21, 50);
+    constexpr size_t worker_count = 8;
+    constexpr size_t messages_per_worker = 1000;
+    std::vector<std::thread> workers;
+    for (size_t i = 0; i < worker_count; ++i)
+        workers.emplace_back ([&] {
+            for (size_t j = 0; j < messages_per_worker; ++j)
+                concurrent.record (body, sizeof body, 75);
+        });
+    for (auto &worker : workers)
+        worker.join ();
+    auto received = concurrent.snapshot (100);
+    assert (received.completed == worker_count * messages_per_worker);
+    assert (received.mean_us == 0.025 && received.p95_us == 0.025 && received.p99_us == 0.025);
+    const auto control = concurrent.control (zlink_c_bench::k_send_stats_snapshot, 100);
+    zlink_c_bench::result_t decoded;
+    zlink_c_bench::send_metrics_t::read_snapshot (*control, decoded);
+    assert (decoded.completed == received.completed && decoded.mean_us == received.mean_us);
+    assert (!concurrent.control ("not-control", 100));
+    bool invalid_rejected = false;
+    try {
+        concurrent.control (std::string (zlink_c_bench::k_send_stats_start) + "100 2", 100);
+    }
+    catch (const std::invalid_argument &) {
+        invalid_rejected = true;
+    }
+    assert (invalid_rejected);
     const auto run_dir = std::filesystem::temp_directory_path ()
                          / ("bench-c-send-metrics-" + std::to_string (getpid ()));
     setenv ("BENCH_RUN_DIR", run_dir.c_str (), 1);
@@ -42,6 +75,8 @@ int main ()
     const auto path = run_dir / "zlink-c-send-saturation-1024/results.json";
     std::ifstream file (path);
     const std::string json ((std::istreambuf_iterator<char> (file)), {});
+    assert (json.find ("\"latency_source\": \"receiver\"") != std::string::npos);
+    assert (json.find ("\"latency_sample_count\": 7") != std::string::npos);
     assert (json.find ("\"throughput_per_second\": 1.400000") != std::string::npos);
     assert (json.find ("\"warmupSeconds\": 2") != std::string::npos);
     assert (json.find ("\"warmup_abandoned\": 3") != std::string::npos);

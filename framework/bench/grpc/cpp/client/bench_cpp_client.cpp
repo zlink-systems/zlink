@@ -109,12 +109,12 @@ struct counters_t
 {
     static constexpr size_t error_kind_limit = 8;
     static constexpr size_t error_message_limit = 200;
-    std::atomic<long long> completed {0};
-    std::atomic<long long> errors {0};
-    std::atomic<long long> submitted {0};
-    std::atomic<long long> header_failures {0};
-    std::atomic<long long> outstanding {0};
-    std::atomic<long long> peak_in_flight {0};
+    std::atomic<long long> completed{0};
+    std::atomic<long long> errors{0};
+    std::atomic<long long> submitted{0};
+    std::atomic<long long> header_failures{0};
+    std::atomic<long long> outstanding{0};
+    std::atomic<long long> peak_in_flight{0};
     std::vector<error_record_t> error_summary;
     long long other_errors = 0;
 
@@ -136,10 +136,10 @@ struct counters_t
         std::replace (message.begin (), message.end (), '\n', ' ');
         if (message.size () > error_message_limit)
             message.resize (error_message_limit);
-        const auto found = std::find_if (
-          error_summary.begin (), error_summary.end (), [&] (const error_record_t &entry) {
-              return entry.type == type && entry.message == message;
-          });
+        const auto found = std::find_if (error_summary.begin (), error_summary.end (),
+                                         [&] (const error_record_t &entry) {
+                                             return entry.type == type && entry.message == message;
+                                         });
         if (found != error_summary.end ())
             ++found->count;
         else if (error_summary.size () < error_kind_limit)
@@ -252,11 +252,11 @@ class grpc_driver_t : public driver_t
               latency_sampler_t *latency) override
     {
         if (_command_path)
-            run_typed<google::protobuf::Empty> (deadline, payload_size, phase, counters,
-                                                         latency, false);
+            run_typed<google::protobuf::Empty> (deadline, payload_size, phase, counters, latency,
+                                                false);
         else
-            run_typed<zlink::framework::bench::withgrpc::BenchPayload> (deadline, payload_size, phase, counters,
-                                                           latency, true);
+            run_typed<zlink::framework::bench::withgrpc::BenchPayload> (
+              deadline, payload_size, phase, counters, latency, true);
     }
 
   private:
@@ -289,9 +289,10 @@ class grpc_driver_t : public driver_t
             call->seq = seq - 1;
             call->payload_size = payload_size;
             call->context.set_deadline (std::chrono::system_clock::now ()
-              + std::chrono::milliseconds (_options.request_timeout_ms));
+                                        + std::chrono::milliseconds (_options.request_timeout_ms));
             if (_command_path) {
-                call->stream = static_cast<size_t> (std::find (busy.begin (), busy.end (), false) - busy.begin ());
+                call->stream = static_cast<size_t> (std::find (busy.begin (), busy.end (), false)
+                                                    - busy.begin ());
                 busy[call->stream] = true;
             }
             _submit_stream = call->stream;
@@ -307,12 +308,14 @@ class grpc_driver_t : public driver_t
         auto handle_completion = [&] (void *tag, bool ok) {
             auto *call = static_cast<grpc_call_t<TReply> *> (tag);
             --open;
-            if (_command_path) busy[call->stream] = false;
+            if (_command_path)
+                busy[call->stream] = false;
             counters.leave ();
             if (ok && call->status.ok ()) {
                 bool valid = true;
                 if (validate_reply)
-                    valid = validate<TReply> (call->reply, phase, counters, call->seq, call->payload_size);
+                    valid = validate<TReply> (call->reply, phase, counters, call->seq,
+                                              call->payload_size);
                 if (valid) {
                     const uint64_t now = now_ns ();
                     if (latency)
@@ -322,10 +325,10 @@ class grpc_driver_t : public driver_t
                     counters.completed.fetch_add (1, std::memory_order_relaxed);
                 }
             } else {
-                const std::string message = ok
-                  ? "code " + std::to_string (call->status.error_code ()) + ": "
-                      + call->status.error_message ()
-                  : "completion queue event was not ok";
+                const std::string message = ok ? "code "
+                                                   + std::to_string (call->status.error_code ())
+                                                   + ": " + call->status.error_message ()
+                                               : "completion queue event was not ok";
                 counters.record_error ("grpc::Status", message);
             }
             delete call;
@@ -342,8 +345,8 @@ class grpc_driver_t : public driver_t
                 // TIMEOUT at once when nothing is ready. Computing "now" here
                 // instead let the call wait for a round trip, which held the
                 // row at depth 1 and made it a serial cell by accident.
-                const auto status = cq.AsyncNext (
-                  &tag, &ok, std::chrono::system_clock::time_point {});
+                const auto status =
+                  cq.AsyncNext (&tag, &ok, std::chrono::system_clock::time_point{});
                 if (status != grpc::CompletionQueue::GOT_EVENT)
                     return status != grpc::CompletionQueue::SHUTDOWN;
                 handle_completion (tag, ok);
@@ -384,15 +387,16 @@ class grpc_driver_t : public driver_t
     }
 
     template <typename TReply>
-    std::unique_ptr<grpc::ClientAsyncResponseReader<TReply>> prepare (
-      grpc::ClientContext *context,
-      const zlink::framework::bench::withgrpc::BenchPayload &request,
-      grpc::CompletionQueue *cq);
+    std::unique_ptr<grpc::ClientAsyncResponseReader<TReply>>
+    prepare (grpc::ClientContext *context,
+             const zlink::framework::bench::withgrpc::BenchPayload &request,
+             grpc::CompletionQueue *cq);
 
     // G2: the reply's 29-byte header is validated, and failures are counted
     // rather than silently treated as completions.
     template <typename TReply>
-    bool validate (const TReply &reply, phase_t phase, counters_t &counters, uint64_t seq, size_t size);
+    bool
+    validate (const TReply &reply, phase_t phase, counters_t &counters, uint64_t seq, size_t size);
 
     const options_t &_options;
     int _window;
@@ -425,12 +429,16 @@ grpc_driver_t::prepare<google::protobuf::Empty> (
 
 template <>
 bool grpc_driver_t::validate<zlink::framework::bench::withgrpc::BenchPayload> (
-  const zlink::framework::bench::withgrpc::BenchPayload &reply, phase_t phase, counters_t &counters, uint64_t seq, size_t size)
+  const zlink::framework::bench::withgrpc::BenchPayload &reply,
+  phase_t phase,
+  counters_t &counters,
+  uint64_t seq,
+  size_t size)
 {
-    decoded_header_t header {};
+    decoded_header_t header{};
     if (!decode_payload (reply.body ().data (), reply.body ().size (), &header)
-        || header.run_id != _run_id || header.phase != static_cast<uint8_t> (phase) || header.seq != seq
-        || header.payload_size != size || reply.body ().size () != size) {
+        || header.run_id != _run_id || header.phase != static_cast<uint8_t> (phase)
+        || header.seq != seq || header.payload_size != size || reply.body ().size () != size) {
         counters.header_failures.fetch_add (1, std::memory_order_relaxed);
         counters.record_error ("ValidationError", "gRPC reply header mismatch");
         return false;
@@ -531,7 +539,8 @@ class zlink_raw_driver_t : public driver_t
           std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now).count ();
         if (remaining <= 0)
             return std::chrono::milliseconds (1);
-        return std::chrono::milliseconds (std::min<int64_t> (remaining, std::max<int64_t> (1, max_wait_ms)));
+        return std::chrono::milliseconds (
+          std::min<int64_t> (remaining, std::max<int64_t> (1, max_wait_ms)));
     }
 
     void run_unbounded (clock_t_::time_point deadline,
@@ -564,9 +573,9 @@ class zlink_raw_driver_t : public driver_t
                 break;
 
             const std::chrono::milliseconds wait =
-              resumed != 0 ? std::chrono::milliseconds (0)
-                           : poll_timeout_until (now, now < deadline ? deadline : hard_stop,
-                                                 poll_max_wait_ms);
+              resumed != 0
+                ? std::chrono::milliseconds (0)
+                : poll_timeout_until (now, now < deadline ? deadline : hard_stop, poll_max_wait_ms);
             _poller.wait (events.data (), events.size (), wait);
         }
 
@@ -610,9 +619,9 @@ class zlink_raw_driver_t : public driver_t
             if (now >= hard_stop)
                 break;
             const std::chrono::milliseconds wait =
-              resumed != 0 ? std::chrono::milliseconds (0)
-                           : poll_timeout_until (now, now < deadline ? deadline : hard_stop,
-                                                 poll_max_wait_ms);
+              resumed != 0
+                ? std::chrono::milliseconds (0)
+                : poll_timeout_until (now, now < deadline ? deadline : hard_stop, poll_max_wait_ms);
             _poller.wait (events.data (), events.size (), wait);
         }
 
@@ -621,9 +630,8 @@ class zlink_raw_driver_t : public driver_t
         close_window (deadline);
     }
 
-    std::pair<zlink::message_t, zlink::message_t> make_parts (size_t payload_size,
-                                                             phase_t phase,
-                                                             uint64_t seq)
+    std::pair<zlink::message_t, zlink::message_t>
+    make_parts (size_t payload_size, phase_t phase, uint64_t seq)
     {
         const char *envelope = request_envelope ();
         zlink::message_t header = zlink::message_t::from (
@@ -638,15 +646,9 @@ class zlink_raw_driver_t : public driver_t
         return {std::move (header), std::move (body)};
     }
 
-    zlink::request_operation_t request_operation ()
-    {
-        return _socket->request (_target);
-    }
+    zlink::request_operation_t request_operation () { return _socket->request (_target); }
 
-    zlink::send_operation_t send_operation ()
-    {
-        return _socket->send (_target);
-    }
+    zlink::send_operation_t send_operation () { return _socket->send (_target); }
 
     task_t request_slot ()
     {
@@ -667,8 +669,7 @@ class zlink_raw_driver_t : public driver_t
                     co_await std::move (submission.admitted);
                 else if (submission.result != ZLINK_SUBMIT_OK)
                     throw std::logic_error ("unexpected request submit result");
-                std::vector<zlink::message_t> reply =
-                  co_await std::move (submission.reply);
+                std::vector<zlink::message_t> reply = co_await std::move (submission.reply);
                 _counters->leave ();
                 record_reply (reply, seq);
             }
@@ -684,8 +685,7 @@ class zlink_raw_driver_t : public driver_t
     {
         co_await _ready.schedule ();
         try {
-            std::vector<zlink::message_t> reply =
-              co_await std::move (reply_);
+            std::vector<zlink::message_t> reply = co_await std::move (reply_);
             _counters->leave ();
             record_reply (reply, seq);
         }
@@ -712,12 +712,10 @@ class zlink_raw_driver_t : public driver_t
                     .message (parts.second)
                     .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
                     .async ();
-                const bool backpressured =
-                  submission.result == ZLINK_SUBMIT_BACKPRESSURED;
+                const bool backpressured = submission.result == ZLINK_SUBMIT_BACKPRESSURED;
                 if (submission.result != ZLINK_SUBMIT_OK && !backpressured)
                     throw std::logic_error ("unexpected request submit result");
-                replies.push_back (
-                  observe_request_reply (std::move (submission.reply), seq));
+                replies.push_back (observe_request_reply (std::move (submission.reply), seq));
                 if (backpressured) {
                     try {
                         co_await std::move (submission.admitted);
@@ -755,10 +753,8 @@ class zlink_raw_driver_t : public driver_t
             _counters->enter ();
             _counters->submitted.fetch_add (1, std::memory_order_relaxed);
             try {
-                zlink::send_submission_t submission = send_operation ()
-                  .message (parts.first)
-                  .message (parts.second)
-                  .async ();
+                zlink::send_submission_t submission =
+                  send_operation ().message (parts.first).message (parts.second).async ();
                 if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
                     co_await std::move (submission.admitted);
                 else if (submission.result != ZLINK_SUBMIT_OK)
@@ -782,19 +778,20 @@ class zlink_raw_driver_t : public driver_t
         }
         const zlink::message_t &body = reply.back ();
         zlink::framework::bench::withgrpc::BenchPayload payload;
-        decoded_header_t header {};
+        decoded_header_t header{};
         if (!payload.ParseFromArray (body.data (), static_cast<int> (body.size ()))
             || !decode_payload (payload.body ().data (), payload.body ().size (), &header)
             || header.run_id != _run_id || header.phase != _phase
-            || header.payload_size != _payload_size || payload.body ().size () != _payload_size || header.seq != seq) {
+            || header.payload_size != _payload_size || payload.body ().size () != _payload_size
+            || header.seq != seq) {
             _counters->header_failures.fetch_add (1, std::memory_order_relaxed);
             _counters->record_error ("ValidationError", "raw reply header mismatch");
             return;
         }
         const uint64_t now = now_ns ();
         if (_latency)
-            _latency->add_us (
-              static_cast<double> (now >= header.sent_ns ? now - header.sent_ns : 0) / 1000.0);
+            _latency->add_us (static_cast<double> (now >= header.sent_ns ? now - header.sent_ns : 0)
+                              / 1000.0);
         _counters->completed.fetch_add (1, std::memory_order_relaxed);
     }
 
@@ -808,7 +805,7 @@ class zlink_raw_driver_t : public driver_t
     zlink::poller_t _poller;
     ready_queue_t _ready;
 
-    clock_t_::time_point _deadline {};
+    clock_t_::time_point _deadline{};
     phase_t _phase = phase_warmup;
     size_t _payload_size = 1024;
     counters_t *_counters = nullptr;
@@ -825,14 +822,18 @@ class framework_driver_t final : public driver_t
 {
   public:
     framework_driver_t (const options_t &options, int window, bool command) :
-        _options (options), _window (window), _command (command),
+        _options (options),
+        _window (window),
+        _command (command),
         _host (std::vector<int>{}, bench_http_callback_t{})
     {
         auto &app = _host.app ();
         auto &config = app.add_zlink_framework ();
         config.codecs ().use (zlink::framework_codecs::protobuf ());
         auto mesh = config.add_route_mesh ("bench");
-        mesh.set_object_role (fw::object_role_t::none).listen ("tcp://127.0.0.1:0").set_routing_id (zlink::routing_id_t::from ("bench-source"));
+        mesh.set_object_role (fw::object_role_t::none)
+          .listen ("tcp://127.0.0.1:0")
+          .set_routing_id (zlink::routing_id_t::from ("bench-source"));
         mesh.peer_connections ().connect (_target_node, options.framework_endpoint);
         app.add_hosted_service (std::make_unique<capture_client_t> (_client));
     }
@@ -840,7 +841,8 @@ class framework_driver_t final : public driver_t
 
     bool await_ready (int timeout_ms) override
     {
-        if (!_host.start ()) return false;
+        if (!_host.start ())
+            return false;
         const auto deadline = clock_t_::now () + std::chrono::milliseconds (timeout_ms);
         while (clock_t_::now () < deadline) {
             auto payload = make_payload (1024, phase_warmup);
@@ -850,7 +852,8 @@ class framework_driver_t final : public driver_t
             if (task.result ())
                 return true;
             if (!_readiness_error_reported) {
-                std::fprintf (stderr, "framework route readiness: %s\n", task.result ().error ()->what ());
+                std::fprintf (stderr, "framework route readiness: %s\n",
+                              task.result ().error ()->what ());
                 _readiness_error_reported = true;
             }
             std::this_thread::sleep_for (std::chrono::milliseconds (50));
@@ -858,8 +861,11 @@ class framework_driver_t final : public driver_t
         return false;
     }
 
-    void run (clock_t_::time_point deadline, size_t size, phase_t phase,
-              counters_t &counters, latency_sampler_t *latency) override
+    void run (clock_t_::time_point deadline,
+              size_t size,
+              phase_t phase,
+              counters_t &counters,
+              latency_sampler_t *latency) override
     {
         if (_command)
             run_tasks<void> (deadline, size, phase, counters, latency);
@@ -879,6 +885,7 @@ class framework_driver_t final : public driver_t
             co_return;
         }
         void stop () noexcept override {}
+
       private:
         fw::route_client_t *&_client;
     };
@@ -891,8 +898,7 @@ class framework_driver_t final : public driver_t
         return payload;
     }
 
-    template<typename T>
-    fw::task_t<T> submit (payload_t payload)
+    template <typename T> fw::task_t<T> submit (payload_t payload)
     {
         if constexpr (std::is_void_v<T>)
             return _client->send_to_node ("bench", _target_node, std::move (payload)).async ();
@@ -902,9 +908,12 @@ class framework_driver_t final : public driver_t
               .async<payload_t> ();
     }
 
-    template<typename T>
-    void run_tasks (clock_t_::time_point deadline, size_t size, phase_t phase,
-                    counters_t &counters, latency_sampler_t *latency)
+    template <typename T>
+    void run_tasks (clock_t_::time_point deadline,
+                    size_t size,
+                    phase_t phase,
+                    counters_t &counters,
+                    latency_sampler_t *latency)
     {
         struct pending_t
         {
@@ -944,9 +953,8 @@ class framework_driver_t final : public driver_t
                 }
                 pending[slot].emplace (submit<T> (std::move (payload)), sent, _seq - 1);
                 fw::detail::observe_task_completion (
-                  pending[slot]->task, [completion_signal, slot] (const auto &) {
-                      completion_signal->notify (slot);
-                  });
+                  pending[slot]->task,
+                  [completion_signal, slot] (const auto &) { completion_signal->notify (slot); });
                 ++in_flight;
                 if (_window <= 0)
                     break;
@@ -960,18 +968,23 @@ class framework_driver_t final : public driver_t
                     if (valid) {
                         const auto &reply = result.value ();
                         decoded_header_t header;
-                        valid = decode_payload (reply.body ().data (), reply.body ().size (), &header)
+                        valid =
+                          decode_payload (reply.body ().data (), reply.body ().size (), &header)
                           && header.run_id == _run_id && header.phase == phase
-                          && header.payload_size == size && reply.body ().size () == size && header.seq == item.seq;
-                        if (!valid) ++counters.header_failures;
+                          && header.payload_size == size && reply.body ().size () == size
+                          && header.seq == item.seq;
+                        if (!valid)
+                            ++counters.header_failures;
                     }
                 }
                 if (valid) {
                     ++counters.completed;
-                    if (latency) latency->add_us (static_cast<double> (now_ns () - item.sent_ns) / 1000.0);
+                    if (latency)
+                        latency->add_us (static_cast<double> (now_ns () - item.sent_ns) / 1000.0);
                 } else {
                     if (result)
-                        counters.record_error ("ValidationError", "Framework reply header mismatch");
+                        counters.record_error ("ValidationError",
+                                               "Framework reply header mismatch");
                     else
                         counters.record_exception (*result.error ());
                 }
@@ -984,8 +997,8 @@ class framework_driver_t final : public driver_t
             const auto now = clock_t_::now ();
             if (now >= hard_stop)
                 break;
-            const bool can_submit = now < deadline
-              && (_window <= 0 || in_flight < static_cast<size_t> (_window));
+            const bool can_submit =
+              now < deadline && (_window <= 0 || in_flight < static_cast<size_t> (_window));
             if (in_flight != 0 && !can_submit)
                 completion_signal->wait_until (now < deadline ? deadline : hard_stop);
         } while (clock_t_::now () < deadline || in_flight != 0);
@@ -1005,10 +1018,14 @@ class framework_driver_t final : public driver_t
 
 int pattern_window (const std::string &pattern)
 {
-    if (pattern == "request-serial") return 1;
-    if (pattern == "request-window") return 100;
-    if (pattern == "request-backpressure") return 0;
-    if (pattern == "send-saturation") return 8;
+    if (pattern == "request-serial")
+        return 1;
+    if (pattern == "request-window")
+        return 100;
+    if (pattern == "request-backpressure")
+        return 0;
+    if (pattern == "send-saturation")
+        return 8;
     throw std::runtime_error ("unknown pattern: " + pattern);
 }
 
@@ -1016,28 +1033,32 @@ int pattern_window (const std::string &pattern)
 class source_t
 {
   public:
-    explicit source_t (options_t options) : _options (std::move (options)),
+    explicit source_t (options_t options) :
+        _options (std::move (options)),
         _http (std::vector<int>{_options.trigger_port, _options.stats_port},
-               [this] (const std::string &method, const std::string &path, const std::string &body) {
-                   return handle (method, path, body);
-               })
+               [this] (const std::string &method,
+                       const std::string &path,
+                       const std::string &body) { return handle (method, path, body); })
     {
         (void) pattern_window (_options.pattern);
     }
 
     ~source_t ()
     {
-        if (_worker.joinable ()) _worker.join ();
+        if (_worker.joinable ())
+            _worker.join ();
         _http.stop ();
     }
 
     bool start ()
     {
-        if (!_http.start ()) return false;
+        if (!_http.start ())
+            return false;
         // The machine's ephemeral range includes the reserved bench band. Claim
         // both HTTP listeners before any outbound transport can allocate a port.
         if (!wait_ready ("127.0.0.1", _options.trigger_port, 30000)
-            || !wait_ready ("127.0.0.1", _options.stats_port, 30000)) return false;
+            || !wait_ready ("127.0.0.1", _options.stats_port, 30000))
+            return false;
         bool prepared = false;
         _worker = std::thread ([this, &prepared] {
             try {
@@ -1049,13 +1070,18 @@ class source_t
                     _driver = std::make_unique<zlink_raw_driver_t> (_options, window, command);
                 else if (_options.implementation == "zlink-framework-cpp")
                     _driver = std::make_unique<framework_driver_t> (_options, window, command);
-                else throw std::runtime_error ("unknown implementation: " + _options.implementation);
+                else
+                    throw std::runtime_error ("unknown implementation: " + _options.implementation);
 
                 const bool ready = _driver->await_ready (_options.readiness_timeout_ms);
                 std::lock_guard lock (_gate);
                 prepared = ready;
-                if (!ready) { _phase = "failed"; _failure = "route readiness timed out"; }
-            } catch (const std::exception &error) {
+                if (!ready) {
+                    _phase = "failed";
+                    _failure = "route readiness timed out";
+                }
+            }
+            catch (const std::exception &error) {
                 fail (error.what ());
             }
         });
@@ -1070,23 +1096,32 @@ class source_t
     }
 
   private:
-    bench_http_reply_t handle (const std::string &method, const std::string &path, const std::string &body)
+    bench_http_reply_t
+    handle (const std::string &method, const std::string &path, const std::string &body)
     {
         if (method == "GET" && (path == "/bench/stats" || path == "/ready")) {
             std::lock_guard lock (_gate);
-            return {200, json{{"role", "source"}, {"ready", _ready}, {"phase", _phase},
-              {"submitted", _counters.submitted.load ()}, {"completed", _counters.completed.load ()},
-              {"errors", _counters.errors.load ()}, {"inFlight", _counters.outstanding.load ()},
-              {"currentInFlight", _counters.outstanding.load ()}, {"failure", _failure}}.dump ()};
+            return {200, json{{"role", "source"},
+                              {"ready", _ready},
+                              {"phase", _phase},
+                              {"submitted", _counters.submitted.load ()},
+                              {"completed", _counters.completed.load ()},
+                              {"errors", _counters.errors.load ()},
+                              {"inFlight", _counters.outstanding.load ()},
+                              {"currentInFlight", _counters.outstanding.load ()},
+                              {"failure", _failure}}
+                           .dump ()};
         }
         if (method != "POST" || path != "/bench/start")
             return {404, R"({"error":"not found"})"};
         try {
             const auto request = json::parse (body);
-            const std::vector<std::string> fields = {"runId", "cellId", "pattern", "payloadBytes",
+            const std::vector<std::string> fields = {
+              "runId", "cellId",     "pattern",       "payloadBytes",
               "phase", "durationMs", "requestWindow", "sendConcurrency"};
             if (!request.is_object () || request.size () != fields.size ()
-                || !std::all_of (fields.begin (), fields.end (), [&] (const auto &key) { return request.contains (key); })
+                || !std::all_of (fields.begin (), fields.end (),
+                                 [&] (const auto &key) { return request.contains (key); })
                 || !request.at ("payloadBytes").is_number_integer ()
                 || !request.at ("durationMs").is_number_integer ()
                 || !request.at ("requestWindow").is_number_integer ()
@@ -1098,33 +1133,45 @@ class source_t
             const auto duration = request.at ("durationMs").get<int64_t> ();
             if (run.empty () || cell.empty () || (phase != "warmup" && phase != "active")
                 || request.at ("pattern") != _options.pattern
-                || request.at ("payloadBytes") != _options.payload_size
-                || duration <= 0 || request.at ("requestWindow") != 100
-                || request.at ("sendConcurrency") != 8)
+                || request.at ("payloadBytes") != _options.payload_size || duration <= 0
+                || request.at ("requestWindow") != 100 || request.at ("sendConcurrency") != 8)
                 return {400, R"({"error":"invalid trigger conditions"})"};
             std::lock_guard lock (_gate);
             const auto key = json::array ({run, cell, phase}).dump ();
             if (auto found = _acks.find (key); found != _acks.end ())
                 return {200, found->second};
             if (!_ready || _phase != "idle" || (phase == "active" && !_warmed)
-                || (phase == "warmup" && _warmed) || (!_cell_id.empty () && (_cell_id != cell || _run_id != run)))
+                || (phase == "warmup" && _warmed)
+                || (!_cell_id.empty () && (_cell_id != cell || _run_id != run)))
                 return {409, R"({"error":"source is not ready for this phase"})"};
             // idle is published as the worker's final action; joining it cannot wait on _gate.
-            if (_worker.joinable ()) _worker.join ();
+            if (_worker.joinable ())
+                _worker.join ();
             _run_id = run;
             _cell_id = cell;
             _phase = phase;
             _counters.reset ();
             _counters.outstanding = 0;
-            const auto ack = json{{"accepted", true}, {"runId", run}, {"cellId", cell},
-              {"phase", phase}, {"startedAt", now_ns ()}}.dump ();
+            const auto ack = json{
+              {"accepted", true},
+              {"runId", run},
+              {"cellId", cell},
+              {"phase", phase},
+              {"startedAt",
+               now_ns ()}}.dump ();
             _acks.emplace (key, ack);
             const auto received_at = std::chrono::duration_cast<std::chrono::milliseconds> (
-              std::chrono::system_clock::now ().time_since_epoch ()).count ();
-            json trigger = {{"runId", run}, {"cellId", cell}, {"pattern", _options.pattern},
-              {"payloadBytes", _options.payload_size}, {"durationMs", duration},
+                                       std::chrono::system_clock::now ().time_since_epoch ())
+                                       .count ();
+            json trigger = {
+              {"runId", run},
+              {"cellId", cell},
+              {"pattern", _options.pattern},
+              {"payloadBytes", _options.payload_size},
+              {"durationMs", duration},
               {"warmup", static_cast<int64_t> (_options.warmup_seconds * 1000)},
-              {"endpoint", "http://127.0.0.1:" + std::to_string (_options.trigger_port) + "/bench/start"},
+              {"endpoint",
+               "http://127.0.0.1:" + std::to_string (_options.trigger_port) + "/bench/start"},
               {"receivedAtUnixMs", received_at}};
             _worker = std::thread ([this, phase, duration, trigger] {
                 try {
@@ -1133,12 +1180,17 @@ class source_t
                     // excluded from the throughput judgement), not a phase failure. Only an
                     // exception or a readiness timeout fails the phase, as in the .NET source.
                     std::lock_guard lock (_gate);
-                    if (phase == "warmup") _warmed = true;
+                    if (phase == "warmup")
+                        _warmed = true;
                     _phase = "idle";
-                } catch (const std::exception &error) { fail (error.what ()); }
+                }
+                catch (const std::exception &error) {
+                    fail (error.what ());
+                }
             });
             return {200, ack};
-        } catch (const std::exception &error) {
+        }
+        catch (const std::exception &error) {
             return {400, json{{"error", error.what ()}}.dump ()};
         }
     }
@@ -1159,12 +1211,16 @@ class source_t
             for (int segment = 0; segment < _options.warmup_segments; ++segment) {
                 const auto before = _counters.completed.load ();
                 const auto segment_start = clock_t_::now ();
-                const auto segment_deadline = segment_start + std::chrono::microseconds (
-                  duration * 1000 / _options.warmup_segments);
-                _driver->run (segment_deadline, _options.payload_size, phase_warmup, _counters, nullptr);
-                const auto elapsed = std::chrono::duration<double> (clock_t_::now () - segment_start).count ();
+                const auto segment_deadline =
+                  segment_start
+                  + std::chrono::microseconds (duration * 1000 / _options.warmup_segments);
+                _driver->run (segment_deadline, _options.payload_size, phase_warmup, _counters,
+                              nullptr);
+                const auto elapsed =
+                  std::chrono::duration<double> (clock_t_::now () - segment_start).count ();
                 _warmup_throughput.push_back ((_counters.completed.load () - before) / elapsed);
-                if (_counters.errors != 0 || _counters.outstanding != 0) return;
+                if (_counters.errors != 0 || _counters.outstanding != 0)
+                    return;
             }
             return;
         }
@@ -1176,7 +1232,8 @@ class source_t
         cell.request_window = pattern_window (_options.pattern);
         cell.logical_cores_value = logical_cores ();
         const auto target_before = fetch_stats ("127.0.0.1", _options.target_stats_port);
-        if (!target_before) throw std::runtime_error ("target stats unavailable before phase");
+        if (!target_before)
+            throw std::runtime_error ("target stats unavailable before phase");
         const auto cpu_before = process_cpu_seconds_self ();
         const auto submit_before = thread_cpu_seconds_self ();
         const auto start = clock_t_::now ();
@@ -1197,9 +1254,11 @@ class source_t
             cell.latency_p95_ms = latency.percentile (0.95) / 1000;
             cell.latency_p99_ms = latency.percentile (0.99) / 1000;
             const auto boundary = fetch_stats ("127.0.0.1", _options.target_stats_port);
-            if (!boundary) throw std::runtime_error ("target boundary stats unavailable");
+            if (!boundary)
+                throw std::runtime_error ("target boundary stats unavailable");
             cell.server_received_at_close = boundary->active_messages;
-            cell.server_cpu_percent = (boundary->cpu_seconds - target_before->cpu_seconds) / elapsed / logical_cores () * 100;
+            cell.server_cpu_percent = (boundary->cpu_seconds - target_before->cpu_seconds) / elapsed
+                                      / logical_cores () * 100;
             cell.server_memory_mb = boundary->rss_mb;
             if (_options.pattern == "send-saturation") {
                 cell.latency_mean_ms = boundary->mean_us / 1000;
@@ -1218,16 +1277,25 @@ class source_t
         cell.header_validation_failures = _counters.header_failures;
         cell.warmup_segment_throughput = _warmup_throughput;
         cell.throughput_per_second = static_cast<double> (_options.pattern == "send-saturation"
-          ? cell.server_received_at_close.value () : completed_at_close) / elapsed;
+                                                            ? cell.server_received_at_close.value ()
+                                                            : completed_at_close)
+                                     / elapsed;
         cell.bandwidth_mb_s = cell.throughput_per_second * cell.payload_size / 1e6;
-        cell.drain_ms = std::chrono::duration<double, std::milli> (clock_t_::now () - deadline).count ();
+        cell.drain_ms =
+          std::chrono::duration<double, std::milli> (clock_t_::now () - deadline).count ();
         cell.drain_bound_hit = cell.abandoned != 0;
         const std::map<std::string, std::string> metadata = {
-          {"model", "server-driven"}, {"warmupSeconds", std::to_string (_options.warmup_seconds)},
-          {"warmupSegments", std::to_string (_options.warmup_segments)}, {"warmupUnit", "milliseconds"}, {"grpcVersion", grpc::Version ()},
-          {"grpcServer", "synchronous ServerBuilder defaults; insecure loopback; no tuning"},
-          {"compiler", __VERSION__}, {"buildType", "Release"},
-          {"frameworkVersion", BENCH_FRAMEWORK_VERSION}, {"bindingVersion", BENCH_BINDING_VERSION}, {"coreVersion", BENCH_CORE_VERSION},
+          {"model", "server-driven"},
+          {"warmupSeconds", std::to_string (_options.warmup_seconds)},
+          {"warmupSegments", std::to_string (_options.warmup_segments)},
+          {"warmupUnit", "milliseconds"},
+          {"grpcVersion", grpc::Version ()},
+          {"grpcServer", "CallbackService; ServerBuilder defaults; insecure loopback; no tuning"},
+          {"compiler", __VERSION__},
+          {"buildType", "Release"},
+          {"frameworkVersion", BENCH_FRAMEWORK_VERSION},
+          {"bindingVersion", BENCH_BINDING_VERSION},
+          {"coreVersion", BENCH_CORE_VERSION},
           {"protobufVersion", BENCH_PROTOBUF_VERSION}};
         const auto temporary = _options.output_file + ".source";
         write_cells_json (temporary, {cell}, metadata);
@@ -1237,11 +1305,16 @@ class source_t
         auto &value = record["cells"][0];
         value["role"] = "source";
         value["trigger"] = trigger;
-        value["streams"] = {{"count", _options.pattern == "send-saturation" ? 8 : 1},
-          {"inFlightPerStream", _options.pattern == "request-backpressure" ? json (nullptr)
-             : json (_options.pattern == "request-window" ? 100 : 1)},
-          {"implementation", _options.implementation == "grpc-cpp" ? "one application thread; async unary CompletionQueue; one stub per logical stream"
-             : _options.implementation == "zlink-cpp" ? "one application thread; coroutine slots and binding completion poller"
+        value["streams"] = {
+          {"count", _options.pattern == "send-saturation" ? 8 : 1},
+          {"inFlightPerStream", _options.pattern == "request-backpressure"
+                                  ? json (nullptr)
+                                  : json (_options.pattern == "request-window" ? 100 : 1)},
+          {"implementation",
+           _options.implementation == "grpc-cpp"
+             ? "one application thread; async unary CompletionQueue; one stub per logical stream"
+           : _options.implementation == "zlink-cpp"
+             ? "one application thread; coroutine slots and binding completion poller"
              : "one application thread; Framework task completion notifications"}};
         value["completed_at_close"] = completed_at_close;
         value["active_elapsed_ms"] = elapsed * 1000;
@@ -1254,7 +1327,8 @@ class source_t
         std::ofstream output (temporary, std::ios::trunc);
         output << record.dump (2) << '\n';
         output.close ();
-        if (!output) throw std::runtime_error ("cannot write source result");
+        if (!output)
+            throw std::runtime_error ("cannot write source result");
         std::filesystem::rename (temporary, _options.output_file);
         for (const auto &error : _counters.error_summary)
             std::fprintf (stdout, "client_error: %s: %s (%lld)\n", error.type.c_str (),
@@ -1278,8 +1352,11 @@ class source_t
     std::thread _worker;
 };
 
-std::atomic<bool> stop_source {false};
-void source_signal (int) { stop_source = true; }
+std::atomic<bool> stop_source{false};
+void source_signal (int)
+{
+    stop_source = true;
+}
 } // namespace
 
 int main (int argc, char **argv)
@@ -1292,26 +1369,33 @@ int main (int argc, char **argv)
         if (options.payload_size != 1024 && options.payload_size != 4096)
             throw std::runtime_error ("payload must be 1024 or 4096");
         const auto endpoint = arg_value (argc, argv, "--endpoint", "127.0.0.1:5282");
-        options.grpc_endpoint = options.raw_request_endpoint = options.framework_endpoint = endpoint;
-        options.raw_command_endpoint = arg_value (argc, argv, "--command-endpoint", "tcp://127.0.0.1:5288");
+        options.grpc_endpoint = options.raw_request_endpoint = options.framework_endpoint =
+          endpoint;
+        options.raw_command_endpoint =
+          arg_value (argc, argv, "--command-endpoint", "tcp://127.0.0.1:5288");
         options.trigger_port = std::stoi (arg_value (argc, argv, "--trigger-port", "5280"));
         options.stats_port = std::stoi (arg_value (argc, argv, "--stats-port", "5281"));
-        options.target_stats_port = std::stoi (arg_value (argc, argv, "--target-stats-port", "5283"));
+        options.target_stats_port =
+          std::stoi (arg_value (argc, argv, "--target-stats-port", "5283"));
         options.warmup_seconds = std::stod (arg_value (argc, argv, "--warmup-seconds", "5"));
         options.warmup_segments = std::stoi (arg_value (argc, argv, "--warmup-segments", "10"));
-        options.request_timeout_ms = std::stoi (arg_value (argc, argv, "--request-timeout-ms", "30000"));
+        options.request_timeout_ms =
+          std::stoi (arg_value (argc, argv, "--request-timeout-ms", "30000"));
         options.drain_bound_ms = std::stoi (arg_value (argc, argv, "--drain-bound-ms", "30000"));
         if (options.warmup_seconds <= 0 || options.warmup_segments < 1
             || options.request_timeout_ms <= 0 || options.drain_bound_ms != 30000)
             throw std::runtime_error ("invalid warmup, timeout or settle bound");
         options.output_file = arg_value (argc, argv, "--output-file", "cells.json");
         source_t source (std::move (options));
-        if (!source.start ()) return 2;
+        if (!source.start ())
+            return 2;
         std::signal (SIGINT, source_signal);
         std::signal (SIGTERM, source_signal);
-        while (!stop_source) std::this_thread::sleep_for (std::chrono::milliseconds (100));
+        while (!stop_source)
+            std::this_thread::sleep_for (std::chrono::milliseconds (100));
         return 0;
-    } catch (const std::exception &error) {
+    }
+    catch (const std::exception &error) {
         std::fprintf (stderr, "source failed: %s\n", error.what ());
         return 2;
     }

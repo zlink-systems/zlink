@@ -40,11 +40,6 @@ add_custom_command(
     DEPENDS ${WG_PROTO_SRC}
     COMMENT "Generating framework/bench/grpc/c protobuf sources")
 
-set(WG_CXX_FLAGS)
-if(NOT MSVC)
-    list(APPEND WG_CXX_FLAGS -O3)
-endif()
-
 add_library(bench_c_raw_proto STATIC ${WG_PROTO_CC})
 target_include_directories(bench_c_raw_proto PUBLIC
     ${WG_PROTO_GEN_DIR} ${WG_PROTOBUF_INCLUDE_DIRS})
@@ -55,7 +50,6 @@ add_executable(bench_c_with_grpc_zlink_server zlink/bench_zlink_server.cpp)
 target_link_libraries(bench_c_with_grpc_zlink_server PRIVATE zlink_c Threads::Threads bench_c_raw_proto)
 target_include_directories(bench_c_with_grpc_zlink_server PRIVATE common)
 target_compile_features(bench_c_with_grpc_zlink_server PRIVATE cxx_std_17)
-target_compile_options(bench_c_with_grpc_zlink_server PRIVATE ${WG_CXX_FLAGS})
 set_target_properties(bench_c_with_grpc_zlink_server PROPERTIES
     BUILD_RPATH "${ZLINK_C_CORE_RUNTIME_DIR}")
 
@@ -63,19 +57,20 @@ add_executable(bench_c_with_grpc_zlink_client zlink/bench_zlink_client.cpp)
 target_link_libraries(bench_c_with_grpc_zlink_client PRIVATE zlink_c Threads::Threads bench_c_raw_proto)
 target_include_directories(bench_c_with_grpc_zlink_client PRIVATE common)
 target_compile_features(bench_c_with_grpc_zlink_client PRIVATE cxx_std_17)
-target_compile_options(bench_c_with_grpc_zlink_client PRIVATE ${WG_CXX_FLAGS})
 set_target_properties(bench_c_with_grpc_zlink_client PROPERTIES
     BUILD_RPATH "${ZLINK_C_CORE_RUNTIME_DIR}")
 
 enable_testing()
 add_executable(bench_c_send_metrics_test EXCLUDE_FROM_ALL zlink/send_metrics_test.cpp)
 target_compile_features(bench_c_send_metrics_test PRIVATE cxx_std_17)
+target_compile_options(bench_c_send_metrics_test PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
 add_test(NAME bench_c_send_metrics_test COMMAND bench_c_send_metrics_test)
 foreach(role client server)
     set(wire_test "bench_c_raw_wire_${role}_test")
     add_executable(${wire_test} EXCLUDE_FROM_ALL zlink/raw_wire_test.cpp)
     target_link_libraries(${wire_test} PRIVATE zlink_c Threads::Threads bench_c_raw_proto)
     target_compile_features(${wire_test} PRIVATE cxx_std_17)
+    target_compile_options(${wire_test} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
     if(role STREQUAL "server")
         target_compile_definitions(${wire_test} PRIVATE RAW_WIRE_SERVER_TEST)
     endif()
@@ -94,7 +89,6 @@ target_link_libraries(bench_c_with_grpc_grpc_server PRIVATE
 target_link_directories(bench_c_with_grpc_grpc_server PRIVATE
     ${WG_GRPCPP_LIBRARY_DIRS} ${WG_PROTOBUF_LIBRARY_DIRS})
 target_compile_features(bench_c_with_grpc_grpc_server PRIVATE cxx_std_17)
-target_compile_options(bench_c_with_grpc_grpc_server PRIVATE ${WG_CXX_FLAGS})
 
 add_executable(bench_c_with_grpc_grpc_client
     grpc/bench_grpc_client.cpp
@@ -107,4 +101,3 @@ target_link_libraries(bench_c_with_grpc_grpc_client PRIVATE
 target_link_directories(bench_c_with_grpc_grpc_client PRIVATE
     ${WG_GRPCPP_LIBRARY_DIRS} ${WG_PROTOBUF_LIBRARY_DIRS})
 target_compile_features(bench_c_with_grpc_grpc_client PRIVATE cxx_std_17)
-target_compile_options(bench_c_with_grpc_grpc_client PRIVATE ${WG_CXX_FLAGS})

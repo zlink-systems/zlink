@@ -1,10 +1,9 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 // `grpc-cpp` server.
 //
-// spec 8.2 / plan 2.3: the gRPC side runs each language's DEFAULT server
-// configuration and the configuration is recorded rather than tuned. This is
-// grpc++ 1.51.1's synchronous ServerBuilder with an insecure loopback credential
-// and no other option set; nothing here competes with the ZLink rows on tuning.
+// README 8.2 records the gRPC server model and default configuration.
+// CallbackService uses the default ServerBuilder and insecure loopback credentials.
+// Unary handlers finish through the default reactor without a thread per call.
 #include "../common/bench_common.hpp"
 #include "../common/bench_stats_server.hpp"
 
@@ -23,33 +22,40 @@
 namespace
 {
 std::unique_ptr<grpc::Server> g_server;
-std::atomic<bool> g_stop {false};
+std::atomic<bool> g_stop{false};
 
 void on_signal (int)
 {
     g_stop.store (true);
 }
 
-class bench_service_t final : public zlink::framework::bench::withgrpc::BenchService::Service
+class bench_service_t final
+    : public zlink::framework::bench::withgrpc::BenchService::CallbackService
 {
   public:
     explicit bench_service_t (zlink_cpp_bench::server_metrics_t &metrics) : _metrics (metrics) {}
 
-    grpc::Status Echo (grpc::ServerContext *,
-                       const zlink::framework::bench::withgrpc::BenchPayload *request,
-                       zlink::framework::bench::withgrpc::BenchPayload *response) override
+    grpc::ServerUnaryReactor *
+    Echo (grpc::CallbackServerContext *context,
+          const zlink::framework::bench::withgrpc::BenchPayload *request,
+          zlink::framework::bench::withgrpc::BenchPayload *response) override
     {
         _metrics.record (request->body ().data (), request->body ().size ());
         response->set_body (request->body ());
-        return grpc::Status::OK;
+        auto *reactor = context->DefaultReactor ();
+        reactor->Finish (grpc::Status::OK);
+        return reactor;
     }
 
-    grpc::Status Command (grpc::ServerContext *,
-                          const zlink::framework::bench::withgrpc::BenchPayload *request,
-                          google::protobuf::Empty *) override
+    grpc::ServerUnaryReactor *
+    Command (grpc::CallbackServerContext *context,
+             const zlink::framework::bench::withgrpc::BenchPayload *request,
+             google::protobuf::Empty *) override
     {
         _metrics.record (request->body ().data (), request->body ().size ());
-        return grpc::Status::OK;
+        auto *reactor = context->DefaultReactor ();
+        reactor->Finish (grpc::Status::OK);
+        return reactor;
     }
 
   private:

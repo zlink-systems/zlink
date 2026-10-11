@@ -33,8 +33,18 @@ int main ()
         return nlohmann::json::parse (metrics.snapshot_json ()).at ("rejected").get<long long> ();
     };
     const auto require = [] (bool condition) {
-        if (!condition) throw std::runtime_error ("incorrect benchmark rejection accounting");
+        if (!condition)
+            throw std::runtime_error ("incorrect benchmark rejection accounting");
     };
+    std::vector<unsigned char> warmup (1024);
+    zlink_cpp_bench::stamp_payload (warmup.data (), warmup.size (), 1,
+                                    zlink_cpp_bench::phase_warmup, 0);
+    metrics.record (warmup.data (), warmup.size ());
+    const auto warmup_stats = nlohmann::json::parse (metrics.snapshot_json ());
+    require (warmup_stats.at ("allPhaseMessages") == 1);
+    require (warmup_stats.at ("received") == 0);
+    metrics.reset ();
+    require (nlohmann::json::parse (metrics.snapshot_json ()).at ("allPhaseMessages") == 0);
     require (rejected () == 0);
     metrics.observe_rejected_total (7);
     require (rejected () == 7);

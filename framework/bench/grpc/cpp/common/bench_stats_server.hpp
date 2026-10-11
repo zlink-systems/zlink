@@ -35,7 +35,7 @@ class server_metrics_t
     {
         std::lock_guard<std::mutex> lock (_gate);
         _active_messages = 0;
-        _any_phase_messages = 0;
+        _all_phase_messages = 0;
         _errors = 0;
         _rejected_baseline = _rejected_total;
         _latency_ns.clear ();
@@ -44,22 +44,21 @@ class server_metrics_t
 
     void record (const void *payload, size_t size)
     {
-        decoded_header_t header {};
-        if (!decode_payload (payload, size, &header)
-            || header.payload_size != size
+        std::lock_guard<std::mutex> lock (_gate);
+        ++_all_phase_messages;
+        decoded_header_t header{};
+        if (!decode_payload (payload, size, &header) || header.payload_size != size
             || (header.phase != phase_warmup && header.phase != phase_active)) {
-            record_error ();
+            ++_errors;
             return;
         }
         const uint64_t now = now_ns ();
         const double latency =
           now >= header.sent_ns ? static_cast<double> (now - header.sent_ns) : 0.0;
-        std::lock_guard<std::mutex> lock (_gate);
-        ++_any_phase_messages;
         if (header.phase != phase_active)
             return;
         ++_active_messages;
-        if (_latency_ns.size () < 2000000)
+        if (_latency_ns.size () < latency_sample_limit)
             _latency_ns.push_back (latency);
     }
 
@@ -79,7 +78,7 @@ class server_metrics_t
     {
         std::vector<double> samples;
         long long active = 0;
-        long long any_phase = 0;
+        long long all_phase = 0;
         long long errors = 0;
         std::optional<long long> rejected;
         double cpu_start = 0.0;
@@ -87,7 +86,7 @@ class server_metrics_t
             std::lock_guard<std::mutex> lock (_gate);
             samples = _latency_ns;
             active = _active_messages;
-            any_phase = _any_phase_messages;
+            all_phase = _all_phase_messages;
             errors = _errors;
             if (_rejected_total && _rejected_baseline)
                 rejected = *_rejected_total - *_rejected_baseline;
@@ -97,21 +96,23 @@ class server_metrics_t
         const double cpu = std::max (0.0, process_cpu_seconds_self () - cpu_start);
         const auto rejected_json = rejected ? std::to_string (*rejected) : "null";
         char buffer[768];
-        std::snprintf (
-          buffer, sizeof (buffer),
-          "{\"role\":\"target\",\"ready\":true,\"phase\":\"idle\","
-          "\"submitted\":0,\"completed\":%lld,\"errors\":%lld,\"received\":%lld,"
-          "\"inFlight\":0,\"currentInFlight\":0,\"peakInFlight\":0,"
-          "\"activeMessages\":%lld,\"anyPhaseMessages\":%lld,"
-          "\"rejected\":%s,\"meanMicros\":%.6f,\"p50Micros\":%.6f,\"p95Micros\":%.6f,"
-          "\"p99Micros\":%.6f,\"cpuSeconds\":%.6f,\"workingSetMb\":%.6f}",
-          active, errors, active, active, any_phase, rejected_json.c_str (), mean (samples) / 1000.0,
-          percentile (samples, 0.50) / 1000.0, percentile (samples, 0.95) / 1000.0,
-          percentile (samples, 0.99) / 1000.0, cpu, rss_mb ());
+        std::snprintf (buffer, sizeof (buffer),
+                       "{\"role\":\"target\",\"ready\":true,\"phase\":\"idle\","
+                       "\"submitted\":0,\"completed\":%lld,\"errors\":%lld,\"received\":%lld,"
+                       "\"inFlight\":0,\"currentInFlight\":0,\"peakInFlight\":0,"
+                       "\"activeMessages\":%lld,\"allPhaseMessages\":%lld,"
+                       "\"rejected\":%s,\"meanMicros\":%.6f,\"p50Micros\":%.6f,\"p95Micros\":%.6f,"
+                       "\"p99Micros\":%.6f,\"cpuSeconds\":%.6f,\"workingSetMb\":%.6f}",
+                       active, errors, active, active, all_phase, rejected_json.c_str (),
+                       mean (samples) / 1000.0, percentile (samples, 0.50) / 1000.0,
+                       percentile (samples, 0.95) / 1000.0, percentile (samples, 0.99) / 1000.0,
+                       cpu, rss_mb ());
         return buffer;
     }
 
   private:
+    static constexpr size_t latency_sample_limit = 2000000;
+
     static double mean (const std::vector<double> &sorted)
     {
         if (sorted.empty ())
@@ -134,7 +135,7 @@ class server_metrics_t
     std::mutex _gate;
     std::vector<double> _latency_ns;
     long long _active_messages = 0;
-    long long _any_phase_messages = 0;
+    long long _all_phase_messages = 0;
     long long _errors = 0;
     std::optional<long long> _rejected_total;
     std::optional<long long> _rejected_baseline = 0;
@@ -160,12 +161,24 @@ inline std::string json_quote (const std::string &value)
     result.push_back ('\"');
     for (const char ch : value) {
         switch (ch) {
-            case '\\': result += "\\\\"; break;
-            case '\"': result += "\\\""; break;
-            case '\n': result += "\\n"; break;
-            case '\r': result += "\\r"; break;
-            case '\t': result += "\\t"; break;
-            default: result.push_back (ch); break;
+            case '\\':
+                result += "\\\\";
+                break;
+            case '\"':
+                result += "\\\"";
+                break;
+            case '\n':
+                result += "\\n";
+                break;
+            case '\r':
+                result += "\\r";
+                break;
+            case '\t':
+                result += "\\t";
+                break;
+            default:
+                result.push_back (ch);
+                break;
         }
     }
     result.push_back ('\"');
@@ -175,10 +188,14 @@ inline std::string json_quote (const std::string &value)
 inline const char *method_name (zlink::framework::http_method_t method)
 {
     switch (method) {
-        case zlink::framework::http_method_t::get: return "GET";
-        case zlink::framework::http_method_t::post: return "POST";
-        case zlink::framework::http_method_t::put: return "PUT";
-        case zlink::framework::http_method_t::delete_: return "DELETE";
+        case zlink::framework::http_method_t::get:
+            return "GET";
+        case zlink::framework::http_method_t::post:
+            return "POST";
+        case zlink::framework::http_method_t::put:
+            return "PUT";
+        case zlink::framework::http_method_t::delete_:
+            return "DELETE";
     }
     return "UNKNOWN";
 }
@@ -191,8 +208,8 @@ class bench_http_dispatch_t
     {
     }
 
-    zlink::framework::http_response_t dispatch (
-      const zlink::framework::http_request_t &request) const
+    zlink::framework::http_response_t
+    dispatch (const zlink::framework::http_request_t &request) const
     {
         try {
             const auto reply = _callback (method_name (request.method), request.path, request.body);
@@ -219,8 +236,7 @@ template <int Route> class bench_http_handler_t
   public:
     explicit bench_http_handler_t (bench_http_dispatch_t &dispatch) : _dispatch (dispatch) {}
 
-    zlink::framework::http_response_t handle (
-      const zlink::framework::http_request_t &request) const
+    zlink::framework::http_response_t handle (const zlink::framework::http_request_t &request) const
     {
         return _dispatch.dispatch (request);
     }
@@ -243,25 +259,29 @@ using start_http_handler_t = bench_http_handler_t<3>;
 class stats_http_server_t
 {
   public:
-    stats_http_server_t (server_metrics_t &metrics, int port,
+    stats_http_server_t (server_metrics_t &metrics,
+                         int port,
                          std::function<void ()> refresh_metrics = {}) :
-        stats_http_server_t (
-          std::vector<int>{port},
-          [&metrics, refresh_metrics = std::move (refresh_metrics)] (const std::string &method, const std::string &path,
-                      const std::string &) -> bench_http_reply_t {
-              if (method == "GET" && path == "/ready")
-                  return {200, "{\"ready\":true}"};
-              if (method == "GET" && path == "/bench/stats") {
-                  if (refresh_metrics) refresh_metrics ();
-                  return {200, metrics.snapshot_json ()};
-              }
-              if (method == "POST" && path == "/bench/reset") {
-                  if (refresh_metrics) refresh_metrics ();
-                  metrics.reset ();
-                  return {200, "{\"ok\":true}"};
-              }
-              return {404, "{}"};
-          })
+        stats_http_server_t (std::vector<int>{port},
+                             [&metrics, refresh_metrics = std::move (refresh_metrics)] (
+                               const std::string &method,
+                               const std::string &path,
+                               const std::string &) -> bench_http_reply_t {
+                                 if (method == "GET" && path == "/ready")
+                                     return {200, "{\"ready\":true}"};
+                                 if (method == "GET" && path == "/bench/stats") {
+                                     if (refresh_metrics)
+                                         refresh_metrics ();
+                                     return {200, metrics.snapshot_json ()};
+                                 }
+                                 if (method == "POST" && path == "/bench/reset") {
+                                     if (refresh_metrics)
+                                         refresh_metrics ();
+                                     metrics.reset ();
+                                     return {200, "{\"ok\":true}"};
+                                 }
+                                 return {404, "{}"};
+                             })
     {
     }
 
@@ -271,7 +291,8 @@ class stats_http_server_t
     }
 
     stats_http_server_t (std::vector<int> ports, bench_http_callback_t callback) :
-        _ports (std::move (ports)), _callback (std::move (callback)),
+        _ports (std::move (ports)),
+        _callback (std::move (callback)),
         _app (zlink::framework::app_t::create ())
     {
     }
@@ -306,8 +327,7 @@ class stats_http_server_t
             }
         }
         catch (const std::exception &error) {
-            std::fprintf (stderr, "C++ bench HTTP host configuration failed: %s\n",
-                          error.what ());
+            std::fprintf (stderr, "C++ bench HTTP host configuration failed: %s\n", error.what ());
             return false;
         }
         catch (...) {
@@ -354,7 +374,7 @@ class stats_http_server_t
     std::vector<int> _ports;
     bench_http_callback_t _callback;
     zlink::framework::app_t _app;
-    std::atomic<bool> _run_done {false};
+    std::atomic<bool> _run_done{false};
     std::thread _thread;
 };
 

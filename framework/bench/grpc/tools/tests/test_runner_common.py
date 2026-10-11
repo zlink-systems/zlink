@@ -1,6 +1,7 @@
 """Contract checks for the shared server-driven runner steps."""
 
 import json
+import os
 import socket
 import subprocess
 import tempfile
@@ -12,6 +13,46 @@ COMMON = Path(__file__).resolve().parents[2] / "runner_common.sh"
 
 
 class RunnerCommonTest(unittest.TestCase):
+    def test_warmup_settle_observes_all_phase_receives(self):
+        # Active-only received stays zero while the target drains warmup sends.
+        script = '''
+source "$1"
+COMMAND_SETTLE_MS=100
+calls_file="$2"
+echo 0 >"$calls_file"
+curl() {
+  if [[ "$*" == *source*/bench/stats* ]]; then
+    printf '%s\\n' '{"completed":1079543,"currentInFlight":0}'
+  else
+    n=$(cat "$calls_file"); n=$((n + 1)); echo "$n" >"$calls_file"
+    printf '{"received":0,"allPhaseMessages":%s,"errors":0}\\n' "$((n < 4 ? n : 4))"
+  fi
+}
+settle_and_capture source target /dev/null allPhaseMessages
+[[ $(cat "$calls_file") -ge 5 ]]
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(["bash", "-c", script, "_", str(COMMON),
+                                     str(Path(directory) / "calls")], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_kotlin_runner_accepts_send_and_preserves_auxiliary_defaults(self):
+        runner = COMMON.parent / "java" / "run_local_kotlin.sh"
+        invocation = runner.read_text().split("bench_init kotlin", 1)[1].split('cd "${HERE}"', 1)[0]
+        script = 'source "$1"; bench_init kotlin' + invocation + '\nIFS=,; printf "%s|%s" "${patterns[*]}" "${payloads[*]}"'
+        base = {key: value for key, value in os.environ.items()
+                if key not in ("PATTERNS", "PAYLOAD_SIZES", "IMPLEMENTATIONS")}
+        for values, expected in [({}, "request-backpressure|1024"),
+                                 ({"PATTERNS": "send-saturation", "PAYLOAD_SIZES": "1024,4096"},
+                                  "send-saturation|1024,4096")]:
+            result = subprocess.run(["bash", "-c", script, "_", str(COMMON)],
+                                    env=base | values, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(expected, result.stdout)
+        result = subprocess.run(["bash", "-c", script, "_", str(COMMON)],
+                                env=base | {"PATTERNS": "request-serial"}, capture_output=True)
+        self.assertNotEqual(0, result.returncode)
+
     def test_common_warmup_is_two_seconds(self):
         result = subprocess.run(["bash", "-c", 'source "$1"; bench_init c grpc-c request-serial 1024; printf "%s" "$WARMUP_SECONDS"',
                                  "_", str(COMMON)], capture_output=True, text=True)
