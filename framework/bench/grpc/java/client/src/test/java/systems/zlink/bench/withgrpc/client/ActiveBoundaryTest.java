@@ -31,6 +31,21 @@ public final class ActiveBoundaryTest {
                             + "/"
                             + metrics.abandoned());
         }
+        var errorMetrics = new BenchDrivers.SourceMetrics(10, 0);
+        for (int index = 0; index < 10; index++) {
+            errorMetrics.begin();
+            errorMetrics.complete(0, new IllegalStateException("error-" + index), 20);
+        }
+        errorMetrics.begin();
+        errorMetrics.complete(0, new IllegalStateException("error-0"), 20);
+        errorMetrics.freezeTerminal();
+        if (errorMetrics.errors() != 11
+                || errorMetrics.errorSummary().size() != 8
+                || errorMetrics.errorSummary().stream()
+                                .mapToLong(entry -> ((Number) entry.get("count")).longValue())
+                                .sum()
+                        != 9)
+            throw new AssertionError("bounded error summary lost terminal counts");
         var concurrent = new BenchDrivers.SourceMetrics(10, 0);
         for (int index = 0; index < 4000; index++) concurrent.begin();
         var failure = new IllegalStateException("early");

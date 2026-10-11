@@ -423,12 +423,13 @@ public final class BenchDrivers {
     static final class SourceMetrics {
         private static final int ERROR_KIND_LIMIT = 8;
         private static final int ERROR_MESSAGE_LIMIT = 200;
+        private static final long TERMINAL_OPEN = -1;
         private final AtomicLong submitted = new AtomicLong();
         private final AtomicLong activeCompleted = new AtomicLong();
         private final long activeDeadline;
         private final AtomicInteger peakInFlight = new AtomicInteger();
         private final AtomicReference<TerminalSnapshot> terminal =
-                new AtomicReference<>(new TerminalSnapshot(0, 0, List.of(), 0, -1));
+                new AtomicReference<>(new TerminalSnapshot(0, 0, List.of(), 0, TERMINAL_OPEN));
         private final Latencies latencies;
 
         SourceMetrics(int sampleLimit, long activeDeadline) {
