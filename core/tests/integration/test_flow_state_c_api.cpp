@@ -648,6 +648,177 @@ void test_paused_pair_lifecycle_keeps_gauge_and_events_matched ()
     test_context_socket_close_zero_linger (dealer);
 }
 
+//  A control call and a data send may run on different application threads
+//  (socket README §2). Both write the same pipe send end, whose single writer
+//  is the socket turn holder. A control write made outside the turn races the
+//  data writer on the outbound ledger and the SPSC queue and aborts the
+//  process within about a second on a tcp pair.
+enum concurrent_control_t
+{
+    concurrent_control_flow_state,
+    concurrent_control_peer_weight
+};
+
+const int k_concurrent_control_ms = 1500;
+
+//  Runs on a worker thread, so it reports instead of asserting.
+bool apply_concurrent_control (void *socket_,
+                               concurrent_control_t control_,
+                               bool toggle_)
+{
+    if (control_ == concurrent_control_flow_state)
+        return zlink_socket_set_receive_flow_state (
+                 socket_, toggle_ ? ZLINK_RECEIVE_FLOW_PAUSED
+                                  : ZLINK_RECEIVE_FLOW_RUNNING)
+               == ZLINK_CONFIG_OK;
+    const int weight = toggle_ ? 37 : 100;
+    return zlink_set_dealer_option (socket_, ZLINK_DEALER_OPT_WEIGHT, &weight,
+                                    sizeof (weight))
+           == ZLINK_CONFIG_OK;
+}
+
+//  sender_ sends 1 KiB records with DONTWAIT while another thread changes
+//  sender_'s control state and a third drains receiver_.
+void run_concurrent_send_and_control (void *sender_,
+                                      const zlink_routing_id_t *target_rid_,
+                                      void *receiver_,
+                                      bool receiver_is_router_,
+                                      concurrent_control_t control_)
+{
+    std::atomic<bool> stop (false);
+    std::atomic<uint64_t> sent (0);
+    std::atomic<uint64_t> controls (0);
+    std::atomic<uint64_t> received (0);
+    std::atomic<uint64_t> control_failures (0);
+
+    std::thread send_thread ([&] {
+        while (!stop.load (std::memory_order_acquire)) {
+            zlink_msg_t part;
+            if (zlink_msg_init_size (&part, 1024) != 0)
+                return;
+            memset (zlink_msg_data (&part), 'c', 1024);
+            const zlink_submit_result_t result =
+              target_rid_
+                ? zlink_send_rid (sender_, target_rid_, &part, 1,
+                                  ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL)
+                : zlink_send (sender_, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT,
+                              NULL, NULL);
+            if (result == ZLINK_SUBMIT_OK)
+                sent.fetch_add (1, std::memory_order_relaxed);
+        }
+    });
+    std::thread control_thread ([&] {
+        bool toggle = false;
+        while (!stop.load (std::memory_order_acquire)) {
+            toggle = !toggle;
+            if (!apply_concurrent_control (sender_, control_, toggle))
+                control_failures.fetch_add (1, std::memory_order_relaxed);
+            controls.fetch_add (1, std::memory_order_relaxed);
+        }
+        if (!apply_concurrent_control (sender_, control_, false))
+            control_failures.fetch_add (1, std::memory_order_relaxed);
+    });
+    std::thread drain_thread ([&] {
+        zlink_msg_t parts[4];
+        while (!stop.load (std::memory_order_acquire)) {
+            size_t count = 0;
+            const zlink_routing_id_t *rid = NULL;
+            zlink_reply_token_t token = 0;
+            const zlink_recv_result_t result =
+              receiver_is_router_
+                ? zlink_router_recv (receiver_, &rid, &token, parts, 4,
+                                     &count, ZLINK_RECV_FLAGS_DONTWAIT)
+                : zlink_recv (receiver_, &rid, parts, 4, &count,
+                              ZLINK_RECV_FLAGS_DONTWAIT);
+            if (result == ZLINK_RECV_OK) {
+                zlink_multipart_close (parts, count);
+                received.fetch_add (1, std::memory_order_relaxed);
+            }
+        }
+    });
+
+    std::this_thread::sleep_for (
+      std::chrono::milliseconds (k_concurrent_control_ms));
+    stop.store (true, std::memory_order_release);
+    send_thread.join ();
+    control_thread.join ();
+    drain_thread.join ();
+
+    //  The race needs both writers active; a run that never overlapped them
+    //  proves nothing.
+    TEST_ASSERT_EQUAL_UINT64 (0, control_failures.load ());
+    TEST_ASSERT_TRUE (sent.load () > 0);
+    TEST_ASSERT_TRUE (controls.load () > 0);
+    TEST_ASSERT_TRUE (received.load () > 0);
+}
+
+struct tcp_dealer_router_t
+{
+    void setup ()
+    {
+        const int zero = 0;
+        router = test_context_socket (ZLINK_SOCKET_ROUTER);
+        dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+        char endpoint[MAX_SOCKET_STRING];
+        bind_loopback_ipv4 (router, endpoint, sizeof (endpoint));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+        send_string_expect_success (dealer, "hello", 0);
+
+        zlink_msg_t part;
+        size_t count = 0;
+        const zlink_routing_id_t *rid = NULL;
+        zlink_reply_token_t token = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK, zlink_router_recv (router, &rid, &token, &part, 1,
+                                            &count, ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_NOT_NULL (rid);
+        dealer_rid = *rid;
+        zlink_multipart_close (&part, count);
+    }
+
+    void teardown ()
+    {
+        dealer = test_context_socket_close_zero_linger (dealer);
+        router = test_context_socket_close_zero_linger (router);
+    }
+
+    void *dealer;
+    void *router;
+    zlink_routing_id_t dealer_rid;
+};
+
+void test_router_send_rid_concurrent_with_receive_flow_toggle ()
+{
+    tcp_dealer_router_t pair;
+    pair.setup ();
+    run_concurrent_send_and_control (pair.router, &pair.dealer_rid,
+                                     pair.dealer, false,
+                                     concurrent_control_flow_state);
+    pair.teardown ();
+}
+
+void test_dealer_send_concurrent_with_receive_flow_toggle ()
+{
+    tcp_dealer_router_t pair;
+    pair.setup ();
+    run_concurrent_send_and_control (pair.dealer, NULL, pair.router, true,
+                                     concurrent_control_flow_state);
+    pair.teardown ();
+}
+
+void test_dealer_send_concurrent_with_peer_weight_toggle ()
+{
+    tcp_dealer_router_t pair;
+    pair.setup ();
+    run_concurrent_send_and_control (pair.dealer, NULL, pair.router, true,
+                                     concurrent_control_peer_weight);
+    pair.teardown ();
+}
+
 }
 
 int main ()
@@ -688,5 +859,11 @@ int main ()
         RUN_TEST (test_flow_state_metrics_snapshot);
     if (!selected_case || strcmp (selected_case, "test_paused_pair_lifecycle_keeps_gauge_and_events_matched") == 0)
         RUN_TEST (test_paused_pair_lifecycle_keeps_gauge_and_events_matched);
+    if (!selected_case || strcmp (selected_case, "test_router_send_rid_concurrent_with_receive_flow_toggle") == 0)
+        RUN_TEST (test_router_send_rid_concurrent_with_receive_flow_toggle);
+    if (!selected_case || strcmp (selected_case, "test_dealer_send_concurrent_with_receive_flow_toggle") == 0)
+        RUN_TEST (test_dealer_send_concurrent_with_receive_flow_toggle);
+    if (!selected_case || strcmp (selected_case, "test_dealer_send_concurrent_with_peer_weight_toggle") == 0)
+        RUN_TEST (test_dealer_send_concurrent_with_peer_weight_toggle);
     return UNITY_END ();
 }

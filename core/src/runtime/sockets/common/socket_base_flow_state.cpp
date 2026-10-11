@@ -50,8 +50,11 @@ int zlink::socket_base_t::set_local_receive_flow_state (int state_)
     bool wrapped = false;
     bool defer_application_controls = false;
     std::vector<pipe_t *> targets;
+    //  Each control below is written to a pipe send end that the data send
+    //  path writes without a pipe lock. The socket turn is the single writer
+    //  of that end, so the turn stays held until the last control write.
+    socket_public_api_lock_scope_t guard (lifecycle);
     {
-        socket_public_api_lock_scope_t guard (lifecycle);
         scoped_lock_t lock (_transport_pairs_sync);
         if (_local_receive_flow_epoch != 0
             && _local_receive_flow_state == state) {
