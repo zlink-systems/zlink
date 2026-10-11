@@ -176,7 +176,6 @@ final class ZLinkChannelSocketRegistry {
     }
 
     void registerClient(String channelName, ZLinkBackendDealerSocket socket) {
-        registerReceiveFlow(socket);
         inTopologyTurn(
                 () -> {
                     clients.put(channelName, socket);
@@ -666,10 +665,6 @@ final class ZLinkChannelSocketRegistry {
             ZLinkClientServerServerDescriptor descriptor,
             ZLinkBackendDealerSocket dealer,
             Consumer<AdmissionFence> restartAdmission) {
-        // This method used to hold the registry monitor while adding the
-        // physical DEALER. The absolute flow-state application happens before
-        // that monitor is acquired so a binding call cannot block routing.
-        registerReceiveFlow(dealer);
         inTopologyTurn(
                 () -> {
                     clientServerConnections.put(
@@ -1908,17 +1903,6 @@ final class ZLinkChannelSocketRegistry {
                         });
         owned.forEach(this::deregisterReceiveFlow);
         closeAll(owned, Collections.newSetFromMap(new IdentityHashMap<>()));
-    }
-
-    private void registerReceiveFlow(ZLinkBackendDealerSocket socket) {
-        if (applicationJobQueue == null) {
-            return;
-        }
-        ZLinkApplicationJobReceiveFlowController.Registration registration =
-                applicationJobQueue.registerReceiveFlowTarget(socket::setReceiveFlowState);
-        ZLinkApplicationJobReceiveFlowController.Registration previous;
-        previous = inStateLane(() -> receiveFlowRegistrations.put(socket, registration));
-        closeReceiveFlowRegistration(previous);
     }
 
     private void registerReceiveFlow(ZLinkBackendRouterSocket socket) {

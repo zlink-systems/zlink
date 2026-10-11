@@ -340,9 +340,6 @@ final class ZLinkChannelSubmissionContractTest {
         }
 
         @Override
-        public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
-
-        @Override
         public String name() {
             return "dealer";
         }

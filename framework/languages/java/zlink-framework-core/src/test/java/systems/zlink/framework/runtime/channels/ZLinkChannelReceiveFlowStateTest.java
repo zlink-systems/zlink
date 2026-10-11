@@ -10,7 +10,6 @@ import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.sockets.ReceiveFlowState;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
@@ -23,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkChannelReceiveFlowStateTest {
     @Test
-    void pairedChannelSocketsReceiveAbsoluteStateBeforeExposureAndDeregisterOnClose() {
+    void serverAndRouteRoutersReceiveAbsoluteStateBeforeExposureAndDeregisterOnClose() {
         ZLinkApplicationJobQueue queue =
                 new ZLinkApplicationJobQueue(
                         ZLinkApplicationJobQueueProfile.BALANCED,
@@ -32,35 +31,29 @@ final class ZLinkChannelReceiveFlowStateTest {
                         100,
                         0);
         ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry(queue);
-        List<ReceiveFlowState> dealerStates = new ArrayList<>();
         List<ReceiveFlowState> serverStates = new ArrayList<>();
         List<ReceiveFlowState> routeStates = new ArrayList<>();
-        ZLinkBackendDealerSocket dealer = socket(ZLinkBackendDealerSocket.class, dealerStates);
         ZLinkBackendRouterSocket server = socket(ZLinkBackendRouterSocket.class, serverStates);
         ZLinkBackendRouterSocket route = socket(ZLinkBackendRouterSocket.class, routeStates);
 
-        sockets.registerClient("client", dealer);
         sockets.registerServer("server", RoutingId.from("server"), server);
         sockets.registerRouteRouter("route", route);
-        assertEquals(List.of(ReceiveFlowState.RUNNING), dealerStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING), serverStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING), routeStates);
 
         ZLinkApplicationJobQueue.Permit permit =
                 queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
-        assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), dealerStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), serverStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), routeStates);
 
         sockets.closeAll();
         permit.close();
-        assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), dealerStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), serverStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), routeStates);
     }
 
     @Test
-    void initialReceiveFlowFailurePreventsClientSocketPublication() {
+    void initialReceiveFlowFailurePreventsServerSocketPublication() {
         ZLinkApplicationJobQueue queue =
                 new ZLinkApplicationJobQueue(
                         ZLinkApplicationJobQueueProfile.BALANCED,
@@ -71,11 +64,11 @@ final class ZLinkChannelReceiveFlowStateTest {
         ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry(queue);
         AtomicInteger flowCalls = new AtomicInteger();
         AtomicInteger closes = new AtomicInteger();
-        ZLinkBackendDealerSocket dealer =
-                (ZLinkBackendDealerSocket)
+        ZLinkBackendRouterSocket server =
+                (ZLinkBackendRouterSocket)
                         Proxy.newProxyInstance(
-                                ZLinkBackendDealerSocket.class.getClassLoader(),
-                                new Class<?>[] {ZLinkBackendDealerSocket.class},
+                                ZLinkBackendRouterSocket.class.getClassLoader(),
+                                new Class<?>[] {ZLinkBackendRouterSocket.class},
                                 (ignored, method, arguments) -> {
                                     if (method.getName().equals("setReceiveFlowState")) {
                                         flowCalls.incrementAndGet();
@@ -88,14 +81,16 @@ final class ZLinkChannelReceiveFlowStateTest {
                                     return defaultValue(method.getReturnType());
                                 });
 
-        assertThrows(ZlinkConfigException.class, () -> sockets.registerClient("client", dealer));
+        assertThrows(
+                ZlinkConfigException.class,
+                () -> sockets.registerServer("server", RoutingId.from("server"), server));
         sockets.closeAll();
         assertEquals(1, flowCalls.get());
         assertEquals(0, closes.get());
     }
 
     @Test
-    void alternatePairedBackendCannotSilentlyIgnoreInitialReceiveFlowState() {
+    void alternateRouterBackendCannotSilentlyIgnoreInitialReceiveFlowState() {
         ZLinkApplicationJobQueue queue =
                 new ZLinkApplicationJobQueue(
                         ZLinkApplicationJobQueueProfile.BALANCED,
@@ -104,11 +99,11 @@ final class ZLinkChannelReceiveFlowStateTest {
                         100,
                         0);
         ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry(queue);
-        ZLinkBackendDealerSocket dealer =
-                (ZLinkBackendDealerSocket)
+        ZLinkBackendRouterSocket server =
+                (ZLinkBackendRouterSocket)
                         Proxy.newProxyInstance(
-                                ZLinkBackendDealerSocket.class.getClassLoader(),
-                                new Class<?>[] {ZLinkBackendDealerSocket.class},
+                                ZLinkBackendRouterSocket.class.getClassLoader(),
+                                new Class<?>[] {ZLinkBackendRouterSocket.class},
                                 (proxy, method, arguments) ->
                                         method.isDefault()
                                                 ? InvocationHandler.invokeDefault(
@@ -117,7 +112,7 @@ final class ZLinkChannelReceiveFlowStateTest {
 
         assertThrows(
                 UnsupportedOperationException.class,
-                () -> sockets.registerClient("client", dealer));
+                () -> sockets.registerServer("server", RoutingId.from("server"), server));
         assertEquals(1L, queue.pressureMetrics().flowStateConfigFailureCount());
     }
 

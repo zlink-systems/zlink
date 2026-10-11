@@ -2322,9 +2322,6 @@ final class ZLinkChannelRuntimeTest {
         }
 
         @Override
-        public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
-
-        @Override
         public void setChannelName(String channelName) {}
 
         @Override
@@ -2524,9 +2521,6 @@ final class ZLinkChannelRuntimeTest {
         int requestFailuresRemaining;
         final List<String> requestThreads = new CopyOnWriteArrayList<>();
         List<Message> requestReplyParts = List.of();
-
-        @Override
-        public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
 
         @Override
         public void setChannelName(String channelName) {}

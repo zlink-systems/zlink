@@ -1261,9 +1261,6 @@ final class ZLinkClientServerM6ARuntimeTest {
         private int disconnects;
 
         @Override
-        public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
-
-        @Override
         public String name() {
             return "controlled";
         }
@@ -1386,9 +1383,6 @@ final class ZLinkClientServerM6ARuntimeTest {
             closes.incrementAndGet();
             closed.countDown();
         }
-
-        @Override
-        public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
 
         @Override
         public String name() {

@@ -488,8 +488,7 @@ final class ZLinkClientServerReadyWaitTest {
                                                     receiveAdmission = (Runnable) args[0];
                                                     yield null;
                                                 }
-                                                case "setReceiveFlowState", "setChannelName" ->
-                                                        null;
+                                                case "setChannelName" -> null;
                                                 default ->
                                                         throw new UnsupportedOperationException(
                                                                 method.toString());
