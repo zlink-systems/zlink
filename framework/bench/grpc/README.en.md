@@ -660,8 +660,8 @@ difference doesn't show in the result table.
 | `SKIP_BUILD` | `0` | `0` builds with the language's `<lang>/build.sh` before measuring; `1` uses the artifacts already built |
 
 - `<lang>` is one of `c`, `cpp`, `dotnet`, `java`, `kotlin`, and `node`.
-- The Kotlin runner measures only the supplementary cells of §10.5. For this runner the defaults of
-  `PATTERNS` and `PAYLOAD_SIZES` are `request-backpressure` and `1024`, and other values are rejected.
+- The Kotlin runner defaults to the supplementary §10.5 cells: `request-backpressure` and `1024`.
+  Manual verification also accepts `send-saturation` and payload sizes `1024,4096`.
 - If a value is outside these ranges, the runner rejects it before the measurement starts.
 
 Values outside the table aren't inputs. Send concurrency 8 and the 30-second drain
