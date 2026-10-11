@@ -80,18 +80,27 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
   async read(
     target: ServiceInstanceActivationTarget,
     instanceIntent?: true,
-    activation?: ServiceInstanceActivationRecoveryEnvelope
+    activation?: ServiceInstanceActivationRecoveryEnvelope,
+    acceptsLocal?: (route: ServiceInstanceRouteFence) => boolean
   ): Promise<ServiceInstanceAuthorityRead> {
     const key = authorityKey(target.targetSpotId);
     const current = await this.options.store.readAuthority(key);
     if (current.kind !== 'snapshot') return { kind: 'missing' };
+    const ready = decodeServiceInstanceAuthorityPayload(current.payload);
+    const resolved = readyRead(current, target, ready);
+    if (
+      ready?.state === 'ready' &&
+      resolved.kind === 'ready' &&
+      acceptsLocal?.(resolved.route) === true
+    ) {
+      return resolved;
+    }
     if (
       activation !== undefined &&
       current.allocation.objectKind === 'instance_spot' &&
       routingIdsEqual(current.allocation.descriptor.rid, target.targetNodeRid) &&
       current.allocation.descriptorLifecycleGeneration === target.targetNodeGeneration
     ) {
-      const ready = decodeServiceInstanceAuthorityPayload(current.payload);
       const reference =
         current.pendingCreation?.requestContentReference ?? ready?.activationRecovery?.reference;
       if (reference !== undefined) {
@@ -135,7 +144,7 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     if (
       instanceIntent === true &&
       current.allocation.state === 'active' &&
-      decodeServiceReadySpotAuthority(current.payload) !== undefined
+      ready?.state === 'ready'
     ) {
       if (
         current.allocation.objectKind !== 'instance_spot' ||
@@ -158,9 +167,11 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
       );
       if (released === true) return { kind: 'missing' };
       const refreshed = await this.options.store.readAuthority(key);
-      return refreshed.kind === 'snapshot' ? readyRead(refreshed, target) : { kind: 'missing' };
+      return refreshed.kind === 'snapshot'
+        ? readyRead(refreshed, target, decodeServiceInstanceAuthorityPayload(refreshed.payload))
+        : { kind: 'missing' };
     }
-    return readyRead(current, target);
+    return resolved;
   }
 
   async reserve(
@@ -396,7 +407,11 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
     }
     const current = await this.options.store.readAuthority(authorityKey(target.targetSpotId));
     if (current.kind === 'snapshot') {
-      const ready = readyRead(current, target);
+      const ready = readyRead(
+        current,
+        target,
+        decodeServiceInstanceAuthorityPayload(current.payload)
+      );
       if (ready.kind === 'ready') {
         this.pending.delete(reservation.token);
         return { kind: 'lost', route: ready.route };
@@ -430,7 +445,7 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
       throw new Error('Instance activation authority changed before inbox release.');
     }
     const recovery = decoded.activationRecovery;
-    if (recovery === undefined) return routeFromSnapshot(current);
+    if (recovery === undefined) return routeFromSnapshot(current, decoded.spotId);
     let completed = current;
     if (recovery.replayCursor < recovery.inboxSequence) {
       const cursorStored = await this.options.store.compareExchangeAuthority(
@@ -545,22 +560,19 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
 
 function readyRead(
   snapshot: ZLinkAuthoritySnapshot,
-  target: ServiceInstanceActivationTarget
+  target: ServiceInstanceActivationTarget,
+  decoded: ReturnType<typeof decodeServiceInstanceAuthorityPayload>
 ): ServiceInstanceAuthorityRead {
-  const decoded =
-    decodeServiceReadySpotAuthority(snapshot.payload) ??
-    decodeServiceClosingSpotAuthority(snapshot.payload);
-  const creating = decodeServiceInstanceAuthorityPayload(snapshot.payload);
   if (
-    creating?.state === 'coldActivating' &&
+    decoded?.state === 'coldActivating' &&
     snapshot.allocation.objectKind === 'instance_spot' &&
-    creating.stableType === target.stableType &&
-    creating.spotId === target.targetSpotId &&
-    creating.ownerId === snapshot.ownerId &&
-    creating.ownerLeaseGeneration === snapshot.ownerLeaseGeneration &&
-    creating.ownerMeshName === snapshot.allocation.descriptor.meshName &&
-    creating.ownerNodeGeneration === snapshot.allocation.descriptorLifecycleGeneration &&
-    routingIdsEqual(creating.ownerNodeRid, snapshot.allocation.descriptor.rid) &&
+    decoded.stableType === target.stableType &&
+    decoded.spotId === target.targetSpotId &&
+    decoded.ownerId === snapshot.ownerId &&
+    decoded.ownerLeaseGeneration === snapshot.ownerLeaseGeneration &&
+    decoded.ownerMeshName === snapshot.allocation.descriptor.meshName &&
+    decoded.ownerNodeGeneration === snapshot.allocation.descriptorLifecycleGeneration &&
+    routingIdsEqual(decoded.ownerNodeRid, snapshot.allocation.descriptor.rid) &&
     routingIdsEqual(target.targetNodeRid, snapshot.allocation.descriptor.rid) &&
     target.targetNodeGeneration === snapshot.allocation.descriptorLifecycleGeneration
   ) {
@@ -572,7 +584,8 @@ function readyRead(
     };
   }
   if (
-    decoded?.kind !== 'instance_spot' ||
+    decoded === undefined ||
+    decoded.state === 'coldActivating' ||
     decoded.stableType !== target.stableType ||
     decoded.spotId !== target.targetSpotId ||
     snapshot.allocation.objectKind !== 'instance_spot' ||
@@ -587,7 +600,7 @@ function readyRead(
   ) {
     return { kind: 'missing' };
   }
-  return { kind: 'ready', route: routeFromSnapshot(snapshot), authority: snapshot };
+  return { kind: 'ready', route: routeFromSnapshot(snapshot, decoded.spotId), authority: snapshot };
 }
 
 function requireCommitIdentity(
@@ -615,17 +628,23 @@ function requireCommitIdentity(
   }
 }
 
-function routeFromSnapshot(snapshot: ZLinkAuthoritySnapshot): ServiceInstanceRouteFence {
-  const decoded =
-    decodeServiceReadySpotAuthority(snapshot.payload) ??
-    decodeServiceClosingSpotAuthority(snapshot.payload);
-  if (decoded?.kind !== 'instance_spot') {
-    throw new Error('Instance authority is not Ready.');
+function routeFromSnapshot(
+  snapshot: ZLinkAuthoritySnapshot,
+  spotId?: string
+): ServiceInstanceRouteFence {
+  if (spotId === undefined) {
+    const decoded =
+      decodeServiceReadySpotAuthority(snapshot.payload) ??
+      decodeServiceClosingSpotAuthority(snapshot.payload);
+    if (decoded?.kind !== 'instance_spot') {
+      throw new Error('Instance authority is not Ready.');
+    }
+    spotId = decoded.spotId;
   }
   return {
     targetNodeRid: String(snapshot.allocation.descriptor.rid),
     targetNodeGeneration: snapshot.allocation.descriptorLifecycleGeneration,
-    targetSpotId: decoded.spotId,
+    targetSpotId: spotId,
     objectGeneration: snapshot.objectGeneration,
     ownerId: snapshot.ownerId,
     authorityOwnerGeneration: snapshot.authorityOwnerGeneration,

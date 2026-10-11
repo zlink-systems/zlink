@@ -317,7 +317,8 @@ export interface ServiceAsyncInstanceActivationAuthority {
   read(
     target: ServiceInstanceActivationTarget,
     instanceIntent?: true,
-    activation?: ServiceInstanceActivationRecoveryEnvelope
+    activation?: ServiceInstanceActivationRecoveryEnvelope,
+    acceptsLocal?: (route: ServiceInstanceRouteFence) => boolean
   ): Promise<ServiceInstanceAuthorityRead>;
   reserve(
     activation: Omit<ServiceInstanceActivationRecoveryEnvelope, 'targetMeshName'>,
@@ -2946,6 +2947,24 @@ export class ServiceStatefulRuntime {
     return activation.spot;
   }
 
+  private localReadyInstance(
+    target: ServiceInstanceActivationTarget,
+    route: ServiceInstanceRouteFence
+  ): ServiceSpotState | undefined {
+    const local = this.registry.spot(target.targetSpotId);
+    if (
+      local !== undefined &&
+      (local.kind !== 'instance' || local.stableType !== target.stableType)
+    ) {
+      throw new ServiceStaleGenerationError('spot', target.targetSpotId);
+    }
+    return local !== undefined &&
+      local.state === 'ready' &&
+      routeMatchesLocal(route, local, this.nodeRid, this.nodeGeneration)
+      ? local
+      : undefined;
+  }
+
   private activateMissingInstanceAsync(
     record: Extract<
       ServiceStatefulWireRecord,
@@ -2968,12 +2987,17 @@ export class ServiceStatefulRuntime {
       }));
     const operation = ready.then(async (value) => {
       if (pending !== undefined) {
-        await this.asyncInstanceAuthority?.read(record.target, undefined, {
-          ...record,
-          targetMeshName: record.target.targetMeshName,
-          ...(metadataFrame === undefined ? {} : { metadataFrame }),
-          applicationPayloadFrame: payloadFrame
-        });
+        await this.asyncInstanceAuthority?.read(
+          record.target,
+          undefined,
+          {
+            ...record,
+            targetMeshName: record.target.targetMeshName,
+            ...(metadataFrame === undefined ? {} : { metadataFrame }),
+            applicationPayloadFrame: payloadFrame
+          },
+          (route) => this.localReadyInstance(record.target, route) !== undefined
+        );
       }
       if (value.stableType !== record.target.stableType) {
         throw new ZLinkFrameworkException(
@@ -3023,14 +3047,19 @@ export class ServiceStatefulRuntime {
       throw new Error('Async Instance activation authority is not registered.');
     }
 
-    const local = this.registry.spot(target.targetSpotId);
     const activationRequest = {
       ...record,
       targetMeshName: record.target.targetMeshName,
       ...(metadataFrame === undefined ? {} : { metadataFrame }),
       applicationPayloadFrame: payloadFrame
     };
-    const current = await authority.read(target, true, activationRequest);
+    const current = await authority.read(
+      target,
+      true,
+      activationRequest,
+      (route) => this.localReadyInstance(target, route) !== undefined
+    );
+    const local = this.registry.spot(target.targetSpotId);
     if (
       current.kind === 'creating' &&
       current.authority?.allocation.state === 'active' &&
@@ -3080,17 +3109,9 @@ export class ServiceStatefulRuntime {
       if (current.route.targetNodeGeneration !== this.nodeGeneration) {
         throw new ServiceStaleGenerationError('spot', target.targetSpotId);
       }
-      if (
-        local !== undefined &&
-        (local.kind !== 'instance' || local.stableType !== target.stableType)
-      ) {
-        throw new ServiceStaleGenerationError('spot', target.targetSpotId);
-      }
-      if (
-        local !== undefined &&
-        routeMatchesLocal(current.route, local, this.nodeRid, this.nodeGeneration)
-      ) {
-        return { spot: local, route: current.route };
+      const readyLocal = this.localReadyInstance(target, current.route);
+      if (readyLocal !== undefined) {
+        return { spot: readyLocal, route: current.route };
       }
       return await this.reconcileReadyInstanceProjection(target, current.route, authority);
     }
