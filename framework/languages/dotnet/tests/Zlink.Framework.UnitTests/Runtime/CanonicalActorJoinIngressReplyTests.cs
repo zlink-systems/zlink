@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
@@ -1097,6 +1098,79 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
+    public async Task WritableRouteWithoutInboundRecords_DoesNotCreateReceivePressure()
+    {
+        const int capacity = ZLinkReceiveBatchBudget.MaximumRecords * 2;
+        using var queue = new ZLinkApplicationJobQueue(
+            new ZLinkApplicationJobQueueCapacity(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                ConfiguredManualMax: capacity,
+                EffectiveProcessorCount: 1,
+                EffectiveMaxQueuedApplicationJobs: capacity
+            )
+        );
+        await using var runtime = await ConnectedRuntime.CreateAsync(
+            _ => SubmitResult.Ok,
+            applicationJobQueue: queue
+        );
+        runtime.Source.SetReceiveFlowState(ReceiveFlowState.Paused);
+        Task? pending = null;
+        var started = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(2))
+        {
+            using var payload = Message.From(new byte[] { 1 });
+            var send = runtime
+                .Target.SendToNodeDirectAsync(
+                    runtime.SourceRid,
+                    [payload],
+                    SendFlags.None,
+                    default,
+                    CancellationToken.None
+                )
+                .AsTask();
+            await Task.WhenAny(send, Task.Delay(50));
+            if (!send.IsCompleted)
+            {
+                pending = send;
+                break;
+            }
+            await send;
+            await Task.Delay(10);
+        }
+        Assert.NotNull(pending);
+        var occupied = new List<ZLinkApplicationJobQueueLease>();
+        try
+        {
+            // Existing jobs stay below the pause boundary. A receive batch
+            // reserved on WRITABLE alone would cross that boundary.
+            var heldCount = checked((int)queue.GetStatus().ResumePermitCount);
+            for (var index = 0; index < heldCount; index++)
+            {
+                var lease = await queue.AcquireAsync(
+                    CancellationToken.None,
+                    ZLinkApplicationJobOrigin.Local
+                );
+                lease.MarkQueued();
+                occupied.Add(lease);
+            }
+            queue.ResetMetrics();
+            runtime.Source.SetReceiveFlowState(ReceiveFlowState.Running);
+            await pending.WaitAsync(TimeSpan.FromSeconds(2));
+            await Task.Delay(200);
+            Assert.Equal(0UL, queue.GetPressureMetrics().PausedTransitionCount);
+            Assert.Equal(
+                ZLinkApplicationJobQueuePressureState.Running,
+                queue.GetStatus().PressureState
+            );
+        }
+        finally
+        {
+            foreach (var lease in occupied)
+                lease.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task RouterMonitor_HandoverReportsCurrentConnectionIdentity()
     {
         Assert.Null(typeof(MonitorEvent).GetProperty("TransportPairId"));
@@ -1730,7 +1804,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
         internal static async Task<ConnectedRuntime> CreateAsync(
             Func<ReplySubmitOperation, SubmitResult>? submit,
-            TimeProvider? deadlineTimeProvider = null
+            TimeProvider? deadlineTimeProvider = null,
+            ZLinkApplicationJobQueue? applicationJobQueue = null
         )
         {
             var context = Systems.Zlink.Zlink.CreateContext();
@@ -1739,6 +1814,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 context,
                 "mesh",
                 deadlineTimeProvider: deadlineTimeProvider,
+                applicationJobQueue: applicationJobQueue,
                 nativeTerminalReplySubmitOverride: submit,
                 decorateSocketMonitor: monitor =>
                     connectionMonitor = new AppliedConnectionReadyMonitor(monitor)

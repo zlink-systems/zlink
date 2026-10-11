@@ -32,6 +32,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         5
     );
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
+    private const PollEventFlags InfrastructurePollEvents =
+        PollEventFlags.PollErr
+        | PollEventFlags.PollOut
+        | PollEventFlags.PollCompletion
+        | PollEventFlags.PollRoute;
+    private const nuint RawSocketPollerSlot = 1;
     private static readonly TimeSpan TransportShutdownGrace = PollInterval + PollInterval;
     private static readonly TimeSpan RelocationAckRetryInterval = TimeSpan.FromMilliseconds(100);
 
@@ -201,7 +207,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private long _queuedMessages;
     private long _queuedBytes;
     private ZLinkApplicationJobQueueLease? _reservedRawApplicationAdmission;
-    private int _rawApplicationAdmissionWaitActive;
     private int _readyPosted;
     private bool IsDisposing => Volatile.Read(ref _disposeTask) is not null;
     private bool _inboundOperationAdmissionClosed;
@@ -386,12 +391,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 poller = Systems.Zlink.Zlink.CreatePoller();
                 poller.Add(
                     socket,
-                    PollEventFlags.PollIn
-                        | PollEventFlags.PollErr
-                        | PollEventFlags.PollOut
-                        | PollEventFlags.PollCompletion
-                        | PollEventFlags.PollRoute,
-                    1
+                    PollEventFlags.PollIn | InfrastructurePollEvents,
+                    RawSocketPollerSlot
                 );
                 _socket = socket;
                 _receiveFlowRegistration = receiveFlowRegistration;
@@ -5246,6 +5247,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             try
             {
+                if (Volatile.Read(ref _reservedRawApplicationAdmission) is not null)
+                    _poller!.Modify(_socket!, PollEventFlags.PollIn | InfrastructurePollEvents);
                 var count = _poller!.Wait(events, PollInterval);
                 var now = Stopwatch.GetTimestamp();
                 DrainSocketMonitorEvents();
@@ -5254,7 +5257,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // records that the same wait reported.
                 if (count > 0 && (events[0].Revents & PollEventFlags.PollRoute) != 0)
                     ObserveSelectedRoutes();
-                if (count > 0)
+                if (count > 0 && (events[0].Revents & PollEventFlags.PollIn) != 0)
                     DrainRawSocket(cancellationToken, admissions);
                 ProcessInfrastructure(now);
             }
@@ -5288,8 +5291,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (queue is not null)
         {
             var reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
-            if (reserved is not null)
-                Volatile.Write(ref _rawApplicationAdmissionWaitActive, 0);
             count = reserved is null ? 0 : 1;
             admissions[0] = reserved;
             count += queue.TryAcquireBatch(
@@ -5300,11 +5301,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             );
             if (count == 0)
             {
-                if (Interlocked.CompareExchange(ref _rawApplicationAdmissionWaitActive, 1, 0) == 0)
-                {
-                    using (ExecutionContext.SuppressFlow())
-                        _ = WaitForRawApplicationAdmissionAsync(queue, cancellationToken);
-                }
+                // A full host leaves arrived records in Core. Keep this socket's
+                // completion and route observer active while its existing waiter
+                // obtains the next receive permit.
+                _poller!.Modify(_socket!, InfrastructurePollEvents);
+                using (ExecutionContext.SuppressFlow())
+                    _ = WaitForRawApplicationAdmissionAsync(queue, cancellationToken);
                 return;
             }
         }
@@ -5353,7 +5355,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         ZLinkApplicationJobQueueLease? admission = null;
-        var transferred = false;
         try
         {
             admission = await queue
@@ -5362,7 +5363,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (cancellationToken.IsCancellationRequested)
                 return;
             Interlocked.Exchange(ref _reservedRawApplicationAdmission, admission)?.Dispose();
-            transferred = true;
             admission = null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -5370,11 +5370,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         finally
         {
             admission?.Dispose();
-            // Once published, only the consumer taking that reservation may
-            // clear the flag, even if it consumes the reservation before this
-            // producer returns.
-            if (!transferred)
-                Volatile.Write(ref _rawApplicationAdmissionWaitActive, 0);
         }
     }
 
