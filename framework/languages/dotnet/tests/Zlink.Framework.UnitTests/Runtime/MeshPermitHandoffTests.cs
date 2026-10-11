@@ -8,6 +8,8 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshPermitHandoffTests
 {
+    private const nuint ReceiveSocketSlot = 1;
+
     [Fact]
     public async Task RawIngress_StopsReceivingAtApplicationPermitCapacity()
     {
@@ -42,6 +44,8 @@ public sealed class MeshPermitHandoffTests
         using var stop = new CancellationTokenSource();
         AddAdmittedPeer(node, sourceRid, sourceGeneration);
         SetField(node, "_socket", socket);
+        using var poller = CreateReceivePoller(socket);
+        SetField(node, "_poller", poller);
 
         try
         {
@@ -75,9 +79,9 @@ public sealed class MeshPermitHandoffTests
             // With both permits owned by queued records, the next
             // drain registers its one waiter and returns before Recv. The next
             // ordinary record is therefore still on the ROUTER socket.
-            Drain(node, stop.Token);
-            Drain(node, stop.Token);
-            Drain(node, stop.Token);
+            Assert.True(DrainWhenReadable(node, poller, stop.Token));
+            Assert.False(DrainWhenReadable(node, poller, stop.Token));
+            Assert.False(DrainWhenReadable(node, poller, stop.Token));
             Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
             Assert.Equal((uint)capacity, node.Status().PendingApplicationMessages);
             using var retained = Received.Create();
@@ -108,6 +112,7 @@ public sealed class MeshPermitHandoffTests
         {
             stop.Cancel();
             SetField(node, "_socket", null);
+            SetField(node, "_poller", null);
         }
 
         void FillIngress()
@@ -140,13 +145,13 @@ public sealed class MeshPermitHandoffTests
         );
         using var stop = new CancellationTokenSource();
         SetField(node, "_socket", socket);
+        using var poller = CreateReceivePoller(socket);
+        SetField(node, "_poller", poller);
 
-        // Arrange the producer's published state. Its reservation can be
-        // consumed before the producer returns; only that consumer owns the
-        // successful handoff flag, including registration of a successor.
+        // Arrange the producer's published reservation. The actual lease is
+        // the handoff fact, including capacity for a successor waiter.
         var reservation = await queue.AcquireAsync(stop.Token, ZLinkApplicationJobOrigin.Remote);
         SetField(node, "_reservedRawApplicationAdmission", reservation);
-        SetField(node, "_rawApplicationAdmissionWaitActive", 1);
         ZLinkApplicationJobQueueLease? held = null;
         try
         {
@@ -162,13 +167,44 @@ public sealed class MeshPermitHandoffTests
             stop.Cancel();
             held?.Dispose();
             SetField(node, "_socket", null);
+            SetField(node, "_poller", null);
         }
+    }
+
+    private static IPoller CreateReceivePoller(IRouterSocket socket)
+    {
+        var poller = Systems.Zlink.Zlink.CreatePoller();
+        poller.Add(
+            socket,
+            PollEventFlags.PollIn | PollEventFlags.PollCompletion | PollEventFlags.PollErr,
+            ReceiveSocketSlot
+        );
+        return poller;
+    }
+
+    private static bool DrainWhenReadable(
+        ZLinkManagedMeshNode node,
+        IPoller poller,
+        CancellationToken stop
+    )
+    {
+        var events = new PollEvent[1];
+        if (
+            poller.Wait(events, TimeSpan.Zero) == 0
+            || (events[0].Revents & PollEventFlags.PollIn) == 0
+        )
+            return false;
+        Drain(node, stop);
+        return true;
     }
 
     private static void Drain(ZLinkManagedMeshNode node, CancellationToken stop) =>
         node.GetType()
             .GetMethod("DrainRawSocket", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(node, [stop, new ZLinkApplicationJobQueueLease?[64]]);
+            .Invoke(
+                node,
+                [stop, new ZLinkApplicationJobQueueLease?[ZLinkReceiveBatchBudget.MaximumRecords]]
+            );
 
     private static void SetField(object instance, string name, object? value) =>
         instance
