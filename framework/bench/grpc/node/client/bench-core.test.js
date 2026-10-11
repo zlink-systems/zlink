@@ -51,8 +51,6 @@ test('a reply drained after active close is excluded from rate and latency', asy
     process.cpuUsage = originalCpuUsage;
   });
   const metrics = new core.SourceMetrics(100);
-  const polling = setInterval(() => metrics.snapshot(), 1);
-  t.after(() => clearInterval(polling));
   const transport = {
     request: async (_stream, payload) => {
       await core.delay(100);
@@ -87,8 +85,6 @@ test('send rate and latency use the target snapshot before worker drain', async 
     global.fetch = originalFetch;
   });
   const metrics = new core.SourceMetrics(100);
-  const polling = setInterval(() => metrics.snapshot(), 1);
-  t.after(() => clearInterval(polling));
   const transport = {
     send: async () => {
       await core.delay(100);
@@ -177,4 +173,25 @@ test('send-saturation yields so every logical stream starts work', async (t) => 
   await core.runActive(transport, metrics, options, activeTrigger('send-saturation'));
 
   assert.deepEqual([...streams].sort(), [0, 1]);
+});
+
+test('completion at the deadline is excluded even before the boundary timer runs', (t) => {
+  const originalNow = header.nowNs;
+  let now = 90n;
+  header.nowNs = () => now;
+  t.after(() => {
+    header.nowNs = originalNow;
+  });
+  const metrics = new core.SourceMetrics(100);
+  metrics.reset(100n);
+  const first = metrics.begin();
+  now = 99n;
+  metrics.complete(first, true);
+  const second = metrics.begin();
+  now = 100n;
+  metrics.complete(second, true);
+  const result = metrics.result();
+  assert.equal(result.completed, 2);
+  assert.equal(result.completedAtClose, 1);
+  assert.equal(result.meanMicros, 0.009);
 });

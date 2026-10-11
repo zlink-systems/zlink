@@ -43,8 +43,9 @@ class SourceMetrics {
     this.reset();
   }
 
-  reset() {
-    this.boundary = null;
+  reset(deadline) {
+    this.deadline = deadline;
+    this.completedAtClose = 0;
     this.submitted = 0;
     this.completed = 0;
     this.errors = 0;
@@ -60,7 +61,6 @@ class SourceMetrics {
 
   begin() {
     const now = header.nowNs();
-    this.closeWindow(now);
     this.submitted += 1;
     this.inFlight += 1;
     this.peakInFlight = Math.max(this.peakInFlight, this.inFlight);
@@ -69,7 +69,6 @@ class SourceMetrics {
 
   complete(started, success, error = null) {
     const now = header.nowNs();
-    this.closeWindow(now);
     const micros = Number(now - started) / 1000;
     this.inFlight -= 1;
     if (success) this.completed += 1;
@@ -77,9 +76,12 @@ class SourceMetrics {
       this.errors += 1;
       if (error !== null) this.recordError(error);
     }
-    this.sampleCount += 1;
-    this.sampleSumMicros += micros;
-    if (this.samples.length < this.sampleLimit) this.samples.push(micros);
+    if (now < this.deadline) {
+      if (success) this.completedAtClose += 1;
+      this.sampleCount += 1;
+      this.sampleSumMicros += micros;
+      if (this.samples.length < this.sampleLimit) this.samples.push(micros);
+    }
   }
 
   recordError(error) {
@@ -102,7 +104,6 @@ class SourceMetrics {
   }
 
   snapshot() {
-    this.closeWindow(header.nowNs());
     return {
       submitted: this.submitted,
       completed: this.completed,
@@ -117,6 +118,7 @@ class SourceMetrics {
     const sorted = this.samples.slice().sort((a, b) => a - b);
     return {
       completed: this.completed,
+      completedAtClose: this.completedAtClose,
       errors: this.errors,
       inFlight: this.inFlight,
       peakInFlight: this.peakInFlight,
@@ -127,10 +129,6 @@ class SourceMetrics {
       p95Micros: percentile(sorted, 0.95),
       p99Micros: percentile(sorted, 0.99)
     };
-  }
-
-  closeWindow(now) {
-    this.boundary?.(now);
   }
 }
 
@@ -211,28 +209,17 @@ async function runWarmup(transport, options, trigger) {
 
 async function runActive(transport, metrics, options, trigger) {
   await resetTarget(options.targetStatsUrl);
-  metrics.reset();
   const resources = new ResourceSample();
   const deadline = header.nowNs() + BigInt(Math.round(trigger.durationMs * 1e6));
+  metrics.reset(deadline);
   const runId = headerRunId(trigger.runId);
   let sequence = 0;
   const nextSequence = () => sequence++;
-  let resolveBoundary;
-  let rejectBoundary;
-  const boundary = new Promise((resolve, reject) => {
-    resolveBoundary = resolve;
-    rejectBoundary = reject;
-  });
-  metrics.boundary = (now) => {
-    if (now < deadline) return;
-    metrics.boundary = null;
+  const boundary = delay(Math.ceil(Number(deadline - header.nowNs()) / 1e6)).then(async () => {
     const usage = resources.finish();
-    const source = metrics.result();
-    targetStats(options.targetStatsUrl).then(
-      (target) => resolveBoundary({ usage, source, target }),
-      rejectBoundary
-    );
-  };
+    const target = await targetStats(options.targetStatsUrl);
+    return { usage, target };
+  });
 
   let running;
   if (trigger.pattern === 'request-serial') {
@@ -272,10 +259,10 @@ async function runActive(transport, metrics, options, trigger) {
   }
 
   const [active] = await Promise.all([boundary, running]);
-  const { usage, source, target } = active;
-  const settled = metrics.result();
+  const { usage, target } = active;
+  const source = metrics.result();
   const send = trigger.pattern === 'send-saturation';
-  const completed = send ? target.received : source.completed;
+  const completed = send ? target.received : source.completedAtClose;
   const seconds = trigger.durationMs / 1000;
   const meanMicros = send ? target.meanMicros : source.meanMicros;
   const p95Micros = send ? target.p95Micros : source.p95Micros;
@@ -283,12 +270,12 @@ async function runActive(transport, metrics, options, trigger) {
   const throughput = completed / Math.max(0.001, seconds);
   return {
     submitted: metrics.submitted,
-    completed: settled.completed,
-    completed_at_close: source.completed,
+    completed: source.completed,
+    completed_at_close: source.completedAtClose,
     active_elapsed_ms: trigger.durationMs,
-    errors: settled.errors,
-    client_error_summary: settled.clientErrorSummary,
-    client_error_other_count: settled.clientErrorOtherCount,
+    errors: source.errors,
+    client_error_summary: source.clientErrorSummary,
+    client_error_other_count: source.clientErrorOtherCount,
     server_errors: target.errors,
     throughput_per_second: throughput,
     bandwidth_mb_s: (throughput * trigger.payloadBytes) / 1_000_000,
@@ -305,7 +292,7 @@ async function runActive(transport, metrics, options, trigger) {
     event_loop_utilization: usage.eventLoopUtilization,
     peak_in_flight: source.peakInFlight,
     request_window: trigger.pattern === 'request-window' ? trigger.requestWindow : null,
-    abandoned: settled.abandoned,
+    abandoned: source.abandoned,
     server_received_at_close: send ? target.received : null
   };
 }
@@ -319,7 +306,6 @@ async function requestWorkers(count, transport, metrics, trigger, runId, nextSeq
     })()
   );
   await Promise.all(workers);
-  metrics.closeWindow(header.nowNs());
 }
 
 async function requestBackpressure(
@@ -380,7 +366,6 @@ async function requestBackpressure(
       await sleepImmediate();
     }
 
-    metrics.closeWindow(header.nowNs());
     const drainDeadline = header.nowNs() + BigInt(options.drainBoundMs) * 1_000_000n;
     while ((pending.size > 0 || blocked !== null) && header.nowNs() < drainDeadline) {
       completionPump.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
@@ -402,7 +387,6 @@ async function requestBackpressure(
       await new Promise((resolve) => setImmediate(resolve));
     }
   }
-  metrics.closeWindow(header.nowNs());
   if (pending.size === 0) return;
   let drained = false;
   await Promise.race([
@@ -446,7 +430,6 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
     })()
   );
   await Promise.all(workers);
-  metrics.closeWindow(header.nowNs());
 }
 
 async function executeRequest(transport, metrics, trigger, runId, stream, sequence) {
