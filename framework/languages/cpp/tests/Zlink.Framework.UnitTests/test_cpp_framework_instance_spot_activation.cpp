@@ -149,8 +149,7 @@ static void verify_same_target_activation_order (bool ready_request,
                .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}});
     std::vector<std::uint64_t> queued;
     target->configure_instance_spot_operations (
-      // The host keeps finishing relocation cleanup after close(); it must also own the blob store.
-      store, relocations, [owner, blob_store] { return owner; },
+      store, relocations, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
         [] (const auto &, const auto &) { return true; },
         [&] (auto command, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
@@ -934,7 +933,7 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
     int prepares = 0;
     int handlers = 0;
     target->configure_instance_spot_operations (
-      store, relocations, [blob_store] { return fw::location_owner_token_t{"target-owner", 1}; },
+      store, relocations, [] { return fw::location_owner_token_t{"target-owner", 1}; },
       host::instance_spot_activation_materializer_t{
         [&] (const auto &, const auto &) {
             ++prepares;
@@ -1911,7 +1910,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                              std::make_shared<rt::runtime_failure_collector_t> ()}});
                 int factories = 0;
                 target->configure_instance_spot_operations (
-                  store, relocations, [owner, blob_store] { return owner; },
+                  store, relocations, [owner] { return owner; },
                   host::instance_spot_activation_materializer_t{
                     [&] (const auto &, const auto &) {
                         ++factories;
@@ -2288,7 +2287,7 @@ TEST (CppFrameworkInstanceSpotActivation, ReadyLocalAdmissionSurvivesRecoveryRoo
     auto local_spots = fw::detail::spot_node_runtime_t::from (builder, "same-target");
     ASSERT_TRUE (local_spots);
     target->configure_instance_spot_operations (
-      store, relocations, [owner, blob_store] { return owner; },
+      store, relocations, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
         [&] (const auto &request, const auto &snapshot) {
             const auto created = local_spots->get_or_create_spot (
