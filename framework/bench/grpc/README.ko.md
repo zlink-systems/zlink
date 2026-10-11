@@ -145,8 +145,8 @@ bench에서 옳은 비교인 이유는 아래와 같다.
   runner 자체는 부하를 만들지 않는다.
 - loopback 주소(`127.0.0.1`)만 사용한다. 포트는 §9의 언어별 대역을 사용한다.
 - Release build로 실행한다.
-- warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup 길이는 언어마다 다르게
-  두고 사용한 값을 결과에 기록한다(§8.2).
+- warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup은 모든 언어에서 같은 패턴으로
+  2초 실행하고 측정에서 제외한다(§8.2).
 - 기본 payload 크기는 `1024,4096` bytes다.
 - `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
   설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2). `request_window` 설정은 이 bench에 없다.
@@ -495,12 +495,11 @@ raw 직렬화 비용을 포함한 결과를 새 기준으로 사용한다. 직�
 
 ### 8.2 언어마다 다르게 두되 반드시 기록하는 값
 
-아래 세 값은 언어마다 다르게 설정한다. 같게 맞추는 것이 목적이 아니라, 사용한 값을 결과에
+warmup은 공용 `WARMUP_SECONDS`(기본값 2초) 동안 같은 패턴을 warmup phase header로 실행하고, 미완료는 `warmup_abandoned`로 기록하며 active 결과에서 제외한다. 아래 두 값은 언어마다 다르게 설정한다. 같게 맞추는 것이 목적이 아니라, 사용한 값을 결과에
 남기는 것이 목적이다.
 
 | 항목 | 이유 |
 |------|------|
-| warmup 길이 | JVM은 JIT 예열이 끝난 뒤에 정상 상태가 된다. `.NET`과 같은 warmup을 강요하면 예열되지 않은 런타임을 측정하게 된다 |
 | gRPC server 구성 | 언어마다 기본 server 구현이 다르다. gRPC 쪽은 각 언어의 기본 구성으로 두고 그 구성을 결과에 남긴다 |
 | 런타임과 gRPC 라이브러리 version | SDK version, 런타임 version, gRPC 라이브러리 version을 셀 원본과 보고서에 함께 남긴다 |
 
@@ -608,6 +607,7 @@ runner는 여섯 개다: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local
 | `RUN_STAMP` | 시작 시각(`YYYYmmdd_HHMMSS`) | 기본 `OUTPUT_DIR`의 이름 |
 | `PAYLOAD_SIZES` | `1024,4096` | §2의 payload 크기 |
 | `DURATION_SECONDS` | `5` | 셀마다의 active 구간(§3) |
+| `WARMUP_SECONDS` | `2` | 모든 언어에서 같은 패턴의 warmup 시간(양의 정수 초, §8.2) |
 | `PATTERNS` | `request-serial,request-backpressure,send-saturation` | §2의 패턴 |
 | `IMPLEMENTATIONS` | 그 언어의 구현 전부(§1.1, §1.2) | 측정할 구현 |
 | `RUNS` | `3` | run 수. G5 재현성 판정이 run 3개를 요구한다 |
@@ -618,7 +618,7 @@ runner는 여섯 개다: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local
   기본값은 `request-backpressure`와 `1024`이며, 다른 값은 거부한다.
 - 값이 위 범위를 벗어나면 runner는 측정을 시작하기 전에 거부한다.
 
-위 표 밖의 값은 입력이 아니다. warmup(§8.2), send concurrency 8과 drain 상한 30초(§3), 포트(§9)는
+위 표 밖의 값은 입력이 아니다. send concurrency 8과 drain 상한 30초(§3), 포트(§9)는
 runner가 정하고 셀 JSON의 `metadata`에 기록한다.
 
 결과는 다음 배치로 쓴다.

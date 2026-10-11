@@ -8,7 +8,6 @@ bench_init dotnet "grpc-dotnet,zlink-dotnet,zlink-framework-dotnet" \
   "request-serial,request-backpressure,send-saturation" "1024,4096"
 
 CONFIGURATION=Release
-WARMUP_CALLS=1000
 
 if [[ "${SKIP_BUILD}" != 1 ]]; then
   "${ROOT_DIR}/build.sh"
@@ -58,7 +57,6 @@ for run in $(seq 1 "${RUNS}"); do
         cell_id="${impl}-${pattern}-${payload}"
         cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
         mkdir -p "${cell_dir}"
-        bench_measurement_load_gate
         target_log="${cell_dir}/target.log"
         source_log="${cell_dir}/source.log"
         target_stats_file="${cell_dir}/target-stats.json"
@@ -72,7 +70,7 @@ for run in $(seq 1 "${RUNS}"); do
           --implementation "${impl}" --scenario "${pattern}" --payload-size "${payload}"
           --request-window "${WINDOW}" --send-concurrency "${SEND_CONCURRENCY}"
           --latency-sample-limit "${LATENCY_SAMPLE_LIMIT}"
-          --warmup "${WARMUP_CALLS}" --drain-bound-ms "${DRAIN_BOUND_MS}"
+          --warmup-seconds "${WARMUP_SECONDS}" --drain-bound-ms "${DRAIN_BOUND_MS}"
           --trigger-url "${trigger_url}" --stats-url "${source_stats_url}"
           --target-endpoint "${target_endpoint}" --target-stats-url "${target_stats_url}"
           --raw-socket router
@@ -86,11 +84,9 @@ for run in $(seq 1 "${RUNS}"); do
         a_pid=$!
         wait_for_stats "${source_stats_url}" 1
 
-        # The warmup is a call count, so target may still be receiving warmup requests when
-        # A goes idle; settle before active so they do not leak into the active count.
         bench_run_cell "${trigger_url}" "${source_stats_url}" "${target_stats_url}" \
           "${run_id}" "${cell_id}" "${impl}" "${pattern}" "${payload}" \
-          "$((DURATION_SECONDS * 1000))" "${cell_dir}/results.json" "${target_stats_file}"
+          "$((WARMUP_SECONDS * 1000))" "${cell_dir}/results.json" "${target_stats_file}"
 
         cleanup_cell
         wait_for_ports_free 5200 5219

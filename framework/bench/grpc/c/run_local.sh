@@ -62,11 +62,10 @@ for run in $(seq 1 "${RUNS}"); do
       for payload in "${payloads[@]}"; do
         cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
         mkdir -p "${cell_dir}"
-        bench_measurement_load_gate
         echo "[bench] run=${run} cell=${impl}-${pattern}-${payload}: start server, then client" >&2
         start_server "${cell_dir}/target.pid" "${cell_dir}/target.log" "${server}" "${port}"
         SERVER_PID="${b_pid}" BENCH_RUN_DIR="${run_dir}" BENCH_CORE_VERSION="${ZLINK_C_CORE_VERSION}" \
-          PAYLOAD_SIZES="${payload}" PATTERNS="${pattern}" DURATION_SECONDS="${DURATION_SECONDS}" \
+          PAYLOAD_SIZES="${payload}" PATTERNS="${pattern}" DURATION_SECONDS="${DURATION_SECONDS}" WARMUP_SECONDS="${WARMUP_SECONDS}" \
           "${client}" >"${cell_dir}/source.log" 2>&1 ||
           { echo "client failed: ${cell_dir}/source.log" >&2; exit 1; }
         cleanup_cell

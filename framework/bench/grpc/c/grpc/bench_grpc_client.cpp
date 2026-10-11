@@ -12,11 +12,11 @@
 
 namespace
 {
-void fill_payload (std::string *body, size_t size, uint32_t run_id, uint64_t seq)
+void fill_payload (
+  std::string *body, size_t size, uint32_t run_id, uint64_t seq, zlink_c_bench::phase_t phase)
 {
     body->assign (std::max (size, zlink_c_bench::k_header_size), static_cast<char> (0xab));
-    zlink_c_bench::stamp_payload (body->data (), body->size (), run_id, zlink_c_bench::phase_active,
-                                  seq);
+    zlink_c_bench::stamp_payload (body->data (), body->size (), run_id, phase, seq);
 }
 
 struct request_call_t
@@ -43,9 +43,11 @@ struct send_call_t
 };
 
 zlink_c_bench::result_t
-run_request_serial (zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size)
+run_request_serial (zlink::framework::bench::withgrpc::BenchService::Stub *stub,
+                    size_t size,
+                    zlink_c_bench::phase_config_t config)
 {
-    const int duration_s = zlink_c_bench::duration_seconds ();
+    const int duration_s = config.seconds;
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
     zlink_c_bench::latency_sampler_t latency (zlink_c_bench::k_latency_sample_limit);
     auto resources = zlink_c_bench::resource_start ();
@@ -57,7 +59,7 @@ run_request_serial (zlink::framework::bench::withgrpc::BenchService::Stub *stub,
     while (std::chrono::steady_clock::now () < deadline) {
         zlink::framework::bench::withgrpc::BenchPayload request;
         zlink::framework::bench::withgrpc::BenchPayload reply;
-        fill_payload (request.mutable_body (), size, run_id, completed + errors);
+        fill_payload (request.mutable_body (), size, run_id, completed + errors, config.phase);
         grpc::ClientContext context;
         const uint64_t submit_start = zlink_c_bench::now_ns ();
         const grpc::Status status = stub->Echo (&context, request, &reply);
@@ -90,9 +92,11 @@ run_request_serial (zlink::framework::bench::withgrpc::BenchService::Stub *stub,
 }
 
 zlink_c_bench::result_t
-run_request_backpressure (zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size)
+run_request_backpressure (zlink::framework::bench::withgrpc::BenchService::Stub *stub,
+                          size_t size,
+                          zlink_c_bench::phase_config_t config)
 {
-    const int duration_s = zlink_c_bench::duration_seconds ();
+    const int duration_s = config.seconds;
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
     zlink_c_bench::latency_sampler_t latency (zlink_c_bench::k_latency_sample_limit);
     std::mutex latency_gate;
@@ -135,7 +139,7 @@ run_request_backpressure (zlink::framework::bench::withgrpc::BenchService::Stub 
     const auto deadline = start + std::chrono::seconds (duration_s);
     while (std::chrono::steady_clock::now () < deadline) {
         auto *call = new request_call_t ();
-        fill_payload (call->request.mutable_body (), size, run_id, submitted++);
+        fill_payload (call->request.mutable_body (), size, run_id, submitted++, config.phase);
         const int now_outstanding = outstanding.fetch_add (1, std::memory_order_relaxed) + 1;
         max_outstanding_seen =
           std::max<uint64_t> (max_outstanding_seen, static_cast<uint64_t> (now_outstanding));
@@ -181,9 +185,11 @@ run_request_backpressure (zlink::framework::bench::withgrpc::BenchService::Stub 
 }
 
 zlink_c_bench::result_t
-run_send_saturation (zlink::framework::bench::withgrpc::BenchService::Stub *stub, size_t size)
+run_send_saturation (zlink::framework::bench::withgrpc::BenchService::Stub *stub,
+                     size_t size,
+                     zlink_c_bench::phase_config_t config)
 {
-    const int duration_s = zlink_c_bench::duration_seconds ();
+    const int duration_s = config.seconds;
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
     grpc::CompletionQueue cq;
     std::atomic<uint64_t> completed{0};
@@ -215,7 +221,7 @@ run_send_saturation (zlink::framework::bench::withgrpc::BenchService::Stub *stub
             continue;
         }
         auto *call = new send_call_t ();
-        fill_payload (call->request.mutable_body (), size, run_id, submitted++);
+        fill_payload (call->request.mutable_body (), size, run_id, submitted++, config.phase);
         const int now_outstanding = outstanding.fetch_add (1, std::memory_order_relaxed) + 1;
         max_outstanding_seen =
           std::max<uint64_t> (max_outstanding_seen, static_cast<uint64_t> (now_outstanding));
@@ -260,17 +266,30 @@ int main ()
     auto stub = zlink::framework::bench::withgrpc::BenchService::NewStub (channel);
     int status = 0;
     for (const size_t size : zlink_c_bench::parse_sizes ()) {
-        zlink_c_bench::result_t results[3];
-        int count = 0;
-        if (zlink_c_bench::pattern_enabled (patterns, "request-serial"))
-            results[count++] = run_request_serial (stub.get (), size);
-        if (zlink_c_bench::pattern_enabled (patterns, "request-backpressure"))
-            results[count++] = run_request_backpressure (stub.get (), size);
-        if (zlink_c_bench::pattern_enabled (patterns, "send-saturation"))
-            results[count++] = run_send_saturation (stub.get (), size);
-        for (int i = 0; i < count; ++i)
-            if (!zlink_c_bench::write_cell_json (results[i], grpc::Version ()))
+        if (zlink_c_bench::pattern_enabled (patterns, "request-serial")) {
+            if (!zlink_c_bench::run_cell (
+                  [&] (zlink_c_bench::phase_config_t config) {
+                      return run_request_serial (stub.get (), size, config);
+                  },
+                  grpc::Version ()))
                 status = 1;
+        }
+        if (zlink_c_bench::pattern_enabled (patterns, "request-backpressure")) {
+            if (!zlink_c_bench::run_cell (
+                  [&] (zlink_c_bench::phase_config_t config) {
+                      return run_request_backpressure (stub.get (), size, config);
+                  },
+                  grpc::Version ()))
+                status = 1;
+        }
+        if (zlink_c_bench::pattern_enabled (patterns, "send-saturation")) {
+            if (!zlink_c_bench::run_cell (
+                  [&] (zlink_c_bench::phase_config_t config) {
+                      return run_send_saturation (stub.get (), size, config);
+                  },
+                  grpc::Version ()))
+                status = 1;
+        }
     }
     return status;
 }

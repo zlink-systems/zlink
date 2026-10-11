@@ -27,7 +27,7 @@ function parseOptions(argv) {
     requestWindow: argInt(argv, '--request-window', 100),
     sendConcurrency: argInt(argv, '--send-concurrency', 8),
     latencySampleLimit: argInt(argv, '--latency-sample-limit', 200000),
-    warmup: argInt(argv, '--warmup', 1000),
+    warmup: argInt(argv, '--warmup-seconds', 2),
     drainBoundMs: argInt(argv, '--drain-bound-ms', 30000),
     requestTimeoutMs: argInt(argv, '--request-timeout-ms', 30000),
     routeReadyMs: argInt(argv, '--route-ready-ms', 30000),
@@ -45,10 +45,16 @@ function parseOptions(argv) {
 function validateOptions(options) {
   if (!IMPLEMENTATIONS.includes(options.implementation)) throw new Error('unknown implementation');
   if (!PATTERNS.includes(options.scenario)) throw new Error('unknown scenario');
-  if (options.payloadSize < header.HEADER_SIZE || options.requestWindow !== 100
-      || options.sendConcurrency !== 8 || options.warmup < 0
-      || options.latencySampleLimit <= 0 || options.drainBoundMs !== 30000
-      || options.requestTimeoutMs !== 30000 || options.routeReadyMs !== 30000) {
+  if (
+    options.payloadSize < header.HEADER_SIZE ||
+    options.requestWindow !== 100 ||
+    options.sendConcurrency !== 8 ||
+    options.warmup < 0 ||
+    options.latencySampleLimit <= 0 ||
+    options.drainBoundMs !== 30000 ||
+    options.requestTimeoutMs !== 30000 ||
+    options.routeReadyMs !== 30000
+  ) {
     throw new Error('fixed benchmark options are invalid');
   }
   if (options.rawSocket !== 'router') throw new Error('RAW_SOCKET must remain router');
@@ -73,9 +79,12 @@ function validateEndpoint(value, scheme, name) {
 }
 
 function validateTriggerForCell(trigger, options) {
-  if (trigger.pattern !== options.scenario || trigger.payloadBytes !== options.payloadSize
-      || trigger.requestWindow !== options.requestWindow
-      || trigger.sendConcurrency !== options.sendConcurrency) {
+  if (
+    trigger.pattern !== options.scenario ||
+    trigger.payloadBytes !== options.payloadSize ||
+    trigger.requestWindow !== options.requestWindow ||
+    trigger.sendConcurrency !== options.sendConcurrency
+  ) {
     throw new Error('trigger values do not match the runner-owned cell configuration');
   }
 }
@@ -90,23 +99,40 @@ function grpcCall(client, method, body, timeoutMs) {
 }
 
 function createGrpcTransport(options) {
-  const definition = protoLoader.loadSync(path.join(__dirname, '..', '..', 'proto', 'bench.proto'), {
-    keepCase: true, longs: String, enums: String, defaults: true, oneofs: true, bytes: Buffer
-  });
+  const definition = protoLoader.loadSync(
+    path.join(__dirname, '..', '..', 'proto', 'bench.proto'),
+    {
+      keepCase: true,
+      longs: String,
+      enums: String,
+      defaults: true,
+      oneofs: true,
+      bytes: Buffer
+    }
+  );
   const proto = grpc.loadPackageDefinition(definition).zlink.framework.bench.withgrpc;
   const streamCount = options.scenario === 'send-saturation' ? options.sendConcurrency : 1;
-  const clients = Array.from({ length: streamCount }, () => new proto.BenchService(
-    options.targetEndpoint, grpc.credentials.createInsecure()
-  ));
+  const clients = Array.from(
+    { length: streamCount },
+    () => new proto.BenchService(options.targetEndpoint, grpc.credentials.createInsecure())
+  );
   return {
     request: async (stream, payload) => {
       const reply = await grpcCall(
-        clients[stream % clients.length], 'Echo', payload, options.requestTimeoutMs
+        clients[stream % clients.length],
+        'Echo',
+        payload,
+        options.requestTimeoutMs
       );
       return reply.body;
     },
     send: async (stream, payload) => {
-      await grpcCall(clients[stream % clients.length], 'Command', payload, options.requestTimeoutMs);
+      await grpcCall(
+        clients[stream % clients.length],
+        'Command',
+        payload,
+        options.requestTimeoutMs
+      );
     },
     close: async () => {
       for (const client of clients) grpc.closeClient(client);
@@ -137,24 +163,30 @@ class RawBenchSocket {
 
 function createRawTransport(options) {
   const context = zlink.createContext();
-  const requestSocket = options.scenario === 'send-saturation' ? null : RawBenchSocket.create(
-    context,
-    `bench-source-request-${process.pid}`,
-    rawWire.ROUTING_IDS.rawRequestServer,
-    options.targetEndpoint
-  );
+  const requestSocket =
+    options.scenario === 'send-saturation'
+      ? null
+      : RawBenchSocket.create(
+          context,
+          `bench-source-request-${process.pid}`,
+          rawWire.ROUTING_IDS.rawRequestServer,
+          options.targetEndpoint
+        );
   // 서버 간 연결은 하나다. `sendConcurrency`는 stream 수이지 연결 수가 아니다.
   // gRPC 행은 채널 하나를 stub 8개가 공유하고 framework 행은 RouteMesh socket 하나를
   // 쓴다. raw만 stream마다 ROUTER를 만들면 `zlink-framework-<lang> / zlink-<lang>`이
   // 계층 비용이 아니라 연결 수 차이를 재게 된다 (#317).
-  const sendSockets = options.scenario === 'send-saturation'
-    ? [RawBenchSocket.create(
-      context,
-      `bench-source-send-${process.pid}`,
-      rawWire.ROUTING_IDS.rawCommandServer,
-      options.targetCommandEndpoint
-    )]
-    : [];
+  const sendSockets =
+    options.scenario === 'send-saturation'
+      ? [
+          RawBenchSocket.create(
+            context,
+            `bench-source-send-${process.pid}`,
+            rawWire.ROUTING_IDS.rawCommandServer,
+            options.targetCommandEndpoint
+          )
+        ]
+      : [];
   const createCompletionPump = (socket) => {
     const poller = zlink.createPoller();
     const events = zlink.createPollEvents(1);
@@ -181,8 +213,12 @@ function createRawTransport(options) {
   const awaitCompletion = async (pump, promise) => {
     let outcome = null;
     Promise.resolve(promise).then(
-      (value) => { outcome = { value }; },
-      (error) => { outcome = { error }; }
+      (value) => {
+        outcome = { value };
+      },
+      (error) => {
+        outcome = { error };
+      }
     );
     while (outcome === null) {
       pump.poll(core.COMPLETION_POLL_INTERVAL_MS);
@@ -193,7 +229,8 @@ function createRawTransport(options) {
   };
 
   const submitRequest = (payload) => {
-    const submission = requestSocket.socket.request(requestSocket.peer)
+    const submission = requestSocket.socket
+      .request(requestSocket.peer)
       .message(rawWire.REQUEST_ENVELOPE)
       .message(rawWire.encodeBenchPayloadMessage(payload))
       .timeout(options.requestTimeoutMs)
@@ -213,7 +250,8 @@ function createRawTransport(options) {
 
   const submitSend = (stream, payload) => {
     const socket = sendSockets[stream % sendSockets.length];
-    return socket.socket.send(socket.peer)
+    return socket.socket
+      .send(socket.peer)
       .message(rawWire.REQUEST_ENVELOPE)
       .message(rawWire.encodeBenchPayloadMessage(payload))
       .submit();
@@ -245,11 +283,12 @@ function createRawTransport(options) {
 }
 
 async function createTransport(options) {
-  const transport = options.implementation === 'grpc-node'
-    ? createGrpcTransport(options)
-    : options.implementation === 'zlink-framework-node'
-      ? await createFrameworkTransport(options)
-      : createRawTransport(options);
+  const transport =
+    options.implementation === 'grpc-node'
+      ? createGrpcTransport(options)
+      : options.implementation === 'zlink-framework-node'
+        ? await createFrameworkTransport(options)
+        : createRawTransport(options);
   const probeBody = header.createPayloadBytes(1024, 1, header.PHASE_WARMUP, 0);
   await core.waitForRouteReady(async () => {
     if (options.scenario === 'send-saturation') {
@@ -270,27 +309,31 @@ async function main() {
   fs.mkdirSync(options.output, { recursive: true });
 
   const transport = await createTransport(options);
-  const metrics = new core.SourceMetrics(options.latencySampleLimit);
+  let metrics = new core.SourceMetrics(options.latencySampleLimit);
   let ready = true;
   let activeResult = null;
+  let warmupAbandoned = 0;
   let controller;
   controller = new BenchPhaseController(
     () => ready,
     () => metrics.snapshot(),
     async (trigger) => {
       validateTriggerForCell(trigger, options);
+      metrics = new core.SourceMetrics(options.latencySampleLimit);
+      const result = await core.runActive(transport, metrics, options, trigger);
       if (trigger.phase === 'warmup') {
-        await core.runWarmup(transport, options, trigger);
+        warmupAbandoned = result.abandoned;
         return;
       }
-      activeResult = await core.runActive(transport, metrics, options, trigger);
+      activeResult = result;
+      activeResult.warmup_abandoned = warmupAbandoned;
       await writeResult(options, controller.lastTrigger, activeResult);
     }
   );
   const httpServers = await startSourceHttp(options.triggerUrl, options.statsUrl, controller);
   process.stderr.write(
-    `[source] implementation=${options.implementation} trigger=${options.triggerUrl}`
-    + ` stats=${options.statsUrl} target=${options.targetEndpoint}\n`
+    `[source] implementation=${options.implementation} trigger=${options.triggerUrl}` +
+      ` stats=${options.statsUrl} target=${options.targetEndpoint}\n`
   );
 
   let stopping = false;
@@ -301,8 +344,12 @@ async function main() {
     await httpServers.close();
     await transport.close();
   };
-  process.on('SIGTERM', () => { stop().then(() => process.exit(0)); });
-  process.on('SIGINT', () => { stop().then(() => process.exit(130)); });
+  process.on('SIGTERM', () => {
+    stop().then(() => process.exit(0));
+  });
+  process.on('SIGINT', () => {
+    stop().then(() => process.exit(130));
+  });
 }
 
 async function writeResult(options, observedTrigger, result) {
@@ -323,7 +370,9 @@ async function writeResult(options, observedTrigger, result) {
     role: 'source',
     trigger,
     streams: core.streamDescription(
-      options.scenario, options.requestWindow, options.sendConcurrency
+      options.scenario,
+      options.requestWindow,
+      options.sendConcurrency
     ),
     target_stats: null,
     ...result
@@ -361,7 +410,9 @@ async function writeResult(options, observedTrigger, result) {
   };
   const scenario = `${options.implementation}-${options.scenario}`;
   for (const [name, value] of Object.entries(metrics)) {
-    lines.push(`RESULT,current,${scenario},local,${options.payloadSize},${name},${value.toFixed(3)}`);
+    lines.push(
+      `RESULT,current,${scenario},local,${options.payloadSize},${name},${value.toFixed(3)}`
+    );
   }
   const text = `${lines.join('\n')}\n`;
   fs.writeFileSync(path.join(options.output, options.reportFile), text);
@@ -404,8 +455,8 @@ async function collectMetadata(options) {
     grpcJsVersion: require('@grpc/grpc-js/package.json').version,
     protoLoaderVersion: require('@grpc/proto-loader/package.json').version,
     zlinkBindingVersion: readPackageVersion('@zlink-systems/zlink'),
-    grpcServerConfiguration: targetInfo.serverConfiguration
-      || '@grpc/grpc-js Server, default options, insecure loopback',
+    grpcServerConfiguration:
+      targetInfo.serverConfiguration || '@grpc/grpc-js Server, default options, insecure loopback',
     logicalCores: core.LOGICAL_CORES,
     clientSaturationMetric: core.CLIENT_SATURATION_METRIC,
     clientParallelismCeiling: core.CLIENT_PARALLELISM_CEILING,

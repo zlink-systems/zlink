@@ -157,8 +157,8 @@ one-way send. Under this condition the difference was N times.
   endpoint over HTTP. The runner itself generates no load.
 - Only a loopback address (`127.0.0.1`) is used. Ports use the per-language bands in §9.
 - Runs as a Release build.
-- Runs a fixed-duration measured active window after warmup. The warmup length is set per language
-  and the value used is recorded in the result (§8.2).
+- Runs a fixed-duration measured active window after warmup. Warmup runs the same pattern
+  for 2 seconds in every language and is excluded from measured results (§8.2).
 - The default payload size is `1024,4096` bytes.
 - The `request-backpressure` pattern has no incomplete-request ceiling setting. In that
   pattern depth is not a condition that is set but a result that is measured and recorded
@@ -531,12 +531,11 @@ can raise this ratio; that reflects corrected measurement conditions, not improv
 
 ### 8.2 Values Set Per Language That Must Be Recorded
 
-The three values below are set differently per language. The goal isn't to make them identical but
+Warmup runs the same pattern with a warmup phase header for the shared `WARMUP_SECONDS` (default 2 seconds). Unfinished operations are recorded as `warmup_abandoned` and excluded from active results. The two values below are set differently per language. The goal isn't to make them identical but
 to leave the values used in the result.
 
 | Item | Reason |
 |------|------|
-| Warmup length | The JVM reaches steady state only after JIT warmup finishes. Forcing the same warmup as `.NET` would measure an unwarmed runtime |
 | gRPC server configuration | The default server implementation differs per language. The gRPC side is left at each language's default configuration, and that configuration is recorded in the result |
 | Runtime and gRPC library version | The SDK version, runtime version, and gRPC library version are recorded in the cell's raw output and in the report |
 
@@ -653,6 +652,7 @@ difference doesn't show in the result table.
 | `OUTPUT_DIR` | `framework/bench/grpc/log/<RUN_STAMP>/<lang>` | Result root. A relative path is resolved against the directory the runner was started from |
 | `RUN_STAMP` | Start time (`YYYYmmdd_HHMMSS`) | Name of the default `OUTPUT_DIR` |
 | `PAYLOAD_SIZES` | `1024,4096` | Payload sizes of §2 |
+| `WARMUP_SECONDS` | `2` | Same-pattern warmup duration for every language (positive integer seconds, §8.2) |
 | `DURATION_SECONDS` | `5` | Active window of each cell (§3) |
 | `PATTERNS` | `request-serial,request-backpressure,send-saturation` | Patterns of §2 |
 | `IMPLEMENTATIONS` | Every implementation of the language (§1.1, §1.2) | Implementations to measure |
@@ -664,7 +664,7 @@ difference doesn't show in the result table.
   `PATTERNS` and `PAYLOAD_SIZES` are `request-backpressure` and `1024`, and other values are rejected.
 - If a value is outside these ranges, the runner rejects it before the measurement starts.
 
-Values outside the table aren't inputs. Warmup (§8.2), send concurrency 8 and the 30-second drain
+Values outside the table aren't inputs. Send concurrency 8 and the 30-second drain
 limit (§3), and ports (§9) are set by the runner and recorded in the `metadata` of the cell JSON.
 
 Results are written in this layout.

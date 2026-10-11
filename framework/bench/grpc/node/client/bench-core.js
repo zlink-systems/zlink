@@ -43,7 +43,8 @@ class SourceMetrics {
     this.reset();
   }
 
-  reset(deadline) {
+  reset(deadline, phase = header.PHASE_ACTIVE) {
+    this.phase = phase;
     this.deadline = deadline;
     this.completedAtClose = 0;
     this.submitted = 0;
@@ -192,29 +193,11 @@ function headerRunId(runId) {
   return hash === 0 ? 1 : hash;
 }
 
-async function runWarmup(transport, options, trigger) {
-  const runId = headerRunId(trigger.runId);
-  for (let index = 0; index < options.warmup; index++) {
-    const stream = trigger.pattern === 'send-saturation' ? index % trigger.sendConcurrency : 0;
-    const payload = header.createPayloadBytes(
-      trigger.payloadBytes,
-      runId,
-      header.PHASE_WARMUP,
-      index
-    );
-    if (trigger.pattern === 'send-saturation') await transport.send(stream, payload);
-    else {
-      const reply = await transport.request(stream, payload);
-      validateReply(reply, runId, header.PHASE_WARMUP, trigger.payloadBytes, index);
-    }
-  }
-}
-
 async function runActive(transport, metrics, options, trigger) {
   await resetTarget(options.targetStatsUrl);
   const resources = new ResourceSample();
   const deadline = header.nowNs() + BigInt(Math.round(trigger.durationMs * 1e6));
-  metrics.reset(deadline);
+  metrics.reset(deadline, trigger.phase === 'warmup' ? header.PHASE_WARMUP : header.PHASE_ACTIVE);
   const runId = headerRunId(trigger.runId);
   let sequence = 0;
   const nextSequence = () => sequence++;
@@ -334,7 +317,7 @@ async function requestBackpressure(
         const payload = header.createPayloadBytes(
           trigger.payloadBytes,
           runId,
-          header.PHASE_ACTIVE,
+          metrics.phase,
           sequence
         );
         const started = metrics.begin();
@@ -348,7 +331,7 @@ async function requestBackpressure(
           const reply = (async () => {
             try {
               const value = await submission.reply;
-              validateReply(value, runId, header.PHASE_ACTIVE, trigger.payloadBytes, sequence);
+              validateReply(value, runId, metrics.phase, trigger.payloadBytes, sequence);
               metrics.complete(started, true);
             } catch (error) {
               metrics.complete(started, false, error);
@@ -404,7 +387,7 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
         const payload = header.createPayloadBytes(
           trigger.payloadBytes,
           runId,
-          header.PHASE_ACTIVE,
+          metrics.phase,
           sequence
         );
         const started = metrics.begin();
@@ -431,11 +414,11 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
 }
 
 async function executeRequest(transport, metrics, trigger, runId, stream, sequence) {
-  const payload = header.createPayloadBytes(trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence);
+  const payload = header.createPayloadBytes(trigger.payloadBytes, runId, metrics.phase, sequence);
   const started = metrics.begin();
   try {
     const reply = await transport.request(stream, payload);
-    validateReply(reply, runId, header.PHASE_ACTIVE, trigger.payloadBytes, sequence);
+    validateReply(reply, runId, metrics.phase, trigger.payloadBytes, sequence);
     metrics.complete(started, true);
   } catch (error) {
     metrics.complete(started, false, error);
@@ -489,7 +472,6 @@ module.exports = {
   pollTimeoutUntil,
   waitForRouteReady,
   headerRunId,
-  runWarmup,
   runActive,
   streamDescription
 };

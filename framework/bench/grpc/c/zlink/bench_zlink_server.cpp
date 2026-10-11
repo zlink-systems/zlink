@@ -138,8 +138,13 @@ void send_loop (void *router)
             } else if (reply_token != 0) {
                 const std::string &control = payload.body ();
                 if (control.rfind (zlink_c_bench::k_send_stats_start, 0) == 0) {
-                    metrics.start (std::stoull (
-                      control.substr (std::strlen (zlink_c_bench::k_send_stats_start))));
+                    std::istringstream settings (
+                      control.substr (std::strlen (zlink_c_bench::k_send_stats_start)));
+                    uint64_t deadline;
+                    unsigned phase;
+                    if (!(settings >> deadline >> phase) || phase > zlink_c_bench::phase_active)
+                        throw std::runtime_error ("invalid send phase settings");
+                    metrics.start (deadline, static_cast<zlink_c_bench::phase_t> (phase));
                 } else if (control == zlink_c_bench::k_send_stats_snapshot) {
                     const auto snapshot = metrics.snapshot (zlink_c_bench::now_ns ());
                     std::ostringstream text;

@@ -25,19 +25,15 @@ Directory.CreateDirectory(options.Output);
 
 await using var transport = await BenchTransport.CreateAsync(options);
 var metrics = new SourceMetrics(options.LatencySampleLimit);
+long warmupAbandoned = 0;
 BenchPhaseController? controller = null;
 controller = new BenchPhaseController(
     () => transport.Ready,
-    metrics.Snapshot,
+    () => metrics.Snapshot(),
     async (request, cancellationToken) =>
     {
         options.Validate(request);
-        if (request.phase == "warmup")
-        {
-            await BenchMeasurement.RunWarmupAsync(transport, options, request, cancellationToken);
-            return;
-        }
-
+        metrics = new SourceMetrics(options.LatencySampleLimit);
         var result = await BenchMeasurement.RunActiveAsync(
             transport,
             metrics,
@@ -45,7 +41,20 @@ controller = new BenchPhaseController(
             request,
             cancellationToken
         );
-        await WriteResultAsync(options, controller!.LastTrigger!, result);
+        if (request.phase == "warmup")
+        {
+            warmupAbandoned = result.Abandoned;
+            return;
+        }
+
+        await WriteResultAsync(
+            options,
+            controller!.LastTrigger!,
+            result with
+            {
+                WarmupAbandoned = warmupAbandoned,
+            }
+        );
     }
 );
 
@@ -649,7 +658,9 @@ internal sealed class SourceMetrics(int sampleLimit)
     private long sampleSum;
     private long otherErrors;
 
-    public void Reset(long deadline)
+    public BenchPhase Phase { get; private set; }
+
+    public void Reset(long deadline, BenchPhase phase = BenchPhase.Active)
     {
         lock (gate)
         {
@@ -657,6 +668,7 @@ internal sealed class SourceMetrics(int sampleLimit)
             terminalSnapshot = null;
             completedAtClose = 0;
             activeDeadline = deadline;
+            Phase = phase;
             sampleCount = sampleSum = 0;
             samples.Clear();
             errorSummary.Clear();
@@ -914,7 +926,8 @@ internal sealed record BenchCell(
     long? server_received_at_close,
     long completed_at_close,
     IReadOnlyList<ClientErrorSummary> client_error_summary,
-    long client_error_other_count
+    long client_error_other_count,
+    long warmup_abandoned
 )
 {
     public double active_elapsed_ms => trigger.durationMs;
@@ -954,7 +967,8 @@ internal sealed record BenchCell(
             result.ServerReceivedAtClose,
             result.CompletedAtClose,
             result.ErrorSummary,
-            result.OtherErrors
+            result.OtherErrors,
+            result.WarmupAbandoned
         );
 }
 
@@ -1104,6 +1118,7 @@ internal sealed record BenchResult(
     public double EffectiveP95Micros => ServerP95Micros ?? P95Micros;
     public double EffectiveP99Micros => ServerP99Micros ?? P99Micros;
     public double ClientCores => ClientCpuSeconds / Math.Max(0.001, DurationSeconds);
+    public long WarmupAbandoned { get; init; }
     public int ClientParallelismCeiling => Environment.ProcessorCount;
 
     public IEnumerable<string> PerfLines
@@ -1162,7 +1177,7 @@ internal sealed record BenchOptions(
             ParseInt(Value(args, "--request-window"), 100),
             ParseInt(Value(args, "--send-concurrency"), 8),
             ParseInt(Value(args, "--latency-sample-limit"), 200_000),
-            ParseInt(Value(args, "--warmup"), 1000),
+            ParseInt(Value(args, "--warmup-seconds"), 2),
             ParseInt(Value(args, "--drain-bound-ms"), 30_000),
             Value(args, "--trigger-url")
                 ?? throw new ArgumentException("--trigger-url is required."),

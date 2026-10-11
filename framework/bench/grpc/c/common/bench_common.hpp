@@ -299,6 +299,21 @@ inline int duration_seconds ()
     return env_int ("DURATION_SECONDS", 5);
 }
 
+struct phase_config_t
+{
+    phase_t phase;
+    int seconds;
+};
+
+inline phase_config_t warmup_config ()
+{
+    return {phase_warmup, env_int ("WARMUP_SECONDS", 2)};
+}
+inline phase_config_t active_config ()
+{
+    return {phase_active, duration_seconds ()};
+}
+
 struct result_t
 {
     std::string implementation;
@@ -306,6 +321,7 @@ struct result_t
     size_t size = 0;
     uint64_t completed = 0;
     uint64_t errors = 0;
+    uint64_t warmup_abandoned = 0;
     std::optional<uint64_t> server_received;
     uint64_t server_errors = 0;
     double elapsed_s = 0.0;
@@ -402,7 +418,7 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
         << "\",\n"
         << "    \"compiler\": \"" << json_escape (__VERSION__) << "\",\n"
         << "    \"durationSeconds\": " << duration_seconds () << ",\n"
-        << "    \"warmup\": \"none\"";
+        << "    \"warmupSeconds\": " << warmup_config ().seconds;
     if (!grpc_version.empty ())
         out << ",\n    \"grpcVersion\": \"" << json_escape (grpc_version) << "\"";
     out << "\n  },\n  \"cells\": [\n    {\n"
@@ -430,8 +446,9 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
             << "      \"target_stats\": {\"received\": " << r.server_received.value ()
             << ", \"errors\": " << r.server_errors << ", \"drainMs\": " << json_number (r.drain_ms)
             << "},\n";
-    out << "      \"errors\": " << r.errors << ",\n"
-        << "      \"contaminated\": false,\n"
+    out << "      \"warmup_abandoned\": " << r.warmup_abandoned << ",\n"
+        << "      \"errors\": " << r.errors << ",\n"
+        << "      \"contaminated\": " << (r.warmup_abandoned != 0 ? "true" : "false") << ",\n"
         << "      \"extra\": {\"submitted\": " << r.submitted << ", \"completed\": " << r.completed
         << ", \"blocked\": " << r.blocked
         << ", \"submit_wait_ms\": " << json_number (r.submit_wait_ms) << "}\n    }\n  ]\n}\n";
@@ -448,6 +465,17 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
                   r.implementation.c_str (), r.pattern.c_str (), r.size, ops_per_s,
                   static_cast<unsigned long long> (r.errors));
     return true;
+}
+
+template <typename Driver> bool run_cell (Driver driver, const std::string &grpc_version)
+{
+    const auto warmup = driver (warmup_config ());
+    auto result = warmup.abandoned == 0 ? driver (active_config ()) : result_t{};
+    result.implementation = warmup.implementation;
+    result.pattern = warmup.pattern;
+    result.size = warmup.size;
+    result.warmup_abandoned = warmup.abandoned;
+    return write_cell_json (result, grpc_version);
 }
 
 } // namespace zlink_c_bench

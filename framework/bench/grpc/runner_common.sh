@@ -14,8 +14,6 @@ DRAIN_BOUND_MS=30000
 REQUEST_TIMEOUT_MS=30000
 ROUTE_READY_MS=30000
 LATENCY_SAMPLE_LIMIT=200000
-MEASUREMENT_LOAD_GATE=2.0
-MEASUREMENT_LOAD_GATE_WAIT_SECONDS=600
 
 bench_fail_input() {
   echo "$1" >&2
@@ -48,6 +46,7 @@ bench_init() {
 
   RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
   DURATION_SECONDS="${DURATION_SECONDS-5}"
+  WARMUP_SECONDS="${WARMUP_SECONDS-2}"
   RUNS="${RUNS-3}"
   SKIP_BUILD="${SKIP_BUILD-0}"
   local payload_sizes="${PAYLOAD_SIZES-${default_payloads}}"
@@ -56,6 +55,7 @@ bench_init() {
 
   [[ "${DURATION_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||
     bench_fail_input "DURATION_SECONDS must be a positive integer"
+  [[ "${WARMUP_SECONDS}" =~ ^[1-9][0-9]*$ ]] || bench_fail_input "WARMUP_SECONDS must be a positive integer"
   [[ "${RUNS}" =~ ^[1-9][0-9]*$ ]] || bench_fail_input "RUNS must be a positive integer"
   [[ "${SKIP_BUILD}" == 0 || "${SKIP_BUILD}" == 1 ]] || bench_fail_input "SKIP_BUILD must be 0 or 1"
   bench_check_list PAYLOAD_SIZES "${payload_sizes}" "${allowed_payloads}"
@@ -83,23 +83,6 @@ bench_require_low_load() {
     echo "load average must be below 10 before build (current ${load_average})" >&2
     return 1
   }
-}
-
-# Measurement gate shared by every runner. Build admission has a separate threshold.
-bench_measurement_load_gate() {
-  local load deadline=$((SECONDS + MEASUREMENT_LOAD_GATE_WAIT_SECONDS))
-  while :; do
-    load="$(awk '{print $1}' /proc/loadavg)"
-    if awk -v measured_load="${load}" -v gate="${MEASUREMENT_LOAD_GATE}" \
-      'BEGIN { exit !(measured_load < gate) }'; then
-      return 0
-    fi
-    ((SECONDS < deadline)) || {
-      echo "load average ${load} stayed above measurement gate ${MEASUREMENT_LOAD_GATE} for ${MEASUREMENT_LOAD_GATE_WAIT_SECONDS}s" >&2
-      return 1
-    }
-    sleep 10
-  done
 }
 
 select_java_home() {
@@ -326,14 +309,16 @@ PY
 }
 
 bench_record_contaminated_cell() {
-  local result_file="$1" implementation="$2" pattern="$3" payload="$4" reason="$5"
-  python3 - "${result_file}" "${implementation}" "${pattern}" "${payload}" "${reason}" <<'PY'
+  local result_file="$1" implementation="$2" pattern="$3" payload="$4" reason="$5" warmup_abandoned="${6:-0}"
+  python3 - "${result_file}" "${implementation}" "${pattern}" "${payload}" "${reason}" "${warmup_abandoned}" <<'PY'
 import json, sys
-path, implementation, pattern, payload, reason = sys.argv[1:]
+path, implementation, pattern, payload, reason, warmup_abandoned = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as handle:
     cell = {
         "implementation": implementation, "pattern": pattern, "payload_size": int(payload),
         "contaminated": True, "contamination_reason": reason,
+        "throughput_per_second": 0, "bandwidth_mb_s": 0,
+        "warmup_abandoned": int(warmup_abandoned),
     }
     json.dump({"schema": "with-grpc-cell-v1", "cells": [cell]}, handle, indent=2)
     handle.write("\n")
@@ -346,9 +331,15 @@ bench_run_cell() {
   local trigger_url="$1" source_url="$2" target_url="$3" run_id="$4" cell_id="$5"
   local implementation="$6" pattern="$7" payload="$8" warmup_ms="$9"
   local result_file="${10}" target_file="${11}" reset_url="${12:-}"
-  local remaining_drain_ms source_bound_hit drain_state
+  local remaining_drain_ms source_bound_hit drain_state warmup_abandoned
   trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" "${payload}" warmup "${warmup_ms}"
   wait_for_idle "${source_url}"
+  warmup_abandoned="$(curl --silent --show-error --fail --max-time 5 "${source_url}/bench/stats" | python3 -c 'import json,sys; a=json.load(sys.stdin); print(a.get("currentInFlight", a.get("inFlight", 0)))')"
+  if ((warmup_abandoned > 0)); then
+    bench_record_contaminated_cell "${result_file}" "${implementation}" "${pattern}" "${payload}" \
+      "warmup drain bound hit" "${warmup_abandoned}"
+    return 0
+  fi
   if [[ -n "${reset_url}" ]]; then
     settle_and_capture "${source_url}" "${target_url}" /dev/null any
   else

@@ -147,12 +147,13 @@ bool submit_request_once (void *dealer,
                           size_t size,
                           uint32_t run_id,
                           uint64_t seq,
+                          zlink_c_bench::phase_t phase,
                           zlink_send_flags_t flags,
                           callback_state_t *cb,
                           request_metrics_t *metrics)
 {
     zlink_msg_t parts[2];
-    if (!make_request_parts (size, run_id, zlink_c_bench::phase_active, seq, parts)) {
+    if (!make_request_parts (size, run_id, phase, seq, parts)) {
         ++metrics->submit_errors;
         return false;
     }
@@ -214,10 +215,13 @@ void fill_request_result (zlink_c_bench::result_t *r,
     r->submit_wait_ms = metrics.submit_wait_ms;
 }
 
-zlink_c_bench::result_t
-run_request_serial (void *dealer, const zlink_routing_id_t *target_rid, void *poller, size_t size)
+zlink_c_bench::result_t run_request_serial (void *dealer,
+                                            const zlink_routing_id_t *target_rid,
+                                            void *poller,
+                                            size_t size,
+                                            zlink_c_bench::phase_config_t config)
 {
-    const int duration_s = zlink_c_bench::duration_seconds ();
+    const int duration_s = config.seconds;
     zlink_c_bench::latency_sampler_t latency (zlink_c_bench::k_latency_sample_limit);
     callback_state_t cb;
     cb.latency = &latency;
@@ -228,8 +232,8 @@ run_request_serial (void *dealer, const zlink_routing_id_t *target_rid, void *po
     const auto deadline = start + std::chrono::seconds (duration_s);
     uint64_t seq = 0;
     while (std::chrono::steady_clock::now () < deadline) {
-        if (submit_request_once (dealer, target_rid, size, run_id, seq++, ZLINK_SEND_FLAGS_NONE,
-                                 &cb, &metrics)) {
+        if (submit_request_once (dealer, target_rid, size, run_id, seq++, config.phase,
+                                 ZLINK_SEND_FLAGS_NONE, &cb, &metrics)) {
             while (cb.outstanding.load (std::memory_order_acquire) > 0)
                 (void) poll_once (poller, dealer, &cb, k_completion_poll_interval_ms);
         }
@@ -265,8 +269,8 @@ bool await_request_ready (void *dealer,
         callback_state_t cb;
         cb.latency = &latency;
         request_metrics_t metrics;
-        if (submit_request_once (dealer, target_rid, 1024, 0, seq++, ZLINK_SEND_FLAGS_DONTWAIT, &cb,
-                                 &metrics)) {
+        if (submit_request_once (dealer, target_rid, 1024, 0, seq++, zlink_c_bench::phase_warmup,
+                                 ZLINK_SEND_FLAGS_DONTWAIT, &cb, &metrics)) {
             const auto attempt_deadline = std::min (deadline, std::chrono::steady_clock::now ()
                                                                 + std::chrono::milliseconds (250));
             while (cb.outstanding.load (std::memory_order_acquire) > 0
@@ -286,9 +290,10 @@ bool await_request_ready (void *dealer,
 zlink_c_bench::result_t run_request_backpressure (void *dealer,
                                                   const zlink_routing_id_t *target_rid,
                                                   void *poller,
-                                                  size_t size)
+                                                  size_t size,
+                                                  zlink_c_bench::phase_config_t config)
 {
-    const int duration_s = zlink_c_bench::duration_seconds ();
+    const int duration_s = config.seconds;
     zlink_c_bench::latency_sampler_t latency (zlink_c_bench::k_latency_sample_limit);
     callback_state_t cb;
     cb.latency = &latency;
@@ -302,7 +307,7 @@ zlink_c_bench::result_t run_request_backpressure (void *dealer,
     while (std::chrono::steady_clock::now () < deadline) {
         bool submitted_any = false;
         while (std::chrono::steady_clock::now () < deadline) {
-            if (!submit_request_once (dealer, target_rid, size, run_id, seq++,
+            if (!submit_request_once (dealer, target_rid, size, run_id, seq++, config.phase,
                                       ZLINK_SEND_FLAGS_DONTWAIT, &cb, &metrics))
                 break;
             submitted_any = true;
@@ -390,10 +395,13 @@ std::string send_stats_request (void *socket,
 // send-saturation (README §2): one-way DONTWAIT sends; the server counts what it received.
 // A BACKPRESSURED submit holds one completion reservation until its WRITABLE record is taken
 // (core socket spec), so the loop takes completions and waits for WRITABLE before resubmitting.
-zlink_c_bench::result_t
-run_send_saturation (void *dealer, const zlink_routing_id_t *target_rid, void *poller, size_t size)
+zlink_c_bench::result_t run_send_saturation (void *dealer,
+                                             const zlink_routing_id_t *target_rid,
+                                             void *poller,
+                                             size_t size,
+                                             zlink_c_bench::phase_config_t config)
 {
-    const int duration_s = zlink_c_bench::duration_seconds ();
+    const int duration_s = config.seconds;
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
     auto resources = zlink_c_bench::resource_start ();
     const auto start = std::chrono::steady_clock::now ();
@@ -403,7 +411,8 @@ run_send_saturation (void *dealer, const zlink_routing_id_t *target_rid, void *p
       std::string (zlink_c_bench::k_send_stats_start)
         + std::to_string (
           std::chrono::duration_cast<std::chrono::nanoseconds> (deadline.time_since_epoch ())
-            .count ()),
+            .count ())
+        + " " + std::to_string (config.phase),
       start + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms));
     uint64_t seq = 0;
     uint64_t blocked = 0;
@@ -413,7 +422,7 @@ run_send_saturation (void *dealer, const zlink_routing_id_t *target_rid, void *p
     callback_state_t cb;
     while (std::chrono::steady_clock::now () < deadline) {
         zlink_msg_t parts[2];
-        if (!make_request_parts (size, run_id, zlink_c_bench::phase_active, seq, parts)) {
+        if (!make_request_parts (size, run_id, config.phase, seq, parts)) {
             ++errors;
             continue;
         }
@@ -514,18 +523,33 @@ int main ()
     std::fprintf (stderr, "[bench] route ready=%s\n", ready ? "true" : "false");
     int status = 0;
     for (const size_t size : zlink_c_bench::parse_sizes ()) {
-        zlink_c_bench::result_t results[3];
-        int count = 0;
-        if (zlink_c_bench::pattern_enabled (patterns, "request-serial"))
-            results[count++] = run_request_serial (request_router, &request_target, poller, size);
-        if (zlink_c_bench::pattern_enabled (patterns, "request-backpressure"))
-            results[count++] =
-              run_request_backpressure (request_router, &request_target, poller, size);
-        if (zlink_c_bench::pattern_enabled (patterns, "send-saturation"))
-            results[count++] = run_send_saturation (send_router, &send_target, send_poller, size);
-        for (int i = 0; i < count; ++i)
-            if (!zlink_c_bench::write_cell_json (results[i], ""))
+        if (zlink_c_bench::pattern_enabled (patterns, "request-serial")) {
+            if (!zlink_c_bench::run_cell (
+                  [&] (zlink_c_bench::phase_config_t config) {
+                      return run_request_serial (request_router, &request_target, poller, size,
+                                                 config);
+                  },
+                  ""))
                 status = 1;
+        }
+        if (zlink_c_bench::pattern_enabled (patterns, "request-backpressure")) {
+            if (!zlink_c_bench::run_cell (
+                  [&] (zlink_c_bench::phase_config_t config) {
+                      return run_request_backpressure (request_router, &request_target, poller,
+                                                       size, config);
+                  },
+                  ""))
+                status = 1;
+        }
+        if (zlink_c_bench::pattern_enabled (patterns, "send-saturation")) {
+            if (!zlink_c_bench::run_cell (
+                  [&] (zlink_c_bench::phase_config_t config) {
+                      return run_send_saturation (send_router, &send_target, send_poller, size,
+                                                  config);
+                  },
+                  ""))
+                status = 1;
+        }
     }
     zlink_poller_destroy (&send_poller);
     zlink_poller_destroy (&poller);

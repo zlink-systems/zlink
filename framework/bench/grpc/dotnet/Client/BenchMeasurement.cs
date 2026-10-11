@@ -17,42 +17,6 @@ internal static class BenchMeasurement
         );
     }
 
-    internal static async Task RunWarmupAsync(
-        IBenchTransport transport,
-        BenchOptions options,
-        BenchTriggerRequest trigger,
-        CancellationToken stopping
-    )
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
-        timeout.CancelAfter(options.Timeout);
-        var runId = HeaderRunId(trigger.runId);
-        for (var index = 0; index < options.Warmup; index++)
-        {
-            var payload = BenchMetricHeaders.CreatePayload(
-                trigger.payloadBytes,
-                runId,
-                BenchPhase.Warmup,
-                (ulong)index
-            );
-            if (trigger.pattern == "send-saturation")
-            {
-                await transport.DriveAsync(
-                    transport
-                        .SendAsync(index % trigger.sendConcurrency, payload, timeout.Token)
-                        .AsTask()
-                );
-            }
-            else
-            {
-                var request = transport.RequestAsync(0, payload, timeout.Token).AsTask();
-                await transport.DriveAsync(request);
-                var reply = await request;
-                ValidateReply(reply, runId, BenchPhase.Warmup, trigger.payloadBytes, (ulong)index);
-            }
-        }
-    }
-
     internal static async Task<BenchResult> RunActiveAsync(
         IBenchTransport transport,
         SourceMetrics metrics,
@@ -82,7 +46,7 @@ internal static class BenchMeasurement
             Stopwatch.GetTimestamp()
             + checked((long)(Stopwatch.Frequency * (trigger.durationMs / 1000.0)));
         var send = trigger.pattern == "send-saturation";
-        metrics.Reset(deadline);
+        metrics.Reset(deadline, trigger.phase == "warmup" ? BenchPhase.Warmup : BenchPhase.Active);
         var activeAtClose = CaptureActiveAtDeadlineAsync(
             http,
             options.TargetStatsUrl,
@@ -356,7 +320,7 @@ internal static class BenchMeasurement
                 var payload = BenchMetricHeaders.CreatePayload(
                     trigger.payloadBytes,
                     runId,
-                    BenchPhase.Active,
+                    metrics.Phase,
                     sequence
                 );
                 var started = metrics.Begin();
@@ -465,7 +429,7 @@ internal static class BenchMeasurement
         try
         {
             var reply = await replyTask;
-            ValidateReply(reply, runId, BenchPhase.Active, trigger.payloadBytes, sequence);
+            ValidateReply(reply, runId, metrics.Phase, trigger.payloadBytes, sequence);
             metrics.Complete(started, true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -533,7 +497,7 @@ internal static class BenchMeasurement
                             var payload = BenchMetricHeaders.CreatePayload(
                                 trigger.payloadBytes,
                                 runId,
-                                BenchPhase.Active,
+                                metrics.Phase,
                                 sequence
                             );
                             var started = metrics.Begin();
@@ -573,14 +537,14 @@ internal static class BenchMeasurement
         var payload = BenchMetricHeaders.CreatePayload(
             trigger.payloadBytes,
             runId,
-            BenchPhase.Active,
+            metrics.Phase,
             sequence
         );
         var started = metrics.Begin();
         try
         {
             var reply = await transport.RequestAsync(stream, payload, cancellationToken);
-            ValidateReply(reply, runId, BenchPhase.Active, trigger.payloadBytes, sequence);
+            ValidateReply(reply, runId, metrics.Phase, trigger.payloadBytes, sequence);
             metrics.Complete(started, true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

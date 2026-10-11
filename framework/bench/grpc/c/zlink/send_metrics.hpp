@@ -15,9 +15,10 @@ inline constexpr const char *k_send_stats_snapshot = "bench-stats-snapshot";
 class send_metrics_t
 {
   public:
-    void start (uint64_t deadline)
+    void start (uint64_t deadline, phase_t phase = phase_active)
     {
         _deadline = deadline;
+        _phase = phase;
         _received = _errors = 0;
         _latency = latency_sampler_t (k_latency_sample_limit);
         _boundary.reset ();
@@ -45,7 +46,7 @@ class send_metrics_t
             ++_errors;
             return;
         }
-        if (header.phase != phase_active)
+        if (header.phase != _phase)
             return;
         ++_received;
         if (!_boundary)
@@ -66,6 +67,7 @@ class send_metrics_t
     uint64_t deadline () const { return _deadline; }
 
   private:
+    phase_t _phase = phase_active;
     uint64_t _deadline = 0;
     uint64_t _received = 0;
     uint64_t _errors = 0;

@@ -222,3 +222,24 @@ test('terminal snapshot excludes late success and failure at the drain bound', (
     header.nowNs = originalNow;
   }
 });
+
+test('warmup runs the selected pattern for its duration with warmup headers', async (t) => {
+  installTargetStats(t);
+  const metrics = new core.SourceMetrics(10);
+  let sent = 0;
+  const transport = {
+    send: async (_stream, payload) => {
+      assert.equal(header.decode(payload).phase, header.PHASE_WARMUP);
+      sent += 1;
+    }
+  };
+  const warmup = await core.runActive(
+    transport,
+    metrics,
+    { ...options, warmup: 0 },
+    activeTrigger('send-saturation', { phase: 'warmup' })
+  );
+  assert.ok(sent > 0);
+  assert.equal(warmup.completed, sent);
+  assert.equal(warmup.abandoned, 0);
+});

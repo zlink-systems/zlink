@@ -81,12 +81,33 @@ foreach (var pattern in args.DefaultIfEmpty("request-serial"))
         grpc.Urls.Single(),
         "--target-stats-url",
         stats.Urls.Single(),
-        "--warmup",
-        "0",
+        "--warmup-seconds",
+        "2",
     ];
     var options = BenchOptions.Parse(optionsArgs);
     var metrics = new SourceMetrics(200_000);
     await using var transport = new GrpcBenchTransport(grpc.Urls.Single(), 8);
+    var warmupTrigger = new BenchTriggerRequest
+    {
+        runId = "boundary",
+        cellId = "boundary",
+        pattern = pattern,
+        payloadBytes = 1024,
+        phase = "warmup",
+        durationMs = 20,
+        requestWindow = 100,
+        sendConcurrency = 8,
+    };
+    var warmupResult = await BenchMeasurement.RunActiveAsync(
+        transport,
+        metrics,
+        options,
+        warmupTrigger,
+        CancellationToken.None
+    );
+    if (warmupResult.Completed == 0 || metrics.Phase != BenchPhase.Warmup)
+        throw new InvalidOperationException("Warmup did not run the selected pattern.");
+    metrics = new SourceMetrics(200_000);
     var trigger = new BenchTriggerRequest
     {
         runId = "boundary",

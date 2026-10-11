@@ -17,6 +17,15 @@ int main ()
     assert (result.completed == 1);
     assert (result.server_received == 2);
     assert (result.mean_us == 0.025);
+    zlink_c_bench::send_metrics_t warmup;
+    warmup.start (100, zlink_c_bench::phase_warmup);
+    zlink_c_bench::stamp_payload (body, sizeof body, 1, zlink_c_bench::phase_warmup, 0);
+    warmup.record (body, sizeof body, 75);
+    warmup.close (100);
+    assert (warmup.snapshot (100).completed == 1);
+    metrics.start (200);
+    metrics.record (body, sizeof body, 125);
+    assert (metrics.snapshot (200).completed == 0);
     const auto run_dir = std::filesystem::temp_directory_path ()
                          / ("bench-c-send-metrics-" + std::to_string (getpid ()));
     setenv ("BENCH_RUN_DIR", run_dir.c_str (), 1);
@@ -28,11 +37,14 @@ int main ()
     result.submitted = 11;
     result.server_received = 11;
     result.elapsed_s = 5.5;
+    result.warmup_abandoned = 3;
     assert (zlink_c_bench::write_cell_json (result, ""));
     const auto path = run_dir / "zlink-c-send-saturation-1024/results.json";
     std::ifstream file (path);
     const std::string json ((std::istreambuf_iterator<char> (file)), {});
     assert (json.find ("\"throughput_per_second\": 1.400000") != std::string::npos);
+    assert (json.find ("\"warmupSeconds\": 2") != std::string::npos);
+    assert (json.find ("\"warmup_abandoned\": 3") != std::string::npos);
     assert (json.find ("\"active_elapsed_ms\": 5000.000000") != std::string::npos);
     result.pattern = "request-serial";
     result.server_received.reset ();
