@@ -741,9 +741,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         }
 
         @Override
-        public void setReceiveFlowState(systems.zlink.contracts.sockets.ReceiveFlowState state) {}
-
-        @Override
         public void setChannelName(String channelName) {
             record("setChannelName." + channelName);
         }

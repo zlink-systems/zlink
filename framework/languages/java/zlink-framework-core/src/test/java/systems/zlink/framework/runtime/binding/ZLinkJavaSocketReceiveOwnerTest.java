@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
@@ -108,41 +107,6 @@ final class ZLinkJavaSocketReceiveOwnerTest {
     }
 
     @Test
-    void dealerReceiveFlowEntryDoesNotWaitForTheReceiveOwner() throws Exception {
-        RoutingId dealerRid = RoutingId.from("receive-owner-dealer");
-        String endpoint = "inproc://receive-owner-dealer-" + System.nanoTime();
-        try (var context = Zlink.createContext();
-                DealerSocket nativeDealer = context.createDealerSocket();
-                RouterSocket nativeRouter = context.createRouterSocket();
-                ExecutorService executor = Executors.newFixedThreadPool(2)) {
-            nativeDealer.options().recvTimeout(Duration.ofSeconds(5));
-            nativeDealer.setRoutingId(dealerRid);
-            nativeRouter.bind(endpoint);
-            nativeDealer.connect(endpoint);
-            RoutingId admittedRid = admitDealer(nativeDealer, nativeRouter);
-            ZLinkJavaDealerSocket dealer = new ZLinkJavaDealerSocket(nativeDealer);
-            AtomicReference<Thread> receiveOwner = new AtomicReference<>();
-            Future<?> receive =
-                    executor.submit(
-                            () -> {
-                                receiveOwner.set(Thread.currentThread());
-                                assertNotNull(dealer.recv(ZLinkBackendRecvMode.BLOCK));
-                            });
-            awaitReceiveEntry(receiveOwner, ZLinkJavaDealerSocket.class);
-            Future<?> flow =
-                    executor.submit(() -> dealer.setReceiveFlowState(ReceiveFlowState.RUNNING));
-
-            try {
-                assertDoesNotThrow(() -> flow.get(1, TimeUnit.SECONDS));
-            } finally {
-                send(nativeRouter, admittedRid, "release-dealer");
-                receive.get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-                dealer.close();
-            }
-        }
-    }
-
-    @Test
     void routerReceiveFlowEntryDoesNotWaitForTheReceiveOwner() throws Exception {
         String endpoint = "inproc://receive-owner-router-" + System.nanoTime();
         try (var context = Zlink.createContext();
@@ -195,35 +159,9 @@ final class ZLinkJavaSocketReceiveOwnerTest {
         }
     }
 
-    private static RoutingId admitDealer(DealerSocket dealer, RouterSocket router)
-            throws Exception {
-        send(dealer, "admit");
-        try (Received received = new Received()) {
-            long deadline = System.nanoTime() + OPERATION_TIMEOUT.toNanos();
-            while (!router.recv(received, RecvFlags.DONT_WAIT)) {
-                if (System.nanoTime() >= deadline) {
-                    throw new AssertionError("dealer admission timed out");
-                }
-                Thread.sleep(1);
-            }
-            return received.getRoutingId().orElseThrow();
-        }
-    }
-
     private static void send(DealerSocket socket, String value) throws Exception {
         try (Message message = Message.from(value)) {
             socket.send()
-                    .message(message)
-                    .submit()
-                    .admitted()
-                    .toCompletableFuture()
-                    .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-        }
-    }
-
-    private static void send(RouterSocket socket, RoutingId target, String value) throws Exception {
-        try (Message message = Message.from(value)) {
-            socket.send(target)
                     .message(message)
                     .submit()
                     .admitted()

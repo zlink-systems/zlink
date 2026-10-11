@@ -10,7 +10,6 @@ import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.sockets.ReceiveFlowState;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
@@ -32,29 +31,23 @@ final class ZLinkChannelReceiveFlowStateTest {
                         100,
                         0);
         ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry(queue);
-        List<ReceiveFlowState> dealerStates = new ArrayList<>();
         List<ReceiveFlowState> serverStates = new ArrayList<>();
         List<ReceiveFlowState> routeStates = new ArrayList<>();
-        ZLinkBackendDealerSocket dealer = socket(ZLinkBackendDealerSocket.class, dealerStates);
         ZLinkBackendRouterSocket server = socket(ZLinkBackendRouterSocket.class, serverStates);
         ZLinkBackendRouterSocket route = socket(ZLinkBackendRouterSocket.class, routeStates);
 
-        sockets.registerClient("client", dealer);
         sockets.registerServer("server", RoutingId.from("server"), server);
         sockets.registerRouteRouter("route", route);
-        assertEquals(List.of(), dealerStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING), serverStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING), routeStates);
 
         ZLinkApplicationJobQueue.Permit permit =
                 queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
-        assertEquals(List.of(), dealerStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), serverStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), routeStates);
 
         sockets.closeAll();
         permit.close();
-        assertEquals(List.of(), dealerStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), serverStates);
         assertEquals(List.of(ReceiveFlowState.RUNNING, ReceiveFlowState.PAUSED), routeStates);
     }

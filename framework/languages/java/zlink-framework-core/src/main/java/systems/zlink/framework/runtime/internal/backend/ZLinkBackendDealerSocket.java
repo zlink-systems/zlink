@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.internal.backend;
 
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.ReceiveFlowState;
 
 import java.time.Duration;
 import java.util.List;
@@ -29,10 +28,4 @@ public interface ZLinkBackendDealerSocket
     }
 
     ZLinkBackendReceived recv(ZLinkBackendRecvMode mode);
-
-    /** Applies the host's absolute paired-socket receive-flow state. */
-    default void setReceiveFlowState(ReceiveFlowState state) {
-        throw new UnsupportedOperationException(
-                "paired dealer receive-flow control is not available");
-    }
 }
