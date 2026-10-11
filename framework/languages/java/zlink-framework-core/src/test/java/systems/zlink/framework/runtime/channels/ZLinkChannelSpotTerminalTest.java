@@ -8,6 +8,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.spots.SpotTerminalProbe;
@@ -40,11 +41,54 @@ final class ZLinkChannelSpotTerminalTest {
 
     private void verifyTerminal(boolean request, boolean instance, boolean stale, boolean missing) {
         var terminal =
+                stale
+                        ? ZLinkFrameworkErrorOrigin.framework(
+                                ZLinkFrameworkErrorKind.NOT_FOUND, "first operation failed")
+                        : new systems.zlink.framework.errors.ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE, "application failure");
+        verifyTerminal(request, instance, stale, missing, terminal);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void ownerFenceRefusalInvalidatesWithoutResubmitting(boolean request) {
+        verifyTerminal(
+                request,
+                true,
+                true,
+                false,
+                ZLinkFrameworkErrorOrigin.ownerFenceRefusal("retired owner"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,NOT_FOUND", "true,NOT_FOUND", "false,UNAVAILABLE", "true,UNAVAILABLE"})
+    void applicationFailureKeepsTheReadyRoute(boolean request, ZLinkFrameworkErrorKind kind) {
+        verifyTerminal(
+                request,
+                true,
+                false,
+                false,
+                new ZLinkFrameworkException(kind, "application failure"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void frameworkUnavailableInvalidatesTheReadyRoute(boolean request) {
+        verifyTerminal(
+                request,
+                true,
+                true,
+                false,
                 ZLinkFrameworkErrorOrigin.framework(
-                        stale
-                                ? ZLinkFrameworkErrorKind.NOT_FOUND
-                                : ZLinkFrameworkErrorKind.UNAVAILABLE,
-                        "first operation failed");
+                        ZLinkFrameworkErrorKind.UNAVAILABLE, "owner unavailable"));
+    }
+
+    private void verifyTerminal(
+            boolean request,
+            boolean instance,
+            boolean stale,
+            boolean missing,
+            RuntimeException terminal) {
         var probe = new SpotTerminalProbe(terminal, missing);
         var scheduler = Executors.newSingleThreadScheduledExecutor();
         var runtime =
