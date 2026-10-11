@@ -1,6 +1,7 @@
 import { RuntimeDisposal } from '../disposal';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { ReceiveFlowState } from '@zlink-systems/zlink';
 import {
   ZLinkFrameworkRuntimeState,
   type RoutingId,
@@ -1743,7 +1744,10 @@ export class ZLinkChannelSocketRegistry {
   private registerReceiveFlowSocket(socket: ZLinkBackendRouterSocket): void {
     this.applicationJobQueue?.registerReceiveFlowTarget(
       socket,
-      (state) => socket.setReceiveFlowState(state === 'paused' ? 1 : 0),
+      (state) =>
+        socket.setReceiveFlowState(
+          state === 'paused' ? ReceiveFlowState.PAUSED : ReceiveFlowState.RUNNING
+        ),
       this.oneWayFailureSink
     );
   }
