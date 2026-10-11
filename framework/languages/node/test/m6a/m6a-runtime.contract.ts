@@ -1650,11 +1650,9 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
         right.isPeerRouteReady('m6a-r6-left')
       );
     });
-    //  Drain any admission-handshake leftovers so the saturated pump below
-    //  parks in front of exactly one ordinary application record.
-    while ((await left.pumpOne()) !== 'noData') {
-      /* drain */
-    }
+    // Queue control traffic before the application record. Both need a permit,
+    // so one receive result cannot establish that the application record drained.
+    await right.updateLocalDescriptor({ placementWeight: rightDescriptor.placementWeight });
 
     //  Saturate the requester's ordinary job flow: hold its only permit and
     //  park the receive pump as a capacity waiter.
@@ -1707,18 +1705,35 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
     //  terminal did not consume (or wait for) an application permit.
     assert.equal(leftJobs.snapshot().capacityWaiters, 1n);
     assert.equal(leftJobs.snapshot().permitsInUse, 1n);
+    assert.equal(left.mailbox.pendingMessages('application'), 0);
+    assert.equal(
+      left.topology.peer('m6a-r6-right')!.descriptor.descriptorRevision,
+      rightDescriptor.descriptorRevision
+    );
 
     //  Releasing the permit drains the parked ordinary record normally.
     occupied.releaseAfterInternalProcessing();
     assert.equal(await pendingOrdinarySend, true);
-    const parkedResult = await parked;
-    assert.ok(parkedResult === 'application' || parkedResult === 'noData');
-    if (parkedResult !== 'application') {
-      await pollUntil(async () => (await left.pumpOne()) === 'application');
-    }
+    await parked;
+    await pollUntil(async () => {
+      if (left.mailbox.pendingMessages('application') !== 0) return true;
+      await left.pumpOne();
+      return false;
+    });
+    assert.equal(
+      left.topology.peer('m6a-r6-right')!.descriptor.descriptorRevision,
+      right.topology.localDescriptor().descriptorRevision
+    );
     const drained = left.mailbox.tryClaim('application', 1, Number.MAX_SAFE_INTEGER)!;
     assert.equal(drained.owner, 'node:m6a-r6-left');
+    assert.equal(drained.records.length, 1);
     const record = drained.records[0]!;
+    assert.equal(record.sourceRoutingId, 'm6a-r6-right');
+    assert.deepEqual(decodeApplicationPayload(record.parts[1]!), {
+      packetName: 'OrdinaryNotice',
+      contentType: 'application/json',
+      payload: Buffer.from('parked')
+    });
     record.applicationJob!.releaseBeforeHandler();
     record.applicationJob!.close();
     assert.equal(left.mailbox.release(drained), true);
