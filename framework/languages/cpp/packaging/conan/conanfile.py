@@ -33,7 +33,7 @@ ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
 
 class ZlinkFrameworkConan(ConanFile):
     name = "zlink-framework"
-    version = "0.29.1"
+    version = "0.30.0"
     package_type = "static-library"
     license = "FSL-1.1-ALv2"
     homepage = "https://github.com/zlink-systems/zlink"
