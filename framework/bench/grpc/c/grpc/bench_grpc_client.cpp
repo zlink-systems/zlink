@@ -1,4 +1,5 @@
 #include "../common/bench_common.hpp"
+#include "../zlink/send_metrics.hpp"
 #include "bench.grpc.pb.h"
 
 #include <grpcpp/grpcpp.h>
@@ -177,7 +178,6 @@ run_request_backpressure (zlink::framework::bench::withgrpc::BenchService::Stub 
     r.submitted = submitted;
     r.peak_in_flight = max_outstanding_seen;
     r.submit_wait_ms = submit_wait_ms;
-    r.has_drain = true;
     r.abandoned = static_cast<uint64_t> (abandoned);
     r.drain_ms = std::chrono::duration<double, std::milli> (drain_end - drain_begin).count ();
     r.drain_bound_hit = abandoned > 0;
@@ -192,29 +192,43 @@ run_send_saturation (zlink::framework::bench::withgrpc::BenchService::Stub *stub
     const int duration_s = config.seconds;
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
     grpc::CompletionQueue cq;
-    std::atomic<uint64_t> completed{0};
     std::atomic<uint64_t> errors{0};
     std::atomic<int> outstanding{0};
     uint64_t submitted = 0;
     uint64_t max_outstanding_seen = 0;
     double submit_wait_ms = 0.0;
 
+    const auto resources = zlink_c_bench::resource_start ();
+    const auto start = std::chrono::steady_clock::now ();
+    const auto deadline = start + std::chrono::seconds (duration_s);
+    auto control = [&] (const std::string &body) {
+        grpc::ClientContext context;
+        context.set_deadline (std::chrono::system_clock::now ()
+                              + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms));
+        zlink::framework::bench::withgrpc::BenchPayload request, response;
+        request.set_body (body);
+        const auto status = stub->Echo (&context, request, &response);
+        if (!status.ok ())
+            throw std::runtime_error ("send stats control failed: " + status.error_message ());
+        return response.body ();
+    };
+    (void) control (std::string (zlink_c_bench::k_send_stats_start)
+                    + std::to_string (std::chrono::duration_cast<std::chrono::nanoseconds> (
+                                        deadline.time_since_epoch ())
+                                        .count ())
+                    + " " + std::to_string (config.phase));
+
     std::thread completion_thread ([&] {
         void *tag = nullptr;
         bool ok = false;
         while (cq.Next (&tag, &ok)) {
             std::unique_ptr<send_call_t> call (static_cast<send_call_t *> (tag));
-            if (ok && call->status.ok ())
-                completed.fetch_add (1, std::memory_order_relaxed);
-            else
+            if (!ok || !call->status.ok ())
                 errors.fetch_add (1, std::memory_order_relaxed);
             outstanding.fetch_sub (1, std::memory_order_relaxed);
         }
     });
 
-    auto resources = zlink_c_bench::resource_start ();
-    const auto start = std::chrono::steady_clock::now ();
-    const auto deadline = start + std::chrono::seconds (duration_s);
     while (std::chrono::steady_clock::now () < deadline) {
         if (outstanding.load (std::memory_order_relaxed) >= k_send_saturation_outstanding) {
             std::this_thread::yield ();
@@ -233,19 +247,25 @@ run_send_saturation (zlink::framework::bench::withgrpc::BenchService::Stub *stub
                             ? static_cast<double> (submit_stop - submit_start) / 1000000.0
                             : 0.0;
     }
-    // Unary Command calls that finished OK inside the window; the wait below is the drain.
+    // The target owns active receive rate and latency; capture source resources here.
     zlink_c_bench::result_t r;
-    zlink_c_bench::capture_active_close (&r, start, resources, completed.load (), nullptr);
+    zlink_c_bench::capture_active_close (&r, start, resources, 0, nullptr);
+    const auto drain_start = std::chrono::steady_clock::now ();
     while (outstanding.load (std::memory_order_relaxed) > 0)
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     cq.Shutdown ();
     completion_thread.join ();
 
+    r.submitted = submitted;
+    zlink_c_bench::send_metrics_t::read_snapshot (control (zlink_c_bench::k_send_stats_snapshot),
+                                                  r);
+    r.drain_ms =
+      std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - drain_start)
+        .count ();
     r.implementation = "grpc-c";
     r.pattern = "send-saturation";
     r.size = size;
     r.errors = errors.load ();
-    r.submitted = submitted;
     r.peak_in_flight = max_outstanding_seen;
     r.submit_wait_ms = submit_wait_ms;
     return r;

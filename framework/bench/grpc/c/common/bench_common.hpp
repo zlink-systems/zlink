@@ -428,6 +428,15 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
         << "      \"throughput_per_second\": " << json_number (ops_per_s) << ",\n"
         << "      \"bandwidth_mb_s\": "
         << json_number (ops_per_s * static_cast<double> (r.size) / 1000000.0) << ",\n"
+        << "      \"latency_source\": \""
+        << (r.pattern == "send-saturation" ? (r.server_received ? "receiver" : "unmeasured")
+                                           : "reply")
+        << "\",\n"
+        << "      \"latency_sample_count\": "
+        << (r.server_received
+              ? std::to_string (std::min<uint64_t> (r.completed, k_latency_sample_limit))
+              : "null")
+        << ",\n"
         << "      \"latency_mean_ms\": " << json_number (r.mean_us / 1000.0) << ",\n"
         << "      \"latency_p95_ms\": " << json_number (r.p95_us / 1000.0) << ",\n"
         << "      \"latency_p99_ms\": " << json_number (r.p99_us / 1000.0) << ",\n"

@@ -137,25 +137,10 @@ void send_loop (void *router)
                 metrics.record (nullptr, 0, zlink_c_bench::now_ns ());
             } else if (reply_token != 0) {
                 const std::string &control = payload.body ();
-                if (control.rfind (zlink_c_bench::k_send_stats_start, 0) == 0) {
-                    std::istringstream settings (
-                      control.substr (std::strlen (zlink_c_bench::k_send_stats_start)));
-                    uint64_t deadline;
-                    unsigned phase;
-                    if (!(settings >> deadline >> phase) || phase > zlink_c_bench::phase_active)
-                        throw std::runtime_error ("invalid send phase settings");
-                    metrics.start (deadline, static_cast<zlink_c_bench::phase_t> (phase));
-                } else if (control == zlink_c_bench::k_send_stats_snapshot) {
-                    const auto snapshot = metrics.snapshot (zlink_c_bench::now_ns ());
-                    std::ostringstream text;
-                    text.precision (17);
-                    text << snapshot.completed << ' ' << snapshot.server_received.value () << ' '
-                         << snapshot.server_errors << ' ' << snapshot.mean_us << ' '
-                         << snapshot.p95_us << ' ' << snapshot.p99_us;
-                    payload.set_body (text.str ());
-                } else {
+                const auto reply = metrics.control (control, zlink_c_bench::now_ns ());
+                if (!reply)
                     throw std::runtime_error ("unknown send stats control request");
-                }
+                payload.set_body (*reply);
                 zlink_msg_t response;
                 if (!serialize_bench_payload (payload, &response)
                     || !reply_multipart (router, &rid, reply_token, &response))

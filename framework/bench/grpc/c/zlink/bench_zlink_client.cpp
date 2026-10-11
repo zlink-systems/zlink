@@ -461,22 +461,17 @@ zlink_c_bench::result_t run_send_saturation (void *dealer,
             break;
     const std::string target = send_stats_request (
       dealer, target_rid, poller, zlink_c_bench::k_send_stats_snapshot, drain_deadline);
-    std::istringstream stats (target);
-    uint64_t received = 0;
-    if (!(stats >> r.completed >> received >> r.server_errors >> r.mean_us >> r.p95_us >> r.p99_us))
-        throw std::runtime_error ("invalid target send metrics");
-    r.server_received = received;
-    r.has_drain = true;
+    r.submitted = seq;
+    zlink_c_bench::send_metrics_t::read_snapshot (target, r);
+
     r.drain_ms =
       std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - drain_start)
         .count ();
-    r.abandoned = seq > received ? seq - received : 0;
-    r.drain_bound_hit = r.abandoned != 0;
+
     r.implementation = "zlink-c";
     r.pattern = "send-saturation";
     r.size = size;
     r.errors = errors + cb.errors.load (std::memory_order_relaxed);
-    r.submitted = seq;
     r.blocked = blocked;
     r.submit_wait_ms = submit_wait_ms;
     return r;
