@@ -94,7 +94,7 @@ foreach (var pattern in args.DefaultIfEmpty("request-serial"))
         pattern = pattern,
         payloadBytes = 1024,
         phase = "warmup",
-        durationMs = 20,
+        durationMs = DelayedEcho.WarmupWindowMilliseconds,
         requestWindow = 100,
         sendConcurrency = 8,
     };
@@ -105,8 +105,14 @@ foreach (var pattern in args.DefaultIfEmpty("request-serial"))
         warmupTrigger,
         CancellationToken.None
     );
-    if (warmupResult.Completed == 0 || metrics.Phase != BenchPhase.Warmup)
-        throw new InvalidOperationException("Warmup did not run the selected pattern.");
+    if (
+        warmupResult.Completed == 0
+        || warmupResult.CompletedAtClose == 0
+        || metrics.Phase != BenchPhase.Warmup
+    )
+        throw new InvalidOperationException(
+            "Warmup did not complete the selected pattern during the warmup window."
+        );
     metrics = new SourceMetrics(200_000);
     var trigger = new BenchTriggerRequest
     {
@@ -146,9 +152,14 @@ foreach (var pattern in args.DefaultIfEmpty("request-serial"))
 
 sealed class DelayedEcho : BenchService.BenchServiceBase
 {
+    public const int DelayMilliseconds = 500;
+    public const int WarmupWorkerStartupAllowanceMilliseconds = 1_000;
+    public const int WarmupWindowMilliseconds =
+        DelayMilliseconds + WarmupWorkerStartupAllowanceMilliseconds;
+
     public override async Task<BenchPayload> Echo(BenchPayload request, ServerCallContext context)
     {
-        await Task.Delay(500, context.CancellationToken);
+        await Task.Delay(DelayMilliseconds, context.CancellationToken);
         return request;
     }
 
@@ -157,7 +168,7 @@ sealed class DelayedEcho : BenchService.BenchServiceBase
         ServerCallContext context
     )
     {
-        await Task.Delay(500, context.CancellationToken);
+        await Task.Delay(DelayMilliseconds, context.CancellationToken);
         return new Google.Protobuf.WellKnownTypes.Empty();
     }
 }
