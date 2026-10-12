@@ -397,9 +397,8 @@ function createProviderResolver(
 ): ZLinkProviderResolver {
   const resolver: ZLinkProviderResolver = {
     get<T>(type: Type<T>): T | undefined {
-      const discovered = findDiscoveredProvider(discovery, type)?.instance as T | undefined;
-      if (discovered !== undefined) {
-        return discovered;
+      if (discovery !== undefined) {
+        return findDiscoveredProvider(discovery, type)?.instance as T | undefined;
       }
       try {
         return moduleRef.get(type, { strict: false });

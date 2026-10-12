@@ -155,6 +155,61 @@ test('ingress record follow-up permits keep their original local origin', async 
   assert.equal(queue.snapshot().permitsInUse, 0n);
 });
 
+test('normal ingress owner close does not construct an Error', () => {
+  const permit = { origin: 'remote', releaseAfterInternalProcessing() {} };
+  const owner = ApplicationIngressRecordOwner.create({}, permit, { close() {} });
+  const OriginalError = global.Error;
+  let errors = 0;
+  global.Error = new Proxy(OriginalError, {
+    construct(target, args, newTarget) {
+      errors++;
+      return Reflect.construct(target, args, newTarget);
+    }
+  });
+  try {
+    owner.close();
+    owner.close();
+  } finally {
+    global.Error = OriginalError;
+  }
+  assert.equal(errors, 0);
+});
+
+test('owner close preserves the late waiter error and external cancellation reason', async () => {
+  for (const externalFirst of [false, true]) {
+    const queue = new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 1n)
+    );
+    const owner = ApplicationIngressRecordOwner.create(
+      queue,
+      await queue.acquire(undefined, 'remote'),
+      { close() {} }
+    );
+    const first = owner.takeInitial('application');
+    const stop = new AbortController();
+    const reason = new Error('caller cancellation');
+    const pending = owner.acquire('application', stop.signal);
+    if (externalFirst) stop.abort(reason);
+    owner.close();
+    await assert.rejects(
+      pending,
+      externalFirst
+        ? (error) => error === reason
+        : {
+            name: 'AbortError',
+            message: 'Application ingress record owner is closed.'
+          }
+    );
+    await assert.rejects(owner.acquire('application'), {
+      name: 'AbortError',
+      message: 'Application ingress record owner is closed.'
+    });
+    first.close();
+    assert.equal(queue.snapshot().permitsInUse, 0n);
+    assert.equal(queue.snapshot().capacityWaiters, 0n);
+  }
+});
+
 for (const profile of ['constructor', '__proto__']) {
   test(`application job queue rejects inherited profile ${profile} before resolving processors`, () => {
     for (const maxQueuedApplicationJobs of [undefined, 1n]) {
@@ -546,11 +601,15 @@ test('detached exact-target turn retains its ingress permit until callback start
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 8n)
   );
   let retainedCloseCount = 0;
-  const owner = ApplicationIngressRecordOwner.create(queue, await queue.acquire(undefined, 'remote'), {
-    close: () => {
-      retainedCloseCount += 1;
+  const owner = ApplicationIngressRecordOwner.create(
+    queue,
+    await queue.acquire(undefined, 'remote'),
+    {
+      close: () => {
+        retainedCloseCount += 1;
+      }
     }
-  });
+  );
   const applicationJob = owner.takeInitial('application');
   owner.close();
 

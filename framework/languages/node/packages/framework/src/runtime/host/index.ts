@@ -334,24 +334,15 @@ export class ZLinkFrameworkRuntimeHost
     this.runtimeEventPublisher =
       options.runtimeEventPublisher ?? new DefaultZLinkRuntimeEventPublisher();
     this.metrics = new ZLinkRuntimeMetrics(options.registration.metrics?.meterProvider);
+    const handlerStartGate = options.providerResolver?.get?.(
+      ZLINK_INTERNAL_APPLICATION_JOB_QUEUE_HANDLER_START_GATE as unknown as Type<ZLinkInternalApplicationJobQueueHandlerStartGate>
+    );
     this.applicationJobQueue = new ApplicationJobQueue(
       resolveApplicationJobQueueConfiguration(options.registration.applicationJobQueue, () =>
         nodeEffectiveProcessorCount(options.registration.worker?.maxThreads)
       ),
       undefined,
-      () => {
-        try {
-          return (
-            this.options.providerResolver
-              ?.get?.(
-                ZLINK_INTERNAL_APPLICATION_JOB_QUEUE_HANDLER_START_GATE as unknown as Type<ZLinkInternalApplicationJobQueueHandlerStartGate>
-              )
-              ?.shouldHoldPermitBeforeHandler() === true
-          );
-        } catch {
-          return false;
-        }
-      },
+      handlerStartGate?.shouldHoldPermitBeforeHandler.bind(handlerStartGate),
       (error) =>
         (this.errorSink ?? this.preStartErrorSink).reportRuntimeTaskException(
           'logger-provider',
