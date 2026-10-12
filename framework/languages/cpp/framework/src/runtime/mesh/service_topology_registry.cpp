@@ -108,7 +108,7 @@ service_topology_registry_t::service_topology_registry_t (
     _liveness_owner (liveness_owner),
     _metric_channel_names (std::move (metric_channel_names))
 {
-    const auto topology = _topology.load (std::memory_order_acquire);
+    const auto topology = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
     if (!valid_descriptor (topology->local)) {
         throw std::invalid_argument ("local service descriptor is invalid");
     }
@@ -169,7 +169,7 @@ bool service_topology_registry_t::selectable (const service_node_descriptor_t &d
 std::function<void ()>
 service_topology_registry_t::publish_local_on_lane (service_node_descriptor_t descriptor)
 {
-    const auto current = _topology.load (std::memory_order_acquire);
+    const auto current = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
     if (!valid_descriptor (descriptor))
         throw std::invalid_argument ("published service descriptor is invalid");
     std::function<void ()> changed;
@@ -194,7 +194,9 @@ service_topology_registry_t::publish_local_on_lane (service_node_descriptor_t de
         else
             ++it;
     }
-    _topology.store (std::move (topology), std::memory_order_release);
+    std::atomic_store_explicit (&_topology,
+                                std::shared_ptr<const topology_state_t>{std::move (topology)},
+                                std::memory_order_release);
     changed = _change_handler;
     return changed;
 }
@@ -230,7 +232,8 @@ service_topology_registry_t::publish_draining_snapshot ()
     auto publication =
       _lane
         .run ([this] {
-            auto descriptor = _topology.load (std::memory_order_acquire)->local;
+            auto descriptor =
+              std::atomic_load_explicit (&_topology, std::memory_order_acquire)->local;
             std::function<void ()> changed;
             if (descriptor.state != service_node_state_t::draining) {
                 if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
@@ -253,7 +256,7 @@ void service_topology_registry_t::set_change_handler (std::function<void ()> han
 
 service_node_descriptor_t service_topology_registry_t::local_descriptor () const
 {
-    return _topology.load (std::memory_order_acquire)->local;
+    return std::atomic_load_explicit (&_topology, std::memory_order_acquire)->local;
 }
 
 task_t<std::tuple<service_node_descriptor_t,
@@ -262,8 +265,8 @@ task_t<std::tuple<service_node_descriptor_t,
 service_topology_registry_t::monitoring_snapshot_async () const
 {
     return _lane.run_task ([this] {
-        return std::tuple{_topology.load (std::memory_order_acquire)->local, peers_on_lane (),
-                          not_required_peers_on_lane ()};
+        return std::tuple{std::atomic_load_explicit (&_topology, std::memory_order_acquire)->local,
+                          peers_on_lane (), not_required_peers_on_lane ()};
     });
 }
 
@@ -297,7 +300,7 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
     const auto result =
       _lane
         .run ([&, this] {
-            const auto topology = _topology.load (std::memory_order_acquire);
+            const auto topology = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
             if (descriptor.mesh_name != topology->local.mesh_name) {
                 return std::pair{peer_admission_result_t::mesh_mismatch, std::function<void ()>{}};
             }
@@ -343,7 +346,9 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                 next->peers.erase (key);
                 _not_required_peers.insert_or_assign (std::move (key), std::move (descriptor));
                 ++_topology_version;
-                _topology.store (std::move (next), std::memory_order_release);
+                std::atomic_store_explicit (
+                  &_topology, std::shared_ptr<const topology_state_t>{std::move (next)},
+                  std::memory_order_release);
                 rebuild_channel_selections ();
                 return std::pair{peer_admission_result_t::not_required, _change_handler};
             }
@@ -372,7 +377,9 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
             next->peers.insert_or_assign (
               std::move (key), admitted_peer_t{std::move (descriptor), std::move (connection_id),
                                                admission_epoch, std::move (connection)});
-            _topology.store (std::move (next), std::memory_order_release);
+            std::atomic_store_explicit (&_topology,
+                                        std::shared_ptr<const topology_state_t>{std::move (next)},
+                                        std::memory_order_release);
             rebuild_channel_selections ();
             return std::pair{peer_admission_result_t::admitted, _change_handler};
         })
@@ -388,7 +395,7 @@ bool service_topology_registry_t::disconnect (const std::vector<std::uint8_t> &n
     auto changed =
       _lane
         .run ([&, this] {
-            const auto topology = _topology.load (std::memory_order_acquire);
+            const auto topology = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
             std::function<void ()> changed;
             const auto found = topology->peers.find (node_routing_id);
             if (found == topology->peers.end () || found->second.connection_id != connection_id) {
@@ -397,7 +404,9 @@ bool service_topology_registry_t::disconnect (const std::vector<std::uint8_t> &n
             auto next = std::make_shared<topology_state_t> (*topology);
             next->peers.erase (node_routing_id);
             ++_topology_version;
-            _topology.store (std::move (next), std::memory_order_release);
+            std::atomic_store_explicit (&_topology,
+                                        std::shared_ptr<const topology_state_t>{std::move (next)},
+                                        std::memory_order_release);
             rebuild_channel_selections ();
             changed = _change_handler;
             return std::pair{true, std::move (changed)};
@@ -421,7 +430,7 @@ std::vector<service_node_descriptor_t> service_topology_registry_t::not_required
 std::vector<admitted_peer_t> service_topology_registry_t::peers_on_lane () const
 {
     std::vector<admitted_peer_t> result;
-    const auto topology = _topology.load (std::memory_order_acquire);
+    const auto topology = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
     result.reserve (topology->peers.size ());
     for (const auto &[_, peer] : topology->peers)
         result.push_back (peer);
@@ -441,7 +450,7 @@ service_topology_registry_t::not_required_peers_on_lane () const
 std::optional<admitted_peer_t>
 service_topology_registry_t::peer (const std::vector<std::uint8_t> &node_routing_id) const
 {
-    const auto topology = _topology.load (std::memory_order_acquire);
+    const auto topology = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
     const auto found = topology->peers.find (node_routing_id);
     if (found == topology->peers.end ())
         return std::nullopt;
@@ -525,7 +534,7 @@ void service_topology_registry_t::rebuild_selection_schedule (selection_state_t 
 
 void service_topology_registry_t::rebuild_channel_selections ()
 {
-    const auto topology = _topology.load (std::memory_order_acquire);
+    const auto topology = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
     std::set<std::string> channel_names;
     for (const auto &[_, peer] : topology->peers) {
         for (const auto &channel : peer.descriptor.channels)
@@ -610,7 +619,7 @@ service_topology_registry_t::select (const std::string &channel_name,
               return result_t<std::vector<std::uint8_t>>::success (target.first);
           }
 
-          const auto topology = _topology.load (std::memory_order_acquire);
+          const auto topology = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
           const admitted_peer_t *selected = nullptr;
           std::int64_t selected_cumulative = std::numeric_limits<std::int64_t>::min ();
           for (const auto &[node_id, weight] : state.weights) {
@@ -670,7 +679,7 @@ void service_topology_registry_t::record_selection_failure (
                              channel_name))
         return;
     const auto found = _selection_state.find (channel_name);
-    const auto topology = _topology.load (std::memory_order_acquire);
+    const auto topology = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
     const char *reason = topology->local.state == service_node_state_t::draining ? "draining"
                          : found == _selection_state.end ()                      ? "no_member"
                                                             : found->second.unavailable_reason;
@@ -689,7 +698,7 @@ void service_topology_registry_t::observe_channel_metrics (
       opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<double>>> (result);
     _lane
       .run ([&] {
-          const auto topology = _topology.load (std::memory_order_acquire);
+          const auto topology = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
           // Selection already maintains the bounded member aggregates. No
           // application object, mailbox or Location Store traversal is needed.
           for (const auto &channel : _metric_channel_names) {
@@ -711,7 +720,7 @@ service_topology_registry_t::multicast_targets (const std::string &channel_name)
         return {};
     return _lane
       .run ([&, this] {
-          const auto topology = _topology.load (std::memory_order_acquire);
+          const auto topology = std::atomic_load_explicit (&_topology, std::memory_order_acquire);
           std::vector<admitted_peer_t> result;
           result.reserve (topology->peers.size ());
           for (const auto &[_, peer] : topology->peers) {

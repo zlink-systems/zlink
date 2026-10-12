@@ -113,7 +113,7 @@ class location_runtime_t
     task_t<observation_status_t> observation_status_task () const
     {
         return _lane.run_task ([this] {
-            const auto lease = _owner_lease.load (std::memory_order_acquire);
+            const auto lease = std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
             return observation_status_t{_last_error, lease->healthy, lease->renewed_at};
         });
     }
@@ -136,7 +136,7 @@ class location_runtime_t
 
     std::optional<location_owner_token_t> current_owner_token () const
     {
-        const auto lease = _owner_lease.load (std::memory_order_acquire);
+        const auto lease = std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
         return owner_lease_usable (*lease, std::chrono::steady_clock::now ())
                  ? lease->token
                  : std::optional<location_owner_token_t>{};
@@ -175,18 +175,18 @@ class location_runtime_t
 
     bool owner_lease_healthy () const noexcept
     {
-        return _owner_lease.load (std::memory_order_acquire)->healthy;
+        return std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire)->healthy;
     }
 
     bool owner_lease_usable () const noexcept
     {
-        const auto lease = _owner_lease.load (std::memory_order_acquire);
+        const auto lease = std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
         return owner_lease_usable (*lease, std::chrono::steady_clock::now ());
     }
 
     std::optional<std::chrono::system_clock::time_point> owner_lease_renewed_at () const
     {
-        return _owner_lease.load (std::memory_order_acquire)->renewed_at;
+        return std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire)->renewed_at;
     }
 
     std::optional<std::string> last_error () const
@@ -342,10 +342,11 @@ class location_runtime_t
 
     template <typename Work> void update_owner_lease_on_lane (Work work) const
     {
-        auto lease = *_owner_lease.load (std::memory_order_acquire);
+        auto lease = *std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
         work (lease);
-        _owner_lease.store (std::make_shared<const owner_lease_snapshot_t> (std::move (lease)),
-                            std::memory_order_release);
+        std::atomic_store_explicit (
+          &_owner_lease, std::make_shared<const owner_lease_snapshot_t> (std::move (lease)),
+          std::memory_order_release);
     }
 
     void clear_owner_lease_on_lane () const
@@ -358,7 +359,7 @@ class location_runtime_t
 
     std::optional<location_owner_token_t> current_owner_token_unchecked () const
     {
-        return _owner_lease.load (std::memory_order_acquire)->token;
+        return std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire)->token;
     }
 
     static std::chrono::milliseconds
@@ -822,7 +823,7 @@ class location_runtime_t
     std::thread _heartbeat;
     std::shared_ptr<heartbeat_owner_t> _heartbeat_state;
     // Lane teardown finishes accepted turns before their state is destroyed.
-    mutable std::atomic<std::shared_ptr<const owner_lease_snapshot_t>> _owner_lease{
+    mutable std::shared_ptr<const owner_lease_snapshot_t> _owner_lease{
       std::make_shared<const owner_lease_snapshot_t> ()};
     mutable std::optional<std::string> _last_error;
     offload_executor_t _lane_executor;

@@ -3369,7 +3369,8 @@ route_client_t spot_context_t::spot_route_client () const
     if (!_state || !_state->node) {
         return route_client_t ();
     }
-    const auto route_client = _state->node->route_client.load (std::memory_order_acquire);
+    const auto route_client =
+      std::atomic_load_explicit (&_state->node->route_client, std::memory_order_acquire);
     return route_client ? *route_client : route_client_t ();
 }
 
@@ -14314,7 +14315,8 @@ result_t<std::uint64_t> spot_node_runtime_t::resolve_wire_actor_join_target (
 
 void spot_node_runtime_t::set_route_client (route_client_t route_client)
 {
-    _state->route_client.store (std::make_shared<const route_client_t> (std::move (route_client)),
+    std::atomic_store_explicit (&_state->route_client,
+                                std::make_shared<const route_client_t> (std::move (route_client)),
                                 std::memory_order_release);
 }
 
@@ -14502,7 +14504,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                              && (record.kind == service::record_kind_t::node_send
                                  || record.kind == service::record_kind_t::node_request);
     if (route_send || route_request) {
-        const auto route_client = _state->route_client.load (std::memory_order_acquire);
+        const auto route_client =
+          std::atomic_load_explicit (&_state->route_client, std::memory_order_acquire);
         runtime::messaging::message_parts_t encoded (std::move (parts));
         runtime::messaging::envelope_codec_t codec;
         const auto &header = *decoded_header;
@@ -15080,7 +15083,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (
             return true;
         }
         if (header.message_name == actor_bound_session_bind_route_request_t::packet_name) {
-            const auto route_client = _state->route_client.load (std::memory_order_acquire);
+            const auto route_client =
+              std::atomic_load_explicit (&_state->route_client, std::memory_order_acquire);
             if (!route_client) {
                 reply_error (framework_exception_t (
                   framework_error_kind_t::unavailable,

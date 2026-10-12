@@ -26,7 +26,7 @@ struct location_runtime_test_access_t
     static state_lane_t &lane (location_runtime_t &runtime) { return runtime._lane; }
     static auto snapshot (const location_runtime_t &runtime)
     {
-        return runtime._owner_lease.load (std::memory_order_acquire);
+        return std::atomic_load_explicit (&runtime._owner_lease, std::memory_order_acquire);
     }
     static void set_deadline (location_runtime_t &runtime,
                               std::chrono::steady_clock::time_point deadline)
