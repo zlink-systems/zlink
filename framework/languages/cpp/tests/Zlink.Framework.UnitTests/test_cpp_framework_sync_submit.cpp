@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include <zlink/framework.hpp>
+#include "../support/request_admission_fixture.hpp"
 
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -85,7 +86,7 @@ struct calls_t
     request_call_t<int> request{"request",
                                 [this] (const auto &, auto, const auto &) {
                                     ++requests;
-                                    return task_t<int> (result_t<int>::success (42));
+                                    return request_task_t<int> (result_t<int>::success (42));
                                 },
                                 [this] (bool) {
                                     ++preflights;
@@ -94,7 +95,7 @@ struct calls_t
     channel_request_call_t channel_request{
       "channel-request", &serializers, [this] (const auto &, auto, const auto &) {
           ++channel_requests;
-          return task_t<zlink::message_t> (
+          return request_task_t<zlink::message_t> (
             result_t<zlink::message_t>::success (zlink::message_t::from (std::string ("42"))));
       }};
     send_call_t send{"send", [this] (const auto &, const auto &) {
@@ -379,7 +380,7 @@ TEST (ZLinkFrameworkSyncSubmit, RequestWaitsForApplicationReply)
                                  EXPECT_EQ (250ms, timeout);
                                  EXPECT_EQ ("sync", metadata.at ("trace"));
                                  submitted.set_value ();
-                                 return reply.task ();
+                                 return test::accepted_request_task (reply.task ());
                              }};
     call.timeout (250ms).metadata ("trace", "sync");
     auto result = std::async (std::launch::async, [&] { return call.submit (); });
@@ -397,7 +398,7 @@ TEST (ZLinkFrameworkSyncSubmit, ChannelRequestWaitsForTypedApplicationReply)
     channel_request_call_t call{"channel-request", &serializers,
                                 [&] (const auto &, auto, const auto &) {
                                     submitted.set_value ();
-                                    return reply.task ();
+                                    return test::accepted_request_task (reply.task ());
                                 }};
     auto result = std::async (std::launch::async, [&] { return call.submit<int> (); });
     submitted.get_future ().wait ();

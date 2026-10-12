@@ -419,16 +419,28 @@ task_t<void> enqueue_session_relay (const std::shared_ptr<detail::actor_gateway_
     return task;
 }
 
-task_t<zlink::message_t> complete_session_actor_relay_request (
+request_task_t<zlink::message_t> complete_session_actor_relay_request (
   std::shared_ptr<detail::actor_gateway_state_t> state,
-  detail::actor_gateway_state_t::relay_dispatcher_t dispatcher,
+  detail::actor_gateway_state_t::relay_dispatcher_t submit,
   actor_ref_t actor,
   actor_context_t actor_context,
   detail::stream_header_t relay_header,
   zlink::message_t payload,
   std::optional<detail::bound_session_relay_source_t> relay_source,
-  std::chrono::milliseconds timeout)
+  std::chrono::milliseconds timeout,
+  std::shared_ptr<task_completion_source_t<void>> admitted = {})
 {
+    if (admitted) {
+        auto source = co_await detail::request_admission_source_t{};
+        auto stage = source->task ();
+        detail::observe_task_terminal (
+          stage, [admitted] (const auto &result) { admitted->complete (result); });
+    }
+    // This dispatcher submits this relay operation. Its explicit connection
+    // excludes any infrastructure request awaited inside the submission.
+    auto dispatcher = [submit = std::move (submit)] (auto &&...args) mutable {
+        return detail::request_submission (submit (std::forward<decltype (args)> (args)...));
+    };
     const auto dispatched = co_await dispatcher (actor, std::move (actor_context), relay_header,
                                                  payload, std::move (relay_source), timeout);
     if (!dispatched) {
@@ -1238,17 +1250,18 @@ relay_request_call_t session_actor_t::relay_request (const zlink::message_t &pay
                  const request_call_t<zlink::message_t>::metadata_map_t &) mutable {
           const auto relay_sequence = actor.reserve_relay_sequence ();
           if (!relay_sequence) {
-              return task_t<zlink::message_t> (detail::propagate_failure<zlink::message_t> (
+              return request_task_t<zlink::message_t> (detail::propagate_failure<zlink::message_t> (
                 relay_sequence, "actor relay request sequence failed"));
           }
           return actor.relay_request_internal (header, relay_sequence.value (), payload, timeout);
       });
 }
 
-task_t<zlink::message_t> session_actor_t::relay_request_internal (detail::stream_header_t header,
-                                                                  std::uint64_t relay_sequence,
-                                                                  zlink::message_t payload,
-                                                                  std::chrono::milliseconds timeout)
+request_task_t<zlink::message_t>
+session_actor_t::relay_request_internal (detail::stream_header_t header,
+                                         std::uint64_t relay_sequence,
+                                         zlink::message_t payload,
+                                         std::chrono::milliseconds timeout)
 {
     detail::actor_gateway_state_t::relay_dispatcher_t dispatcher;
     detail::stream_header_t relay_header;
@@ -1319,23 +1332,28 @@ task_t<zlink::message_t> session_actor_t::relay_request_internal (detail::stream
         }
     });
     if (rejected)
-        return task_t<zlink::message_t> (std::move (*rejected));
+        return request_task_t<zlink::message_t> (std::move (*rejected));
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
     if (!offload_session_relay) {
-        return complete_session_actor_relay_request (_state, std::move (dispatcher), _ref,
-                                                     context (), std::move (relay_header), payload,
-                                                     std::move (relay_source), timeout);
+        return request_task_t<zlink::message_t> (
+          complete_session_actor_relay_request (_state, std::move (dispatcher), _ref, context (),
+                                                std::move (relay_header), payload,
+                                                std::move (relay_source), timeout, admitted),
+          admitted);
     }
     auto actor_context = std::make_shared<actor_context_t> (context ());
-    return runtime::handler_coroutine_executor ().submit<zlink::message_t> (
-      [state = _state, dispatcher = std::move (dispatcher), actor = _ref,
-       actor_context = std::move (actor_context), relay_header = std::move (relay_header), payload,
-       relay_source = std::move (relay_source),
-       timeout] () mutable -> boost::asio::awaitable<result_t<zlink::message_t>> {
-          co_return co_await runtime::await_task_result (complete_session_actor_relay_request (
-            std::move (state), std::move (dispatcher), std::move (actor),
-            std::move (*actor_context), std::move (relay_header), payload, std::move (relay_source),
-            timeout));
-      });
+    return request_task_t<zlink::message_t> (
+      runtime::handler_coroutine_executor ().submit<zlink::message_t> (
+        [state = _state, dispatcher = std::move (dispatcher), actor = _ref,
+         actor_context = std::move (actor_context), relay_header = std::move (relay_header),
+         payload, relay_source = std::move (relay_source), timeout,
+         admitted] () mutable -> boost::asio::awaitable<result_t<zlink::message_t>> {
+            co_return co_await runtime::await_task_result (complete_session_actor_relay_request (
+              std::move (state), std::move (dispatcher), std::move (actor),
+              std::move (*actor_context), std::move (relay_header), payload,
+              std::move (relay_source), timeout, admitted));
+        }),
+      admitted);
 }
 
 relay_request_call_t session_actor_t::relay_request (std::string packet_name,
@@ -1659,7 +1677,9 @@ request_call_t<session_actor_t> session_actor_manager_t::bind (actor_ref_t actor
       "BindSessionActor",
       [manager = *this, actor_ref] (const std::string &, std::chrono::milliseconds,
                                     const request_call_t<session_actor_t>::metadata_map_t &) mutable
-      -> task_t<session_actor_t> { return manager.bind_current_session (actor_ref, false); });
+      -> request_task_t<session_actor_t> {
+          return manager.bind_current_session (actor_ref, false);
+      });
 }
 
 request_call_t<session_actor_t> session_actor_manager_t::bind_or_get (actor_ref_t actor_ref)
@@ -1689,11 +1709,13 @@ request_call_t<session_actor_t> session_actor_manager_t::bind_or_get (actor_ref_
       "BindOrGetSessionActor",
       [manager = *this, actor_ref] (const std::string &, std::chrono::milliseconds,
                                     const request_call_t<session_actor_t>::metadata_map_t &) mutable
-      -> task_t<session_actor_t> { return manager.bind_current_session (actor_ref, true); });
+      -> request_task_t<session_actor_t> {
+          return manager.bind_current_session (actor_ref, true);
+      });
 }
 
-task_t<session_actor_t> session_actor_manager_t::bind_current_session (actor_ref_t actor_ref,
-                                                                       bool reuse_current)
+request_task_t<session_actor_t>
+session_actor_manager_t::bind_current_session (actor_ref_t actor_ref, bool reuse_current)
 {
     const auto state = _state;
     const auto binding_context = _binding_context;
@@ -1721,12 +1743,14 @@ task_t<session_actor_t> session_actor_manager_t::bind_current_session (actor_ref
     };
     if (!binding_context) {
         publish_without_stream ();
+        co_await detail::request_admitted_t{};
         co_return session_actor_t (state, actor_ref, 0);
     }
     std::unique_lock binding_lock (binding_context->mutex);
     if (!binding_context->stream) {
         binding_lock.unlock ();
         publish_without_stream ();
+        co_await detail::request_admitted_t{};
         co_return session_actor_t (state, actor_ref, 0);
     }
     {
@@ -1751,6 +1775,7 @@ task_t<session_actor_t> session_actor_manager_t::bind_current_session (actor_ref
             if (current_binding_matches) {
                 const auto token = current->second;
                 binding_lock.unlock ();
+                co_await detail::request_admitted_t{};
                 co_return session_actor_t (state, actor_ref, token);
             }
         }
@@ -1790,7 +1815,7 @@ task_t<session_actor_t> session_actor_manager_t::bind_current_session (actor_ref
         auto native_binder = binding_context->native_binder;
         binding_lock.unlock ();
         if (native_binder) {
-            co_await native_binder (actor_ref, token, actor_slot);
+            co_await detail::request_submission (native_binder (actor_ref, token, actor_slot));
         } else {
             const auto payload =
               detail::stream_runtime_t::encode_actor_bound_payload (actor_slot, actor_id);
@@ -1804,6 +1829,7 @@ task_t<session_actor_t> session_actor_manager_t::bind_current_session (actor_ref
               .result ()
               .value ();
         }
+        co_await detail::request_admitted_t{};
         binding_lock.lock ();
         const auto current = binding_context->actor_tokens.find (actor_id);
         if (current != binding_context->actor_tokens.end () && current->second == token) {
@@ -1860,7 +1886,7 @@ void detail::session_actor_manager_access_t::set_codec (session_actor_manager_t 
 
 void detail::session_actor_manager_access_t::bind_native (
   session_actor_manager_t &manager,
-  std::function<task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> binder)
+  std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> binder)
 {
     const std::lock_guard lock (manager._binding_context->mutex);
     manager._binding_context->native_binder = std::move (binder);
@@ -1869,10 +1895,13 @@ void detail::session_actor_manager_access_t::bind_native (
 void detail::session_actor_manager_access_t::bind_native (
   session_actor_manager_t &manager, std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder)
 {
-    bind_native (manager, [binder = std::move (binder)] (
-                            actor_ref_t actor, std::uint64_t generation, std::uint16_t) mutable {
-        return binder (std::move (actor), generation);
-    });
+    bind_native (manager,
+                 [binder = std::move (binder)] (actor_ref_t actor, std::uint64_t generation,
+                                                std::uint16_t) mutable -> request_task_t<void> {
+                     auto pending = binder (std::move (actor), generation);
+                     co_await detail::request_admitted_t{};
+                     co_await pending;
+                 });
 }
 
 std::optional<session_actor_t>
