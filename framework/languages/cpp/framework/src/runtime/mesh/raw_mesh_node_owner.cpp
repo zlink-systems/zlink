@@ -8,6 +8,7 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 
 #include <array>
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
@@ -1346,14 +1347,11 @@ task_t<bool> raw_mesh_node_owner_t::send_session_relocation_route (
             || route.route.target_node_generation != local.lifecycle_generation) {
             co_return false;
         }
-        const auto accepted = _mailbox.try_enqueue (
-          service_mailbox_record_t{owner_key (local.node_routing_id),
-                                   service_mailbox_domain_t::infrastructure,
-                                   {protocol::encode_session_relocation_route (route)},
-                                   local.node_routing_id,
-                                   std::nullopt,
-                                   std::nullopt,
-                                   local.lifecycle_generation});
+        const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t{
+          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
+          detail::backend::materialize_binding_parts (
+            {protocol::encode_session_relocation_route (route)}),
+          local.node_routing_id, std::nullopt, std::nullopt, local.lifecycle_generation});
         if (accepted)
             signal_activity ();
         co_return accepted;
@@ -2163,7 +2161,8 @@ task_t<bool> raw_mesh_node_owner_t::send_instance_spot_activation (
     parts.push_back (protocol::encode_application_payload (application_payload));
     const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t{
       owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
-      std::move (parts), local.node_routing_id, std::nullopt, std::nullopt});
+      detail::backend::materialize_binding_parts (std::move (parts)), local.node_routing_id,
+      std::nullopt, std::nullopt});
     if (accepted)
         signal_activity ();
     co_return accepted;
@@ -2213,7 +2212,8 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     if (target_routing_id == local.node_routing_id) {
         const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t{
           owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
-          std::move (parts), local.node_routing_id, std::nullopt, correlation});
+          detail::backend::materialize_binding_parts (std::move (parts)), local.node_routing_id,
+          std::nullopt, correlation});
         if (!accepted)
             (void) _operations->fail (id, foundation::operation_terminal_t::transport_failed);
         if (accepted)
@@ -2341,13 +2341,10 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
         co_return false;
     }
     if (target_routing_id == local.node_routing_id) {
-        const auto accepted =
-          _mailbox.try_enqueue (service_mailbox_record_t{owner_key (local.node_routing_id),
-                                                         service_mailbox_domain_t::infrastructure,
-                                                         {header (correlation)},
-                                                         local.node_routing_id,
-                                                         std::nullopt,
-                                                         correlation});
+        const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t{
+          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
+          detail::backend::materialize_binding_parts ({header (correlation)}),
+          local.node_routing_id, std::nullopt, correlation});
         if (!accepted)
             (void) _operations->fail (id, foundation::operation_terminal_t::transport_failed);
         if (accepted)
@@ -2642,7 +2639,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
         co_return raw_mesh_pump_result_t::protocol_error;
     }
     try {
-        const auto header = protocol::decode_header (received->parts.front ());
+        const auto header =
+          protocol::decode_header (protocol::message_bytes (received->parts.front ()));
         trace_mesh ("receive kind=" + std::to_string (static_cast<int> (header.kind))
                     + " parts=" + std::to_string (received->parts.size ()) + " replyToken="
                     + (received->reply_token ? std::string ("present") : std::string ("-")));
@@ -2656,7 +2654,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                 co_return raw_mesh_pump_result_t::infrastructure;
             }
             const auto descriptor = protocol::decode_route_mesh_admission (
-              received->parts.front (), header.kind, received->source_routing_id);
+              protocol::message_bytes (received->parts.front ()), header.kind,
+              received->source_routing_id);
             const auto connection_id = route_connection_id (received->route_generation);
             struct admission_expectation_t
             {
@@ -2759,7 +2758,7 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             if (received->parts.size () != 1) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            (void) protocol::decode_reject (received->parts.front ());
+            (void) protocol::decode_reject (protocol::message_bytes (received->parts.front ()));
             _lane
               .run ([this, &received] {
                   const auto peer = _topology.peer (received->source_routing_id);
@@ -2779,8 +2778,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
         if (!admitted) {
             if (application_command (header.kind) && header.flags == 0
                 && received->parts.size () == 2) {
-                const auto correlation =
-                  application_request_correlation (header.kind, received->parts.front ());
+                const auto correlation = application_request_correlation (
+                  header.kind, protocol::message_bytes (received->parts.front ()));
                 bool rejected = false;
                 if (correlation && received->reply_token) {
                     try {
@@ -2814,7 +2813,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             if (received->parts.size () != 1) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            const auto record = protocol::decode_liveness (received->parts.front ());
+            const auto record =
+              protocol::decode_liveness (protocol::message_bytes (received->parts.front ()));
             std::array<std::uint8_t, sizeof (received->route_generation)> connection_id;
             detail::backend::encode_route_connection_id (received->route_generation, connection_id);
             if (record.kind == protocol::command::livenessProbe) {
@@ -2846,7 +2846,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             if (header.flags != 0 || received->parts.size () != 1 || received->reply_token) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            const auto notice = protocol::decode_message_follow (received->parts.front ());
+            const auto notice =
+              protocol::decode_message_follow (protocol::message_bytes (received->parts.front ()));
             const auto source_matches_peer = std::visit (
               [&received, &admitted] (const auto &source) {
                   return source.target_node_routing_id == received->source_routing_id
@@ -2906,13 +2907,15 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             if (header.flags != 0 || received->parts.size () != 2 || received->reply_token) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            const auto send = protocol::decode_bound_session_send (received->parts.front ());
+            const auto send = protocol::decode_bound_session_send (
+              protocol::message_bytes (received->parts.front ()));
             if (send.actor.target_node_routing_id != received->source_routing_id
                 || send.actor.target_node_routing_id != admitted->descriptor.node_routing_id
                 || send.actor.target_node_generation != admitted->descriptor.lifecycle_generation) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            (void) protocol::decode_application_payload (received->parts.back (), false);
+            (void) protocol::decode_application_payload (
+              protocol::message_bytes (received->parts.back ()), false);
             co_return enqueue_received (
               service_mailbox_record_t{
                 "bound-session:" + send.actor.actor_id, service_mailbox_domain_t::application,
@@ -2924,7 +2927,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             if (header.flags != 0 || received->parts.size () != 1 || !received->reply_token) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            const auto bind = protocol::decode_bound_session_bind (received->parts.front ());
+            const auto bind = protocol::decode_bound_session_bind (
+              protocol::message_bytes (received->parts.front ()));
             const auto local = _topology.local_descriptor ();
             if (bind.actor.target_node_routing_id != local.node_routing_id
                 || bind.actor.target_node_generation != local.lifecycle_generation) {
@@ -2941,8 +2945,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             if (header.flags != 0 || received->parts.size () != 1 || received->reply_token) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            const auto replacement =
-              protocol::decode_bound_session_replaced (received->parts.front ());
+            const auto replacement = protocol::decode_bound_session_replaced (
+              protocol::message_bytes (received->parts.front ()));
             const auto local = _topology.local_descriptor ();
             if (replacement.actor_authority.target_node_routing_id != received->source_routing_id
                 || replacement.actor_authority.target_node_routing_id
@@ -2963,8 +2967,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
               raw_mesh_pump_result_t::infrastructure);
         }
         if (header.kind == protocol::command::instanceSpot) {
-            const auto activation =
-              protocol::decode_instance_spot_activation_header (received->parts.front ());
+            const auto activation = protocol::decode_instance_spot_activation_header (
+              protocol::message_bytes (received->parts.front ()));
             const auto expected_parts = activation.has_metadata ? 3u : 2u;
             if (received->parts.size () != expected_parts
                 || activation.source_node_routing_id != received->source_routing_id
@@ -2979,7 +2983,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                 || (!activation.request && activation.reply_route_id != 0)) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            (void) protocol::decode_application_payload (received->parts.back (), false);
+            (void) protocol::decode_application_payload (
+              protocol::message_bytes (received->parts.back ()), false);
             co_return enqueue_received (
               service_mailbox_record_t{
                 owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
@@ -3001,23 +3006,24 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             std::uint64_t target_node_generation = 0;
             std::uint64_t correlation = 0;
             if (header.kind == protocol::command::actorCreate) {
-                const auto create = protocol::decode_actor_create_header (received->parts.front ());
+                const auto create = protocol::decode_actor_create_header (
+                  protocol::message_bytes (received->parts.front ()));
                 source_node_routing_id = create.source_node_routing_id;
                 source_node_generation = create.source_node_generation;
                 target_node_routing_id = create.reservation.target_node_routing_id;
                 target_node_generation = create.reservation.target_node_generation;
                 correlation = create.correlation;
             } else if (header.kind == protocol::command::userSpotCreate) {
-                const auto create =
-                  protocol::decode_user_spot_create_header (received->parts.front ());
+                const auto create = protocol::decode_user_spot_create_header (
+                  protocol::message_bytes (received->parts.front ()));
                 source_node_routing_id = create.source_node_routing_id;
                 source_node_generation = create.source_node_generation;
                 target_node_routing_id = create.reservation.target_node_routing_id;
                 target_node_generation = create.reservation.target_node_generation;
                 correlation = create.correlation;
             } else {
-                const auto close =
-                  protocol::decode_user_spot_close_header (received->parts.front ());
+                const auto close = protocol::decode_user_spot_close_header (
+                  protocol::message_bytes (received->parts.front ()));
                 source_node_routing_id = close.source_node_routing_id;
                 source_node_generation = close.source_node_generation;
                 target_node_routing_id = close.target.target_node_routing_id;
@@ -3045,7 +3051,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             }
             const auto decoded_canonical = [&] {
                 try {
-                    return protocol::decode_actor_join_28 (received->parts);
+                    return protocol::decode_actor_join_28 (
+                      detail::backend::copy_binding_parts (received->parts));
                 }
                 catch (const std::invalid_argument &) {
                     throw protocol::service_wire_error_t ("invalid Actor join request");
@@ -3092,7 +3099,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                 || (received->reply_token && header.kind != protocol::command::relocationPrepare)) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            const auto control = protocol::decode_relocation_control (received->parts.front ());
+            const auto control = protocol::decode_relocation_control (
+              protocol::message_bytes (received->parts.front ()));
             const auto source_fence = std::visit (
               [] (const auto &value)
                 -> std::optional<std::pair<std::vector<std::uint8_t>, std::uint64_t>> {
@@ -3143,18 +3151,21 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                 if (received->parts.empty () || received->parts.size () > 2) {
                     co_return raw_mesh_pump_result_t::protocol_error;
                 }
-                const auto relay = protocol::decode_reply_relay (received->parts.front ());
+                const auto relay =
+                  protocol::decode_reply_relay (protocol::message_bytes (received->parts.front ()));
                 if (relay.terminal_result != 0 && received->parts.size () == 2) {
                     co_return raw_mesh_pump_result_t::protocol_error;
                 }
                 if (received->parts.size () == 2) {
-                    (void) protocol::decode_application_payload (received->parts.back (), false);
+                    (void) protocol::decode_application_payload (
+                      protocol::message_bytes (received->parts.back ()), false);
                 }
             } else {
                 if (received->parts.size () != 1) {
                     co_return raw_mesh_pump_result_t::protocol_error;
                 }
-                const auto ack = protocol::decode_reply_relay_ack (received->parts.front ());
+                const auto ack = protocol::decode_reply_relay_ack (
+                  protocol::message_bytes (received->parts.front ()));
                 if (ack.request_source.node_routing_id != received->source_routing_id
                     || ack.request_source.node_routing_id != admitted->descriptor.node_routing_id
                     || ack.request_source.node_generation
@@ -3177,8 +3188,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             }
             const auto local = _topology.local_descriptor ();
             if (header.kind == protocol::command::sessionRelocationSeal) {
-                const auto seal =
-                  protocol::decode_session_relocation_seal (received->parts.front ());
+                const auto seal = protocol::decode_session_relocation_seal (
+                  protocol::message_bytes (received->parts.front ()));
                 const auto expected_source_rid =
                   seal.sender_role == protocol::relocation_role_t::source
                     ? seal.actor.target_node_routing_id
@@ -3202,8 +3213,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                   raw_mesh_pump_result_t::infrastructure);
             }
             if (header.kind == protocol::command::sessionRelocationRoute) {
-                const auto route =
-                  protocol::decode_session_relocation_route (received->parts.front ());
+                const auto route = protocol::decode_session_relocation_route (
+                  protocol::message_bytes (received->parts.front ()));
                 const auto expected_source_rid =
                   route.sender_role == protocol::relocation_role_t::target
                     ? route.route.target_node_routing_id
@@ -3227,8 +3238,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                   raw_mesh_pump_result_t::infrastructure);
             }
             if (header.kind == protocol::command::sessionRelocationSealed) {
-                const auto sealed =
-                  protocol::decode_session_relocation_sealed (received->parts.front ());
+                const auto sealed = protocol::decode_session_relocation_sealed (
+                  protocol::message_bytes (received->parts.front ()));
                 if (sealed.session_owner_node_routing_id != received->source_routing_id
                     || sealed.session_owner_node_routing_id != admitted->descriptor.node_routing_id
                     || sealed.session_owner_node_generation
@@ -3236,7 +3247,7 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                     co_return raw_mesh_pump_result_t::protocol_error;
                 }
                 const auto operation = operation_id (sealed.relocation.high, sealed.relocation.low);
-                if (!_operations->complete (operation, std::move (received->parts.front ()))) {
+                if (!_operations->complete (operation, received->parts.front ().to_bytes ())) {
                     co_return raw_mesh_pump_result_t::protocol_error;
                 }
                 co_return raw_mesh_pump_result_t::infrastructure;
@@ -3271,20 +3282,22 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                 if (!received->reply_token) {
                     co_return raw_mesh_pump_result_t::protocol_error;
                 }
-                correlation = protocol::decode_node_request_header (received->parts.front ());
+                correlation = protocol::decode_node_request_header (
+                  protocol::message_bytes (received->parts.front ()));
             }
             mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::node);
         } else if (header.kind == protocol::command::channelSend
                    || header.kind == protocol::command::channelRequest) {
             std::string channel_name;
             if (header.kind == protocol::command::channelSend) {
-                channel_name = protocol::decode_channel_send_header (received->parts.front ());
+                channel_name = protocol::decode_channel_send_header (
+                  protocol::message_bytes (received->parts.front ()));
             } else {
                 if (!received->reply_token) {
                     co_return raw_mesh_pump_result_t::protocol_error;
                 }
-                auto channel_request =
-                  protocol::decode_channel_request_header (received->parts.front ());
+                auto channel_request = protocol::decode_channel_request_header (
+                  protocol::message_bytes (received->parts.front ()));
                 correlation = channel_request.correlation;
                 channel_name = std::move (channel_request.channel_name);
             }
@@ -3302,8 +3315,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             if (header.kind == protocol::command::spotRequest && !received->reply_token) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            const auto spot =
-              protocol::decode_spot_message_header (received->parts.front (), header.kind);
+            const auto spot = protocol::decode_spot_message_header (
+              protocol::message_bytes (received->parts.front ()), header.kind);
             if (spot.target.target_node_routing_id != local.node_routing_id
                 || spot.target.target_node_generation != local.lifecycle_generation) {
                 co_return raw_mesh_pump_result_t::protocol_error;
@@ -3316,8 +3329,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
             if (header.kind == protocol::command::actorRequest && !received->reply_token) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            auto actor =
-              protocol::decode_actor_message_header (received->parts.front (), header.kind);
+            auto actor = protocol::decode_actor_message_header (
+              protocol::message_bytes (received->parts.front ()), header.kind);
             if (actor.target.target_node_routing_id != local.node_routing_id
                 || actor.target.target_node_generation != local.lifecycle_generation) {
                 co_return raw_mesh_pump_result_t::protocol_error;

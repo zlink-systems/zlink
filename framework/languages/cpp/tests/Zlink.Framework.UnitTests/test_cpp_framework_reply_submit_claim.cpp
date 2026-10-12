@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
@@ -117,16 +118,13 @@ void verify_stateful_claim_releases_after_one_shot_reply_terminal ()
 
     const std::string mailbox_owner = "actor:" + actor.key;
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
-      mailbox_owner,
-      mesh::service_mailbox_domain_t::application,
-      {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt, fence,
-                                              operation, correlation),
-       protocol::encode_application_payload (
-         {"ActorRequest", "application/json", bytes ("request")})},
-      source_routing_id,
-      std::nullopt,
-      correlation,
-      source_generation,
+      mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts (
+        {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
+                                                fence, operation, correlation),
+         protocol::encode_application_payload (
+           {"ActorRequest", "application/json", bytes ("request")})}),
+      source_routing_id, std::nullopt, correlation, source_generation,
       std::make_pair (operation.high, operation.low)}));
     assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
     const auto [claim_error, delivery] = dispatch.try_claim (actor);
@@ -134,7 +132,8 @@ void verify_stateful_claim_releases_after_one_shot_reply_terminal ()
     assert (delivery && delivery->request);
 
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
-      mailbox_owner, mesh::service_mailbox_domain_t::application, {{0x01}}}));
+      mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{0x01}})}));
     assert (objects.enqueue (actor, stateful::turn_domain_t::application, {777, {0x02}})
             == stateful::stateful_error_t::none);
 
@@ -200,8 +199,7 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
     constexpr std::uint64_t request_sequence = 51;
     constexpr std::uint64_t correlation = 61;
     const std::string mailbox_owner = descriptor.channel_name;
-    /* The reply path reads the request's channel-envelope header, so the
-     * synthetic record carries a real envelope header frame. */
+    /* The synthetic record carries the ingress header and its wire frame. */
     messaging::envelope_header_t request_header;
     request_header.kind = messaging::message_kind_t::request;
     request_header.channel_name = descriptor.channel_name;
@@ -209,15 +207,19 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
     request_header.correlation_id = "reply-claim-corr";
     const auto request_header_bytes =
       messaging::envelope_codec_t{}.encode_header (request_header).to_bytes ();
-    assert (server.mailbox ().try_enqueue (
+    auto request_record =
       mesh::service_mailbox_record_t{mailbox_owner,
                                      mesh::service_mailbox_domain_t::application,
-                                     {request_header_bytes, bytes ("request")},
+                                     zlink::framework::detail::backend::materialize_binding_parts (
+                                       {request_header_bytes, bytes ("request")}),
                                      source_routing_id,
                                      std::nullopt,
-                                     correlation}));
+                                     correlation};
+    request_record.envelope_header = request_header;
+    assert (server.mailbox ().try_enqueue (std::move (request_record)));
     assert (server.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
-      mailbox_owner, mesh::service_mailbox_domain_t::application, {{0x02}}}));
+      mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{0x02}})}));
     auto claim = server.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
                                                     mailbox_owner, 1, 1024);
     assert (claim && claim->records.size () == 1);
@@ -276,16 +278,13 @@ void verify_stateful_ingest_rejection_releases_on_one_shot_terminal ()
     const std::string source_routing_id_text = "ingest-reply-source";
     const auto source_routing_id = bytes (source_routing_id_text);
     const std::string mailbox_owner = "actor:" + actor.key;
-    assert (target.mailbox ().try_enqueue (
-      mesh::service_mailbox_record_t{mailbox_owner,
-                                     mesh::service_mailbox_domain_t::application,
-                                     {{0xff}, {0x00}},
-                                     source_routing_id,
-                                     std::nullopt,
-                                     81,
-                                     1}));
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
-      mailbox_owner, mesh::service_mailbox_domain_t::application, {{0x01}}}));
+      mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{0xff}, {0x00}}),
+      source_routing_id, std::nullopt, 81, 1}));
+    assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
+      mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{0x01}})}));
 
     assert (dispatch.ingest (actor) == stateful::stateful_error_t::invalid);
     std::optional<mesh::service_mailbox_claim_t> released;

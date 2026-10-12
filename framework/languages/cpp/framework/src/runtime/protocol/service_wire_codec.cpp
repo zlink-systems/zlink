@@ -20,8 +20,6 @@ namespace zlink::framework::runtime::protocol
 namespace
 {
 
-constexpr std::size_t prefix_size =
-  sizeof (magic) + sizeof (wire_major) + sizeof (command) + sizeof (flag);
 constexpr std::size_t liveness_size = prefix_size + sizeof (std::uint64_t);
 constexpr std::array<std::uint8_t, 5> instance_activation_recovery_prefix{'Z', 'L', 'I', 'A', 1};
 constexpr std::size_t instance_activation_recovery_minimum_size =
@@ -2509,20 +2507,12 @@ application_payload_t application_payload_t::from_parts (multipart_t &&parts)
     return result;
 }
 
-application_payload_t::multipart_t decode_application_parts (const application_payload_t &payload)
+namespace
 {
-    if (payload.packet_name != framework_multipart_packet_name
-        || payload.content_type != framework_multipart_content_type) {
-        throw service_wire_error_t ("framework application payload profile is unsupported");
-    }
-    if (const auto *parts = payload.parts ()) {
-        application_payload_t::multipart_t result;
-        result.reserve (parts->size ());
-        for (const auto &part : *parts)
-            result.push_back (part.copy ());
-        return result;
-    }
-    const auto &encoded = payload.payload_bytes ();
+template <typename CreatePart>
+application_payload_t::multipart_t
+decode_application_parts_bytes (std::span<const std::uint8_t> encoded, CreatePart create_part)
+{
     if (encoded.size () < 4)
         throw service_wire_error_t ("framework multipart payload is truncated");
     std::size_t offset = 0;
@@ -2537,13 +2527,30 @@ application_payload_t::multipart_t decode_application_parts (const application_p
         const auto size = read_u32 (encoded, offset);
         if (size > encoded.size () - offset)
             throw service_wire_error_t ("framework multipart part is truncated");
-        parts.push_back (
-          zlink::message_t::from (std::span<const std::uint8_t> (encoded.data () + offset, size)));
+        parts.push_back (create_part (encoded.subspan (offset, size)));
         offset += size;
     }
     if (offset != encoded.size ())
         throw service_wire_error_t ("framework multipart payload has trailing bytes");
     return parts;
+}
+} // namespace
+
+application_payload_t::multipart_t decode_application_parts (const application_payload_t &payload)
+{
+    if (payload.packet_name != framework_multipart_packet_name
+        || payload.content_type != framework_multipart_content_type) {
+        throw service_wire_error_t ("framework application payload profile is unsupported");
+    }
+    if (const auto *parts = payload.parts ()) {
+        application_payload_t::multipart_t result;
+        result.reserve (parts->size ());
+        for (const auto &part : *parts)
+            result.push_back (part.copy ());
+        return result;
+    }
+    return decode_application_parts_bytes (
+      payload.payload_bytes (), [] (auto bytes) { return zlink::message_t::from (bytes); });
 }
 
 bool operator== (const application_payload_t &left, const application_payload_t &right)
@@ -2648,8 +2655,12 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
     return result;
 }
 
-application_payload_t decode_application_payload (std::span<const std::uint8_t> bytes,
-                                                  bool capture_flow)
+namespace
+{
+template <typename RetainBody>
+application_payload_t decode_application_payload_bytes (std::span<const std::uint8_t> bytes,
+                                                        bool capture_flow,
+                                                        RetainBody retain_body)
 {
     if (bytes.size () < 5
         || (bytes[0] != application_payload_version
@@ -2669,9 +2680,7 @@ application_payload_t decode_application_payload (std::span<const std::uint8_t> 
     if (payload_length > bytes.size () - offset) {
         throw service_wire_error_t ("application payload length does not match frame");
     }
-    result.payload_bytes ().assign (bytes.begin () + static_cast<std::ptrdiff_t> (offset),
-                                    bytes.begin ()
-                                      + static_cast<std::ptrdiff_t> (offset + payload_length));
+    const auto body = bytes.subspan (offset, payload_length);
     offset += payload_length;
     if (has_flow) {
         if (capture_flow) {
@@ -2695,7 +2704,44 @@ application_payload_t decode_application_payload (std::span<const std::uint8_t> 
     if (offset != bytes.size ()) {
         throw service_wire_error_t ("application payload has trailing fields");
     }
+    retain_body (result, body);
     return result;
+}
+} // namespace
+
+application_payload_t decode_application_payload (std::span<const std::uint8_t> bytes,
+                                                  bool capture_flow)
+{
+    return decode_application_payload_bytes (bytes, capture_flow, [] (auto &result, auto body) {
+        result.payload_bytes ().assign (body.begin (), body.end ());
+    });
+}
+
+application_payload_t::multipart_t decode_application_parts (zlink::message_t &&bytes,
+                                                             bool capture_flow)
+{
+    auto owner = std::make_shared<zlink::message_t> (std::move (bytes));
+    application_payload_t::multipart_t parts;
+    (void) decode_application_payload_bytes (
+      message_bytes (*owner), capture_flow, [&owner, &parts] (auto &result, auto body) {
+          if (result.packet_name != framework_multipart_packet_name
+              || result.content_type != framework_multipart_content_type)
+              throw service_wire_error_t ("framework application payload profile is unsupported");
+          parts = decode_application_parts_bytes (body, [&owner] (auto part) {
+              auto retained = std::make_unique<std::shared_ptr<zlink::message_t>> (owner);
+              auto message = zlink::advanced::external_message_t::from (
+                std::span<std::uint8_t> (const_cast<std::uint8_t *> (part.data ()), part.size ()),
+                [] (void *, void *hint) {
+                    delete static_cast<std::shared_ptr<zlink::message_t> *> (hint);
+                },
+                retained.get ());
+              if (!message.valid ())
+                  throw std::bad_alloc ();
+              retained.release ();
+              return message;
+          });
+      });
+    return parts;
 }
 
 std::size_t application_payload_hwm_bytes (const application_payload_t &payload)

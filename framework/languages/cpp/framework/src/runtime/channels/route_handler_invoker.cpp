@@ -23,10 +23,8 @@ route_handler_invoker_t::invoke_send (const route_handler_registry_t &handlers,
     auto &invocation_services = invocation_scope.provider ();
     co_await filters.invoke_filters_async (
       dispatch_kind, invocation_services, serializers, context,
-      [&handlers, router_channel_id = std::string (router_channel_id),
-       packet_name = std::string (packet_name), &invocation_services, &serializers,
-       message = message.copy (), context,
-       before_application_handler = std::move (before_application_handler)] () mutable {
+      [&handlers, router_channel_id, packet_name, &invocation_services, &serializers, &message,
+       &context, before_application_handler = std::move (before_application_handler)] () mutable {
           if (before_application_handler) {
               before_application_handler ();
           }
@@ -55,9 +53,8 @@ route_handler_invoker_t::invoke_request (const route_handler_registry_t &handler
         auto &invocation_services = invocation_scope.provider ();
         co_return co_await filters.invoke_filters_async (
           dispatch_kind, invocation_services, serializers, context,
-          [&handlers, router_channel_id = std::string (router_channel_id),
-           packet_name = std::string (packet_name), &invocation_services, &serializers,
-           message = message.copy (), context,
+          [&handlers, router_channel_id, packet_name, &invocation_services, &serializers, &message,
+           &context,
            before_application_handler = std::move (before_application_handler)] () mutable {
               if (before_application_handler) {
                   before_application_handler ();

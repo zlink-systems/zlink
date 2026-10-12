@@ -15,6 +15,7 @@
 
 #include <zlink/Contracts/Messaging/received.hpp>
 #include "runtime/dispatch/application_record.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 
 namespace zlink::framework::runtime::mesh
 {
@@ -36,7 +37,7 @@ struct service_mailbox_record_t
 {
     std::string owner;
     service_mailbox_domain_t domain;
-    std::vector<std::vector<std::uint8_t>> parts;
+    std::vector<zlink::message_t> parts;
     std::vector<std::uint8_t> source_routing_id{};
     std::optional<zlink::reply_token_t> reply_token = std::nullopt;
     std::optional<std::uint64_t> correlation = std::nullopt;
@@ -45,6 +46,7 @@ struct service_mailbox_record_t
     std::optional<service_bound_session_source_t> bound_session_source;
     std::function<void ()> before_application_handler;
     std::shared_ptr<host::local_application_dispatch_t> application;
+    messaging::envelope_header_t envelope_header;
 };
 
 struct service_mailbox_claim_t

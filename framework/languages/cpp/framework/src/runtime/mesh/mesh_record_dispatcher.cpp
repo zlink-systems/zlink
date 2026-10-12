@@ -3,7 +3,6 @@
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
 
 #include "runtime/channels/route_packet_dispatcher.hpp"
-#include "runtime/diagnostics/message_flow_tracer.hpp"
 
 #include <utility>
 
@@ -26,8 +25,10 @@ mesh_record_dispatcher_t::mesh_record_dispatcher_t (
 {
 }
 
-result_t<void> mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &record,
-                                                   std::vector<zlink::message_t> parts) const
+result_t<void>
+mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &record,
+                                    std::vector<zlink::message_t> parts,
+                                    runtime::messaging::envelope_header_t header) const
 {
     using record_kind_t = runtime::host::record_kind_t;
     if (record.kind != record_kind_t::node_send && record.kind != record_kind_t::node_request
@@ -38,14 +39,8 @@ result_t<void> mesh_record_dispatcher_t::dispatch (const runtime::host::receive_
     }
 
     runtime::messaging::message_parts_t message_parts (std::move (parts));
-    runtime::messaging::envelope_codec_t codec;
-    auto header = codec.decode_header (
-      message_parts, message_flow_tracer_t (_dispatch_options).capture_enabled ());
-    if (!header) {
-        return detail::propagate_failure<void> (header, "MeshNode envelope header decode failed");
-    }
     const std::string dispatch_channel =
-      record.channel_name.empty () ? header.value ().channel_name : record.channel_name;
+      record.channel_name.empty () ? header.channel_name : record.channel_name;
     const auto channel_dispatch =
       record.kind == record_kind_t::channel_send || record.kind == record_kind_t::channel_request;
     route_packet_dispatcher_t dispatcher (
@@ -58,7 +53,7 @@ result_t<void> mesh_record_dispatcher_t::dispatch (const runtime::host::receive_
       _before_application_handler);
     auto dispatched = dispatcher.dispatch (
       route_received_packet_t{record.source_node_rid, {}, std::move (message_parts), {}},
-      std::move (header.value ()));
+      std::move (header));
     if (!dispatched) {
         return detail::propagate_failure<void> (dispatched, "MeshNode handler dispatch failed");
     }

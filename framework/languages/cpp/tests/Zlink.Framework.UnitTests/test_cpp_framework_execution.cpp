@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/dispatch/offload_executor.hpp"
@@ -1504,7 +1505,8 @@ bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
     service_mailbox_record_t record;
     record.owner = "transferred-owner";
     record.domain = service_mailbox_domain_t::application;
-    record.parts.emplace_back (512, std::uint8_t{0x2a});
+    record.parts.push_back (
+      zlink::message_t::from (std::vector<std::uint8_t> (512, std::uint8_t{0x2a})));
     if (!mailbox.try_enqueue (std::move (record))) {
         (*complete_active) ([] {});
         queue.drain ();
@@ -2591,7 +2593,9 @@ bool verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()
     std::atomic_int ingress_terminals{0};
     bool terminal_deferred = false;
     const auto dispatched = spot_node_runtime_t (node).dispatch_mesh_record (
-      owner, record, parts, provider, serializers,
+      owner, record, parts,
+      zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
+      provider, serializers,
       [&ingress_terminals] { ingress_terminals.fetch_add (1, std::memory_order_acq_rel); },
       &terminal_deferred);
 
@@ -7313,8 +7317,11 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
             (void) source.dispatch_ready ([&] (const host::ready_record_t &owner,
                                                const host::receive_record_t &record,
                                                std::vector<zlink::message_t> parts) {
-                (void) source_spots.dispatch_mesh_record (owner, record, parts, source_provider,
-                                                          serializers);
+                (void) source_spots.dispatch_mesh_record (
+                  owner, record, parts,
+                  zlink::framework::runtime::decode_mesh_record_header (record, parts, false)
+                    .value (),
+                  source_provider, serializers);
             });
             std::this_thread::sleep_for (1ms);
         }
@@ -7324,8 +7331,11 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
             (void) target.dispatch_ready ([&] (const host::ready_record_t &owner,
                                                const host::receive_record_t &record,
                                                std::vector<zlink::message_t> parts) {
-                (void) target_spots.dispatch_mesh_record (owner, record, parts, target_provider,
-                                                          serializers);
+                (void) target_spots.dispatch_mesh_record (
+                  owner, record, parts,
+                  zlink::framework::runtime::decode_mesh_record_header (record, parts, false)
+                    .value (),
+                  target_provider, serializers);
             });
             std::this_thread::sleep_for (1ms);
         }

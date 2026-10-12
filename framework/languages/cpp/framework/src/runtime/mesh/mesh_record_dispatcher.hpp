@@ -25,7 +25,8 @@ class mesh_record_dispatcher_t
                               std::function<void ()> before_application_handler = {});
 
     result_t<void> dispatch (const runtime::host::receive_record_t &record,
-                             std::vector<zlink::message_t> parts) const;
+                             std::vector<zlink::message_t> parts,
+                             runtime::messaging::envelope_header_t header) const;
 
   private:
     service_provider_t *_services;

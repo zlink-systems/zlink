@@ -2180,6 +2180,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ZLINK_ERROR_MAPPING_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/framework-error-mapping-v1.json")
   add_executable(test_cpp_framework_gtest_harness
     tests/Zlink.Framework.UnitTests/test_cpp_framework_gtest_harness.cpp)
+  add_executable(test_cpp_framework_route_payload_ownership
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_route_payload_ownership)
+  target_link_libraries(test_cpp_framework_route_payload_ownership PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_route_payload_ownership PRIVATE
+    framework/src ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_route_payload_ownership
+    COMMAND test_cpp_framework_route_payload_ownership
+    LABELS "framework-unit;framework-regression;messaging"
+    TIMEOUT 30)
   target_use_zlink_gtest_main(test_cpp_framework_gtest_harness)
   target_link_libraries(test_cpp_framework_gtest_harness PRIVATE
     zlink::framework)

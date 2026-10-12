@@ -23,6 +23,9 @@
 namespace zlink::framework::runtime::protocol
 {
 
+inline constexpr std::size_t prefix_size =
+  sizeof (magic) + sizeof (wire_major) + sizeof (command) + sizeof (flag);
+
 inline constexpr char message_follow_hop_count_metadata_key[] = "__zlink.messageFollowHopCount";
 
 class service_wire_error_t : public std::runtime_error
@@ -943,6 +946,13 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
  * frame-integrity guards. */
 application_payload_t decode_application_payload (std::span<const std::uint8_t> bytes,
                                                   bool capture_flow = true);
+application_payload_t::multipart_t decode_application_parts (zlink::message_t &&bytes,
+                                                             bool capture_flow = true);
+
+inline std::span<const std::uint8_t> message_bytes (const zlink::message_t &message) noexcept
+{
+    return {reinterpret_cast<const std::uint8_t *> (message.data ()), message.size ()};
+}
 std::size_t application_payload_hwm_bytes (const application_payload_t &payload);
 // Validate an encoded application envelope and calculate its HWM charge
 // without allocating the application payload vector. Ingress uses this

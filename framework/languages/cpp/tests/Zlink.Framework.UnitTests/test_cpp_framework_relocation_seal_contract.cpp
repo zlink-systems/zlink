@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
@@ -124,8 +125,9 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
           mesh::service_mailbox_record_t record{
             "bound-session:" + std::string (source_actor.actor_id ().value ()),
             mesh::service_mailbox_domain_t::application,
-            {protocol::encode_bound_session_send (send),
-             protocol::encode_application_payload (application)},
+            zlink::framework::detail::backend::materialize_binding_parts (
+              {protocol::encode_bound_session_send (send),
+               protocol::encode_application_payload (application)}),
             actor_node.to_bytes (),
             std::nullopt,
             std::nullopt,

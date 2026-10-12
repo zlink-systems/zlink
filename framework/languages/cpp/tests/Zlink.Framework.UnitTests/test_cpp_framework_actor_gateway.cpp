@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -1630,11 +1631,12 @@ int bound_session_route_installs_sink_and_fence_together ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
+    serializer_registry_t serializers;
     auto state = std::make_shared<actor_gateway_state_t> ();
     actor_gateway_runtime_t gateway (state);
     const auto actor = test_actor_ref ("route-node", "support-user", "route-actor", 5);
     const auto bound = gateway.bind_session_route (
-      actor, route_client_t{}, "actor-route",
+      actor, nullptr, serializers, "actor-route",
       zlink::routing_id_t::from (std::string ("session-node")), stream_codec_t::message_pack, true,
       std::make_optional (zlink::routing_id_t::from (std::string ("session-rid"))));
     if (!bound) {
@@ -1655,7 +1657,7 @@ int bound_session_route_installs_sink_and_fence_together ()
     }
 
     const auto non_replacing = gateway.bind_session_route (
-      actor, route_client_t{}, "replacement-route",
+      actor, nullptr, serializers, "replacement-route",
       zlink::routing_id_t::from (std::string ("replacement-node")), stream_codec_t::json, false,
       std::make_optional (zlink::routing_id_t::from (std::string ("replacement-rid"))));
     if (!non_replacing) {
@@ -1669,7 +1671,7 @@ int bound_session_route_installs_sink_and_fence_together ()
 
     const auto wrong_type = test_actor_ref ("route-node", "other-actor", "route-actor", 5);
     const auto rejected =
-      gateway.bind_session_route (wrong_type, route_client_t{}, "actor-route",
+      gateway.bind_session_route (wrong_type, nullptr, serializers, "actor-route",
                                   zlink::routing_id_t::from (std::string ("other-node")));
     if (rejected || rejected.error_kind () != framework_error_kind_t::type_mismatch) {
         return 6;
@@ -2286,7 +2288,10 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
                                        .message_name = "MoveMsg"},
           zlink::message_t::from (std::string ("move")));
         auto parts = std::move (encoded).take_items ();
-        return spots.dispatch_mesh_record (owner, record, parts, provider, serializers);
+        return spots.dispatch_mesh_record (
+          owner, record, parts,
+          zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
+          provider, serializers);
     };
     const auto wait_for_calls = [&] (int expected) {
         const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
@@ -4212,7 +4217,7 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
     service_collection_t services;
     services.add_singleton<actor_gateway_runtime_t> ();
     auto provider = services.build_provider ();
-    node->route_client_lane.run ([&] { node->route_client.emplace (); }).get ();
+    spots.set_route_client (route_client_t{});
     const runtime::host::ready_record_t owner{.owner_kind = runtime::host::owner_kind_t::node,
                                               .domain = runtime::host::ready_domain_t::application};
     const auto dispatch_leave = [&] (const spot_actor_leave_route_command_t &command,
@@ -4228,9 +4233,10 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
         record.transferred_owner_byte_cost = transferred_owner_byte_cost;
         const bool owns_terminal = static_cast<bool> (transfer_owner_reservation);
         bool terminal_deferred = false;
-        const auto handled =
-          spots.dispatch_mesh_record (owner, record, parts, provider, serializers,
-                                      std::move (transfer_owner_reservation), &terminal_deferred);
+        const auto handled = spots.dispatch_mesh_record (
+          owner, record, parts,
+          zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
+          provider, serializers, std::move (transfer_owner_reservation), &terminal_deferred);
         return handled && (!owns_terminal || terminal_deferred);
     };
 
@@ -5573,7 +5579,10 @@ int parked_request_reply_case (const std::string &requester_rid,
       zlink::message_t::from (std::string ("ping")));
     auto request_parts = std::move (encoded).take_items ();
 
-    (void) spots.dispatch_mesh_record (owner, record, request_parts, provider, serializers);
+    (void) spots.dispatch_mesh_record (
+      owner, record, request_parts,
+      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false).value (),
+      provider, serializers);
 
     // The request must park (not dispatch) and the pending handoff entry
     // that owns the original reply token must be recorded despite the
@@ -5817,7 +5826,10 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
 
     // Deliberately the deferred-terminal-less overload: this is the direct
     // dispatch shape used while the transfer window is still open.
-    (void) spots.dispatch_mesh_record (owner, record, request_parts, provider, serializers);
+    (void) spots.dispatch_mesh_record (
+      owner, record, request_parts,
+      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false).value (),
+      provider, serializers);
 
     const auto reply_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     for (;;) {

@@ -111,7 +111,8 @@ class raw_client_server_server_t
     pump_one (mesh::service_liveness_registry_t::clock_t::time_point now,
               std::shared_ptr<application_job_queue_t::permit_t> application_permit = {},
               receive_batch_budget_t *budget = nullptr,
-              std::vector<received_application_record_t> *application_records = nullptr);
+              std::vector<received_application_record_t> *application_records = nullptr,
+              const dispatch_options_t *dispatch_options = nullptr);
     task_t<client_server_pump_result_t>
     enqueue_application_records (std::vector<received_application_record_t> &records);
     task_t<mesh::service_liveness_tick_t>
@@ -120,10 +121,8 @@ class raw_client_server_server_t
     next_liveness_activity_task () const;
     task_t<bool> reply (const mesh::service_mailbox_record_t &request,
                         const protocol::application_payload_t &payload);
-    task_t<bool>
-    reply (const mesh::service_mailbox_record_t &request,
-           const framework_exception_t &error,
-           const std::optional<messaging::envelope_header_t> *decoded_context = nullptr);
+    task_t<bool> reply (const mesh::service_mailbox_record_t &request,
+                        const framework_exception_t &error);
 
   private:
     task_t<client_server_pump_result_t> enqueue_application_record (

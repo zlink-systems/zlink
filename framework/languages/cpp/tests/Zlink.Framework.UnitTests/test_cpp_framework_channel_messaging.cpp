@@ -28,6 +28,7 @@
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
+#include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -792,8 +793,10 @@ int main ()
         off_options.message_flow (message_flow_log_mode_t::off);
         detail::mesh_record_dispatcher_t off (provider, serializers, handlers, filters,
                                               off_options);
-        if (!off.dispatch (record, parts (malformed)) || handler.invocations != 1
-            || handler.last_value != 42)
+        if (!off.dispatch (
+              record, parts (malformed),
+              codec.decode_header (msg::message_parts_t (parts (malformed)), false).value ())
+            || handler.invocations != 1 || handler.last_value != 42)
             return 220;
         dispatch_options_t options;
         options.message_flow (message_flow_log_mode_t::normal);
@@ -805,11 +808,13 @@ int main ()
                     event.flow_id == header.flow_id && event.flow_origin == header.flow_origin;
           });
         detail::mesh_record_dispatcher_t on (provider, serializers, handlers, filters, options);
-        if (!on.dispatch (record, parts (wire)) || !preserved || handler.invocations != 2
-            || handler.last_value != 42)
+        if (!on.dispatch (record, parts (wire),
+                          codec.decode_header (msg::message_parts_t (parts (wire)), true).value ())
+            || !preserved || handler.invocations != 2 || handler.last_value != 42)
             return 221;
-        const auto rejected = on.dispatch (record, parts (malformed));
-        if (rejected || rejected.error_kind () != framework_error_kind_t::protocol_error
+        auto invalid_parts = parts (malformed);
+        auto decoded = runtime::decode_mesh_record_header (record, invalid_parts, true);
+        if (decoded || decoded.error_kind () != framework_error_kind_t::protocol_error
             || handler.invocations != 2)
             return 222;
     }

@@ -411,12 +411,14 @@ stateful_error_t raw_stateful_dispatch_t::ingest (const object_ref_t &owner)
     std::optional<protocol::spot_message_header_t> spot_header;
     std::optional<accepted_record_authority_t> accepted_authority;
     try {
-        const auto header = protocol::decode_header (record.parts.front ());
+        const auto header =
+          protocol::decode_header (protocol::message_bytes (record.parts.front ()));
         if (record.parts.size () != 2 || !_authority_resolver || record.source_routing_id.empty ()
             || !record.source_node_generation)
             validation = stateful_error_t::invalid;
         else {
-            application_payload_bytes = protocol::application_payload_hwm_bytes (record.parts[1]);
+            application_payload_bytes =
+              protocol::application_payload_hwm_bytes (protocol::message_bytes (record.parts[1]));
         }
 
         accepted_record_authority_query_t query;
@@ -429,8 +431,8 @@ stateful_error_t raw_stateful_dispatch_t::ingest (const object_ref_t &owner)
                 && header.kind != protocol::command::actorRequest) {
                 validation = stateful_error_t::invalid;
             } else {
-                auto actor =
-                  protocol::decode_actor_message_header (record.parts.front (), header.kind);
+                auto actor = protocol::decode_actor_message_header (
+                  protocol::message_bytes (record.parts.front ()), header.kind);
                 if (!matches_application_route (owner, actor.target)) {
                     validation = stateful_error_t::conflict;
                 } else if (const bool bound_session_routed =
@@ -481,8 +483,8 @@ stateful_error_t raw_stateful_dispatch_t::ingest (const object_ref_t &owner)
                 && header.kind != protocol::command::spotRequest) {
                 validation = stateful_error_t::invalid;
             } else {
-                auto spot =
-                  protocol::decode_spot_message_header (record.parts.front (), header.kind);
+                auto spot = protocol::decode_spot_message_header (
+                  protocol::message_bytes (record.parts.front ()), header.kind);
                 if (!matches_application_route (owner, spot.target)) {
                     validation = stateful_error_t::conflict;
                 } else {
@@ -590,7 +592,8 @@ stateful_error_t raw_stateful_dispatch_t::ingest (const object_ref_t &owner)
     try {
         /* flow-correlation §4: at Off the wire flow pair is neither validated
          * nor materialized at this ingress (structural skip only). */
-        payload = protocol::decode_application_payload (record.parts[1], capture_flow ());
+        payload = protocol::decode_application_payload (protocol::message_bytes (record.parts[1]),
+                                                        capture_flow ());
         if (actor_header) {
             auto accepted_target = actor_header->target;
             accepted_target.object_generation = owner.object_generation;
@@ -1137,18 +1140,22 @@ raw_relocation_replay_coordinator_t::process (const mesh::service_mailbox_record
     if (record.parts.empty ())
         co_return raw_relocation_replay_result_t::invalid;
     try {
-        const auto header = protocol::decode_header (record.parts.front ());
+        const auto header =
+          protocol::decode_header (protocol::message_bytes (record.parts.front ()));
         if (header.kind == protocol::command::relocationData) {
-            const auto control = protocol::decode_relocation_control (record.parts.front ());
+            const auto control =
+              protocol::decode_relocation_control (protocol::message_bytes (record.parts.front ()));
             const auto *data = std::get_if<protocol::relocation_data_t> (&control);
             co_return data ? process_data (record, *data) : raw_relocation_replay_result_t::invalid;
         }
         if (header.kind == protocol::command::replyRelay)
             co_return co_await process_reply_relay (
-              record, protocol::decode_reply_relay (record.parts.front ()));
+              record,
+              protocol::decode_reply_relay (protocol::message_bytes (record.parts.front ())));
         if (header.kind == protocol::command::replyRelayAck)
             co_return co_await process_reply_relay_ack (
-              record, protocol::decode_reply_relay_ack (record.parts.front ()));
+              record,
+              protocol::decode_reply_relay_ack (protocol::message_bytes (record.parts.front ())));
     }
     catch (const protocol::service_wire_error_t &) {
         co_return raw_relocation_replay_result_t::invalid;
@@ -1355,7 +1362,8 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::proc
         try {
             /* flow-correlation §4: reply flow pair is observation-only —
              * skip validation/materialization at Off. */
-            reply = protocol::decode_application_payload (record.parts[1], capture_flow ());
+            reply = protocol::decode_application_payload (protocol::message_bytes (record.parts[1]),
+                                                          capture_flow ());
         }
         catch (const protocol::service_wire_error_t &) {
             co_return raw_relocation_replay_result_t::invalid;

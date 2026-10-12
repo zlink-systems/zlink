@@ -426,7 +426,7 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (zlink::poll_ev
     auto source_routing_id = _received.routing_id ()->to_bytes ();
     auto reply_token = _received.reply_token ();
     const auto route_generation = _received.route_generation ();
-    auto parts = copy_binding_parts (_received.parts ());
+    auto parts = std::move (_received.parts ());
     _received.close ();
     return raw_received_t{std::move (source_routing_id), std::move (reply_token), std::move (parts),
                           route_generation};

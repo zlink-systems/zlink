@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 
 #include <zlink/framework/contracts/detail/message_name.hpp>
@@ -28,6 +29,41 @@ class client_call_codec_t
                      std::chrono::milliseconds timeout = std::chrono::milliseconds (0),
                      std::optional<std::string> topic = std::nullopt,
                      std::optional<std::string> source = std::nullopt) const;
+
+    message_parts_t encode_payload_parts (envelope_header_t header,
+                                          serialized_payload_t serialized) const
+    {
+        header.content_type = std::move (serialized.content_type);
+        return _codec.encode_raw_body_parts (header,
+                                             detail::encoded_payload_to_raw (serialized.payload));
+    }
+
+    template <typename TEncodePayload>
+    message_parts_t encode_node_send_parts (const std::string &channel_name,
+                                            const std::string &packet_name,
+                                            const zlink::routing_id_t &target_node_rid,
+                                            const std::map<std::string, std::string> &metadata,
+                                            const dispatch_options_t &dispatch,
+                                            serializer_registry_t &serializers,
+                                            TEncodePayload &&encode_payload) const
+    {
+        auto header = create_envelope (message_kind_t::command, channel_name, packet_name);
+        header.metadata = metadata;
+        detail::message_flow_tracer_t (dispatch).trace (message_flow_outcome_t::sent, [&] {
+            return message_flow_event_t{message_flow_outcome_t::sent,
+                                        dispatch_error_surface_t::route_mesh_channel,
+                                        dispatch_message_kind_t::send,
+                                        packet_name,
+                                        channel_name,
+                                        std::nullopt,
+                                        header.correlation_id,
+                                        target_node_rid.to_string (),
+                                        std::nullopt,
+                                        std::nullopt,
+                                        std::nullopt};
+        });
+        return encode_payload_parts (std::move (header), encode_payload (serializers));
+    }
 
     template <typename TMessage>
     message_parts_t encode_envelope_parts (const envelope_header_t &header,
