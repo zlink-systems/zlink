@@ -24,7 +24,22 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
-    public async Task OperationDeadline_ExpiresInDeadlineOrderAtTheMonotonicBoundary()
+    public void OperationDeadline_LinkAndUnlinkUseFixedPointerWork()
+    {
+        var source = File.ReadAllText(ManagedMeshSourcePath());
+        var indexing = source[
+            source.IndexOf(
+                "private void IndexOperationDeadline(",
+                StringComparison.Ordinal
+            )..source.IndexOf("private TimeSpan OperationWaitBound(", StringComparison.Ordinal)
+        ];
+        // Hot-path E3: intrusive wheel registration/removal never traverses pending entries.
+        Assert.DoesNotContain("while (", indexing);
+        Assert.DoesNotContain("for (", indexing);
+    }
+
+    [Fact]
+    public async Task OperationDeadline_ExpiresAtOccupiedTicksWithoutExpiringEarly()
     {
         var clock = new OperationDeadlineClock();
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -46,21 +61,103 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             .GetValue(node)!;
         var count = operations.GetType().GetProperty("Count")!;
         Assert.True(
-            (bool)begin.Invoke(node, [MeshOperationKind.NodeRequest, TimeSpan.FromTicks(20), null])!
+            (bool)
+                begin.Invoke(
+                    node,
+                    [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(20), null]
+                )!
         );
         Assert.True(
-            (bool)begin.Invoke(node, [MeshOperationKind.NodeRequest, TimeSpan.FromTicks(10), null])!
+            (bool)
+                begin.Invoke(
+                    node,
+                    [
+                        MeshOperationKind.NodeRequest,
+                        TimeSpan.FromMilliseconds(10) + TimeSpan.FromTicks(1),
+                        null,
+                    ]
+                )!
         );
 
-        clock.Timestamp = 9;
+        // Hot-path E3: a timer wheel rounds deadlines up to the next 1ms occupied tick.
+        var wait = typeof(ZLinkManagedMeshNode).GetMethod("OperationWaitBound", flags)!;
+        Assert.Equal(TimeSpan.FromMilliseconds(11), wait.Invoke(node, null));
+        clock.Timestamp = 9 * TimeSpan.TicksPerMillisecond;
         expire.Invoke(node, null);
         Assert.Equal(2, count.GetValue(operations));
-        clock.Timestamp = 10;
+        clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(2, count.GetValue(operations));
+        clock.Timestamp = 11 * TimeSpan.TicksPerMillisecond;
         expire.Invoke(node, null);
         Assert.Equal(1, count.GetValue(operations));
-        clock.Timestamp = 20;
+        clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
         expire.Invoke(node, null);
         Assert.Equal(0, count.GetValue(operations));
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+        Assert.Equal(TimeSpan.FromMilliseconds(100), wait.Invoke(node, null));
+    }
+
+    [Fact]
+    public async Task OperationDeadline_PreservesRoundsAndResumesABudgetedSlot()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkManagedMeshNode);
+        var begin = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        var expire = type.GetMethod("ExpireOperations", flags)!;
+        var operations = type.GetField("_operations", flags)!.GetValue(node)!;
+        var count = operations.GetType().GetProperty("Count")!;
+        object?[] longRegistration =
+        [
+            MeshOperationKind.NodeRequest,
+            TimeSpan.FromMilliseconds(513),
+            null,
+        ];
+        Assert.True((bool)begin.Invoke(node, longRegistration)!);
+        // Hot-path E3: occupied-slot visits cannot expire an entry with remaining rounds.
+        foreach (var tick in new[] { 1, 257, 512 })
+        {
+            clock.Timestamp = tick * TimeSpan.TicksPerMillisecond;
+            expire.Invoke(node, null);
+            Assert.Equal(1, count.GetValue(operations));
+        }
+        clock.Timestamp = 513 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+        object?[] firstRegistration =
+        [
+            MeshOperationKind.NodeRequest,
+            TimeSpan.FromMilliseconds(1),
+            null,
+        ];
+        Assert.True((bool)begin.Invoke(node, firstRegistration)!);
+        var first = firstRegistration[2]!;
+        var token = (CancellationToken)
+            first.GetType().GetProperty("Token", flags)!.GetValue(first)!;
+        using var slowTerminal = token.Register(() => Thread.Sleep(3));
+        for (var index = 0; index < 2; index++)
+            Assert.True(
+                (bool)
+                    begin.Invoke(
+                        node,
+                        [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(1), null]
+                    )!
+            );
+        clock.Timestamp = 514 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(2, count.GetValue(operations));
         expire.Invoke(node, null);
         Assert.Equal(0, count.GetValue(operations));
     }

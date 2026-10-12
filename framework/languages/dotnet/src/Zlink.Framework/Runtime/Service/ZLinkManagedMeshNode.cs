@@ -70,7 +70,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly ZLinkMeshSelectedRoutes _selectedRoutes = new();
     private readonly ConcurrentDictionary<MailboxKey, OwnedMailbox> _ownedMailboxes = new();
     private readonly ConcurrentDictionary<ulong, PendingOperation> _operations = new();
-    private DeadlineNode? _deadlineRoot;
+    private const int DeadlineSlotCount = 256;
+    private const int DeadlineBitmapWordBits = sizeof(ulong) * 8;
+    private const long DeadlineTickTicks = TimeSpan.TicksPerMillisecond;
+    private readonly PendingOperation?[] _deadlineHeads = new PendingOperation?[DeadlineSlotCount];
+    private readonly PendingOperation?[] _deadlineTails = new PendingOperation?[DeadlineSlotCount];
+    private readonly ulong[] _deadlineOccupied = new ulong[
+        DeadlineSlotCount / DeadlineBitmapWordBits
+    ];
+    private readonly long _deadlineOriginTicks;
+    private long _deadlineTick;
+    private PendingOperation? _deadlineCursor;
+    private readonly Func<TimeSpan> _readOperationWaitBound;
+    private readonly Func<PendingOperation?> _takeExpiredOperation;
     private readonly Dictionary<
         RelocationReplyTerminalKey,
         RelocationReplyTerminal
@@ -242,6 +254,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             inboundOperationShutdownTimeout ?? DefaultInboundOperationShutdownTimeout;
         _deadlineTimeProvider = deadlineTimeProvider ?? TimeProvider.System;
         _deadlineClock = new ZLinkDeadlineClock(_deadlineTimeProvider);
+        _deadlineOriginTicks = _deadlineClock.Elapsed.Ticks;
+        _readOperationWaitBound = ReadOperationWaitBound;
+        _takeExpiredOperation = TakeExpiredOperation;
         _applicationJobQueue = applicationJobQueue;
         NativeTerminalReplySubmitOverride = nativeTerminalReplySubmitOverride is null
             ? null
@@ -11003,108 +11018,138 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
     }
 
+    private long NextOccupiedDeadlineTick()
+    {
+        var slot = (int)(_deadlineTick & (DeadlineSlotCount - 1));
+        var firstWord = slot / DeadlineBitmapWordBits;
+        var words = _deadlineOccupied.Length;
+        for (var step = 0; step <= words; step++)
+        {
+            var word = (firstWord + step) % words;
+            var bits = _deadlineOccupied[word];
+            if (step == 0)
+                bits &= ulong.MaxValue << (slot % DeadlineBitmapWordBits);
+            if (step == words)
+                bits &= ~(ulong.MaxValue << (slot % DeadlineBitmapWordBits));
+            if (bits == 0)
+                continue;
+            var next =
+                word * DeadlineBitmapWordBits
+                + System.Numerics.BitOperations.TrailingZeroCount(bits);
+            return _deadlineTick + ((next - slot) & (DeadlineSlotCount - 1));
+        }
+        return -1;
+    }
+
     private void IndexOperationDeadline(PendingOperation operation, TimeSpan deadline)
     {
-        var leaf = new DeadlineNode(deadline.Ticks, operation.OperationId.Low);
-        if (_deadlineRoot is null)
-        {
-            _deadlineRoot = leaf;
-            operation.DeadlineIndex = leaf;
-            return;
-        }
-        var other = _deadlineRoot;
-        while (other.Bit < DeadlineNode.KeyBits)
-            other = other.Child(leaf.KeyBit(other.Bit))!;
-        var differing = 0;
-        while (leaf.KeyBit(differing) == other.KeyBit(differing))
-            differing++;
-        DeadlineNode? parent = null;
-        var current = _deadlineRoot;
-        while (current.Bit < differing)
-        {
-            parent = current;
-            current = current.Child(leaf.KeyBit(current.Bit))!;
-        }
-        var branch = new DeadlineNode { Bit = differing };
-        var side = leaf.KeyBit(differing);
-        branch.SetChild(side, leaf);
-        branch.SetChild(1 - side, current);
-        if (parent is null)
-            _deadlineRoot = branch;
+        var relative = deadline.Ticks - _deadlineOriginTicks;
+        var tick = Math.Max(
+            _deadlineTick,
+            relative / DeadlineTickTicks + (relative % DeadlineTickTicks > 0 ? 1 : 0)
+        );
+        var slot = (int)(tick & (DeadlineSlotCount - 1));
+        operation.DeadlineSlot = slot;
+        operation.DeadlineRounds = (tick - _deadlineTick) / DeadlineSlotCount;
+        operation.DeadlinePrevious = _deadlineTails[slot];
+        if (operation.DeadlinePrevious is null)
+            _deadlineHeads[slot] = operation;
         else
-            parent.SetChild(leaf.KeyBit(parent.Bit), branch);
-        operation.DeadlineIndex = leaf;
+            operation.DeadlinePrevious.DeadlineNext = operation;
+        _deadlineTails[slot] = operation;
+        _deadlineOccupied[slot / DeadlineBitmapWordBits] |= 1UL << (slot % DeadlineBitmapWordBits);
     }
 
     private void UnlinkOperationDeadline(PendingOperation operation)
     {
-        if (operation.DeadlineIndex is not { } leaf)
+        if (operation.DeadlineSlot < 0)
             return;
-        DeadlineNode? parent = null;
-        DeadlineNode? grandparent = null;
-        var current = _deadlineRoot;
-        while (current is not null && current.Bit < DeadlineNode.KeyBits)
-        {
-            grandparent = parent;
-            parent = current;
-            current = current.Child(leaf.KeyBit(current.Bit));
-        }
-        if (!ReferenceEquals(current, leaf))
-            return;
-        if (parent is null)
-            _deadlineRoot = null;
+        var slot = operation.DeadlineSlot;
+        var previous = operation.DeadlinePrevious;
+        var next = operation.DeadlineNext;
+        if (previous is null)
+            _deadlineHeads[slot] = next;
         else
+            previous.DeadlineNext = next;
+        if (next is null)
+            _deadlineTails[slot] = previous;
+        else
+            next.DeadlinePrevious = previous;
+        if (ReferenceEquals(_deadlineCursor, operation))
         {
-            var sibling = parent.Child(1 - leaf.KeyBit(parent.Bit))!;
-            if (grandparent is null)
-                _deadlineRoot = sibling;
-            else
-                grandparent.SetChild(leaf.KeyBit(grandparent.Bit), sibling);
+            _deadlineCursor = next;
+            if (next is null)
+                _deadlineTick++;
         }
-        operation.DeadlineIndex = null;
+        if (_deadlineHeads[slot] is null)
+            _deadlineOccupied[slot / DeadlineBitmapWordBits] &= ~(
+                1UL << (slot % DeadlineBitmapWordBits)
+            );
+        operation.DeadlineSlot = -1;
+        operation.DeadlinePrevious = null;
+        operation.DeadlineNext = null;
     }
 
-    private DeadlineNode? FirstOperationDeadline()
+    private TimeSpan OperationWaitBound() => RunOperation(_readOperationWaitBound);
+
+    private TimeSpan ReadOperationWaitBound()
     {
-        var first = _deadlineRoot;
-        while (first is not null && first.Bit < DeadlineNode.KeyBits)
-            first = first.Left;
-        return first;
+        var tick = NextOccupiedDeadlineTick();
+        if (tick < 0)
+            return PollInterval;
+        var remaining =
+            TimeSpan.FromTicks(_deadlineOriginTicks + tick * DeadlineTickTicks)
+            - _deadlineClock.Elapsed;
+        return remaining <= TimeSpan.Zero ? TimeSpan.Zero
+            : remaining < PollInterval ? remaining
+            : PollInterval;
     }
 
-    private TimeSpan OperationWaitBound() =>
-        RunOperation(() =>
+    private PendingOperation? TakeExpiredOperation()
+    {
+        var nowTick = (_deadlineClock.Elapsed.Ticks - _deadlineOriginTicks) / DeadlineTickTicks;
+        while (true)
         {
-            var first = FirstOperationDeadline();
-            if (first is null)
-                return PollInterval;
-            var remaining = TimeSpan.FromTicks(first.DeadlineTicks) - _deadlineClock.Elapsed;
-            return remaining <= TimeSpan.Zero ? TimeSpan.Zero
-                : remaining < PollInterval ? remaining
-                : PollInterval;
-        });
+            if (_deadlineCursor is null)
+            {
+                var next = NextOccupiedDeadlineTick();
+                if (next < 0)
+                {
+                    _deadlineTick = Math.Max(_deadlineTick, nowTick + 1);
+                    return null;
+                }
+                if (next > nowTick)
+                    return null;
+                _deadlineTick = next;
+                _deadlineCursor = _deadlineHeads[(int)(next & (DeadlineSlotCount - 1))];
+            }
+            var current = _deadlineCursor!;
+            if (current.DeadlineRounds > 0)
+            {
+                current.DeadlineRounds--;
+                _deadlineCursor = current.DeadlineNext;
+                if (_deadlineCursor is null)
+                    _deadlineTick++;
+                continue;
+            }
+            if (
+                !_operations.TryRemove(current.OperationId.Low, out var pending)
+                || !ReferenceEquals(current, pending)
+            )
+                throw new InvalidOperationException("Operation deadline has no pending owner.");
+            RemoveRelocationReplyOperationUnderLock(current, rememberTerminal: true);
+            return current;
+        }
+    }
 
     private void ExpireOperations()
     {
+        var pending = RunOperation(_takeExpiredOperation);
+        if (pending is null)
+            return;
         var startedAt = Stopwatch.GetTimestamp();
-        var now = _deadlineClock.Elapsed;
-        while (
-            Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds
-            < ZLinkReceiveBatchBudget.MaximumMilliseconds
-        )
+        do
         {
-            var pending = RunOperation(() =>
-            {
-                var first = FirstOperationDeadline();
-                if (first is null || first.DeadlineTicks > now.Ticks)
-                    return null;
-                if (!_operations.TryRemove(first.Correlation, out var current))
-                    throw new InvalidOperationException("Operation deadline has no pending owner.");
-                RemoveRelocationReplyOperationUnderLock(current, rememberTerminal: true);
-                return current;
-            });
-            if (pending is null)
-                break;
             pending.Complete();
             var result = RequestResult.TimedOut;
             if (pending.AwaitedCompletion is { } awaitedCompletion)
@@ -11119,39 +11164,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     0,
                     Array.Empty<Message>()
                 );
-        }
-    }
-
-    // Deadline and correlation form a fixed-width radix key. Its depth is
-    // bounded independently of the number of pending operations.
-    private sealed class DeadlineNode(long deadlineTicks = 0, ulong correlation = 0)
-    {
-        internal const int WordBits = sizeof(ulong) * 8;
-        internal const int KeyBits = 2 * WordBits;
-        internal readonly long DeadlineTicks = deadlineTicks;
-        internal readonly ulong Correlation = correlation;
-        internal int Bit = KeyBits;
-        internal DeadlineNode? Left;
-        internal DeadlineNode? Right;
-
-        internal int KeyBit(int bit) =>
-            (int)(
-                (
-                    bit < WordBits
-                        ? ((ulong)DeadlineTicks ^ (1UL << (WordBits - 1))) >> (WordBits - 1 - bit)
-                        : Correlation >> (KeyBits - 1 - bit)
-                ) & 1
-            );
-
-        internal DeadlineNode? Child(int side) => side == 0 ? Left : Right;
-
-        internal void SetChild(int side, DeadlineNode value)
-        {
-            if (side == 0)
-                Left = value;
-            else
-                Right = value;
-        }
+            if (
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds
+                >= ZLinkReceiveBatchBudget.MaximumMilliseconds
+            )
+                break;
+            pending = RunOperation(_takeExpiredOperation);
+        } while (pending is not null);
     }
 
     private void EnqueueCompletion(
@@ -12684,7 +12703,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         internal TaskCompletionSource<ManagedRequestCompletion>? AwaitedCompletion { get; }
         internal long DeadlineStartTimestamp { get; set; }
         internal TimeSpan DeadlineTimeout { get; set; }
-        internal DeadlineNode? DeadlineIndex { get; set; }
+        internal int DeadlineSlot { get; set; } = -1;
+        internal long DeadlineRounds { get; set; }
+        internal PendingOperation? DeadlinePrevious { get; set; }
+        internal PendingOperation? DeadlineNext { get; set; }
         internal ulong DeadlineUnixMs { get; set; }
         internal ZLinkServiceLiveness? ReceiveAdmission { get; set; }
         internal ActorJoinOrigin? ActorJoinOrigin { get; set; }

@@ -34,8 +34,23 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkServiceOperationRegistryTest {
     @Test
-    void deadlineIndexHandlesMixedDeadlinesAndIdentitiesAcrossNanoTimeWraparound() {
-        AtomicLong clock = new AtomicLong(Long.MAX_VALUE - 50);
+    void deadlineLinkAndUnlinkUseFixedPointerWork() throws Exception {
+        String source =
+                java.nio.file.Files.readString(
+                        java.nio.file.Path.of(
+                                "src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistry.java"));
+        String indexing =
+                source.substring(
+                        source.indexOf("private void indexDeadline("),
+                        source.indexOf("int expire("));
+        // Hot-path E3: intrusive wheel registration/removal never traverses pending entries.
+        assertFalse(indexing.contains("while ("));
+        assertFalse(indexing.contains("for ("));
+    }
+
+    @Test
+    void wheelHandlesMixedDeadlinesAndIdentities() {
+        AtomicLong clock = new AtomicLong();
         try (var scheduler = new CountingScheduler();
                 var registry =
                         new ZLinkServiceOperationRegistry(
@@ -46,9 +61,9 @@ final class ZLinkServiceOperationRegistryTest {
                 int timeout = (index * 37 % 100) + 1;
                 operations.add(
                         registry.register(
-                                new UUID(index % 2, index + 1), Duration.ofNanos(timeout)));
+                                new UUID(index % 2, index + 1), Duration.ofMillis(timeout)));
             }
-            assertEquals(50, registry.expire(Long.MAX_VALUE));
+            assertEquals(50, registry.expire(TimeUnit.MILLISECONDS.toNanos(50)));
             for (int index = 0; index < operations.size(); index++) {
                 int timeout = (index * 37 % 100) + 1;
                 if (timeout <= 50)
@@ -56,7 +71,7 @@ final class ZLinkServiceOperationRegistryTest {
                             CompletionException.class, operations.get(index).completion()::join);
                 else assertFalse(operations.get(index).completion().isDone());
             }
-            assertEquals(50, registry.expire(Long.MIN_VALUE + 49));
+            assertEquals(50, registry.expire(TimeUnit.MILLISECONDS.toNanos(100)));
             assertEquals(0, registry.pendingCount());
         }
     }
@@ -78,11 +93,11 @@ final class ZLinkServiceOperationRegistryTest {
                                 },
                                 clock::get)) {
             scheduler.shutdownNow();
-            var first = registry.register(Duration.ofNanos(1));
-            var removed = registry.register(Duration.ofNanos(1));
-            var last = registry.register(Duration.ofNanos(1));
+            var first = registry.register(Duration.ofMillis(1));
+            var removed = registry.register(Duration.ofMillis(1));
+            var last = registry.register(Duration.ofMillis(1));
 
-            assertEquals(1, registry.expire(1));
+            assertEquals(1, registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
             assertTrue(registry.discard(removed.id()));
             assertEquals(1, registry.expire(clock.get()));
             assertEquals(0, registry.pendingCount());
@@ -103,8 +118,10 @@ final class ZLinkServiceOperationRegistryTest {
 
             assertEquals(1, scheduler.fixedRateSchedules.get());
             assertEquals(0, scheduler.otherSchedules.get());
+            // Hot-path E3: timer-wheel deadlines expire at the next 1ms tick, never early.
             assertEquals(0, registry.expire(109));
-            assertEquals(2, registry.expire(110));
+            assertEquals(0, registry.expire(110));
+            assertEquals(2, registry.expire(100 + TimeUnit.MILLISECONDS.toNanos(1)));
             assertEquals(0, registry.pendingCount());
             assertTrue(
                     assertThrows(CompletionException.class, first.completion()::join).getCause()
@@ -116,19 +133,20 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void deadlineComparisonSurvivesNanoTimeWraparound() {
-        AtomicLong clock = new AtomicLong(Long.MAX_VALUE - 2);
+    void wheelRoundsDoNotExpireInEarlierRevolutions() {
+        AtomicLong clock = new AtomicLong();
         try (var scheduler = new CountingScheduler();
                 var registry =
                         new ZLinkServiceOperationRegistry(
                                 scheduler, new IllegalStateException("closed"), clock::get)) {
-            var operation = registry.register(Duration.ofNanos(5));
-
-            assertEquals(0, registry.expire(Long.MAX_VALUE));
-            assertEquals(1, registry.expire(Long.MIN_VALUE + 2));
-            assertTrue(
-                    assertThrows(CompletionException.class, operation.completion()::join).getCause()
-                            instanceof TimeoutException);
+            scheduler.shutdownNow();
+            var operation = registry.register(Duration.ofMillis(513));
+            // Hot-path E3: occupied-slot visits preserve the remaining wheel rounds.
+            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
+            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(257)));
+            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(512)));
+            assertEquals(1, registry.expire(TimeUnit.MILLISECONDS.toNanos(513)));
+            assertThrows(CompletionException.class, operation.completion()::join);
         }
     }
 
@@ -265,7 +283,9 @@ final class ZLinkServiceOperationRegistryTest {
                                             ignored -> {}));
             try {
                 assertTrue(entered.await(1, TimeUnit.SECONDS));
-                var expiry = workers.submit(() -> registry.expire(1L));
+                // Hot-path E3: expiry runs at the first 1ms timer-wheel tick after the deadline.
+                var expiry =
+                        workers.submit(() -> registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
                 assertEquals(1, expiry.get(1, TimeUnit.SECONDS));
                 assertEquals(0, registry.pendingCount());
             } finally {
