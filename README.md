@@ -128,9 +128,7 @@ nothing is built from this repository.
 | .NET / C# | `dotnet add package Zlink` |
 | Java, Kotlin | `systems.zlink:zlink` |
 | Node.js, JavaScript | `npm install @zlink-systems/zlink` |
-| Python | `pip install zlink` |
-| Go | `go get zlink.systems/zlink` |
-| Rust | `cargo add zlink` |
+| Python, Go, Rust | Not published yet — they ship after performance work |
 
 C is the public Core API rather than a separate Binding. Each Binding carries
 samples for PAIR, PUB/SUB, DEALER/ROUTER, request/reply, STREAM, and monitoring.

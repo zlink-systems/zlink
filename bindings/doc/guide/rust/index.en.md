@@ -19,6 +19,9 @@ messaging concepts.
 
 ## Installation
 
+> **Not published yet.** This binding is not on crates.io yet; it ships after performance work.
+> The commands below show how it will install. Do not run `cargo add zlink` now: the `zlink` crate on crates.io belongs to a different project.
+
 Add it to `Cargo.toml`.
 
 ```toml

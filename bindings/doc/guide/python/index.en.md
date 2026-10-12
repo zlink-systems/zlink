@@ -19,6 +19,9 @@ candidate and clean-consumer verification are complete.
 
 ## Installation And A First Round Trip
 
+> **Not published yet.** This binding is not on PyPI yet; it ships after performance work.
+> The commands below show how it will install. Do not run `pip install zlink` now: the `zlink` package on PyPI belongs to a different project.
+
 ```python
 import zlink
 
