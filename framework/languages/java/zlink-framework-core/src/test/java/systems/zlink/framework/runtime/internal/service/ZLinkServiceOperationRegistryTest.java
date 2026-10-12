@@ -133,6 +133,34 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
+    void deadlineComparisonSurvivesNanoTimeWraparound() {
+        long tickNanos = TimeUnit.MILLISECONDS.toNanos(1);
+        long origin = Long.MAX_VALUE - tickNanos;
+        Duration timeout = Duration.ofMillis(2);
+        AtomicLong clock = new AtomicLong(origin);
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler, new IllegalStateException("closed"), clock::get)) {
+            scheduler.shutdownNow();
+            var operation = registry.register(timeout);
+            long deadline = origin + timeout.toNanos();
+
+            assertTrue(deadline < 0);
+            assertEquals(0, registry.expire(Long.MAX_VALUE));
+            assertFalse(operation.completion().isDone());
+            assertEquals(0, registry.expire(deadline - 1));
+            assertFalse(operation.completion().isDone());
+            clock.set(deadline + 1);
+            assertEquals(1, registry.expire(clock.get()));
+            assertTrue(
+                    assertThrows(CompletionException.class, operation.completion()::join).getCause()
+                            instanceof TimeoutException);
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
     void wheelRoundsDoNotExpireInEarlierRevolutions() {
         AtomicLong clock = new AtomicLong();
         try (var scheduler = new CountingScheduler();
