@@ -20,7 +20,7 @@ import java.util.function.Supplier;
 public final class ZLinkServiceLivenessRegistry {
     public static final Duration DEFAULT_PROBE_INTERVAL = Duration.ofSeconds(5);
     public static final Duration DEFAULT_PEER_TIMEOUT = Duration.ofSeconds(15);
-    private static final Duration NO_MANAGEMENT_DEADLINE = Duration.ofMillis(-1);
+    public static final Duration NO_MANAGEMENT_DEADLINE = Duration.ofMillis(-1);
     private final long probeIntervalNanos;
     private final long peerTimeoutNanos;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -111,30 +111,11 @@ public final class ZLinkServiceLivenessRegistry {
         return inStateLane(() -> tickCore(nowNanos));
     }
 
-    /** Uses the existing probe and expiry deadlines; no periodic data recheck is scheduled. */
-    public Duration waitTimeout(long nowNanos) {
-        return inStateLane(
-                () -> {
-                    if (peers.isEmpty()) return NO_MANAGEMENT_DEADLINE;
-                    long next = Long.MAX_VALUE;
-                    for (PeerState state : peers.values())
-                        next =
-                                Math.min(
-                                        next,
-                                        Math.min(state.nextProbeNanos, state.deadlineNanos.get()));
-                    if (next <= nowNanos) return Duration.ZERO;
-                    long remaining = next - nowNanos;
-                    long millis = TimeUnit.NANOSECONDS.toMillis(remaining);
-                    if (remaining % TimeUnit.MILLISECONDS.toNanos(1) != 0) millis++;
-                    // The public poller uses integer milliseconds. Keep a positive
-                    // sub-millisecond deadline wait blocking at that resolution.
-                    return Duration.ofMillis(Math.min(millis, Integer.MAX_VALUE));
-                });
-    }
-
     private Tick tickCore(long nowNanos) {
         List<Probe> probes = new ArrayList<>();
         List<RoutingId> timedOut = new ArrayList<>();
+        long nextDeadlineNanos = Long.MAX_VALUE;
+        boolean hasDeadline = false;
         for (Map.Entry<RoutingId, PeerState> entry : peers.entrySet()) {
             PeerState state = entry.getValue();
             if (state.isExpired(nowNanos)) {
@@ -143,9 +124,26 @@ public final class ZLinkServiceLivenessRegistry {
             }
             long probeId = state.tryGetProbe(nowNanos, this::allocateProbeId);
             if (probeId != 0) probes.add(new Probe(entry.getKey(), state.connectionId, probeId));
+            long peerDeadlineNanos = Math.min(state.nextProbeNanos, state.deadlineNanos.get());
+            if (!hasDeadline || peerDeadlineNanos < nextDeadlineNanos) {
+                nextDeadlineNanos = peerDeadlineNanos;
+                hasDeadline = true;
+            }
         }
         timedOut.forEach(peers::remove);
-        return new Tick(List.copyOf(probes), List.copyOf(timedOut));
+        Duration nextWaitTimeout =
+                hasDeadline ? toWaitTimeout(nextDeadlineNanos, nowNanos) : NO_MANAGEMENT_DEADLINE;
+        return new Tick(List.copyOf(probes), List.copyOf(timedOut), nextWaitTimeout);
+    }
+
+    private static Duration toWaitTimeout(long nextDeadlineNanos, long nowNanos) {
+        if (nextDeadlineNanos <= nowNanos) return Duration.ZERO;
+        long remaining = nextDeadlineNanos - nowNanos;
+        long millis = TimeUnit.NANOSECONDS.toMillis(remaining);
+        if (remaining % TimeUnit.MILLISECONDS.toNanos(1) != 0) millis++;
+        // The public poller uses integer milliseconds. Keep a positive
+        // sub-millisecond deadline wait blocking at that resolution.
+        return Duration.ofMillis(Math.min(millis, Integer.MAX_VALUE));
     }
 
     public int size() {
@@ -176,7 +174,8 @@ public final class ZLinkServiceLivenessRegistry {
 
     public record Probe(RoutingId nodeRoutingId, String connectionId, long probeId) {}
 
-    public record Tick(List<Probe> probes, List<RoutingId> timedOutNodes) {}
+    public record Tick(
+            List<Probe> probes, List<RoutingId> timedOutNodes, Duration nextWaitTimeout) {}
 
     public static final class PeerState implements Runnable {
         private final String connectionId;

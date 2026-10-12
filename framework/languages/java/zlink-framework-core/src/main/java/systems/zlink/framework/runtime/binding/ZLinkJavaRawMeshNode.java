@@ -4524,27 +4524,27 @@ final class ZLinkJavaRawMeshNode
         pump =
                 Executors.newSingleThreadExecutor(
                         Thread.ofPlatform().name("zlink-jvm-raw-mesh-" + meshName).factory());
-        pump.execute(() -> pumpTurn(pumpSocket));
+        pump.execute(
+                () -> pumpTurn(pumpSocket, ZLinkServiceLivenessRegistry.NO_MANAGEMENT_DEADLINE));
     }
 
-    private void pumpTurn(RouterSocket pumpSocket) {
+    private void pumpTurn(RouterSocket pumpSocket, Duration waitTimeout) {
         if (closed.get()) return;
-        int ready = port.waitForReady(pumpSocket, liveness.waitTimeout(System.nanoTime()));
+        int ready = port.waitForReady(pumpSocket, waitTimeout);
         if (closed.get()) return;
-        long now = System.nanoTime();
         // The existing pump remains this ROUTER's one route observer.
         if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
             observeSelectedRoutes();
         }
         finishRequestedIntentCloses();
         announceExpectedPeers();
-        tickLiveness(now);
         if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0) {
             drainIngressBatch(pumpSocket);
         }
         if (!closed.get()) {
+            Duration nextWaitTimeout = tickLiveness(System.nanoTime());
             try {
-                pump.execute(() -> pumpTurn(pumpSocket));
+                pump.execute(() -> pumpTurn(pumpSocket, nextWaitTimeout));
             } catch (RejectedExecutionException stopped) {
                 if (!closed.get()) throw stopped;
             }
@@ -7208,7 +7208,7 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
-    private void tickLiveness(long nowNanos) {
+    private Duration tickLiveness(long nowNanos) {
         ZLinkServiceLivenessRegistry.Tick tick = liveness.tick(nowNanos);
         for (ZLinkServiceLivenessRegistry.Probe probe : tick.probes()) {
             try {
@@ -7229,6 +7229,7 @@ final class ZLinkJavaRawMeshNode
                                 signalStateChanged(peer);
                             }
                         });
+        return tick.nextWaitTimeout();
     }
 
     private CompletionStage<Void> sendLiveness(RoutingId target, List<byte[]> frames) {
