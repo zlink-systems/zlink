@@ -46,16 +46,16 @@ final class ZLinkClientServerMetadataTest {
                 "work",
                 Map.of(
                         "Send",
-                        new ChannelSendHandlerRegistration(SendHandler.class, Send.class, "Send")
-                                .prepare(java.util.List.of())),
+                        new ChannelSendHandlerRegistration(
+                                SendHandler.class, Send.class, "Send", java.util.List.of())),
                 Map.of(
                         "Request",
                         new ChannelRequestHandlerRegistration(
-                                        RequestHandler.class,
-                                        Request.class,
-                                        String.class,
-                                        "Request")
-                                .prepare(java.util.List.of())));
+                                RequestHandler.class,
+                                Request.class,
+                                String.class,
+                                "Request",
+                                java.util.List.of())));
         var invoker =
                 new ZLinkChannelHandlerInvoker(
                         new ZLinkJsonMessageSerializer(),

@@ -7,45 +7,46 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationA
 
 import java.lang.reflect.Method;
 import java.util.Collection;
+import java.util.List;
 
 record ChannelRequestHandlerRegistration(
         Class<?> handlerType,
         Class<?> requestType,
         Class<?> replyType,
         String packetName,
-        Method declaredMethod,
         PreparedMethod invocation) {
     ChannelRequestHandlerRegistration(
             Class<?> handlerType,
-            Method declaredMethod,
+            Method method,
             Class<?> requestType,
             Class<?> replyType,
-            String packetName) {
-        this(handlerType, requestType, replyType, packetName, declaredMethod, null);
-    }
-
-    ChannelRequestHandlerRegistration(
-            Class<?> handlerType, Class<?> requestType, Class<?> replyType, String packetName) {
-        this(handlerType, (Method) null, requestType, replyType, packetName);
-    }
-
-    ChannelRequestHandlerRegistration prepare(Collection<ZLinkSuspendInvocationAdapter> invokers) {
-        return new ChannelRequestHandlerRegistration(
+            String packetName,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
+        this(
                 handlerType,
                 requestType,
                 replyType,
                 packetName,
-                null,
                 ZLinkHandlerMethodInvoker.prepareChannel(
-                        handlerType,
-                        declaredMethod,
-                        requestType,
-                        ZLinkMessageContext.class,
-                        invokers));
+                        handlerType, method, requestType, ZLinkMessageContext.class, invokers));
+    }
+
+    ChannelRequestHandlerRegistration(
+            Class<?> handlerType,
+            Class<?> requestType,
+            Class<?> replyType,
+            String packetName,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
+        this(handlerType, null, requestType, replyType, packetName, invokers);
+    }
+
+    ChannelRequestHandlerRegistration(
+            Class<?> handlerType, Class<?> requestType, Class<?> replyType, String packetName) {
+        this(handlerType, null, requestType, replyType, packetName, List.of());
     }
 
     ChannelRequestHandlerRegistration withPacketName(String packetName) {
         return new ChannelRequestHandlerRegistration(
-                handlerType, requestType, replyType, packetName, declaredMethod, invocation);
+                handlerType, requestType, replyType, packetName, invocation);
     }
 }

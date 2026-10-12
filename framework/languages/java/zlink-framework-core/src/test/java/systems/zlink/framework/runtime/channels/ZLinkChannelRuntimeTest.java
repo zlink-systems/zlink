@@ -130,11 +130,11 @@ final class ZLinkChannelRuntimeTest {
                 Map.of(
                         "Request",
                         new ChannelRequestHandlerRegistration(
-                                        PendingCloseRequestHandler.class,
-                                        String.class,
-                                        String.class,
-                                        "Request")
-                                .prepare(java.util.List.of())));
+                                PendingCloseRequestHandler.class,
+                                String.class,
+                                String.class,
+                                "Request",
+                                java.util.List.of())));
         closeHandlerEntered = new CompletableFuture<>();
         closeHandlerTerminal = new CompletableFuture<>();
         AtomicInteger replies = new AtomicInteger();

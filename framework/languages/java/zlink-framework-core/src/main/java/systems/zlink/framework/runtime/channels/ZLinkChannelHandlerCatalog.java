@@ -42,12 +42,12 @@ final class ZLinkChannelHandlerCatalog {
                             handler.handlerMethod(),
                             handler.messageType(),
                             handler.replyType(),
-                            handler.packetName()));
+                            handler.packetName(),
+                            suspendInvokers));
         }
         for (ChannelRequestHandlerRegistration handler : channel.requestHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
-        handlers.replaceAll((name, handler) -> handler.prepare(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -65,12 +65,12 @@ final class ZLinkChannelHandlerCatalog {
                             handler.handlerType(),
                             handler.handlerMethod(),
                             handler.messageType(),
-                            handler.packetName()));
+                            handler.packetName(),
+                            suspendInvokers));
         }
         for (ChannelSendHandlerRegistration handler : channel.sendHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
-        handlers.replaceAll((name, handler) -> handler.prepare(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -88,12 +88,12 @@ final class ZLinkChannelHandlerCatalog {
                             handler.handlerType(),
                             handler.handlerMethod(),
                             handler.messageType(),
-                            handler.packetName()));
+                            handler.packetName(),
+                            suspendInvokers));
         }
         for (ChannelPublishHandlerRegistration handler : channel.publishHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
-        handlers.replaceAll((name, handler) -> handler.prepare(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -113,12 +113,12 @@ final class ZLinkChannelHandlerCatalog {
                             handler.handlerMethod(),
                             handler.messageType(),
                             handler.replyType(),
-                            handler.packetName()));
+                            handler.packetName(),
+                            suspendInvokers));
         }
         for (ChannelRouteRequestHandlerRegistration handler : channel.routeRequestHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
-        handlers.replaceAll((name, handler) -> handler.prepare(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -134,12 +134,12 @@ final class ZLinkChannelHandlerCatalog {
                             handler.handlerType(),
                             handler.handlerMethod(),
                             handler.messageType(),
-                            handler.packetName()));
+                            handler.packetName(),
+                            suspendInvokers));
         }
         for (ChannelRouteSendHandlerRegistration handler : channel.routeSendHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
-        handlers.replaceAll((name, handler) -> handler.prepare(suspendInvokers));
         return Map.copyOf(handlers);
     }
 

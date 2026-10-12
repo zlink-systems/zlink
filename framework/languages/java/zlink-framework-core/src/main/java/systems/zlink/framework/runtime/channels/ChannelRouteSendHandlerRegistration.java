@@ -7,40 +7,43 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationA
 
 import java.lang.reflect.Method;
 import java.util.Collection;
+import java.util.List;
 
 record ChannelRouteSendHandlerRegistration(
-        Class<?> handlerType,
-        Class<?> messageType,
-        String packetName,
-        Method declaredMethod,
-        PreparedMethod invocation) {
+        Class<?> handlerType, Class<?> messageType, String packetName, PreparedMethod invocation) {
     ChannelRouteSendHandlerRegistration(
-            Class<?> handlerType, Method declaredMethod, Class<?> messageType, String packetName) {
-        this(handlerType, messageType, packetName, declaredMethod, null);
-    }
-
-    ChannelRouteSendHandlerRegistration(
-            Class<?> handlerType, Class<?> messageType, String packetName) {
-        this(handlerType, (Method) null, messageType, packetName);
-    }
-
-    ChannelRouteSendHandlerRegistration prepare(
+            Class<?> handlerType,
+            Method method,
+            Class<?> messageType,
+            String packetName,
             Collection<ZLinkSuspendInvocationAdapter> invokers) {
-        return new ChannelRouteSendHandlerRegistration(
+        this(
                 handlerType,
                 messageType,
                 packetName,
-                null,
                 ZLinkHandlerMethodInvoker.prepareChannel(
                         handlerType,
-                        declaredMethod,
+                        method,
                         messageType,
                         ZLinkRouteMessageContext.class,
                         invokers));
     }
 
+    ChannelRouteSendHandlerRegistration(
+            Class<?> handlerType,
+            Class<?> messageType,
+            String packetName,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
+        this(handlerType, null, messageType, packetName, invokers);
+    }
+
+    ChannelRouteSendHandlerRegistration(
+            Class<?> handlerType, Class<?> messageType, String packetName) {
+        this(handlerType, null, messageType, packetName, List.of());
+    }
+
     ChannelRouteSendHandlerRegistration withPacketName(String packetName) {
         return new ChannelRouteSendHandlerRegistration(
-                handlerType, messageType, packetName, declaredMethod, invocation);
+                handlerType, messageType, packetName, invocation);
     }
 }

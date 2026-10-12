@@ -7,39 +7,43 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationA
 
 import java.lang.reflect.Method;
 import java.util.Collection;
+import java.util.List;
 
 record ChannelPublishHandlerRegistration(
-        Class<?> handlerType,
-        Class<?> messageType,
-        String packetName,
-        Method declaredMethod,
-        PreparedMethod invocation) {
+        Class<?> handlerType, Class<?> messageType, String packetName, PreparedMethod invocation) {
     ChannelPublishHandlerRegistration(
-            Class<?> handlerType, Method declaredMethod, Class<?> messageType, String packetName) {
-        this(handlerType, messageType, packetName, declaredMethod, null);
-    }
-
-    ChannelPublishHandlerRegistration(
-            Class<?> handlerType, Class<?> messageType, String packetName) {
-        this(handlerType, (Method) null, messageType, packetName);
-    }
-
-    ChannelPublishHandlerRegistration prepare(Collection<ZLinkSuspendInvocationAdapter> invokers) {
-        return new ChannelPublishHandlerRegistration(
+            Class<?> handlerType,
+            Method method,
+            Class<?> messageType,
+            String packetName,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
+        this(
                 handlerType,
                 messageType,
                 packetName,
-                null,
                 ZLinkHandlerMethodInvoker.prepareChannel(
                         handlerType,
-                        declaredMethod,
+                        method,
                         messageType,
                         ZLinkPublishMessageContext.class,
                         invokers));
     }
 
+    ChannelPublishHandlerRegistration(
+            Class<?> handlerType,
+            Class<?> messageType,
+            String packetName,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
+        this(handlerType, null, messageType, packetName, invokers);
+    }
+
+    ChannelPublishHandlerRegistration(
+            Class<?> handlerType, Class<?> messageType, String packetName) {
+        this(handlerType, null, messageType, packetName, List.of());
+    }
+
     ChannelPublishHandlerRegistration withPacketName(String packetName) {
         return new ChannelPublishHandlerRegistration(
-                handlerType, messageType, packetName, declaredMethod, invocation);
+                handlerType, messageType, packetName, invocation);
     }
 }
