@@ -2010,15 +2010,18 @@ internal sealed class ZLinkSpotNodeCatalog(
                         outcome.Successor,
                         outcome.Authority,
                         outcome.IntentFailure,
-                        () =>
-                            _lane.RunAsync(() =>
+                        completeSuccessor =>
+                            _lane.RunAsync(async () =>
                             {
                                 if (outcome.Successor is { } successor)
                                 {
                                     ForgetCloseLocked(spotId, transaction);
                                     _spots[activation.RuntimeSpotId] = successor;
-                                    successor.AttachNativeDispatch();
                                 }
+                                await ZLinkRuntimeTaskRunner
+                                    .WithoutExecutionContextFlow(completeSuccessor)
+                                    .ConfigureAwait(false);
+                                outcome.Successor?.AttachNativeDispatch();
                             })
                     )
                     .ConfigureAwait(false);

@@ -1053,39 +1053,43 @@ internal abstract partial class ZLinkSpotActivation
     internal ZLinkSpotActivation? CompletedSuccessor =>
         _successor is { Task.IsCompletedSuccessfully: true } outcome ? outcome.Task.Result : null;
 
-    internal async ValueTask SetSuccessorAsync(
+    internal ValueTask SetSuccessorAsync(
         ZLinkSpotActivation? successor,
         ZLinkAuthoritySnapshot? authority,
         ZLinkFrameworkException? intentFailure,
-        Func<ValueTask> publish
+        Func<Func<ValueTask>, ValueTask> commit
     )
     {
-        await _serial
-            .VisitPendingAcceptedStateAsync(
-                successor?._serial,
-                state =>
-                {
-                    if (state is DurableActivationDispatch pending && authority is { } snapshot)
-                    {
-                        pending.Received.RebindAuthority(
-                            snapshot.Allocation.DescriptorLifecycleGeneration,
-                            snapshot.AuthorityOwnerGeneration,
-                            checked((ulong)snapshot.OwnerLeaseGeneration)
-                        );
-                        _ = successor!.DispatchDurableActivationAsync(pending);
-                    }
-                }
-            )
-            .ConfigureAwait(false);
-        await publish().ConfigureAwait(false);
-        if (intentFailure is null)
-            _successor!.TrySetResult(successor);
-        else
+        return commit(CompleteSuccessorAsync);
+
+        async ValueTask CompleteSuccessorAsync()
         {
-            _successor!.TrySetException(intentFailure);
-            _ = _successor.Task.Exception;
+            await _serial
+                .VisitPendingAcceptedStateAsync(
+                    successor?._serial,
+                    state =>
+                    {
+                        if (state is DurableActivationDispatch pending && authority is { } snapshot)
+                        {
+                            pending.Received.RebindAuthority(
+                                snapshot.Allocation.DescriptorLifecycleGeneration,
+                                snapshot.AuthorityOwnerGeneration,
+                                checked((ulong)snapshot.OwnerLeaseGeneration)
+                            );
+                            _ = successor!.DispatchDurableActivationAsync(pending);
+                        }
+                    }
+                )
+                .ConfigureAwait(false);
+            if (intentFailure is null)
+                _successor!.TrySetResult(successor);
+            else
+            {
+                _successor!.TrySetException(intentFailure);
+                _ = _successor.Task.Exception;
+            }
+            _serial.SchedulePendingApplications();
         }
-        _serial.SchedulePendingApplications();
     }
 
     internal void SetSuccessorFailure(Exception error)
