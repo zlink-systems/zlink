@@ -121,6 +121,10 @@ jobs:
         working-directory: doc/site
         run: mkdocs build --strict
 
+      # 빌드가 만든 llms.txt의 링크가 모두 실제 페이지를 가리키는지 본다.
+      - name: Check llms.txt links
+        run: python3 doc/site/scripts/check_llms_txt.py doc/site/site
+
       # 옛 core 사이트의 `/ko/**`·`/api/**` 주소를 새 자리로 보낸다.
       - name: Redirect the old paths
         run: python3 doc/site/scripts/make_core_redirects.py doc/site/site
