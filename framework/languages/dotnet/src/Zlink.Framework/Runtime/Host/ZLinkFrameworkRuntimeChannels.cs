@@ -238,14 +238,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         )
             classification = ZLinkRouteMeshTargetClassification.RequiredNotConnected;
 
-        if (classification != ZLinkRouteMeshTargetClassification.RequiredNotConnected)
-            return classification;
-
-        return nodeRuntime
-            .Node.MeshPeers()
-            .Any(peer => peer.RoutingId == targetNodeRid && peer.State == MeshPeerState.Admitted)
-            ? ZLinkRouteMeshTargetClassification.ReadyEligible
-            : classification;
+        return classification;
     }
 
     internal void EnsureKnownRouteMeshPeer(

@@ -6,12 +6,35 @@ using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshChannelSelectionHotPathTests
 {
+    [Fact]
+    public async Task LiveTargetClassificationUsesTheMonitoringAdmissionState()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "classification");
+        var peer = AddReadyPeer(node);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.Unknown,
+            node.ClassifyLiveRouterTarget(peer.RoutingId)
+        );
+        peer.State = MeshPeerState.Admitted;
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.ReadyEligible,
+            node.ClassifyLiveRouterTarget(peer.RoutingId)
+        );
+        peer.State = MeshPeerState.Configured;
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.Unknown,
+            node.ClassifyLiveRouterTarget(peer.RoutingId)
+        );
+    }
+
     private delegate (
         bool Selected,
         RoutingId TargetRid,

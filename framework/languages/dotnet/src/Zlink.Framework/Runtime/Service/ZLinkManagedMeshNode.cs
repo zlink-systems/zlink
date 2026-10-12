@@ -2089,6 +2089,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
     }
 
+    internal ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetRid) =>
+        RunState(() =>
+        {
+            if (!_peersByRid.TryGetValue(targetRid, out var peer))
+                return ZLinkRouteMeshTargetClassification.Unknown;
+            if (peer.Admission?.ObjectRole == (byte)ZLinkMeshNodeObjectRole.Client)
+                return ZLinkRouteMeshTargetClassification.ObjectClientTarget;
+            return peer.State == MeshPeerState.Admitted
+                ? ZLinkRouteMeshTargetClassification.ReadyEligible
+                : ZLinkRouteMeshTargetClassification.Unknown;
+        });
+
     public MeshNodePeer[] Peers()
     {
         return RunState(() =>

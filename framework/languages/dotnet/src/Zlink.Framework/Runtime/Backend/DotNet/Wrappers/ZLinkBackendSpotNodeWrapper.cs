@@ -942,6 +942,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         return _node.Peers();
     }
 
+    public ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetRid) =>
+        _node.ClassifyLiveRouterTarget(targetRid);
+
     public IReadOnlyList<MeshPeerChannel> MeshPeerChannels(
         RoutingId peerRid,
         ulong lifecycleGeneration

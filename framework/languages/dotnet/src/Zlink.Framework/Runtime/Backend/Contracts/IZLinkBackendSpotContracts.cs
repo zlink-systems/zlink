@@ -127,6 +127,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     IReadOnlyList<MeshNodePeer> MeshPeers();
 
+    ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetRid);
+
     IReadOnlyList<MeshPeerChannel> MeshPeerChannels(RoutingId peerRid, ulong lifecycleGeneration);
 
     IMeshNodeMonitor OpenMeshMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All);
