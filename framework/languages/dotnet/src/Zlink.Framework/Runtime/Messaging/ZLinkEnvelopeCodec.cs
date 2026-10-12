@@ -187,16 +187,6 @@ internal static class ZLinkEnvelopeCodec
         }
 
         ValidateProtocolHeader(header, true, ZlinkStreamFlowId.FormatMarker, flowId, flowOrigin);
-        if (IsSimpleHeader(header) && flowId is null && flowOrigin is null)
-        {
-            var key = new SimpleHeaderKey(
-                header.Kind,
-                header.ChannelName,
-                header.MessageName,
-                contentType
-            );
-            return Message.From(GetSimpleHeaderBytes(key));
-        }
 
         return EncodePlannedHeader(
             header,
@@ -860,19 +850,6 @@ internal static class ZLinkEnvelopeCodec
                 InvalidProtocolHeader(),
                 $"ZLink envelope {name} part is missing."
             );
-    }
-
-    private static bool IsSimpleHeader(ZLinkEnvelopeHeader header)
-    {
-        return header.CorrelationId is null
-            && header.Deadline is null
-            && header.Topic is null
-            && header.ErrorCode is null
-            && header.ErrorMessage is null
-            && header.Source is null
-            && header.Metadata is not { Count: > 0 }
-            && header.FlowId is null
-            && header.FlowOrigin is null;
     }
 
     private static void ValidateProtocolHeader(
