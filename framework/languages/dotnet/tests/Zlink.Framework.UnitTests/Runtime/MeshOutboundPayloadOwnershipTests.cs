@@ -16,6 +16,44 @@ public sealed class MeshOutboundPayloadOwnershipTests
     private const string Channel = "worker";
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PublicMeshRequest_AdmitsBeforeReply(bool channel)
+    {
+        var gate = new ReplyGate();
+        using var target = BuildHost(replyGate: gate);
+        await target.StartAsync();
+        var targetNode = target
+            .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+            .GetMeshNodeRuntime(Mesh);
+        using var source = BuildHost(
+            endpoint: targetNode.Node.MeshStatus().LocalEndpoint,
+            peer: targetNode.Node.RoutingId
+        );
+        await source.StartAsync();
+        try
+        {
+            await WaitForPeerAsync(source, targetNode.Node.RoutingId);
+            var client = source.Services.GetRequiredService<IZLinkRouteClient>();
+            var payload = new BytesValue { Value = ByteString.CopyFrom(new byte[64]) };
+            var call = channel
+                ? client.RequestToChannel(Channel, payload)
+                : client.RequestToNode(Mesh, targetNode.Node.RoutingId, payload);
+            var request = call.Async<BytesValue>();
+            await request.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(request.Reply.IsCompleted);
+            gate.Release.SetResult();
+            Assert.Equal(4096, (await request).Value.Length);
+        }
+        finally
+        {
+            gate.Release.TrySetResult();
+            await source.StopAsync();
+            await target.StopAsync();
+        }
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
@@ -185,11 +223,14 @@ public sealed class MeshOutboundPayloadOwnershipTests
     private static IHost BuildHost(
         TrackingProtobufCodec? tracking = null,
         RoutingId peer = default,
-        string? endpoint = null
+        string? endpoint = null,
+        ReplyGate? replyGate = null
     )
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Logging.ClearProviders();
+        if (replyGate is not null)
+            builder.Services.AddSingleton(replyGate);
         builder.Services.AddZLinkFramework(options =>
         {
             options.Codecs.Use(tracking is null ? ZLinkProtobufCodec.Default : tracking);
@@ -228,7 +269,13 @@ public sealed class MeshOutboundPayloadOwnershipTests
         Assert.Fail("The ownership test peer was not admitted.");
     }
 
-    public sealed class ProbeHandler
+    public sealed class ReplyGate
+    {
+        public TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    public sealed class ProbeHandler(ReplyGate? gate = null)
         : IZLinkRouteSendHandler<BytesValue>,
             IZLinkRouteRequestHandler<BytesValue, BytesValue>,
             IZLinkSendHandler<BytesValue>,
@@ -244,7 +291,7 @@ public sealed class MeshOutboundPayloadOwnershipTests
             BytesValue request,
             ZLinkRouteMessageContext context,
             CancellationToken cancellationToken
-        ) => ValueTask.FromResult(new BytesValue { Value = ByteString.CopyFrom(new byte[4096]) });
+        ) => ReplyAsync();
 
         public ValueTask HandleAsync(
             BytesValue message,
@@ -256,7 +303,14 @@ public sealed class MeshOutboundPayloadOwnershipTests
             BytesValue request,
             IZLinkMessageContext context,
             CancellationToken cancellationToken
-        ) => ValueTask.FromResult(new BytesValue { Value = ByteString.CopyFrom(new byte[4096]) });
+        ) => ReplyAsync();
+
+        private async ValueTask<BytesValue> ReplyAsync()
+        {
+            if (gate is not null)
+                await gate.Release.Task;
+            return new BytesValue { Value = ByteString.CopyFrom(new byte[4096]) };
+        }
     }
 
     private sealed class TrackingProtobufCodec(Action? afterEncode = null)

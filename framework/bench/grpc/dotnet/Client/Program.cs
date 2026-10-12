@@ -324,12 +324,16 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
         );
     }
 
+    public Zlink.Framework.Contracts.Channels.ZLinkRequest<BenchPayload> SubmitRequest(
+        BenchPayload payload,
+        CancellationToken cancellationToken
+    ) => client.RequestToNode("bench", Target, payload).Async<BenchPayload>(cancellationToken);
+
     public async ValueTask<BenchPayload> RequestAsync(
         int stream,
         BenchPayload payload,
         CancellationToken cancellationToken
-    ) =>
-        await client.RequestToNode("bench", Target, payload).Async<BenchPayload>(cancellationToken);
+    ) => await SubmitRequest(payload, cancellationToken);
 
     public async ValueTask SendAsync(
         int stream,

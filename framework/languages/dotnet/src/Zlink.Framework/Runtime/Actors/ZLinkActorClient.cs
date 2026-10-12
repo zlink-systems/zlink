@@ -113,7 +113,8 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         TimeSpan? timeout,
         ZLinkCallMetadata metadata,
         CancellationToken cancellationToken,
-        ResolvedActorRoute? fixedRoute = null
+        ResolvedActorRoute? fixedRoute = null,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         var started = timeout is null ? 0 : Stopwatch.GetTimestamp();
@@ -164,7 +165,8 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                     actor.ToBackend(),
                     parts,
                     remainingTimeout,
-                    cancellationToken
+                    cancellationToken,
+                    requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
             terminal?.Succeeded();
@@ -289,13 +291,20 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         IReadOnlyList<Message> reply;
         try
         {
-            reply = await node.RequestToActorAsync(actor, parts, timeout, cancellationToken)
+            reply = await node.RequestToActorAsync(
+                    actor,
+                    parts,
+                    timeout,
+                    cancellationToken,
+                    requestAdmission: requestAdmission
+                )
                 .ConfigureAwait(false);
         }
         catch (ZlinkSubmitException error)
@@ -566,14 +575,16 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             return this;
         }
 
-        public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
+        public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
         {
             ZLinkApplicationExecutionContext.ValidateActorRequest(
                 actorId,
                 ZLinkNestedRequestTerminator.Async,
                 _executionScope
             );
-            return ExecuteAsync<TReply>(cancellationToken);
+            return ZLinkRequestAdmission.Run<TReply>(admission =>
+                ExecuteAsync<TReply>(cancellationToken, admission)
+            );
         }
 
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default)
@@ -585,10 +596,13 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             );
             return ZLinkApplicationExecutionContext
                 .RequireYieldTurn(_turn, "Actor request")
-                .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
+                .YieldFrameworkCallAsync(token => ExecuteAsync<TReply>(token), cancellationToken);
         }
 
-        private ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
+        private ValueTask<TReply> ExecuteAsync<TReply>(
+            CancellationToken cancellationToken,
+            ZLinkRequestAdmission? requestAdmission = null
+        )
         {
             return client.RequestAsync<TRequest, TReply>(
                 actorId,
@@ -597,7 +611,8 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                 _timeout,
                 _metadata,
                 cancellationToken,
-                fixedRoute
+                fixedRoute,
+                requestAdmission: requestAdmission
             );
         }
     }

@@ -181,19 +181,24 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
         return this;
     }
 
-    public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
+    public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ExecuteAsync<TReply>(cancellationToken);
+        return ZLinkRequestAdmission.Run<TReply>(admission =>
+            ExecuteAsync<TReply>(cancellationToken, admission)
+        );
     }
 
     public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default)
     {
         return ZLinkApplicationExecutionContext
             .RequireYieldTurn(_turn, "Channel request")
-            .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
+            .YieldFrameworkCallAsync(token => ExecuteAsync<TReply>(token), cancellationToken);
     }
 
-    private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
+    private async ValueTask<TReply> ExecuteAsync<TReply>(
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
+    )
     {
         var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
         var timeout = _timeout ?? runtime.Registration.ResolveChannelRequestTimeout(channelName);
@@ -227,7 +232,14 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
             terminal?.SetCorrelation(header.CorrelationId);
             var parts = ZLinkClientCallCodec.CopyEnvelopeParts(header, encodedBody, contentType);
             var reply = await runtime
-                .RequestToChannelAsync(channelName, parts, timeout, cancellationToken, metadata)
+                .RequestToChannelAsync(
+                    channelName,
+                    parts,
+                    timeout,
+                    cancellationToken,
+                    metadata,
+                    requestAdmission: requestAdmission
+                )
                 .ConfigureAwait(false);
             var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
                 reply,
@@ -359,9 +371,11 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
         return this;
     }
 
-    public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
+    public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ExecuteAsync<TReply>(cancellationToken);
+        return ZLinkRequestAdmission.Run<TReply>(admission =>
+            ExecuteAsync<TReply>(cancellationToken, admission)
+        );
     }
 
     public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default)
@@ -372,7 +386,10 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
         );
     }
 
-    private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
+    private async ValueTask<TReply> ExecuteAsync<TReply>(
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
+    )
     {
         var nodeRuntime = runtime.GetMeshNodeRuntime(meshName);
         var timeout =
@@ -424,7 +441,8 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
                     timeout,
                     cancellationToken,
                     _metadata.Encode(),
-                    durable
+                    durable,
+                    requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
             var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
@@ -551,11 +569,14 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
         return this;
     }
 
-    public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
+    public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ExecuteAfterTerminatorAsync<TReply>(
-            ZLinkNestedRequestTerminator.Async,
-            cancellationToken
+        return ZLinkRequestAdmission.Run<TReply>(admission =>
+            ExecuteAfterTerminatorAsync<TReply>(
+                ZLinkNestedRequestTerminator.Async,
+                cancellationToken,
+                admission
+            )
         );
     }
 
@@ -568,12 +589,13 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
         );
         return ZLinkApplicationExecutionContext
             .RequireYieldTurn(_turn, "Spot request")
-            .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
+            .YieldFrameworkCallAsync(token => ExecuteAsync<TReply>(token), cancellationToken);
     }
 
     internal ValueTask<TReply> ExecuteAfterTerminatorAsync<TReply>(
         ZLinkNestedRequestTerminator terminator,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         ZLinkApplicationExecutionContext.ValidateSpotRequest(
@@ -581,10 +603,13 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
             terminator,
             _executionScope
         );
-        return ExecuteAsync<TReply>(cancellationToken);
+        return ExecuteAsync<TReply>(cancellationToken, requestAdmission: requestAdmission);
     }
 
-    private ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken) =>
+    private ValueTask<TReply> ExecuteAsync<TReply>(
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
+    ) =>
         ZLinkSpotHandleRequestExecution.ExecuteAsync(
             target,
             async snapshot =>
@@ -617,7 +642,8 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
                         timeout,
                         cancellationToken,
                         _metadata.Encode(),
-                        ZLinkServiceWireCodec.CreateInstanceReadyRoute(snapshot, instanceIntent)
+                        ZLinkServiceWireCodec.CreateInstanceReadyRoute(snapshot, instanceIntent),
+                        requestAdmission: requestAdmission
                     )
                     .ConfigureAwait(false);
                 return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(

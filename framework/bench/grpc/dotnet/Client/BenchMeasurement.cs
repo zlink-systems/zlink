@@ -250,17 +250,43 @@ internal static class BenchMeasurement
         while (Stopwatch.GetTimestamp() < deadline)
         {
             var sequence = next.Next();
-            pending.Add(
-                ExecuteRequestAsync(
-                    transport,
-                    metrics,
-                    trigger,
+            if (transport is FrameworkBenchTransport framework)
+            {
+                var payload = BenchMetricHeaders.CreatePayload(
+                    trigger.payloadBytes,
                     runId,
-                    0,
-                    sequence,
-                    operationCancellation.Token
-                )
-            );
+                    metrics.Phase,
+                    sequence
+                );
+                var started = metrics.Begin();
+                var request = framework.SubmitRequest(payload, operationCancellation.Token);
+                pending.Add(
+                    ObserveRequestReplyAsync(
+                        request.AsTask(),
+                        metrics,
+                        trigger,
+                        runId,
+                        sequence,
+                        started,
+                        operationCancellation.Token
+                    )
+                );
+                await request.Admitted;
+            }
+            else
+            {
+                pending.Add(
+                    ExecuteRequestAsync(
+                        transport,
+                        metrics,
+                        trigger,
+                        runId,
+                        0,
+                        sequence,
+                        operationCancellation.Token
+                    )
+                );
+            }
             if (++issuedSincePump == 256)
             {
                 pending.RemoveWhere(static task => task.IsCompleted);
@@ -331,7 +357,7 @@ internal static class BenchMeasurement
                         operationCancellation.Token
                     );
                     pendingReplies.Add(
-                        ObserveRawRequestAsync(
+                        ObserveRequestReplyAsync(
                             submission.Reply,
                             metrics,
                             trigger,
@@ -416,7 +442,7 @@ internal static class BenchMeasurement
         }
     }
 
-    private static async Task ObserveRawRequestAsync(
+    private static async Task ObserveRequestReplyAsync(
         Task<BenchPayload> replyTask,
         SourceMetrics metrics,
         BenchTriggerRequest trigger,
@@ -541,21 +567,15 @@ internal static class BenchMeasurement
             sequence
         );
         var started = metrics.Begin();
-        try
-        {
-            var reply = await transport.RequestAsync(stream, payload, cancellationToken);
-            ValidateReply(reply, runId, metrics.Phase, trigger.payloadBytes, sequence);
-            metrics.Complete(started, true);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            metrics.Cancel();
-            throw;
-        }
-        catch (Exception error)
-        {
-            metrics.Complete(started, false, error);
-        }
+        await ObserveRequestReplyAsync(
+            transport.RequestAsync(stream, payload, cancellationToken).AsTask(),
+            metrics,
+            trigger,
+            runId,
+            sequence,
+            started,
+            cancellationToken
+        );
     }
 
     private static void ValidateReply(

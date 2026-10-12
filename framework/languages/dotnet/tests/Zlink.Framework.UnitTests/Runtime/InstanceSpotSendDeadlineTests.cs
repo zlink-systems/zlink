@@ -13,6 +13,201 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Fact]
+    public async Task InfrastructureRequest_DoesNotAdmitUserRequestWaitingForAuthority()
+    {
+        const string spotId = "held-user-authority";
+        HeldInstanceResolveStore? store = null;
+        var node = new CapturingSpotNode
+        {
+            NodeRequestHandler = (_, _) =>
+                ValueTask.FromResult(
+                    new ZLinkBackendRouteReceived(
+                        [Message.From("authority reply")],
+                        null,
+                        null,
+                        null,
+                        null
+                    )
+                ),
+        };
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            locationStoreWrapper: inner => store = new(inner, spotId)
+        );
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var request = new ZLinkSpotClient(runtime)
+                .RequestToSpot(spotId, new ProbeRouteMessage("request"))
+                .InstanceSpot("Tests.InstanceSpot")
+                .InMesh("entry")
+                .Async<ProbeReply>(cancellation.Token);
+            await store!.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using var payload = Message.From("authority lookup");
+            using var infrastructure = await runtime
+                .GetSpotNodeRuntime("entry")
+                .RequestToNodeAsync(
+                    node.RoutingId,
+                    [payload],
+                    TimeSpan.FromSeconds(5),
+                    CancellationToken.None
+                );
+            Assert.Equal(1, node.NodeRequestAttempts);
+            Assert.False(request.Admitted.IsCompleted);
+            Assert.False(request.Reply.IsCompleted);
+            cancellation.Cancel();
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                request.AsTask()
+            );
+            Assert.Same(
+                failure,
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    request.Admitted.AsTask()
+                )
+            );
+        }
+        finally
+        {
+            cancellation.Cancel();
+            store!.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task LocalInstanceActivation_PublicRequest_AdmitsBeforeReply()
+    {
+        var probe = new ColdSendProbe();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            instanceSpotType: typeof(AdmissionInstanceSpot),
+            instanceDispatchProbe: probe,
+            relocationStore: new InMemoryRelocationStore()
+        );
+        try
+        {
+            var request = new ZLinkSpotClient(runtime)
+                .RequestToSpot("admission-cold", new ProbeRouteMessage("activate"))
+                .InstanceSpot("Tests.InstanceSpot")
+                .InMesh("entry")
+                .Async<ProbeReply>();
+            await request.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(request.Reply.IsCompleted);
+            Assert.Equal("activate", await probe.Message.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.False(request.Reply.IsCompleted);
+            probe.Release.SetResult();
+            Assert.Equal("activate", (await request).Value);
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteInstanceActivation_PublicRequest_AdmitsBeforeReply()
+    {
+        var node = new PendingInstanceRequestNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            relocationStore: new InMemoryRelocationStore(),
+            meshResolverWrapper: inner => new RemoteInstanceResolver(inner)
+        );
+        try
+        {
+            await PublishCandidateAsync(
+                RequireLocationStore(runtime),
+                "remote-instance-owner",
+                RoutingId.From("remote-instance-node"),
+                TimeSpan.FromMinutes(1)
+            );
+            var request = new ZLinkSpotClient(runtime)
+                .RequestToSpot("admission-remote-cold", new ProbeRouteMessage("activate"))
+                .InstanceSpot("Tests.InstanceSpot")
+                .InMesh("entry")
+                .Async<ProbeReply>();
+            await node.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await request.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(request.Reply.IsCompleted);
+            node.Release.SetResult();
+            Assert.Equal("activated", (await request).Value);
+        }
+        finally
+        {
+            node.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class PendingInstanceRequestNode : CapturingSpotNode, IZLinkBackendSpotNode
+    {
+        internal TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<IReadOnlyList<Message>> ActivateInstanceSpotAsync(
+            InstanceSpotActivationTarget target,
+            string sourceSpotId,
+            IReadOnlyList<Message> parts,
+            bool request,
+            ulong deadlineUnixMs,
+            TimeSpan timeout,
+            ReadOnlyMemory<byte> metadata,
+            CancellationToken cancellationToken,
+            ZLinkRequestAdmission? requestAdmission = null
+        )
+        {
+            Assert.True(request);
+            Assert.NotNull(requestAdmission);
+            Assert.Equal(RoutingId.From("remote-instance-node"), target.TargetNodeRid);
+            requestAdmission.Complete();
+            Entered.SetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return ZLinkEnvelopeCodec.EncodeParts(
+                ZLinkEnvelopeCodec.DecodeHeader(parts) with
+                {
+                    Kind = ZLinkMessageKind.Response,
+                    MessageName = string.Empty,
+                },
+                new ProbeReply("activated"),
+                typeof(ProbeReply),
+                codecs: null
+            );
+        }
+    }
+
+    private sealed class AdmissionInstanceSpot(IZLinkInstanceSpotContext context)
+        : IZLinkInstanceSpot
+    {
+        public IZLinkInstanceSpotContext Context { get; } = context;
+
+        public void Configure() => Context.Handlers.AddPacket<AdmissionInstanceHandler>();
+    }
+
+    private sealed class AdmissionInstanceHandler(ColdSendProbe probe)
+        : IZLinkSpotRequestHandler<AdmissionInstanceSpot, ProbeRouteMessage, ProbeReply>
+    {
+        public async ValueTask<ProbeReply> HandleAsync(
+            AdmissionInstanceSpot spot,
+            ProbeRouteMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            probe.Message.SetResult(request.Value);
+            await probe.Release.Task.WaitAsync(cancellationToken);
+            return new ProbeReply(request.Value);
+        }
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -652,7 +847,8 @@ public sealed partial class EntrySpotActorDispatchTests
             ulong deadlineUnixMs,
             TimeSpan timeout,
             ReadOnlyMemory<byte> metadata,
-            CancellationToken cancellationToken
+            CancellationToken cancellationToken,
+            Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null
         )
         {
             Assert.False(request);
