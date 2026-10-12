@@ -235,7 +235,10 @@ final class ZLinkSpotActivationFactory {
                                                 failure, context.closeResourcesAsync()))
                 .thenCompose(stage -> stage);
         registerDispatchHandler(
-                backendSpot, activation::handleDispatchEvent, activation::admitRoute);
+                backendSpot,
+                activation::handleDispatchEvent,
+                activation::admitRoute,
+                activation::admitActor);
         return CompletableFuture.completedFuture(activation);
     }
 
@@ -315,7 +318,8 @@ final class ZLinkSpotActivationFactory {
                             registerDispatchHandler(
                                     backendSpot,
                                     activation::handleDispatchEvent,
-                                    activation::admitRoute);
+                                    activation::admitRoute,
+                                    activation::admitActor);
                             return activation;
                         })
                 .handle(
@@ -374,7 +378,14 @@ final class ZLinkSpotActivationFactory {
             ZLinkBackendSpot backendSpot,
             Function<ZLinkBackendSpotDispatchInfo, CompletionStage<Void>> handler,
             BiFunction<ZLinkBackendReceived, CompletableFuture<Void>, CompletionStage<Void>>
-                    routeHandler) {
+                    routeHandler,
+            BiFunction<
+                            java.util.List<
+                                    systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendActorReceived>,
+                            CompletableFuture<Void>,
+                            CompletionStage<Void>>
+                    actorHandler) {
         backendSpot.onDispatchEvent(
                 new ZLinkInternalAsyncSpotDispatchHandler() {
                     @Override
@@ -391,6 +402,25 @@ final class ZLinkSpotActivationFactory {
                     public CompletionStage<Void> handleRoute(
                             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
                         return routeHandler.apply(received, admission);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleActor(
+                            java.util.List<
+                                            systems.zlink.framework.runtime.internal.backend
+                                                    .ZLinkBackendActorReceived>
+                                    messages) {
+                        return actorHandler.apply(messages, null);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleActor(
+                            java.util.List<
+                                            systems.zlink.framework.runtime.internal.backend
+                                                    .ZLinkBackendActorReceived>
+                                    messages,
+                            CompletableFuture<Void> admission) {
+                        return actorHandler.apply(messages, admission);
                     }
                 });
     }
@@ -430,6 +460,16 @@ final class ZLinkSpotActivationFactory {
                                                     .ZLinkBackendActorReceived>
                                     messages) {
                         return activation.admitActor(messages);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> handleActor(
+                            java.util.List<
+                                            systems.zlink.framework.runtime.internal.backend
+                                                    .ZLinkBackendActorReceived>
+                                    messages,
+                            CompletableFuture<Void> requestAdmission) {
+                        return activation.admitActor(messages, requestAdmission);
                     }
                 });
     }

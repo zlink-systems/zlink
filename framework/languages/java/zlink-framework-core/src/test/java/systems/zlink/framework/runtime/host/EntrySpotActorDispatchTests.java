@@ -1673,6 +1673,16 @@ final class EntrySpotActorDispatchTests {
             throw new UnsupportedOperationException();
         }
 
+        public CompletionStage<List<Message>> requestToActor(
+                ZLinkBackendActorRef actor,
+                List<Message> parts,
+                SendFlags flags,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    requestToActor(actor, parts, flags, timeout), requestAdmission);
+        }
+
         @Override
         public boolean forwardActorBoundSession(
                 ZLinkBackendActorRef actor,
@@ -1804,6 +1814,43 @@ final class EntrySpotActorDispatchTests {
                     new ZLinkBackendSpotDispatchInfo(
                             ZLinkBackendSpotDispatchEvent.ROUTED_READABLE, List.of()));
             return result;
+        }
+
+        public CompletionStage<ZLinkBackendReceived> requestToSpot(
+                RoutingId targetNodeRid,
+                String spotId,
+                long spotGeneration,
+                byte[] metadata,
+                List<Message> parts,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    requestToSpot(targetNodeRid, spotId, spotGeneration, metadata, parts, timeout),
+                    requestAdmission);
+        }
+
+        public CompletionStage<ZLinkBackendReceived> requestToSpot(
+                RoutingId targetNodeRid,
+                String spotId,
+                long spotGeneration,
+                byte[] metadata,
+                List<Message> parts,
+                Duration timeout,
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                        operations,
+                java.util.UUID operationId,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    requestToSpot(
+                            targetNodeRid,
+                            spotId,
+                            spotGeneration,
+                            metadata,
+                            parts,
+                            timeout,
+                            operations,
+                            operationId),
+                    requestAdmission);
         }
 
         @Override

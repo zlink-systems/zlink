@@ -21,6 +21,7 @@ import systems.zlink.framework.locations.ZLinkLocationPage;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
@@ -1294,6 +1295,15 @@ final class ZLinkClientServerM6ARuntimeTest {
             return new CompletableFuture<>();
         }
 
+        public CompletionStage<ZLinkBackendReceived> request(
+                List<Message> parts,
+                Duration timeout,
+                Runnable receiveAdmission,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    request(parts, timeout, receiveAdmission), requestAdmission);
+        }
+
         @Override
         public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
             if (receiveFailure != null) {
@@ -1412,6 +1422,15 @@ final class ZLinkClientServerM6ARuntimeTest {
             return new CompletableFuture<>();
         }
 
+        public CompletionStage<ZLinkBackendReceived> request(
+                List<Message> parts,
+                Duration timeout,
+                Runnable receiveAdmission,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    request(parts, timeout, receiveAdmission), requestAdmission);
+        }
+
         @Override
         public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
             return null;
@@ -1495,6 +1514,15 @@ final class ZLinkClientServerM6ARuntimeTest {
         public CompletionStage<ZLinkBackendReceived> request(
                 RoutingId routingId, List<Message> parts, Duration timeout) {
             return new CompletableFuture<>();
+        }
+
+        public CompletionStage<ZLinkBackendReceived> request(
+                RoutingId routingId,
+                List<Message> parts,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    request(routingId, parts, timeout), requestAdmission);
         }
 
         @Override

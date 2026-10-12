@@ -66,7 +66,11 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                                             return operations.submit(
                                                     systems.zlink.framework.runtime.internal.service
                                                             .ZLinkServiceOperationIds.next(),
-                                                    (Duration) arguments[arguments.length - 1],
+                                                    java.util.Arrays.stream(arguments)
+                                                            .filter(Duration.class::isInstance)
+                                                            .map(Duration.class::cast)
+                                                            .findFirst()
+                                                            .orElseThrow(),
                                                     () -> CompletableFuture.failedFuture(terminal),
                                                     systems.zlink.framework.runtime.internal.backend
                                                                     .ZLinkBackendReceived

@@ -2013,6 +2013,17 @@ final class ZLinkJavaRawMeshNode
             Duration timeout,
             ZLinkServiceOperationRegistry operationOwner,
             UUID operationId) {
+        return requestNode(target, metadata, parts, timeout, operationOwner, operationId, null);
+    }
+
+    CompletionStage<ZLinkBackendReceived> requestNode(
+            RoutingId target,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operationOwner,
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
         RouterSocket router = requireStarted();
         long correlation = allocateCorrelation();
         int flags =
@@ -2022,7 +2033,15 @@ final class ZLinkJavaRawMeshNode
                         wire.encodeNodeRequestHeader(correlation, flags), metadata, parts);
         try {
             return request(
-                    router, target, frames, timeout, correlation, operationOwner, operationId);
+                    router,
+                    target,
+                    frames,
+                    timeout,
+                    correlation,
+                    operationOwner,
+                    operationId,
+                    null,
+                    requestAdmission);
         } finally {
             Message.closeAll(frames);
         }
@@ -2041,6 +2060,18 @@ final class ZLinkJavaRawMeshNode
             Duration timeout,
             ZLinkServiceOperationRegistry operationOwner,
             UUID operationId) {
+        return requestChannel(
+                channelName, metadata, parts, timeout, operationOwner, operationId, null);
+    }
+
+    CompletionStage<ZLinkBackendReceived> requestChannel(
+            String channelName,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operationOwner,
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
         String selectedChannel = requireChannel(channelName);
         RouterSocket router = requireStarted();
         long correlation = allocateCorrelation();
@@ -2079,7 +2110,8 @@ final class ZLinkJavaRawMeshNode
                     correlation,
                     operationOwner,
                     operationId,
-                    target.orElseThrow().liveness());
+                    target.orElseThrow().liveness(),
+                    requestAdmission);
         } finally {
             Message.closeAll(frames);
         }
@@ -2184,8 +2216,29 @@ final class ZLinkJavaRawMeshNode
                 metadata,
                 parts,
                 timeout,
+                null);
+    }
+
+    CompletionStage<ZLinkBackendReceived> requestSpot(
+            String sourceSpotId,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            long targetSpotGeneration,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        return requestSpot(
+                sourceSpotId,
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                metadata,
+                parts,
+                timeout,
                 operations,
-                ZLinkServiceOperationIds.next());
+                ZLinkServiceOperationIds.next(),
+                requestAdmission);
     }
 
     CompletionStage<ZLinkBackendReceived> requestSpot(
@@ -2198,6 +2251,30 @@ final class ZLinkJavaRawMeshNode
             Duration timeout,
             ZLinkServiceOperationRegistry operationOwner,
             UUID operationId) {
+        return requestSpot(
+                sourceSpotId,
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                metadata,
+                parts,
+                timeout,
+                operationOwner,
+                operationId,
+                null);
+    }
+
+    CompletionStage<ZLinkBackendReceived> requestSpot(
+            String sourceSpotId,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            long targetSpotGeneration,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operationOwner,
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
         try (Message applicationFrame = wire.encodeFrameworkMultipartMessage(parts)) {
             Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                     topology == null ? Optional.empty() : topology.peer(targetNodeRid);
@@ -2264,7 +2341,8 @@ final class ZLinkJavaRawMeshNode
                                                                 RequestResult.OK,
                                                                 replyFrames),
                                                 ZLinkBackendReceived::close,
-                                                peer.orElseThrow().liveness()),
+                                                peer.orElseThrow().liveness(),
+                                                requestAdmission),
                                         failure ->
                                                 completeSpotRequest(
                                                         targetNodeRid,
@@ -2830,12 +2908,23 @@ final class ZLinkJavaRawMeshNode
             byte[] metadata,
             List<Message> parts,
             Duration timeout) {
+        return requestInstanceSpot(route, stableType, sourceSpotId, metadata, parts, timeout, null);
+    }
+
+    public CompletionStage<List<Message>> requestInstanceSpot(
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
+            String stableType,
+            String sourceSpotId,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         Objects.requireNonNull(route, "route");
         Objects.requireNonNull(parts, "parts");
         Objects.requireNonNull(timeout, "timeout");
         long deadlineNanos = addDeadlineNanos(timeout);
         return dispatchInstanceSpotRequest(
-                route, stableType, sourceSpotId, metadata, parts, deadlineNanos);
+                route, stableType, sourceSpotId, metadata, parts, deadlineNanos, requestAdmission);
     }
 
     private CompletionStage<List<Message>> dispatchInstanceSpotRequest(
@@ -2845,9 +2934,28 @@ final class ZLinkJavaRawMeshNode
             byte[] metadata,
             List<Message> parts,
             long deadlineNanos) {
+        return dispatchInstanceSpotRequest(
+                route, stableType, sourceSpotId, metadata, parts, deadlineNanos, null);
+    }
+
+    private CompletionStage<List<Message>> dispatchInstanceSpotRequest(
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
+            String stableType,
+            String sourceSpotId,
+            byte[] metadata,
+            List<Message> parts,
+            long deadlineNanos,
+            CompletableFuture<Void> requestAdmission) {
         if (route.targetNodeRid().equals(routingId)) {
             return dispatchLocalInstanceSpot(
-                    route, stableType, sourceSpotId, metadata, parts, true, deadlineNanos);
+                    route,
+                    stableType,
+                    sourceSpotId,
+                    metadata,
+                    parts,
+                    true,
+                    deadlineNanos,
+                    requestAdmission);
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());
@@ -2902,7 +3010,10 @@ final class ZLinkJavaRawMeshNode
             submitted =
                     remainingNanos > 0
                             ? requestApplication(
-                                    route.targetNodeRid(), frames, Duration.ofNanos(remainingNanos))
+                                    route.targetNodeRid(),
+                                    frames,
+                                    Duration.ofNanos(remainingNanos),
+                                    requestAdmission)
                             : CompletableFuture.failedFuture(
                                     new ZlinkRequestException(RequestResult.TIMED_OUT));
         } catch (RuntimeException | Error failure) {
@@ -3005,6 +3116,19 @@ final class ZLinkJavaRawMeshNode
             List<Message> parts,
             boolean request,
             long deadlineNanos) {
+        return dispatchLocalInstanceSpot(
+                route, stableType, sourceSpotId, metadata, parts, request, deadlineNanos, null);
+    }
+
+    private CompletionStage<List<Message>> dispatchLocalInstanceSpot(
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
+            String stableType,
+            String sourceSpotId,
+            byte[] metadata,
+            List<Message> parts,
+            boolean request,
+            long deadlineNanos,
+            CompletableFuture<Void> requestAdmission) {
         if (closed.get()
                 || localDescriptor == null
                 || route.targetNodeGeneration() != localDescriptor.lifecycleGeneration()) {
@@ -3108,6 +3232,7 @@ final class ZLinkJavaRawMeshNode
             if (operation != null) operations.completeExceptionally(operation.id(), failure);
             return CompletableFuture.failedFuture(failure);
         }
+        if (requestAdmission != null) requestAdmission.complete(null);
         return request ? operation.completion() : CompletableFuture.completedFuture(List.of());
     }
 
@@ -3125,6 +3250,14 @@ final class ZLinkJavaRawMeshNode
 
     CompletionStage<List<Message>> requestActor(
             ZLinkBackendActorRef actor, List<Message> parts, Duration timeout) {
+        return requestActor(actor, parts, timeout, null);
+    }
+
+    CompletionStage<List<Message>> requestActor(
+            ZLinkBackendActorRef actor,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peer(actor.nodeRid());
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
@@ -3159,7 +3292,7 @@ final class ZLinkJavaRawMeshNode
                         wire.encodeFrameworkMultipartFrame(parts));
         ZLinkServiceOperationRegistry.Operation<ZLinkBackendReceived> operation =
                 operations.register(operationId, timeout);
-        port.request(requireStarted(), actor.nodeRid(), frames, timeout)
+        port.request(requireStarted(), actor.nodeRid(), frames, timeout, requestAdmission)
                 .whenComplete(
                         (replyFrames, failure) ->
                                 completeActorRequest(
@@ -4386,6 +4519,28 @@ final class ZLinkJavaRawMeshNode
             ZLinkServiceOperationRegistry operationOwner,
             UUID operationId,
             ZLinkServiceLivenessRegistry.PeerState admission) {
+        return request(
+                router,
+                target,
+                frames,
+                timeout,
+                correlation,
+                operationOwner,
+                operationId,
+                admission,
+                null);
+    }
+
+    private CompletionStage<ZLinkBackendReceived> request(
+            RouterSocket router,
+            RoutingId target,
+            List<Message> frames,
+            Duration timeout,
+            long correlation,
+            ZLinkServiceOperationRegistry operationOwner,
+            UUID operationId,
+            ZLinkServiceLivenessRegistry.PeerState admission,
+            CompletableFuture<Void> requestAdmission) {
         return operationOwner.submit(
                 operationId,
                 timeout,
@@ -4403,7 +4558,8 @@ final class ZLinkJavaRawMeshNode
                                                         RequestResult.OK,
                                                         replyFrames),
                                         ZLinkBackendReceived::close,
-                                        admission),
+                                        admission,
+                                        requestAdmission),
                                 failure ->
                                         decodeRequestReply(
                                                 target,
@@ -7401,8 +7557,16 @@ final class ZLinkJavaRawMeshNode
 
     private CompletionStage<List<byte[]>> requestApplication(
             RoutingId target, List<byte[]> frames, Duration timeout) {
+        return requestApplication(target, frames, timeout, null);
+    }
+
+    private CompletionStage<List<byte[]>> requestApplication(
+            RoutingId target,
+            List<byte[]> frames,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         CompletionStage<List<byte[]>> submission =
-                port.request(requireStarted(), target, frames, timeout);
+                port.request(requireStarted(), target, frames, timeout, requestAdmission);
         return submission;
     }
 

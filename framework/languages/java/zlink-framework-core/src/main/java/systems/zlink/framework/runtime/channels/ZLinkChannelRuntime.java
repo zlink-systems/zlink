@@ -1410,6 +1410,24 @@ public final class ZLinkChannelRuntime
             long targetSpotGeneration,
             List<Message> spotParts,
             Duration timeout) {
+        return requestToSpotViaRouterChannel(
+                routerChannelId,
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                spotParts,
+                timeout,
+                null);
+    }
+
+    public CompletionStage<List<Message>> requestToSpotViaRouterChannel(
+            String routerChannelId,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            long targetSpotGeneration,
+            List<Message> spotParts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         return callRuntime.requestToSpot(
                 routerChannelId,
                 targetNodeRid,
@@ -1418,7 +1436,8 @@ public final class ZLinkChannelRuntime
                 0L,
                 0L,
                 spotParts,
-                timeout);
+                timeout,
+                requestAdmission);
     }
 
     private CompletionStage<List<Message>> requestToSpotViaRouterChannel(
@@ -1431,7 +1450,8 @@ public final class ZLinkChannelRuntime
             List<Message> spotParts,
             Duration timeout,
             ZLinkServiceOperationRegistry operations,
-            UUID operationId) {
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
         Objects.requireNonNull(timeout, "timeout");
         return sockets.submitToSpot(
                 routerChannelId,
@@ -1452,7 +1472,8 @@ public final class ZLinkChannelRuntime
                                         targetSpotId,
                                         copyMessages(spotParts),
                                         effectiveTimeout,
-                                        result);
+                                        result,
+                                        requestAdmission);
                                 return result;
                             },
                             Message::closeAll);
@@ -1469,7 +1490,8 @@ public final class ZLinkChannelRuntime
                             spotParts,
                             effectiveTimeout,
                             operations,
-                            operationId);
+                            operationId,
+                            requestAdmission);
                 });
     }
 

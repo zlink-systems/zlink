@@ -17,6 +17,7 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 
 import java.time.Duration;
 import java.util.List;
@@ -128,6 +129,140 @@ final class ZLinkJavaRequestCapacityContractTest {
             request.completeReply(List.of(Message.from(new byte[] {2})));
             try (var received = completion.get(1, TimeUnit.SECONDS)) {
                 assertEquals(1, received.parts().size());
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void publicAdmissionTracksBindingCapacityBeforeReply(boolean backpressured) throws Exception {
+        var request =
+                new PendingRequest(backpressured ? SubmitResult.BACKPRESSURED : SubmitResult.OK);
+        var admission = new CompletableFuture<Void>();
+        try (var message = Message.from(new byte[] {1})) {
+            var result =
+                    ZLinkRequestStages.observe(
+                            ZLinkJavaSocketSupport.submitRequest(
+                                    request,
+                                    List.of(message),
+                                    Duration.ofSeconds(1),
+                                    null,
+                                    admission),
+                            admission);
+            assertEquals(!backpressured, result.admitted().toCompletableFuture().isDone());
+            assertFalse(result.toCompletableFuture().isDone());
+            request.admitted.complete(null);
+            result.admitted().toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertFalse(result.toCompletableFuture().isDone());
+            request.completeReply(List.of(Message.from(new byte[] {2})));
+            try (var reply = result.toCompletableFuture().get(1, TimeUnit.SECONDS)) {
+                assertEquals(1, reply.parts().size());
+            }
+        }
+    }
+
+    @Test
+    void publicTimeoutBeforeBindingAdmissionFailsBothStagesWithTheSameCause() throws Exception {
+        var request = new PendingRequest(SubmitResult.BACKPRESSURED);
+        var admission = new CompletableFuture<Void>();
+        try (var message = Message.from(new byte[] {1})) {
+            var result =
+                    ZLinkRequestStages.observe(
+                            ZLinkJavaSocketSupport.submitRequest(
+                                    request,
+                                    List.of(message),
+                                    Duration.ofMillis(100),
+                                    null,
+                                    admission),
+                            admission);
+            var replyFailure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> result.toCompletableFuture().get(1, TimeUnit.SECONDS));
+            var admissionFailure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> result.admitted().toCompletableFuture().get(1, TimeUnit.SECONDS));
+            assertSame(replyFailure.getCause(), admissionFailure.getCause());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    assertInstanceOf(ZLinkFrameworkException.class, replyFailure.getCause())
+                            .kind());
+            request.admitted.complete(null);
+            assertTrue(result.admitted().toCompletableFuture().isCompletedExceptionally());
+            request.completeReply(List.of(Message.from(new byte[] {2})));
+        }
+    }
+
+    @Test
+    void publicCancellationBeforeBindingAdmissionFailsBothStagesWithTheSameCause() {
+        var request = new PendingRequest(SubmitResult.BACKPRESSURED);
+        var admission = new CompletableFuture<Void>();
+        try (var message = Message.from(new byte[] {1})) {
+            var result =
+                    ZLinkRequestStages.observe(
+                            ZLinkJavaSocketSupport.submitRequest(
+                                    request,
+                                    List.of(message),
+                                    Duration.ofSeconds(1),
+                                    null,
+                                    admission),
+                            admission);
+            assertTrue(result.toCompletableFuture().cancel(false));
+            var replyFailure =
+                    result.handle((ignored, failure) -> failure).toCompletableFuture().join();
+            var admissionFailure =
+                    result.admitted()
+                            .handle((ignored, failure) -> failure)
+                            .toCompletableFuture()
+                            .join();
+            assertInstanceOf(java.util.concurrent.CancellationException.class, replyFailure);
+            assertSame(replyFailure, admissionFailure);
+            request.admitted.complete(null);
+            assertTrue(result.admitted().toCompletableFuture().isCancelled());
+        }
+    }
+
+    @Test
+    void publicBindingAdmissionsAreIsolatedBetweenCalls() throws Exception {
+        var firstRequest = new PendingRequest(SubmitResult.OK);
+        var secondRequest = new PendingRequest(SubmitResult.BACKPRESSURED);
+        var firstAdmission = new CompletableFuture<Void>();
+        var secondAdmission = new CompletableFuture<Void>();
+        try (var firstMessage = Message.from(new byte[] {1});
+                var secondMessage = Message.from(new byte[] {2})) {
+            var first =
+                    ZLinkRequestStages.observe(
+                            ZLinkJavaSocketSupport.submitRequest(
+                                    firstRequest,
+                                    List.of(firstMessage),
+                                    Duration.ofSeconds(1),
+                                    null,
+                                    firstAdmission),
+                            firstAdmission);
+            var second =
+                    ZLinkRequestStages.observe(
+                            ZLinkJavaSocketSupport.submitRequest(
+                                    secondRequest,
+                                    List.of(secondMessage),
+                                    Duration.ofSeconds(1),
+                                    null,
+                                    secondAdmission),
+                            secondAdmission);
+            first.admitted()
+                    .toCompletableFuture()
+                    .obtrudeException(new IllegalStateException("caller mutation"));
+            assertFalse(second.admitted().toCompletableFuture().isDone());
+            assertFalse(second.toCompletableFuture().isDone());
+            secondRequest.admitted.complete(null);
+            second.admitted().toCompletableFuture().get(1, TimeUnit.SECONDS);
+            secondRequest.completeReply(List.of(Message.from(new byte[] {3})));
+            try (var reply = second.toCompletableFuture().get(1, TimeUnit.SECONDS)) {
+                assertEquals(1, reply.parts().size());
+            }
+            firstRequest.completeReply(List.of(Message.from(new byte[] {4})));
+            try (var reply = first.toCompletableFuture().get(1, TimeUnit.SECONDS)) {
+                assertEquals(1, reply.parts().size());
             }
         }
     }

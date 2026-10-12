@@ -746,7 +746,8 @@ final class ZLinkNodeSubmitTurnTest {
                                     onSpotBinding.run();
                                     return CompletableFuture.completedFuture(null);
                                 }
-                                if (method.getName().equals("requestToSpot") && args.length == 8) {
+                                if (method.getName().equals("requestToSpot")
+                                        && (args.length == 8 || args.length == 9)) {
                                     timeout.set((Duration) args[5]);
                                     ZLinkServiceOperationRegistry operations =
                                             (ZLinkServiceOperationRegistry) args[6];
@@ -788,7 +789,7 @@ final class ZLinkNodeSubmitTurnTest {
                                                 }
                                                 break;
                                             case "requestToNode":
-                                                if (args.length == 6) {
+                                                if ((args.length == 6 || args.length == 7)) {
                                                     timeout.set((Duration) args[3]);
                                                     metadata.set(
                                                             ZLinkApplicationMetadata.decode(

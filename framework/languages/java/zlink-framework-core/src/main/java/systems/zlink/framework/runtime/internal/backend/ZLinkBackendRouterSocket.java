@@ -6,6 +6,7 @@ import systems.zlink.contracts.sockets.ReceiveFlowState;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public interface ZLinkBackendRouterSocket
@@ -47,5 +48,14 @@ public interface ZLinkBackendRouterSocket
     default void setReceiveFlowState(ReceiveFlowState state) {
         throw new UnsupportedOperationException(
                 "paired router receive-flow control is not available");
+    }
+
+    default CompletionStage<ZLinkBackendReceived> request(
+            RoutingId routingId,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
+        return request(routingId, parts, timeout);
     }
 }

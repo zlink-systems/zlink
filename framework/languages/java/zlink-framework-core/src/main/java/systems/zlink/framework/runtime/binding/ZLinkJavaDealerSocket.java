@@ -10,6 +10,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJavaSocketBacked {
@@ -81,10 +82,19 @@ final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJava
     }
 
     @Override
-    public synchronized CompletionStage<ZLinkBackendReceived> request(
+    public CompletionStage<ZLinkBackendReceived> request(
             List<Message> parts, Duration timeout, Runnable admission) {
+        return request(parts, timeout, admission, null);
+    }
+
+    @Override
+    public synchronized CompletionStage<ZLinkBackendReceived> request(
+            List<Message> parts,
+            Duration timeout,
+            Runnable receiveAdmission,
+            CompletableFuture<Void> requestAdmission) {
         return ZLinkJavaSocketSupport.submitRequest(
-                socket.request(), parts, timeout, receiveAdmission);
+                socket.request(), parts, timeout, receiveAdmission, requestAdmission);
     }
 
     @Override

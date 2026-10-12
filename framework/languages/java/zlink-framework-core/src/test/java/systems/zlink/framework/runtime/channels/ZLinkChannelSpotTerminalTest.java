@@ -129,7 +129,8 @@ final class ZLinkChannelSpotTerminalTest {
                                 parts,
                                 timeout,
                                 registry,
-                                operationId) -> {
+                                operationId,
+                                requestAdmission) -> {
                             probe.submissions++;
                             probe.operationIds.add(operationId);
                             return registry.submit(

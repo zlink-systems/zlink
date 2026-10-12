@@ -5,6 +5,7 @@ import systems.zlink.contracts.messaging.Message;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public interface ZLinkBackendSpotRouteBridge extends ZLinkBackendObject {
@@ -26,4 +27,15 @@ public interface ZLinkBackendSpotRouteBridge extends ZLinkBackendObject {
     int drain();
 
     void close();
+
+    default CompletionStage<List<Message>> request(
+            String channelName,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
+        return request(channelName, targetNodeRid, targetSpotId, parts, timeout);
+    }
 }

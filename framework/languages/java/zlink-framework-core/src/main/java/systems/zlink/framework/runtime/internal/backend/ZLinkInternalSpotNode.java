@@ -507,4 +507,38 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                 Consumer<List<Message>> reply,
                 Consumer<Throwable> failure);
     }
+
+    default CompletionStage<ZLinkBackendReceived> requestToNode(
+            RoutingId targetNodeRid,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
+        return requestToNode(targetNodeRid, metadata, parts, timeout, operations, operationId);
+    }
+
+    default CompletionStage<ZLinkBackendReceived> requestToChannel(
+            String channelName,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
+        return requestToChannel(channelName, metadata, parts, timeout, operations, operationId);
+    }
+
+    default CompletionStage<List<Message>> requestToActor(
+            ZLinkBackendActorRef actor,
+            List<Message> parts,
+            SendFlags flags,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
+        return requestToActor(actor, parts, flags, timeout);
+    }
 }

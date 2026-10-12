@@ -4,6 +4,7 @@ import systems.zlink.contracts.messaging.Message;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public interface ZLinkBackendDealerSocket
@@ -28,4 +29,13 @@ public interface ZLinkBackendDealerSocket
     }
 
     ZLinkBackendReceived recv(ZLinkBackendRecvMode mode);
+
+    default CompletionStage<ZLinkBackendReceived> request(
+            List<Message> parts,
+            Duration timeout,
+            Runnable receiveAdmission,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
+        return request(parts, timeout, receiveAdmission);
+    }
 }

@@ -290,19 +290,12 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         }
     }
 
-    CompletionStage<Void> admitActor(List<ZLinkBackendActorReceived> messages) {
-        var dispatched =
-                dispatchActorMessages(
-                        messages,
-                        operation -> {
-                            var hostRejection = host.spotHostAdmissionFailure(context.spotId());
-                            return hostRejection == null
-                                    ? context.admitIngress(operation)
-                                    : CompletableFuture.failedFuture(hostRejection);
-                        });
-        dispatched.whenComplete(
-                (done, failure) -> messages.forEach(ZLinkBackendActorReceived::close));
-        return dispatched;
+    @Override
+    CompletionStage<Void> admitActorIngress(Supplier<CompletionStage<Void>> operation) {
+        var hostRejection = host.spotHostAdmissionFailure(context.spotId());
+        return hostRejection == null
+                ? context.admitIngress(operation)
+                : CompletableFuture.failedFuture(hostRejection);
     }
 
     void drainPolledDispatchQueues() {

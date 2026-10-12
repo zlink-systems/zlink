@@ -1043,6 +1043,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     info.actorMessages().forEach(ZLinkBackendActorReceived::close);
                                     return CompletableFuture.failedFuture(dispatchFailure);
                                 }
+
+                                @Override
+                                public CompletionStage<Void> handleActor(
+                                        List<ZLinkBackendActorReceived> messages,
+                                        CompletableFuture<Void> admission) {
+                                    messages.forEach(ZLinkBackendActorReceived::close);
+                                    return CompletableFuture.failedFuture(dispatchFailure);
+                                }
                             });
 
             var route =

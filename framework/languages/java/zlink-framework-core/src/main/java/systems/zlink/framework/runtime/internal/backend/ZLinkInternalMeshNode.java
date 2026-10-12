@@ -863,4 +863,16 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             Objects.requireNonNull(storeVersion, "storeVersion");
         }
     }
+
+    default CompletionStage<List<Message>> requestInstanceSpot(
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
+            String stableType,
+            String sourceSpotId,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
+        return requestInstanceSpot(route, stableType, sourceSpotId, metadata, parts, timeout);
+    }
 }

@@ -5,6 +5,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.channels.ZLinkPublishCall;
 import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
@@ -12,6 +13,7 @@ import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
@@ -180,6 +182,32 @@ final class ZLinkSpotDirectOutbound {
             ZLinkApplicationMetadata metadata,
             Duration timeout,
             Class<TReply> replyType) {
+        return submitRequest(
+                spot,
+                targetNodeRid,
+                spotId,
+                spotGeneration,
+                payload,
+                packetName,
+                contentType,
+                metadata,
+                timeout,
+                replyType,
+                null);
+    }
+
+    <TReply> CompletionStage<TReply> submitRequest(
+            ZLinkBackendSpot spot,
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            Message payload,
+            Optional<String> packetName,
+            String contentType,
+            ZLinkApplicationMetadata metadata,
+            Duration timeout,
+            Class<TReply> replyType,
+            CompletableFuture<Void> requestAdmission) {
         CompletableFuture<TReply> result = new CompletableFuture<>();
         List<Message> requestParts =
                 messages.encodeRequest(
@@ -210,7 +238,8 @@ final class ZLinkSpotDirectOutbound {
                             spotGeneration,
                             metadata.encode(),
                             requestParts,
-                            timeout)
+                            timeout,
+                            requestAdmission)
                     .whenComplete(
                             (reply, failure) -> {
                                 if (failure != null) {
@@ -470,6 +499,8 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
 }
 
 final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
+    private CompletableFuture<Void> requestAdmission;
+
     private final AtomicBoolean submitGate;
     private final ZLinkSpotDirectOutbound outbound;
     private final ZLinkBackendSpot spot;
@@ -641,11 +672,16 @@ final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
     }
 
     @Override
-    public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+    public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
-        if (duplicate != null) {
-            return duplicate;
-        }
+        if (duplicate != null)
+            return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
+        requestAdmission = new CompletableFuture<>();
+        return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
+    }
+
+    private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
+
         systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                 .rejectSameSpotWait(spotId);
         return ZLinkSerialExecutionQueue.manageCurrent(
@@ -659,7 +695,8 @@ final class ZLinkSpotDirectRequestCall implements ZLinkRequestCall {
                         contentType,
                         metadata,
                         timeout,
-                        replyType));
+                        replyType,
+                        requestAdmission));
     }
 
     @Override

@@ -548,6 +548,17 @@ final class ZLinkActorClientRuntimeTest {
                                                 Duration timeout) {
                                             return CompletableFuture.failedFuture(failure);
                                         }
+
+                                        public CompletionStage<List<Message>> requestToActor(
+                                                ZLinkBackendActorRef actor,
+                                                List<Message> parts,
+                                                SendFlags flags,
+                                                Duration timeout,
+                                                CompletableFuture<Void> requestAdmission) {
+                                            return ZLinkTestAdmissionFactory.acceptedRequest(
+                                                    requestToActor(actor, parts, flags, timeout),
+                                                    requestAdmission);
+                                        }
                                     },
                             new ZLinkStoreLocationResolvers(
                                     ZLinkRegisteredLocationStores.fromUnified(
@@ -979,6 +990,16 @@ final class ZLinkActorClientRuntimeTest {
             return CompletableFuture.completedFuture(reply.stream().map(Message::from).toList());
         }
 
+        public CompletionStage<List<Message>> requestToActor(
+                ZLinkBackendActorRef actor,
+                List<Message> parts,
+                SendFlags flags,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    requestToActor(actor, parts, flags, timeout), requestAdmission);
+        }
+
         @Override
         public boolean forwardActorBoundSession(
                 ZLinkBackendActorRef actor,
@@ -1039,6 +1060,16 @@ final class ZLinkActorClientRuntimeTest {
                 Duration timeout) {
             requestAttempts++;
             return CompletableFuture.failedFuture(new ZlinkRequestException(result));
+        }
+
+        public CompletionStage<List<Message>> requestToActor(
+                ZLinkBackendActorRef actor,
+                List<Message> parts,
+                SendFlags flags,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    requestToActor(actor, parts, flags, timeout), requestAdmission);
         }
     }
 }

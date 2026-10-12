@@ -36,4 +36,9 @@ public interface ZLinkInternalAsyncSpotDispatchHandler extends ZLinkBackendSpotD
     default void handle(ZLinkBackendSpotDispatchInfo info) {
         handleAsync(info);
     }
+
+    default CompletionStage<Void> handleActor(
+            List<ZLinkBackendActorReceived> messages, CompletableFuture<Void> requestAdmission) {
+        return null;
+    }
 }

@@ -11,6 +11,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -393,6 +394,15 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             return CompletableFuture.failedFuture(new UnsupportedOperationException());
         }
 
+        public CompletionStage<ZLinkBackendReceived> request(
+                RoutingId routingId,
+                List<Message> parts,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    request(routingId, parts, timeout), requestAdmission);
+        }
+
         @Override
         public void reply(RoutingId routingId, long requestSeq, List<Message> parts) {}
 
@@ -484,6 +494,15 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
         public CompletionStage<ZLinkBackendReceived> request(
                 RoutingId routingId, List<Message> parts, Duration timeout) {
             return CompletableFuture.failedFuture(new UnsupportedOperationException());
+        }
+
+        public CompletionStage<ZLinkBackendReceived> request(
+                RoutingId routingId,
+                List<Message> parts,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    request(routingId, parts, timeout), requestAdmission);
         }
 
         @Override

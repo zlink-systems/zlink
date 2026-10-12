@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 
@@ -61,6 +62,18 @@ final class ZLinkSpotRouteBridgeDrainerTest {
                 List<Message> parts,
                 Duration timeout) {
             return CompletableFuture.completedFuture(List.of());
+        }
+
+        public CompletionStage<List<Message>> request(
+                String channelName,
+                RoutingId targetNodeRid,
+                String targetSpotId,
+                List<Message> parts,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    request(channelName, targetNodeRid, targetSpotId, parts, timeout),
+                    requestAdmission);
         }
 
         @Override

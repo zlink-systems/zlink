@@ -322,6 +322,15 @@ final class ZLinkChannelSubmissionContractTest {
                     }
                     return new CompletableFuture<>();
                 }
+
+                public CompletionStage<ZLinkBackendReceived> request(
+                        List<Message> parts,
+                        Duration timeout,
+                        Runnable receiveAdmission,
+                        CompletableFuture<Void> requestAdmission) {
+                    return ZLinkTestAdmissionFactory.acceptedRequest(
+                            request(parts, timeout, receiveAdmission), requestAdmission);
+                }
             };
         }
     }
@@ -375,6 +384,15 @@ final class ZLinkChannelSubmissionContractTest {
                                 List.of(response)));
             }
             return new CompletableFuture<>();
+        }
+
+        public CompletionStage<ZLinkBackendReceived> request(
+                List<Message> parts,
+                Duration timeout,
+                Runnable receiveAdmission,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    request(parts, timeout, receiveAdmission), requestAdmission);
         }
 
         @Override

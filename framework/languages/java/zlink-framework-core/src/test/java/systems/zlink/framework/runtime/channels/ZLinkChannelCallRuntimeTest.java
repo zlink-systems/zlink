@@ -116,7 +116,8 @@ final class ZLinkChannelCallRuntimeTest {
                                     parts,
                                     timeout,
                                     owner,
-                                    identity) -> {
+                                    identity,
+                                    requestAdmission) -> {
                                 fail("closed source must not enter Spot selection");
                                 return null;
                             });

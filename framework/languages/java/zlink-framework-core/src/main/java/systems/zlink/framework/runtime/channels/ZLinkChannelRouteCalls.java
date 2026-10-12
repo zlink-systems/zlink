@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.channels;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -12,6 +13,7 @@ import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
@@ -231,6 +233,8 @@ final class RouteSendCall implements ZLinkSendCall {
 }
 
 final class RouteRequestCall implements ZLinkRequestCall {
+    private CompletableFuture<Void> requestAdmission;
+
     private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
@@ -358,11 +362,16 @@ final class RouteRequestCall implements ZLinkRequestCall {
     }
 
     @Override
-    public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+    public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
-        if (duplicate != null) {
-            return duplicate;
-        }
+        if (duplicate != null)
+            return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
+        requestAdmission = new CompletableFuture<>();
+        return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
+    }
+
+    private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
+
         ZLinkRequestMetrics.Series metric =
                 ZLinkRequestMetrics.node(sockets.requestMetricMeshName(channelName));
         long started =
@@ -403,7 +412,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
         List<Message> requestParts = requestParts(operationId, Map.of());
         try {
             CompletionStage<ZLinkBackendReceived> operation =
-                    runtime.requestRoute(operationId, router, target, requestParts, timeout);
+                    runtime.requestRoute(
+                            operationId, router, target, requestParts, timeout, requestAdmission);
             ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
@@ -469,7 +479,13 @@ final class RouteRequestCall implements ZLinkRequestCall {
             }
             CompletionStage<ZLinkBackendReceived> operation =
                     runtime.requestNode(
-                            operationId, node, target, metadata.encode(), requestParts, timeout);
+                            operationId,
+                            node,
+                            target,
+                            metadata.encode(),
+                            requestParts,
+                            timeout,
+                            requestAdmission);
             ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
@@ -753,6 +769,8 @@ final class ChannelSendCall implements ZLinkSendCall {
 }
 
 final class ChannelRequestCall implements ZLinkRequestCall {
+    private CompletableFuture<Void> requestAdmission;
+
     private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
@@ -891,11 +909,16 @@ final class ChannelRequestCall implements ZLinkRequestCall {
     }
 
     @Override
-    public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+    public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
-        if (duplicate != null) {
-            return duplicate;
-        }
+        if (duplicate != null)
+            return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
+        requestAdmission = new CompletableFuture<>();
+        return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
+    }
+
+    private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
+
         ZLinkRequestMetrics.Series metric =
                 ZLinkRequestMetrics.channel(sockets.requestMetricMeshName(channelName));
         long started =
@@ -966,7 +989,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                                 null));
             }
             CompletionStage<ZLinkBackendReceived> operation =
-                    runtime.requestClient(target, requestParts, remaining);
+                    runtime.requestClient(target, requestParts, remaining, requestAdmission);
             ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
@@ -1016,7 +1039,13 @@ final class ChannelRequestCall implements ZLinkRequestCall {
         try {
             CompletionStage<ZLinkBackendReceived> operation =
                     runtime.requestChannel(
-                            operationId, node, channelName, metadata.encode(), parts, timeout);
+                            operationId,
+                            node,
+                            channelName,
+                            metadata.encode(),
+                            parts,
+                            timeout,
+                            requestAdmission);
             ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {

@@ -8,6 +8,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationReg
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public interface ZLinkBackendSpot extends ZLinkBackendObject {
@@ -133,4 +134,38 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
 
     void replyActorJoin(
             ZLinkBackendActorJoinRequest request, int joinResultCode, List<Message> parts);
+
+    default CompletionStage<ZLinkBackendReceived> requestToSpot(
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
+        return requestToSpot(
+                targetNodeRid,
+                spotId,
+                spotGeneration,
+                metadata,
+                parts,
+                timeout,
+                operations,
+                operationId);
+    }
+
+    default CompletionStage<ZLinkBackendReceived> requestToSpot(
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
+        return requestToSpot(targetNodeRid, spotId, spotGeneration, metadata, parts, timeout);
+    }
 }

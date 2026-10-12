@@ -2501,7 +2501,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     Map<String, String> metadata,
                     Duration timeout,
                     systems.zlink.framework.runtime.internal.spots.SpotTransportAddress readyRoute,
-                    SpotTransportAddressResolver resolver) {
+                    SpotTransportAddressResolver resolver,
+                    CompletableFuture<Void> requestAdmission) {
                 Duration effective = timeout == null ? defaultRequestTimeout : timeout;
                 long deadline = System.currentTimeMillis() + effective.toMillis();
                 byte[] applicationMetadata =
@@ -2536,7 +2537,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                 activation,
                                                                                 applicationMetadata,
                                                                                 parts,
-                                                                                deadline)));
+                                                                                deadline,
+                                                                                requestAdmission)));
                 //  Failover policy §4.4: after Close released the authority, the next Instance
                 //  intent message cold-activates. spotMoving is the owner fence refusal made
                 //  before admission, so one authority read decides: Missing continues as a cold
@@ -2576,7 +2578,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     InstanceActivation activation,
                     byte[] applicationMetadata,
                     List<Message> parts,
-                    long deadline) {
+                    long deadline,
+                    CompletableFuture<Void> requestAdmission) {
                 long remainingMillis = deadline - System.currentTimeMillis();
                 if (remainingMillis <= 0) {
                     return CompletableFuture.failedFuture(
@@ -2592,7 +2595,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 primaryNode.entrySpot().spotId(),
                                 applicationMetadata,
                                 parts,
-                                Duration.ofMillis(remainingMillis));
+                                Duration.ofMillis(remainingMillis),
+                                requestAdmission);
             }
         };
     }
@@ -5077,6 +5081,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     <T> CompletionStage<T> admitNewApplicationJob(
             SpotDispatchLine destination, Supplier<CompletionStage<T>> operation) {
+        return admitNewApplicationJob(destination, operation, null);
+    }
+
+    <T> CompletionStage<T> admitNewApplicationJob(
+            SpotDispatchLine destination,
+            Supplier<CompletionStage<T>> operation,
+            CompletableFuture<Void> requestAdmission) {
         Objects.requireNonNull(operation, "operation");
         try {
             ensureOwnerAdmissionOpen();
@@ -5091,7 +5102,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     task.run();
                                     return CompletableFuture.completedFuture(null);
                                 }),
-                permit -> publishApplicationJob(permit, operation));
+                permit -> {
+                    var published = publishApplicationJob(permit, operation);
+                    if (requestAdmission != null) requestAdmission.complete(null);
+                    return published;
+                });
     }
 
     private <T> CompletionStage<T> publishApplicationJob(

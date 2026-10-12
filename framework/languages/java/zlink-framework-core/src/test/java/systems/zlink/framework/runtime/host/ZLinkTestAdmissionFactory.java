@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.host;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -34,13 +35,24 @@ public final class ZLinkTestAdmissionFactory {
                 (submission, cleanup) -> {
                     try {
                         return submission.get()
-                                ? java.util.concurrent.CompletableFuture.completedFuture(null)
-                                : java.util.concurrent.CompletableFuture.failedFuture(
+                                ? CompletableFuture.completedFuture(null)
+                                : CompletableFuture.failedFuture(
                                         new IllegalStateException(
                                                 "one-way submission was not admitted"));
                     } finally {
                         cleanup.run();
                     }
                 };
+    }
+
+    /**
+     * These request test adapters accept pending replies synchronously; failed futures refuse
+     * admission.
+     */
+    public static <T> java.util.concurrent.CompletionStage<T> acceptedRequest(
+            java.util.concurrent.CompletionStage<T> reply, CompletableFuture<Void> admission) {
+        if (admission != null && !reply.toCompletableFuture().isCompletedExceptionally())
+            admission.complete(null);
+        return reply;
     }
 }

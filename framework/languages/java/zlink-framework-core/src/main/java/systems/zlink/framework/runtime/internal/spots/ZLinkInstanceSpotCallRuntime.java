@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 /** Internal bridge from the public fluent call to Instance Spot activation. */
@@ -27,6 +28,31 @@ public interface ZLinkInstanceSpotCallRuntime {
             long activationDeadline,
             SpotTransportAddress readyRoute);
 
+    default CompletionStage<List<Message>> request(
+            String spotId,
+            String stableType,
+            String meshName,
+            Message payload,
+            Optional<String> packetName,
+            String contentType,
+            Map<String, String> metadata,
+            Duration timeout,
+            SpotTransportAddress readyRoute,
+            SpotTransportAddressResolver resolver) {
+        return request(
+                spotId,
+                stableType,
+                meshName,
+                payload,
+                packetName,
+                contentType,
+                metadata,
+                timeout,
+                readyRoute,
+                resolver,
+                null);
+    }
+
     CompletionStage<List<Message>> request(
             String spotId,
             String stableType,
@@ -37,5 +63,6 @@ public interface ZLinkInstanceSpotCallRuntime {
             Map<String, String> metadata,
             Duration timeout,
             SpotTransportAddress readyRoute,
-            SpotTransportAddressResolver resolver);
+            SpotTransportAddressResolver resolver,
+            CompletableFuture<Void> requestAdmission);
 }
