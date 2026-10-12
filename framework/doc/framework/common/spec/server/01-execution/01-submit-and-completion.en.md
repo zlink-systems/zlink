@@ -63,16 +63,18 @@ completion uses `Submit`/`submit`. Only the terminal that actually releases the 
 gate uses the name `Yield`/`yield`.
 
 <a id="request-admitted-stage"></a>
-**A messaging request also returns its admission stage.** The general async terminal of a messaging
-request returns a value that awaits the reply and exposes an `admitted` stage on the same value.
-`admitted` ends at the call's [source-local admission](../00-foundation/02-glossary.en.md#source-local-admission)
+**A request that passes Core request admission also returns its admission stage.** Among server runtime
+requests, those that pass Core request admission — operations submitted as a Core REQUEST, such as node,
+Channel, Spot and Actor requests — provide a terminal that returns an async result awaiting the reply,
+and that result has an `admitted` stage as a member. Stream Connector and HTTP requests do not pass Core
+request admission, so they have no such stage. `admitted` ends at the call's [source-local admission](../00-foundation/02-glossary.en.md#source-local-admission)
 with the same meaning as the one-way async terminal — it completes without data on success and
 completes with the failure if the call fails before admission. If `admitted` fails, the reply ends
 with the same cause. Each stage ends exactly once. Send and request therefore give the caller the
 same admission boundary: a caller that wants to delay its next submission waits for the previous
 call's admission. `admitted` does not reveal a `Backpressured` status (§5) — it simply stays
-incomplete while capacity is awaited. The per-language type and name are set by the per-language
-interface in §16.
+incomplete while capacity is awaited. The result type and the names of that terminal and member are
+set by the per-language interface in §16.
 
 **[The binding rule for isolation between submissions](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md#submission-stage-isolation) also applies to asynchronous completion representations returned by the Framework.** When an asynchronous terminator covered by this document returns an admission or application result, directly or by transforming a binding result, completion-state changes, cancellation, consumption, or detachment applied to one call must not propagate to another call's completion state or ability to consume its result through a shared returned representation or shared state behind it. This also applies to shared representations of already-completed results. Progress of other calls due to normal resource reclamation follows the existing admission and lifecycle contracts.
 
@@ -552,19 +554,16 @@ the specific return type and error representation.
 
 | Language | General async completion | Synchronous blocking | Returning the Spot turn | per-language interface owner |
 |---|---|---|---|---|
-| .NET | `Async(...)` returns `ValueTask` or `ValueTask<T>` | `Submit(...)` | `Yield(...)` | [per-language interface index](../languages/dotnet/interfaces/README.en.md) |
-| Java | `submit(...)` returns `CompletionStage<T>` | `submit_sync(...)` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.en.md) |
+| .NET | `Async(...)` | `Submit(...)` | `Yield(...)` | [per-language interface index](../languages/dotnet/interfaces/README.en.md) |
+| Java | `submit(...)` | `submit_sync(...)` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.en.md) |
 | Kotlin | Uses the dedicated call wrapper's suspending `await()` | the Java surface's `submit_sync(...)` | The dedicated wrapper's `yield()` | [Channel messaging](../languages/kotlin/interfaces/channel-messaging.en.md) |
-| Node.js | `submit(...)` returns `Promise<T>` | **not provided (§4.1)** | `yield(...)` | [interface index](../languages/node/interfaces/README.en.md) |
-| C++ | `async(...)` returns `task_t<T>` | `submit(...)` | `yield(...)` | [framework interfaces](../languages/cpp/interfaces/README.en.md) |
+| Node.js | `submit(...)` | **not provided (§4.1)** | `yield(...)` | [interface index](../languages/node/interfaces/README.en.md) |
+| C++ | `async(...)` | `submit(...)` | `yield(...)` | [framework interfaces](../languages/cpp/interfaces/README.en.md) |
 
 The synchronous blocking terminator fails with `InvalidOperation` in a runtime execution context (§4 F2-a).
 
 Each per-language interface fixes the return type, cancellation argument, and callback or coroutine
-representation per terminator. The general async terminal of a messaging request is a value awaited for
-the reply like the language's standard async value in the table above, and it provides the
-[§2](#request-admitted-stage) `admitted` stage as a member of the same value. Its type and member name
-are set by each per-language interface. Even when the language's standard idiom differs, the same
+representation per terminator. Even when the language's standard idiom differs, the same
 operation's completion timing, ordering, and error classification do not change.
 
 Because C++'s `task_t` starts the operation when it's called, `async()` can be used in the
