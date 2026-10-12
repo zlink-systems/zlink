@@ -576,7 +576,7 @@ auto reply = co_await requestCall.async(); // Awaits the async application reply
 ```
 
 No overload differing only by return type is created. The C++ Messaging call wrapper offers both
-the async `task_t<T> async()` and the synchronous blocking `submit()` (the two terminators have
+the async `async()` and the synchronous blocking `submit()` (the two terminators have
 different names, so they are not overloads). `submit()` is application-thread only and fails with
 `InvalidOperation` in a runtime execution context (§4 F2-a). A callback overload can be provided as
 `submit(callback)` since its parameter list differs.
