@@ -7,25 +7,52 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshMailboxReadinessTests
 {
+    private const int ReadinessWarmupCount = 16;
+    private const int ReadinessMeasurementCount = 64;
+    private const int EmptyRegistryEnumerationAllocationLimit = 128;
+
     [Fact]
     public async Task EmptyReadinessDoesNotRebuildMailboxSnapshots()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, "empty-readiness");
         using var batch = new MeshReadyBatch();
-        for (var index = 0; index < 16; index++)
+        // The no-domain call uses the same async state machine without enumerating
+        // mailboxes. Subtract its compiler-generated allocation in Debug builds.
+        var noDomains = MeasureEmptyReadinessAllocation(node, batch, MeshReadyDomains.None);
+        var readiness = MeasureEmptyReadinessAllocation(node, batch, MeshReadyDomains.All);
+        var enumeration = readiness - noDomains;
+        // Empty registry enumeration needs no record, ordering buffer or claim storage.
+        Assert.True(
+            enumeration >= 0
+                && enumeration
+                    <= ReadinessMeasurementCount * EmptyRegistryEnumerationAllocationLimit,
+            $"Empty readiness enumeration allocated {enumeration} bytes "
+                + $"(readiness {readiness}, no domains {noDomains})."
+        );
+        Assert.Equal(0, batch.Count);
+    }
+
+    private static long MeasureEmptyReadinessAllocation(
+        ZLinkManagedMeshNode node,
+        MeshReadyBatch batch,
+        MeshReadyDomains domains
+    )
+    {
+        for (var index = 0; index < ReadinessWarmupCount; index++)
             Assert.False(
-                await node.DrainReadyAsync(MeshReadyDomains.All, batch, RecvFlags.DontWait)
+                node.DrainReadyAsync(domains, batch, RecvFlags.DontWait).GetAwaiter().GetResult()
             );
 
+        var ready = false;
         var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 64; index++)
-            node.DrainReadyAsync(MeshReadyDomains.All, batch, RecvFlags.DontWait)
+        for (var index = 0; index < ReadinessMeasurementCount; index++)
+            ready |= node.DrainReadyAsync(domains, batch, RecvFlags.DontWait)
                 .GetAwaiter()
                 .GetResult();
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        // Empty registry enumeration needs no record, ordering buffer or claim storage.
-        Assert.True(allocated <= 64 * 128, $"Empty readiness allocated {allocated} bytes.");
+        Assert.False(ready);
+        return allocated;
     }
 
     [Fact]
