@@ -43,6 +43,7 @@ struct envelope_header_t
      * Every route/actor/spot relay preserves both values as-is. */
     std::optional<std::string> flow_id;
     std::optional<flow_origin_t> flow_origin;
+    bool can_correlate_reply () const noexcept;
 };
 
 class message_parts_t
@@ -92,7 +93,7 @@ class envelope_codec_t
      * Callers at a flow processing point pass capture_enabled(); callers that
      * never consume flow pass false. */
     /* On rejection, the optional context retains readable base fields;
-     * metadata stays empty. A parse abort may leave the context absent. */
+     * metadata stays empty. Invalid JSON has no rejection context. */
     result_t<envelope_header_t>
     decode_header (const zlink::message_t &message,
                    bool capture_flow = true,

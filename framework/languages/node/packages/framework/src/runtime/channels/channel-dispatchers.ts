@@ -13,7 +13,7 @@ import {
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type { Message } from '../../contracts/Common/Message';
 import { SubmitResult } from '../backend/runtime-values';
-import type { ReceiveRecord } from '../foundation/service-runtime-contracts';
+import { ReceiveKind, type ReceiveRecord } from '../foundation/service-runtime-contracts';
 import { ZLinkConfigurationException, type ZLinkRouteChannelOptions } from '../configuration';
 import type { ZLinkBackendSpotRouteBridge } from '../backend/contracts';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
@@ -134,7 +134,7 @@ export class ZLinkChannelRequestDispatcher {
       await this.pipeline.dispatchMalformed({
         info,
         error,
-        transportRequest: replyToken !== null,
+        transportRequest: replyToken != null,
         writeProtocolError:
           replyToken === null
             ? undefined
@@ -248,7 +248,7 @@ export class ZLinkChannelRequestDispatcher {
       await this.pipeline.dispatchMalformed({
         info,
         error,
-        transportRequest: false,
+        transportRequest: isMeshRequest(record),
         sourceRid: record.sourceNodeRid == null ? undefined : String(record.sourceNodeRid),
         writeProtocolError: async (protocolError) => {
           requireMeshReplyAccepted(
@@ -587,7 +587,7 @@ export class ZLinkRoutePacketDispatcher {
       await this.pipeline.dispatchMalformed({
         info,
         error,
-        transportRequest: replyToken !== null,
+        transportRequest: replyToken != null,
         sourceRid: String(received.routingId),
         writeProtocolError:
           replyToken === null
@@ -697,7 +697,7 @@ export class ZLinkRoutePacketDispatcher {
       await this.pipeline.dispatchMalformed({
         info,
         error,
-        transportRequest: false,
+        transportRequest: isMeshRequest(record),
         sourceRid: record.sourceNodeRid == null ? undefined : String(record.sourceNodeRid),
         writeProtocolError: async (protocolError) => {
           requireMeshReplyAccepted(
@@ -843,4 +843,8 @@ export class ZLinkRoutePacketDispatcher {
       correlationId: envelope.header.correlationId ?? undefined
     };
   }
+}
+
+function isMeshRequest(record: ReceiveRecord): boolean {
+  return record.kind === ReceiveKind.NodeRequest || record.kind === ReceiveKind.ChannelRequest;
 }

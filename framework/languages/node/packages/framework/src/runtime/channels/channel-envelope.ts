@@ -994,9 +994,17 @@ function validateCorrelationForKind(
   }
 }
 
+const MAXIMUM_CORRELATION_ID_BYTES = 64;
+
+export function isValidChannelCorrelationId(value: string): boolean {
+  const byteLength = Buffer.byteLength(value, 'utf8');
+  return (
+    byteLength >= 1 && byteLength <= MAXIMUM_CORRELATION_ID_BYTES && /^[\x00-\x7f]*$/.test(value)
+  );
+}
+
 function validateCorrelationValue(correlationId: string): void {
-  const byteLength = Buffer.byteLength(correlationId, 'utf8');
-  if (byteLength < 1 || byteLength > 64 || !/^[\x00-\x7f]*$/.test(correlationId)) {
+  if (!isValidChannelCorrelationId(correlationId)) {
     throw new ZLinkConfigurationException(
       'Channel envelope correlationId must be a non-empty ASCII value of at most 64 bytes.'
     );

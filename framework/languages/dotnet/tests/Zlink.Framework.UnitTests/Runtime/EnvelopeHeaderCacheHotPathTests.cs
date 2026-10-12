@@ -146,7 +146,9 @@ public sealed class EnvelopeHeaderCacheHotPathTests
         {
             Kind = ZLinkMessageKind.Error,
             FormatMarker = 242,
-            CorrelationId = text,
+            CorrelationId = new string(
+                Enumerable.Range(0, 64).Select(static value => (char)value).ToArray()
+            ),
             Topic = text,
             Source = text,
             ErrorCode = "failure",
@@ -156,6 +158,9 @@ public sealed class EnvelopeHeaderCacheHotPathTests
         using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
 
         Assert.Equal(ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(header), encoded.ToArray());
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.EncodeHeader(header with { CorrelationId = text })
+        );
     }
 
     [Theory]

@@ -1530,6 +1530,7 @@ test('MFLOW-MAL malformed request envelope replies protocol error and records in
         flowId: '01890000-0000-7000-8000-000000000001'
       }),
       routingId: 'peer-1',
+      replyToken: {},
       requestSeq: 9n
     },
     router

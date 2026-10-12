@@ -512,20 +512,24 @@ final class ZLinkChannelEnvelopeGoldenTest {
 
     @Test
     void decodeKeepsJacksonIntNodeBoundariesForMarkerAndKind() {
-        assertEquals(
-                Integer.MAX_VALUE,
-                decode(
-                                "{\"formatMarker\":242,\"kind\":2147483647,\"channelName\":\"c\","
-                                        + "\"messageName\":\"m\"}",
-                                false)
-                        .kind());
-        assertEquals(
-                Integer.MIN_VALUE,
-                decode(
-                                "{\"formatMarker\":242,\"kind\":-2147483648,\"channelName\":\"c\","
-                                        + "\"messageName\":\"m\"}",
-                                false)
-                        .kind());
+        for (int kind = ZLinkChannelEnvelope.KIND_REQUEST;
+                kind <= ZLinkChannelEnvelope.KIND_ERROR;
+                kind++) {
+            String error =
+                    kind == ZLinkChannelEnvelope.KIND_ERROR
+                            ? ",\"errorCode\":\"protocol_error\""
+                            : "";
+            assertEquals(
+                    kind,
+                    decode(
+                                    "{\"formatMarker\":242,\"kind\":"
+                                            + kind
+                                            + ",\"channelName\":\"c\",\"messageName\":\"m\""
+                                            + error
+                                            + "}",
+                                    false)
+                            .kind());
+        }
 
         for (String marker : List.of("242.0", "2147483648", "-2147483649")) {
             assertProtocolError(
@@ -535,7 +539,16 @@ final class ZLinkChannelEnvelopeGoldenTest {
                             + "\"channelName\":\"c\",\"messageName\":\"m\"}",
                     false);
         }
-        for (String kind : List.of("1.0", "2147483648", "-2147483649")) {
+        for (String kind :
+                List.of(
+                        "0",
+                        "6",
+                        "1.0",
+                        "2147483647",
+                        "-2147483648",
+                        "2147483648",
+                        "-2147483649",
+                        "4294967297")) {
             assertProtocolError(
                     "{\"formatMarker\":242,\"kind\":"
                             + kind

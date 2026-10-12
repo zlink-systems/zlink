@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include <zlink/framework.hpp>
 #include "runtime/channels/route_handler_invoker.hpp"
@@ -16,6 +17,9 @@
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <thread>
 
 namespace
@@ -396,6 +400,88 @@ class client_node_store_t : public runtime::in_memory_location_repository_t
         co_return page;
     }
 };
+
+TEST (RoutePayloadOwnership, MalformedReplyRouteMatchesSharedFourLanguageContract)
+{
+    namespace host = runtime::host;
+    namespace msg = runtime::messaging;
+    auto root = std::filesystem::path (__FILE__).parent_path ();
+    for (int depth = 0; depth < 4; ++depth)
+        root = root.parent_path ();
+    std::ifstream fixture (root / "test/fixtures/malformed-envelope-reply-route.tsv");
+    ASSERT_TRUE (fixture.is_open ());
+    auto reply_host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "header-rejection",
+                              .node_routing_id = zlink::routing_id_t::from ("reply").to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    std::string row;
+    int count = 0;
+    while (std::getline (fixture, row)) {
+        if (!row.empty () && row.back () == '\r')
+            row.pop_back ();
+        if (row.empty () || row.front () == '#')
+            continue;
+        std::istringstream input (row);
+        std::string id, request, json, action;
+        std::getline (input, id, '\t');
+        std::getline (input, request, '\t');
+        std::getline (input, json, '\t');
+        std::getline (input, action, '\t');
+        SCOPED_TRACE (id);
+        for (auto kind :
+             request == "true"
+               ? std::vector{host::record_kind_t::node_request,
+                             host::record_kind_t::channel_request,
+                             host::record_kind_t::spot_request, host::record_kind_t::actor_request}
+               : std::vector{host::record_kind_t::node_send, host::record_kind_t::channel_send,
+                             host::record_kind_t::spot_send, host::record_kind_t::actor_send}) {
+            SCOPED_TRACE (static_cast<int> (kind));
+            host::receive_record_t record;
+            record.kind = kind;
+            record.channel_name = "play";
+            int replies = 0;
+            std::vector<zlink::message_t> reply_parts;
+            if (request == "true") {
+                record.reply_token.host = reply_host;
+                record.reply_token.local_reply = [&] (const std::vector<zlink::message_t> &parts) {
+                    ++replies;
+                    reply_parts = parts;
+                    return true;
+                };
+            }
+            dispatch_options_t options;
+            options.message_flow (message_flow_log_mode_t::normal);
+            std::vector<message_dispatch_error_event_t> errors;
+            detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+              options,
+              [&] (const message_dispatch_error_event_t &event) { errors.push_back (event); });
+            auto parts = std::vector<zlink::message_t>{zlink::message_t::from (json),
+                                                       zlink::message_t::from ("request")};
+            auto result = runtime::decode_mesh_record_header (record, parts, false, options);
+            EXPECT_FALSE (result);
+            EXPECT_EQ (replies, action == "reply_error" ? 1 : 0);
+            ASSERT_EQ (errors.size (), 1u);
+            EXPECT_EQ (errors[0].reason, dispatch_error_reason_t::invalid_frame);
+            EXPECT_EQ (errors[0].action, action == "reply_error"
+                                           ? dispatch_error_action_t::reply_error
+                                           : dispatch_error_action_t::drop);
+            if (!reply_parts.empty ()) {
+                auto reply =
+                  msg::envelope_codec_t{}.decode_header (msg::message_parts_t (reply_parts), false);
+                ASSERT_TRUE (reply);
+                EXPECT_EQ (reply.value ().kind, msg::message_kind_t::error);
+                EXPECT_EQ (reply.value ().error_code, "protocol_error");
+                EXPECT_EQ (reply.value ().correlation_id,
+                           nlohmann::json::parse (json).at ("correlationId").get<std::string> ());
+            }
+        }
+        ++count;
+    }
+    EXPECT_EQ (count, 22);
+}
 
 TEST (RoutePayloadOwnership, BoundSessionInternalSendSkipsUserTargetClassification)
 {

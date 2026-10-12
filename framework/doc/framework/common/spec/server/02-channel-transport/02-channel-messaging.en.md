@@ -655,9 +655,15 @@ The precise full signature is defined by
 | ChannelName isn't registered in the current process. | Ends with `NotFound` and isn't sent via a different send path. |
 | ChannelName has no selectable target. | Follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result). |
 | A known target's connection doesn't become ready by the time limit. | Ends with a route connection error or timeout. |
-| No request handler was found, or the payload couldn't be interpreted. | Completes with an error reply if a reply route remains. |
+| No request handler was found, or the payload couldn't be interpreted. | Completes with an error reply [if a reply route remains](#reply-route-remains). |
 | No one-way handler was found, or the payload couldn't be interpreted. | Doesn't deliver the message to a handler — records it in runtime observability information. |
 | The host isn't accepting new submits. | Fails with that language's shutdown error. |
+
+<a id="reply-route-remains"></a>A reply route remains when the received message is a request with a reply token,
+the whole envelope header is a syntactically valid JSON object, and `correlationId` is a string conforming to
+[Request Correlation and Business Flow Identification §3](../06-observability/04-flow-correlation.en.md#3-format-and-ownership).
+If another header field is invalid in that case, the request completes with an error reply. If this condition
+is not met, no reply is built and the failure is recorded once in runtime observability information.
 
 For a ChannelName call, the framework selects one Server member. A member in a
 draining state — finishing existing work while stopping new-work acceptance — is
