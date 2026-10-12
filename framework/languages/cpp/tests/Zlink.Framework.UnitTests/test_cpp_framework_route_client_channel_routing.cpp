@@ -321,3 +321,103 @@ TEST (CppFrameworkRouteClientChannelRouting, ResolvesRouteMeshAndClientServerCha
     EXPECT_EQ ("ChannelName 'unregistered-channel' is not registered",
                error_message (missing_request));
 }
+
+namespace
+{
+class admitted_spot_resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
+{
+  public:
+    zlink::framework::task_t<std::optional<zlink::framework::runtime::spot_address_t>>
+    resolve_spot_address (std::string, std::string spot_id) override
+    {
+        using namespace zlink::framework;
+        runtime::spot_address_t address;
+        address.mesh_name = "admission-mesh";
+        address.node_rid = zlink::routing_id_t::from ("target");
+        address.spot_id = std::move (spot_id);
+        address.spot_generation = 1;
+        return task_t<std::optional<runtime::spot_address_t>> (
+          result_t<std::optional<runtime::spot_address_t>>::success (std::move (address)));
+    }
+    void invalidate_spot_address (std::string_view) override {}
+    void invalidate_all_routes_after_store_recovery () override {}
+};
+
+void verify_mesh_request_admission (bool to_spot)
+{
+    using namespace zlink::framework;
+    using runtime::messaging::envelope_codec_t;
+    using runtime::messaging::message_kind_t;
+    using runtime::messaging::message_parts_t;
+    serializer_registry_t serializers;
+    add_int_serializer<route_request_t> (serializers, "application/x-route-request");
+    add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
+    auto builder = test::runtime_failure_builder ();
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    auto accepted = std::make_shared<task_completion_source_t<void>> ();
+    task_completion_source_t<result_t<message_parts_t>> physical_reply;
+    std::optional<message_parts_t> response;
+    auto submit = [&] (message_parts_t parts) -> request_task_t<result_t<message_parts_t>> {
+        envelope_codec_t envelope;
+        auto header = envelope.decode_header (parts, false);
+        EXPECT_TRUE (header);
+        if (header) {
+            auto reply_header = header.value ();
+            reply_header.kind = message_kind_t::response;
+            const auto encoded =
+              serializers.get<route_reply_t> ().serialize_with_content_type (route_reply_t{14});
+            reply_header.content_type = encoded.content_type;
+            response.emplace (envelope.encode_raw_body_parts (
+              reply_header, detail::encoded_payload_to_raw (encoded.payload)));
+        }
+        return request_task_t<result_t<message_parts_t>> (physical_reply.task (), accepted);
+    };
+    runtime.bind_mesh_node_transport (
+      "admission-mesh", {},
+      [&] (const zlink::routing_id_t &, message_parts_t parts, std::chrono::milliseconds) {
+          return submit (std::move (parts));
+      });
+    runtime.bind_spot_mesh_transport ("admission-mesh", {},
+                                      [&] (const zlink::routing_id_t &, const std::string &spot_id,
+                                           std::uint64_t generation, message_parts_t parts,
+                                           std::chrono::milliseconds) {
+                                          EXPECT_EQ (spot_id, "admission-spot");
+                                          EXPECT_EQ (generation, 1);
+                                          return submit (std::move (parts));
+                                      });
+    admitted_spot_resolver_t resolver;
+    runtime.bind_spot_address_resolver (resolver);
+    auto client = builder.route_client (serializers);
+    auto pending = to_spot
+                     ? client.request_to_spot (spot_id_t ("admission-spot"), route_request_t{7})
+                         .async<route_reply_t> ()
+                     : client
+                         .request_to_node ("admission-mesh", zlink::routing_id_t::from ("target"),
+                                           route_request_t{7})
+                         .async<route_reply_t> ();
+    auto admitted = pending.admitted ();
+    EXPECT_FALSE (admitted.await_ready ());
+    EXPECT_FALSE (pending.await_ready ());
+    accepted->complete (result_t<void>::success ());
+    EXPECT_TRUE (admitted.await_ready ()) << "Mesh request waited for reply to publish admission";
+    EXPECT_FALSE (pending.await_ready ());
+    ASSERT_TRUE (response.has_value ());
+    physical_reply.complete (result_t<result_t<message_parts_t>>::success (
+      result_t<message_parts_t>::success (std::move (*response))));
+    ASSERT_TRUE (pending.result ());
+    EXPECT_EQ (pending.result ().value ().value, 14);
+    EXPECT_TRUE (admitted.result ());
+}
+
+} // namespace
+
+TEST (CppFrameworkRouteClientChannelRouting, NodeRequestPublishesItsOwnAdmissionBeforeReply)
+{
+    verify_mesh_request_admission (false);
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, SpotRequestPublishesItsOwnAdmissionBeforeReply)
+{
+    verify_mesh_request_admission (true);
+}

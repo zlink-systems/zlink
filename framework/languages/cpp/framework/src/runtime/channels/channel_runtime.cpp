@@ -1853,7 +1853,7 @@ request_task_t<zlink::message_t> route_client_t::submit_request_reply_message_er
                 }),
               admitted);
         }();
-        const auto reply = co_await reply_task;
+        const auto reply = co_await detail::request_submission (std::move (reply_task));
         if (!reply)
             co_return detail::propagate_failure<zlink::message_t> (reply, "route request failed");
         auto reply_header = envelope.decode_header (reply.value (), false);
@@ -2137,7 +2137,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_request_reply_messa
                 }),
               admitted);
         }();
-        const auto reply = co_await reply_task;
+        const auto reply = co_await detail::request_submission (std::move (reply_task));
         if (!reply) {
             if (reply.error_kind () == framework_error_kind_t::not_found) {
                 detail::dispatch_error_reporter_t (state->runtime->dispatch).report_lazy ([&] {
