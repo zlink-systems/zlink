@@ -73,6 +73,8 @@ hooks:
   - hooks/quiet_i18n_instant.py
   - hooks/mermaid_size.py
   - hooks/repo_links.py
+  # 언어별 nav와 빌드된 페이지 URL로 루트 llms.txt를 만든다.
+  - hooks/llms_txt.py
 
 # `mkdocs serve`는 docs_dir 안만 감시한다. 페이지가 `--8<--`로 끌어다 쓰는 파일은
 # docs_dir 밖의 실제 프로젝트이므로, 여기 적지 않으면 그 파일을 고쳐도 미리보기가

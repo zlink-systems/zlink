@@ -50,7 +50,7 @@ release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issu
 
 | System you're building | Sample | What this sample covers |
 | --- | --- | --- |
-| A real-time head-to-head game server | [TicTacToe](#2-tictactoe--building-a-real-time-head-to-head-game-server) | The smallest configuration, with auto-connect and auto-registration stripped away |
+| A real-time head-to-head game server | [TicTacToe](#3-tictactoe--building-a-real-time-head-to-head-game-server) | The smallest configuration, with auto-connect and auto-registration stripped away |
 | A full online game server — where the most framework features show up | [Bingo](#4-bingo--building-an-online-game-server) | A conventional game server split into a connection gateway, auth/matchmaking, and room servers |
 | A live chat support system | [SupportChat](#5-supportchat--building-a-live-chat-support-system) | An actor/routing setup where one agent handles several conversations at once |
 | A dispatch system | [DeliveryDispatch](#6-deliverydispatch--building-a-dispatch-system) | Create a request → pick a fulfiller → reassign on no response → deliver to the party involved |
