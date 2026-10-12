@@ -208,22 +208,34 @@ export function wrapSocket<T extends { close(): void }>(
     },
     request(...args: unknown[]): unknown {
       if (hasRoutedPeer) {
-        const [routingId, payload, timeoutMs] = args as [unknown, unknown, number | undefined];
+        const [routingId, payload, timeoutMs, onAdmitted] = args as [
+          unknown,
+          unknown,
+          number | undefined,
+          (() => void) | undefined
+        ];
         return submitBindingRequest(
           (
             nativeInstance as T & { request(routingId: unknown): ZLinkBindingRequestOperation }
           ).request(toNativeRoutingId(routingId)),
           payload,
-          timeoutMs
+          timeoutMs,
+          undefined,
+          onAdmitted
         );
       }
       if (hasRequest) {
-        const [payload, timeoutMs] = args as [unknown, number | undefined];
+        const [payload, timeoutMs, onAdmitted] = args as [
+          unknown,
+          number | undefined,
+          (() => void) | undefined
+        ];
         return submitBindingRequest(
           (nativeInstance as T & { request(): ZLinkBindingRequestOperation }).request(),
           payload,
           timeoutMs,
-          adapter.receiveAdmission?.recordReceived
+          adapter.receiveAdmission?.recordReceived,
+          onAdmitted
         );
       }
       throw new TypeError('Backend request requires a DEALER or ROUTER socket.');
@@ -302,7 +314,8 @@ export function wrapSocket<T extends { close(): void }>(
       targetRid: unknown,
       targetSpot: unknown,
       payload: unknown,
-      timeoutMs?: number
+      timeoutMs?: number,
+      onAdmitted?: () => void
     ): Promise<readonly unknown[]> {
       return submitBindingRequest(
         (
@@ -311,7 +324,9 @@ export function wrapSocket<T extends { close(): void }>(
           }
         ).requestToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot)),
         payload,
-        timeoutMs
+        timeoutMs,
+        undefined,
+        onAdmitted
       );
     },
     disconnectPeer(routingId: unknown): void {

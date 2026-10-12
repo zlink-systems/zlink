@@ -1,4 +1,3 @@
-import { captureRequestAdmission } from '../messaging/request-result';
 import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import type {
   RoutingId,
@@ -51,6 +50,7 @@ interface ZLinkRoutedSpotPacketDispatchOptions {
 
 interface ZLinkRoutedSpotPacketContext {
   readonly channelName: string;
+  readonly onAdmitted?: () => void;
   readonly contentType?: string;
   readonly workOptions?: ZLinkSerialWorkOptions;
   readonly admissionTimeoutMs?: number;
@@ -266,7 +266,7 @@ export class ZLinkRoutedSpotPacketDispatch {
         }
         await activation.serial.execute(
           runHandler,
-          { ...context.workOptions, onAdmitted: captureRequestAdmission() },
+          { ...context.workOptions, onAdmitted: context.onAdmitted },
           instanceIntent ? runHandler : undefined
         );
       }

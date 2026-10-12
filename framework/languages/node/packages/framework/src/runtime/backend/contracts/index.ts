@@ -125,7 +125,8 @@ export interface ZLinkBackendMeshNode {
     parts: ZLinkBackendMessageLike | readonly ZLinkBackendMessageLike[],
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    onAdmitted?: () => void
   ): MeshOperationId;
   sendToInstanceSpot(
     route: ServiceInstanceRouteFence,
@@ -140,7 +141,8 @@ export interface ZLinkBackendMeshNode {
     timeoutMs?: number,
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>,
-    instanceIntent?: boolean
+    instanceIntent?: boolean,
+    onAdmitted?: () => void
   ): MeshOperationId;
   registerUserSpotOperationHandler(handler: ServiceUserSpotOperationHandler): void;
   requestUserSpotCreate(
@@ -213,7 +215,12 @@ export interface ZLinkBackendMeshNode {
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
-    options?: { flags?: number; timeoutMs?: number; applicationMetadata?: Buffer }
+    options?: {
+      flags?: number;
+      timeoutMs?: number;
+      applicationMetadata?: Buffer;
+      onAdmitted?: () => void;
+    }
   ): MeshOperationId;
   sendToChannel(
     channelName: string,
@@ -223,7 +230,12 @@ export interface ZLinkBackendMeshNode {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: { flags?: number; timeoutMs?: number; applicationMetadata?: Buffer }
+    options?: {
+      flags?: number;
+      timeoutMs?: number;
+      applicationMetadata?: Buffer;
+      onAdmitted?: () => void;
+    }
   ): MeshOperationId;
   status(): MeshNodeStatus;
   peers(): MeshPeerEntry[];
@@ -349,7 +361,12 @@ export interface ZLinkBackendMeshNode {
   requestToActor(
     actor: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { flags?: number; timeoutMs?: number; applicationMetadata?: Buffer }
+    options?: {
+      flags?: number;
+      timeoutMs?: number;
+      applicationMetadata?: Buffer;
+      onAdmitted?: () => void;
+    }
   ): MeshOperationId;
   actorSendToActor(
     source: ZLinkBackendActorRef,
@@ -361,7 +378,12 @@ export interface ZLinkBackendMeshNode {
     source: ZLinkBackendActorRef,
     target: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { flags?: number; timeoutMs?: number; applicationMetadata?: Buffer }
+    options?: {
+      flags?: number;
+      timeoutMs?: number;
+      applicationMetadata?: Buffer;
+      onAdmitted?: () => void;
+    }
   ): MeshOperationId;
   sendActorBoundSession(
     actor: ZLinkBackendActorRef,
@@ -484,7 +506,11 @@ export interface ZLinkBackendDealerSocket extends ZLinkBackendConnectableSocket 
   receiveTimeoutMs: number;
   maxMessageSize: number;
   send(message: Message | readonly Message[]): Promise<void>;
-  request(message: Message | readonly Message[], timeoutMs?: number): Promise<readonly Message[]>;
+  request(
+    message: Message | readonly Message[],
+    timeoutMs?: number,
+    onAdmitted?: () => void
+  ): Promise<readonly Message[]>;
   recv(flags?: ZLinkBackendRecvFlags): Received | undefined;
 }
 
@@ -501,7 +527,7 @@ export interface ZLinkBackendSendOperation {
 export interface ZLinkBackendRequestOperation {
   message(message: MessageLike): ZLinkBackendRequestOperation;
   timeout(timeoutMs: number): ZLinkBackendRequestOperation;
-  submit(): Promise<readonly Message[]>;
+  submit(onAdmitted?: () => void): Promise<readonly Message[]>;
 }
 
 export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket {
@@ -519,7 +545,8 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
   request(
     routingId: RoutingId,
     message: Message | readonly Message[],
-    timeoutMs?: number
+    timeoutMs?: number,
+    onAdmitted?: () => void
   ): Promise<readonly Message[]>;
   sendToSpot(
     targetNodeRid: RoutingId,
@@ -531,7 +558,8 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
     targetNodeRid: RoutingId,
     targetSpotId: RoutingId,
     parts: readonly Message[],
-    timeoutMs?: number
+    timeoutMs?: number,
+    onAdmitted?: () => void
   ): Promise<readonly Message[]>;
   disconnectPeer(routingId: RoutingId): void;
   reply(routingId: RoutingId, replyToken: unknown): ZLinkBackendReplyOperation;
@@ -688,7 +716,8 @@ export interface ZLinkBackendSpot extends ZLinkBackendObject {
   requestToChannel(
     channelName: string,
     payload: Message | readonly Message[],
-    timeoutMs?: number
+    timeoutMs?: number,
+    onAdmitted?: () => void
   ): Promise<readonly Message[]>;
   sendToChannel(channelName: string, payload: Message | readonly Message[]): Promise<void>;
   publish(
@@ -705,7 +734,8 @@ export interface ZLinkBackendSpot extends ZLinkBackendObject {
     targetRid: RoutingId,
     spotId: RoutingId,
     payload: Message | readonly Message[],
-    timeoutMs?: number
+    timeoutMs?: number,
+    onAdmitted?: () => void
   ): Promise<readonly Message[]>;
   dispose(): Promise<void>;
 }

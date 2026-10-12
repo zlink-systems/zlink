@@ -53,7 +53,7 @@ function fixture() {
     queue,
     raw,
     runtime,
-    request(kind) {
+    request(kind, onAdmitted) {
       return kind === 'spot'
         ? runtime.requestToSpot(
             'local',
@@ -65,9 +65,10 @@ function fixture() {
               ownerLeaseGeneration: 1n
             },
             payload,
-            1000
+            1000,
+            onAdmitted
           )
-        : runtime.requestToActor(actor, 1n, 1n, payload, 1000);
+        : runtime.requestToActor(actor, 1n, 1n, payload, 1000, undefined, undefined, onAdmitted);
     }
   };
 }
@@ -80,8 +81,8 @@ for (const kind of ['spot', 'actor']) {
     const outbound = new framework.DefaultZLinkSpotOutbound({
       serial,
       addressTransport: {
-        requestToSpotAddress() {
-          operation = f.request(kind);
+        requestToSpotAddress(_spot, _request, options) {
+          operation = f.request(kind, options.onAdmitted);
           return operation.promise;
         }
       }
@@ -91,8 +92,8 @@ for (const kind of ['spot', 'actor']) {
       class Query {}
       const actorClient = new framework.DefaultZLinkActorClient({
         nodeProvider: () => ({
-          requestToActor() {
-            operation = f.request(kind);
+          requestToActor(_actor, _parts, options) {
+            operation = f.request(kind, options.onAdmitted);
             return operation.id;
           }
         }),

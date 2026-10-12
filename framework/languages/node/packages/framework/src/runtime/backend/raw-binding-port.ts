@@ -78,7 +78,11 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
 export interface ZLinkRawDealerPort extends ZLinkRawSocketPort {
   setRoutingId(routingId: string): void;
   send(parts: readonly Uint8Array[]): Promise<void>;
-  request(parts: readonly Uint8Array[], timeoutMs: number): Promise<readonly Buffer[]>;
+  request(
+    parts: readonly Uint8Array[],
+    timeoutMs: number,
+    onAdmitted?: () => void
+  ): Promise<readonly Buffer[]>;
   receive(dontWait?: boolean): ZLinkRawReceivedRecord | undefined;
 }
 

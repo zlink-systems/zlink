@@ -244,7 +244,8 @@ export class ZLinkChannelRuntimeManager {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     return this.outbound.request<TReply>(
       channelName,
@@ -252,7 +253,8 @@ export class ZLinkChannelRuntimeManager {
       request,
       timeoutMs,
       signal,
-      metadata
+      metadata,
+      onAdmitted
     );
   }
 
@@ -294,7 +296,8 @@ export class ZLinkChannelRuntimeManager {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     return this.outbound.routeRequest<TReply>(
       routerChannelId,
@@ -303,7 +306,8 @@ export class ZLinkChannelRuntimeManager {
       request,
       timeoutMs,
       signal,
-      metadata
+      metadata,
+      onAdmitted
     );
   }
 
@@ -322,7 +326,8 @@ export class ZLinkChannelRuntimeManager {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     return this.spotRoutes.routeRequestToSpot<TReply>(
       spotRouteTarget,
@@ -330,7 +335,8 @@ export class ZLinkChannelRuntimeManager {
       request,
       timeoutMs,
       signal,
-      metadata
+      metadata,
+      onAdmitted
     );
   }
 
@@ -340,7 +346,8 @@ export class ZLinkChannelRuntimeManager {
     packetName: string | undefined,
     request: unknown,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     return this.spotRoutes.routeRequestFromSpotToSpot<TReply>(
       sourceSpot,
@@ -348,7 +355,8 @@ export class ZLinkChannelRuntimeManager {
       packetName,
       request,
       timeoutMs,
-      signal
+      signal,
+      onAdmitted
     );
   }
 
@@ -373,14 +381,16 @@ export class ZLinkChannelRuntimeManager {
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: Message,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<readonly Message[]> {
     return this.spotRoutes.routeRequestRawFromSpotToSpot(
       sourceSpot,
       spotRouteTarget,
       request,
       timeoutMs,
-      signal
+      signal,
+      onAdmitted
     );
   }
 
@@ -388,9 +398,16 @@ export class ZLinkChannelRuntimeManager {
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: Message,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<readonly Message[]> {
-    return this.spotRoutes.routeRequestRawToSpot(spotRouteTarget, request, timeoutMs, signal);
+    return this.spotRoutes.routeRequestRawToSpot(
+      spotRouteTarget,
+      request,
+      timeoutMs,
+      signal,
+      onAdmitted
+    );
   }
 
   canRouteChannel(routerChannelId: string): boolean {

@@ -1,4 +1,3 @@
-import { captureRequestAdmission } from '../messaging/request-result';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
@@ -1327,7 +1326,8 @@ export class ServiceStatefulRuntime {
     sourceSpotId: string,
     requested: ServiceDirectSpotRouteFence,
     payload: ServiceApplicationPayload,
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     const target = this.acceptSpotAuthority(requested);
@@ -1349,7 +1349,7 @@ export class ServiceStatefulRuntime {
       timeoutMs,
       'spotRequest',
       undefined,
-      captureRequestAdmission()
+      onAdmitted
     );
     return pending;
   }
@@ -1387,7 +1387,8 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     sourceActor?: ServiceActorRef,
-    boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint }
+    boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint },
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     const route = this.tryActorFence(target);
@@ -1418,7 +1419,7 @@ export class ServiceStatefulRuntime {
       timeoutMs,
       'actorRequest',
       undefined,
-      captureRequestAdmission()
+      onAdmitted
     );
     return pending;
   }
@@ -1504,7 +1505,8 @@ export class ServiceStatefulRuntime {
     timeoutMs: number,
     sourceSpotId?: string,
     metadataFrame?: Uint8Array,
-    instanceIntent = false
+    instanceIntent = false,
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     this.submitRequest(
@@ -1530,7 +1532,7 @@ export class ServiceStatefulRuntime {
       timeoutMs,
       'instanceSpotRequest',
       undefined,
-      captureRequestAdmission()
+      onAdmitted
     );
     return pending;
   }
@@ -1558,7 +1560,8 @@ export class ServiceStatefulRuntime {
     payloadFrame: Buffer,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
-    metadataFrame?: Uint8Array
+    metadataFrame?: Uint8Array,
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const timeoutMs = remainingDeadlineMs(deadlineUnixMs);
     const pending = this.operations.register(timeoutMs);
@@ -1585,7 +1588,7 @@ export class ServiceStatefulRuntime {
       timeoutMs,
       'instanceSpotRequest',
       undefined,
-      captureRequestAdmission()
+      onAdmitted
     );
     return pending;
   }

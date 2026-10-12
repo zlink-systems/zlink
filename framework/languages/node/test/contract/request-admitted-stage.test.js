@@ -17,13 +17,14 @@ function fixture(shared) {
     spotNodes: { mesh: { router: { bind: 'tcp://127.0.0.1:0' } } }
   });
   const client = new framework.DefaultZLinkRouteClient(registration, {
-    request() {
+    request(_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) {
       if (shared !== undefined) return shared;
       const admission = deferred();
       const reply = deferred();
       admissions.push(admission);
       replies.push(reply);
-      return Object.assign(reply.promise, { admitted: admission.promise });
+      void admission.promise.then(onAdmitted, () => undefined);
+      return reply.promise;
     }
   });
   return {

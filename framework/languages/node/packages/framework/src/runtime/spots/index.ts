@@ -1620,6 +1620,7 @@ export class DefaultZLinkSpotManager {
       readonly workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions;
       readonly admissionTimeoutMs?: number;
       readonly signal?: AbortSignal;
+      readonly onAdmitted?: () => void;
     }
   ): Promise<TReply> {
     return await this.routedSpotPackets.request<TReply>(spotId, packetName, request, context);

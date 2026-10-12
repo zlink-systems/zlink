@@ -2341,8 +2341,8 @@ for (const phase of ['captured', 'relay']) {
           }
         })
       }),
-      handoffCapture: (_mesh, actorId, parts, returnResponse, ref) =>
-        coordinator.capture('local', actorId, parts, returnResponse, undefined, ref)
+      handoffCapture: (_mesh, actorId, parts, returnResponse, ref, _deadline, onAdmitted) =>
+        coordinator.capture('local', actorId, parts, returnResponse, undefined, ref, undefined, undefined, undefined, onAdmitted)
     });
     class Query {}
     const pending = client.requestToActor('actor-1', new Query()).submit();

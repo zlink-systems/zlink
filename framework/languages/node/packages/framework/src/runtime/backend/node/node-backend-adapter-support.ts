@@ -1,4 +1,3 @@
-import { captureRequestAdmission } from '../../messaging/request-result';
 import { constants as osConstants } from 'node:os';
 import { waitRequestReply } from '../../messaging/request-deadline';
 import {
@@ -178,7 +177,8 @@ export async function submitBindingRequest(
   operation: ZLinkBindingRequestOperation,
   payload: unknown,
   timeoutMs: number | undefined,
-  recordReceived?: () => void
+  recordReceived?: () => void,
+  onAdmitted?: () => void
 ): Promise<readonly unknown[]> {
   const deadlineMs = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
   try {
@@ -196,12 +196,7 @@ export async function submitBindingRequest(
     if (timeoutMs !== undefined) {
       current = current.timeout(timeoutMs);
     }
-    return await bindingRequestReply(
-      current.submit(),
-      deadlineMs,
-      recordReceived,
-      captureRequestAdmission()
-    );
+    return await bindingRequestReply(current.submit(), deadlineMs, recordReceived, onAdmitted);
   } catch (error) {
     throw translateBindingResultError(error);
   }

@@ -43,7 +43,7 @@ function requestFixture(t, submission) {
   t.after(() => { host.close(); context.close(); });
   const parts = [Buffer.from('request')];
   return {
-    adapter: () => submitBindingRequest(operation, parts, REQUEST_BUDGET_MS),
+    adapter: (onAdmitted) => submitBindingRequest(operation, parts, REQUEST_BUDGET_MS, undefined, onAdmitted),
     router: () => router.request('target', parts, REQUEST_BUDGET_MS),
     dealer: () => dealer.request(parts, REQUEST_BUDGET_MS)
   };
@@ -104,7 +104,7 @@ for (const backpressured of [false, true]) {
     const registration = framework.createFrameworkRegistration({
       spotNodes: { mesh: { router: { bind: 'inproc://binding-admission' } } }
     });
-    const client = new framework.DefaultZLinkRouteClient(registration, { request: fixture.adapter });
+    const client = new framework.DefaultZLinkRouteClient(registration, { request(_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) { return fixture.adapter(onAdmitted); } });
     const pending = client.requestToNode('mesh', 'peer', {}).submit();
     assert.ok(pending.admitted instanceof Promise);
     let accepted = false;
@@ -137,8 +137,8 @@ for (const terminal of ['timeout', 'cancellation']) {
     });
     const controller = new AbortController();
     const client = new framework.DefaultZLinkRouteClient(registration, {
-      request(_mesh, _rid, _packet, _request, _timeout, signal) {
-        return awaitWithAbort(fixture.adapter(), signal);
+      request(_mesh, _rid, _packet, _request, _timeout, signal, _metadata, onAdmitted) {
+        return awaitWithAbort(fixture.adapter(onAdmitted), signal);
       }
     });
     t.mock.timers.enable({ apis: ['setTimeout'] });

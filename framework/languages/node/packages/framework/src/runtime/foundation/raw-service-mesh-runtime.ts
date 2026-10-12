@@ -1,4 +1,3 @@
-import { captureRequestAdmission } from '../messaging/request-result';
 import { constants as osConstants } from 'node:os';
 import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
 import type {
@@ -519,15 +518,17 @@ export class RawServiceMeshRuntime {
   requestToNode(
     targetNodeRoutingId: string,
     payload: ServiceApplicationPayloadInput,
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): PendingOperation<RawServiceRequestResult> {
-    return this.requestToTarget(targetNodeRoutingId, payload, timeoutMs);
+    return this.requestToTarget(targetNodeRoutingId, payload, timeoutMs, undefined, onAdmitted);
   }
 
   requestToChannel(
     channelName: string,
     payload: ServiceApplicationPayloadInput,
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): PendingOperation<RawServiceRequestResult> {
     const selection = this.selectChannelTarget(channelName);
     if (selection.kind !== 'selected') {
@@ -539,7 +540,8 @@ export class RawServiceMeshRuntime {
       selection.peer.descriptor.nodeRoutingId,
       payload,
       timeoutMs,
-      channelName
+      channelName,
+      onAdmitted
     );
   }
 
@@ -1115,7 +1117,8 @@ export class RawServiceMeshRuntime {
     targetNodeRoutingId: string,
     payload: ServiceApplicationPayloadInput,
     timeoutMs: number,
-    channelName?: string
+    channelName?: string,
+    onAdmitted?: () => void
   ): PendingOperation<RawServiceRequestResult> {
     const correlation = this.nextCorrelation++;
     const header =
@@ -1124,7 +1127,6 @@ export class RawServiceMeshRuntime {
         : encodeChannelRequestHeader(correlation, channelName);
     const encodedPayload = this.applicationFrame(payload);
     const pending = this.operations.register(timeoutMs);
-    const onAdmitted = captureRequestAdmission();
     let selectedTargetNodeRoutingId = targetNodeRoutingId;
     if (
       selectedTargetNodeRoutingId !== this.descriptor.nodeRoutingId &&

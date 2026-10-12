@@ -7,7 +7,11 @@ export async function tryRequestRoutedJson(
   transport: ZLinkActorRoutedJoinTransport,
   target: ZLinkSpotRouteTarget,
   payload: unknown,
-  options: { readonly timeoutMs?: number; readonly signal?: AbortSignal }
+  options: {
+    readonly timeoutMs?: number;
+    readonly signal?: AbortSignal;
+    readonly onAdmitted?: () => void;
+  }
 ): Promise<boolean> {
   const request = transport.requestRawToSpot;
   if (request === undefined) return false;
@@ -24,7 +28,11 @@ export async function requestRoutedJsonReply<T>(
   transport: ZLinkActorRoutedJoinTransport,
   target: ZLinkSpotRouteTarget,
   payload: unknown,
-  options: { readonly timeoutMs?: number; readonly signal?: AbortSignal },
+  options: {
+    readonly timeoutMs?: number;
+    readonly signal?: AbortSignal;
+    readonly onAdmitted?: () => void;
+  },
   unavailableMessage: string,
   decode: (replyParts: readonly Message[]) => T
 ): Promise<T> {

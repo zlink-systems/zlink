@@ -1,21 +1,7 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 
-// This context carries an observation callback, never physical admission state.
-const requestAdmission = new AsyncLocalStorage<(() => void) | undefined>();
-
-export function captureRequestAdmission(): (() => void) | undefined {
-  return requestAdmission.getStore();
-}
-
-export function bindRequestAdmission<T>(operation: () => T): () => T {
-  const admitted = captureRequestAdmission();
-  if (admitted === undefined) return operation;
-  return () => requestAdmission.run(admitted, operation);
-}
-
 export function createZLinkRequest<TReply>(
-  start: () => Promise<TReply>,
+  start: (onAdmitted: () => void) => Promise<TReply>,
   deliverReply?: (reply: Promise<TReply>) => Promise<TReply>
 ): ZLinkRequest<TReply> {
   let resolveAdmission!: () => void;
@@ -28,9 +14,7 @@ export function createZLinkRequest<TReply>(
   void admitted.catch(() => undefined);
   let pending: Promise<TReply>;
   try {
-    pending = requestAdmission.run(resolveAdmission, start);
-    const forwarded = (pending as Partial<ZLinkRequest<TReply>>).admitted;
-    if (forwarded !== undefined) void forwarded.then(resolveAdmission, () => undefined);
+    pending = start(resolveAdmission);
   } catch (error) {
     pending = Promise.reject(error);
   }
