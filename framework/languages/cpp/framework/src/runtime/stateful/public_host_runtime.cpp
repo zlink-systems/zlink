@@ -4313,6 +4313,8 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     auto lifetime = shared_from_this ();
     auto owned_command =
       std::make_shared<protocol::instance_activation_recovery_t> (std::move (command));
+    std::shared_ptr<const protocol::instance_activation_recovery_t> admission_command =
+      owned_command;
     auto &request = owned_command->activation;
     std::shared_ptr<location_repository_t> store;
     std::shared_ptr<stateful::relocation_store_port_t> instance_relocations;
@@ -4474,6 +4476,20 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
         return snapshot ? decode_instance_spot_authority_payload (snapshot->payload) : std::nullopt;
     };
+    const auto validate_retransmission =
+      [&] (const protocol::instance_activation_recovery_t &stored) {
+          const auto &prior = stored.activation;
+          if (prior.operation == request.operation
+              && (prior.target.mesh_name != request.target.mesh_name
+                  || prior.target.stable_type != request.target.stable_type
+                  || prior.target.descriptor_version != request.target.descriptor_version
+                  || prior.target.deadline_unix_ms != request.target.deadline_unix_ms
+                  || prior.has_metadata != request.has_metadata
+                  || stored.metadata != owned_command->metadata
+                  || stored.application_payload != owned_command->application_payload))
+              throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                           "Instance route does not match the stored activation");
+      };
     const auto join_existing =
       [&] (const authority_read_result_t &current,
            std::optional<instance_spot_authority_payload_t> ready_state) -> task_t<bool> {
@@ -4579,7 +4595,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             }
             auto running = std::make_shared<task_t<instance_spot_activation_result_t>> (
               instance_materializer->dispatch (owned_command, resume_missing, nullptr));
-            finish_admission (*snapshot);
+            finish_admission (instance_activation_ready_t{*snapshot, admission_command});
             detail::observe_task_terminal (
               *running, [running, reply_terminal] (
                           const result_t<instance_spot_activation_result_t> &result) {
@@ -4610,11 +4626,16 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             reject_activation (*failure);
             co_return;
         }
-        current = std::get<authority_snapshot_t> (admitted);
-    } else {
-        current = co_await run_blocking_step<authority_read_result_t> (
-          [store, authority_key] { return store->read_authority (authority_key); });
+        const auto &ready = std::get<instance_activation_ready_t> (admitted);
+        validate_retransmission (*ready.command);
+        admission_command = ready.command;
+        current = ready.snapshot;
+        if (!(co_await join_existing (current, decode_current_authority (current))))
+            reject_activation ();
+        co_return;
     }
+    current = co_await run_blocking_step<authority_read_result_t> (
+      [store, authority_key] { return store->read_authority (authority_key); });
     auto current_ready = decode_current_authority (current);
     if (request.target.authority_owner_generation == 0) {
         if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current)) {
@@ -4655,21 +4676,10 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                                      error.what ());
                     }
-                    const auto &prior = stored.activation;
-                    if (prior.operation == request.operation
-                        && (prior.target.mesh_name != request.target.mesh_name
-                            || prior.target.stable_type != request.target.stable_type
-                            || prior.target.descriptor_version != request.target.descriptor_version
-                            || prior.target.deadline_unix_ms != request.target.deadline_unix_ms
-                            || prior.has_metadata != request.has_metadata
-                            || stored.metadata != owned_command->metadata))
-                        throw framework_exception_t (
-                          framework_error_kind_t::protocol_error,
-                          "Instance route does not match the stored activation");
+                    validate_retransmission (stored);
                 }
             }
-            if (!previous_admission
-                && snapshot->allocation.state == placement_allocation_state_t::active && ready
+            if (snapshot->allocation.state == placement_allocation_state_t::active && ready
                 && ready->state == instance_spot_authority_state_t::ready) {
                 object_reserve_request_t release;
                 release.key = {placement_object_kind_t::instance_spot, request.target.spot_id};
@@ -4688,10 +4698,6 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         }
     }
     if (co_await join_existing (current, std::move (current_ready))) {
-        co_return;
-    }
-    if (previous_admission) {
-        reject_activation ();
         co_return;
     }
     if (std::holds_alternative<authority_missing_t> (current)
@@ -4832,7 +4838,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     auto activation_terminal = std::make_shared<activation_terminal_t> ();
     auto dispatched =
       instance_materializer->dispatch (owned_command, resume_missing, &activation_terminal->gate);
-    finish_admission (ready_snapshot);
+    finish_admission (instance_activation_ready_t{ready_snapshot, admission_command});
     auto result = co_await dispatched;
     activation_terminal->accepted = std::move (result.accepted_turn_terminal);
     result.accepted_turn_terminal = [activation_terminal] { activation_terminal->finish (); };

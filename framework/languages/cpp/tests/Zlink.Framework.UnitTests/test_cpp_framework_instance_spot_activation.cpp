@@ -74,14 +74,26 @@ struct event_t
     int value{};
 };
 
-static void verify_same_target_activation_order (bool ready_request,
-                                                 bool retransmission_mismatch = false,
-                                                 bool close_during_terminal = false)
+enum class retransmission_input_t
+{
+    unchanged,
+    metadata,
+    payload
+};
+
+static void verify_same_target_activation_order (
+  bool ready_request,
+  bool retransmission_mismatch = false,
+  bool close_during_terminal = false,
+  bool read_after_delete = false,
+  retransmission_input_t mismatch_input = retransmission_input_t::unchanged)
 {
     using namespace std::chrono_literals;
     namespace fw = zlink::framework;
     namespace rt = fw::runtime;
     namespace host = rt::host;
+    retransmission_mismatch =
+      retransmission_mismatch || mismatch_input != retransmission_input_t::unchanged;
     class held_reservation_t final : public rt::in_memory_location_repository_t
     {
       public:
@@ -156,7 +168,40 @@ static void verify_same_target_activation_order (bool ready_request,
                  .result ()
                  .value ()
                  .status);
-    auto blob_store = std::make_shared<rt::in_memory_relocation_store_t> ();
+    class delete_before_read_store_t final : public fw::relocation_store_t
+    {
+      public:
+        fw::task_t<fw::blob_put_result_t> put (fw::blob_reference_t reference,
+                                               std::span<const std::byte> payload,
+                                               std::chrono::milliseconds retention) override
+        {
+            return inner.put (std::move (reference), payload, retention);
+        }
+        fw::task_t<fw::blob_read_result_t> read (fw::blob_reference_t reference) override
+        {
+            if (read_after_delete) {
+                read_entered.store (true);
+                co_await deleted.task ();
+            }
+            co_return co_await inner.read (std::move (reference));
+        }
+        fw::task_t<fw::blob_renew_result_t> renew (fw::blob_reference_t reference,
+                                                   std::chrono::milliseconds retention) override
+        {
+            return inner.renew (std::move (reference), retention);
+        }
+        fw::task_t<void> erase (fw::blob_reference_t reference) override
+        {
+            co_await inner.erase (std::move (reference));
+            deleted.complete (fw::result_t<void>::success ());
+        }
+        rt::in_memory_relocation_store_t inner;
+        bool read_after_delete = false;
+        std::atomic_bool read_entered{false};
+        fw::task_completion_source_t<void> deleted;
+    };
+    auto blob_store = std::make_shared<delete_before_read_store_t> ();
+    blob_store->read_after_delete = read_after_delete;
     auto blobs = std::make_shared<rt::provider_relocation_repository_t> (*blob_store);
     auto relocations = std::make_shared<rt::stateful::public_relocation_store_adapter_t> (blobs);
     auto target = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
@@ -167,12 +212,15 @@ static void verify_same_target_activation_order (bool ready_request,
                               .advertised_endpoint = "tcp://127.0.0.1:0"},
                .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}});
     std::vector<std::uint64_t> queued;
+    fw::task_completion_source_t<host::instance_spot_activation_result_t> first_handler;
     target->configure_instance_spot_operations (
       store, relocations, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
         [] (const auto &, const auto &) { return true; },
         [&] (auto command, auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
             queued.push_back (command->activation.operation.low);
+            if (read_after_delete && command->activation.operation.low == 1)
+                co_return co_await first_handler.task ();
             co_return host::instance_spot_activation_result_t{
               0, 0,
               command->activation.request
@@ -188,6 +236,9 @@ static void verify_same_target_activation_order (bool ready_request,
     };
     const cleanup_t cleanup{[&] {
         store->release.complete (fw::result_t<void>::success ());
+        first_handler.complete (
+          fw::result_t<host::instance_spot_activation_result_t>::success ({}));
+        blob_store->deleted.complete (fw::result_t<void>::success ());
         target->close ();
     }};
     const auto deadline =
@@ -224,8 +275,16 @@ static void verify_same_target_activation_order (bool ready_request,
     request.request = true;
     request.operation.low = retransmission_mismatch ? 1 : 2;
     request.reply_route_id = 2;
-    if (retransmission_mismatch)
+    if (retransmission_mismatch && mismatch_input == retransmission_input_t::unchanged)
         ++request.target.deadline_unix_ms;
+    auto request_payload = payload;
+    std::optional<std::vector<std::uint8_t>> request_metadata;
+    if (mismatch_input == retransmission_input_t::metadata) {
+        request.has_metadata = true;
+        request_metadata = std::vector<std::uint8_t>{2};
+    }
+    if (mismatch_input == retransmission_input_t::payload)
+        request_payload.payload_bytes () = {2};
     if (ready_request) {
         const auto authority =
           store->read_authority (rt::spot_authority_key ("room")).result ().value ();
@@ -241,13 +300,23 @@ static void verify_same_target_activation_order (bool ready_request,
     auto result = reply.get_future ();
     ASSERT_TRUE (target
                    ->activate_instance_spot_remote (
-                     target->status ().routing_id (), request, std::nullopt, payload, 3s,
-                     [&] (auto, auto header, auto) { reply.set_value (header); })
+                     target->status ().routing_id (), request, request_metadata, request_payload,
+                     3s, [&] (auto, auto header, auto) { reply.set_value (header); })
                    .result ());
     pump ();
     EXPECT_EQ (1, store->reserves);
     EXPECT_TRUE (queued.empty ());
     store->release.complete (fw::result_t<void>::success ());
+    if (read_after_delete) {
+        while (!blob_store->read_entered.load ()
+               && result.wait_for (0ms) != std::future_status::ready
+               && std::chrono::steady_clock::now () < until)
+            pump ();
+        ASSERT_TRUE (blob_store->read_entered.load ()
+                     || result.wait_for (0ms) == std::future_status::ready);
+        first_handler.complete (
+          fw::result_t<host::instance_spot_activation_result_t>::success ({}));
+    }
     if (close_during_terminal) {
         auto entered = store->terminal_entered.get_future ();
         while (entered.wait_for (0ms) != std::future_status::ready
@@ -269,10 +338,16 @@ static void verify_same_target_activation_order (bool ready_request,
         closing.get ();
         return;
     }
-    while (result.wait_for (0ms) != std::future_status::ready
+    while ((result.wait_for (0ms) != std::future_status::ready
+            || (read_after_delete && !blob_store->deleted.task ().await_ready ()))
            && std::chrono::steady_clock::now () < until)
         pump ();
     ASSERT_EQ (std::future_status::ready, result.wait_for (0ms));
+    EXPECT_EQ (1, store->reserves);
+    if (read_after_delete) {
+        EXPECT_TRUE (blob_store->deleted.task ().await_ready ());
+        EXPECT_FALSE (blob_store->read_entered.load ());
+    }
     EXPECT_EQ (retransmission_mismatch
                  ? static_cast<std::uint32_t> (rt::protocol::request_terminal_result::protocolError)
                  : 0u,
@@ -305,6 +380,23 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
 TEST (ZLinkFrameworkInstanceSpotActivation, SameTargetRetransmissionMismatchIsRejectedBeforeJoin)
 {
     verify_same_target_activation_order (false, true);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, PendingAdmissionJoinsAfterRecoveryRootDeletion)
+{
+    verify_same_target_activation_order (false, false, false, true);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, PendingAdmissionRejectsRetransmissionMetadataMismatch)
+{
+    verify_same_target_activation_order (false, false, false, false,
+                                         retransmission_input_t::metadata);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, PendingAdmissionRejectsRetransmissionPayloadMismatch)
+{
+    verify_same_target_activation_order (false, false, false, false,
+                                         retransmission_input_t::payload);
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation, HostCloseWaitsForAcceptedActivationStoreTerminal)
@@ -2230,7 +2322,7 @@ TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBefore
     EXPECT_FALSE (roots->exists);
 }
 
-TEST (CppFrameworkInstanceSpotActivation, ReadyLocalAdmissionSurvivesRecoveryRootDeletion)
+static void verify_ready_recovery_root_deletion (bool local_available)
 {
     using namespace std::chrono_literals;
     namespace fw = zlink::framework;
@@ -2352,9 +2444,10 @@ TEST (CppFrameworkInstanceSpotActivation, ReadyLocalAdmissionSurvivesRecoveryRoo
         {},
         {},
         [&] (const auto &request, const auto &snapshot) {
-            return local_spots->matches_instance_activation (
-              request.target.spot_id, request.target.stable_type, request.target.mesh_name,
-              snapshot.object_generation, snapshot.authority_owner_generation);
+            return local_available
+                   && local_spots->matches_instance_activation (
+                     request.target.spot_id, request.target.stable_type, request.target.mesh_name,
+                     snapshot.object_generation, snapshot.authority_owner_generation);
         }});
 
     target->start ();
@@ -2448,9 +2541,29 @@ TEST (CppFrameworkInstanceSpotActivation, ReadyLocalAdmissionSurvivesRecoveryRoo
     const auto [first_header, first_payload] = first.get ();
     const auto [second_header, second_payload] = second.get ();
     EXPECT_EQ (0u, first_header.terminal_result);
-    EXPECT_EQ (0u, second_header.terminal_result);
     ASSERT_TRUE (first_payload);
-    ASSERT_TRUE (second_payload);
     EXPECT_EQ (std::vector<std::uint8_t>{'1'}, first_payload->payload_bytes ());
-    EXPECT_EQ (std::vector<std::uint8_t>{'2'}, second_payload->payload_bytes ());
+    if (local_available) {
+        EXPECT_EQ (0u, second_header.terminal_result);
+        ASSERT_TRUE (second_payload);
+        EXPECT_EQ (std::vector<std::uint8_t>{'2'}, second_payload->payload_bytes ());
+    } else {
+        const auto failure = rt::messaging::request_failure_mapper_t{}.target_failure_reply (
+          fw::framework_error_kind_t::data_lost);
+        ASSERT_TRUE (failure);
+        EXPECT_EQ (failure->terminal_result, second_header.terminal_result);
+        EXPECT_EQ (failure->failure_code, second_header.failure_code);
+        EXPECT_FALSE (second_payload);
+        EXPECT_EQ (1, entered.load ());
+    }
+}
+
+TEST (CppFrameworkInstanceSpotActivation, ReadyLocalAdmissionSurvivesRecoveryRootDeletion)
+{
+    verify_ready_recovery_root_deletion (true);
+}
+
+TEST (CppFrameworkInstanceSpotActivation, RecoveryWithoutLocalAdmissionRejectsMissingRoot)
+{
+    verify_ready_recovery_root_deletion (false);
 }
