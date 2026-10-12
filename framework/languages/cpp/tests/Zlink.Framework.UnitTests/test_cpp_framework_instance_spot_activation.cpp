@@ -21,6 +21,7 @@
 #include "runtime/spots/spot_runtime.hpp"
 
 #include <gtest/gtest.h>
+#include "runtime/mesh/mesh_node_host_service.hpp"
 
 #include "runtime_context_hooks_environment.hpp"
 
@@ -1651,8 +1652,10 @@ TEST (ZLinkFrameworkInstanceSpotActivation, RetiredOwnerRequestCompletesWithUnav
       traced_request_t{7}, serializers);
     auto request_parts = std::move (encoded).take_items ();
 
-    EXPECT_TRUE (
-      runtime->dispatch_mesh_record (owner, record, request_parts, provider, serializers));
+    EXPECT_TRUE (runtime->dispatch_mesh_record (
+      owner, record, request_parts,
+      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false), provider,
+      serializers));
     ASSERT_EQ (2u, reply_parts.size ());
     const auto reply_header = codec.decode_header (messaging::message_parts_t (reply_parts));
     ASSERT_TRUE (reply_header);

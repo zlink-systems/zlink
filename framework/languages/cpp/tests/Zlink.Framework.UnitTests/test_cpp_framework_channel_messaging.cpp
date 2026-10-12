@@ -28,6 +28,7 @@
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
+#include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -810,9 +811,9 @@ int main ()
                           codec.decode_header (msg::message_parts_t (parts (wire)), true))
             || !preserved || handler.invocations != 2 || handler.last_value != 42)
             return 221;
-        const auto rejected =
-          on.dispatch (record, parts (malformed),
-                       codec.decode_header (msg::message_parts_t (parts (malformed)), true));
+        auto invalid_parts = parts (malformed);
+        auto decoded = runtime::decode_mesh_record_header (record, invalid_parts, true);
+        const auto rejected = on.dispatch (record, std::move (invalid_parts), std::move (*decoded));
         if (rejected || rejected.error_kind () != framework_error_kind_t::protocol_error
             || handler.invocations != 2)
             return 222;

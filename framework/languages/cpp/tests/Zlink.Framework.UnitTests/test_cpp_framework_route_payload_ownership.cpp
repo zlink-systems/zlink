@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #include <gtest/gtest.h>
+#include "runtime/mesh/mesh_node_host_service.hpp"
 #include <zlink/framework.hpp>
 #include "runtime/channels/route_handler_invoker.hpp"
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
@@ -111,9 +112,9 @@ TEST (RoutePayloadOwnership, ApplicationDispatcherConsumesTheDecodedHeader)
     runtime::host::receive_record_t record;
     record.kind = runtime::host::record_kind_t::node_send;
     record.channel_name = "mesh";
-    std::optional<result_t<runtime::messaging::envelope_header_t>> decoded;
-    EXPECT_FALSE (spots.dispatch_mesh_record (owner, record, parts, provider, serializers, {},
-                                              nullptr, {}, &decoded));
+    auto decoded = runtime::decode_mesh_record_header (record, parts, false);
+    EXPECT_FALSE (
+      spots.dispatch_mesh_record (owner, record, parts, decoded, provider, serializers));
     ASSERT_TRUE (decoded);
     ASSERT_TRUE (*decoded);
     // A consumer of the parsed header must never consult its wire frame again.
@@ -140,12 +141,121 @@ TEST (RoutePayloadOwnership, MeshIngressProvidesHeaderWithoutARouteClient)
     auto parts = runtime::messaging::envelope_codec_t{}
                    .encode_raw_body_parts (header, zlink::message_t::from ("42"))
                    .take_items ();
-    std::optional<result_t<runtime::messaging::envelope_header_t>> decoded;
-    EXPECT_FALSE (spots.dispatch_mesh_record (owner, record, parts, provider, serializers, {},
-                                              nullptr, {}, &decoded));
+    auto decoded = runtime::decode_mesh_record_header (record, parts, false);
+    EXPECT_FALSE (
+      spots.dispatch_mesh_record (owner, record, parts, decoded, provider, serializers));
     ASSERT_TRUE (decoded);
     ASSERT_TRUE (*decoded);
     EXPECT_EQ (decoded->value ().message_name, "payload");
+}
+
+TEST (RoutePayloadOwnership, ActorSendFallbackProvidesHeader)
+{
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    auto state = std::make_shared<detail::spot_node_builder_state_t> ("node");
+    detail::spot_node_runtime_t spots (state);
+    runtime::host::ready_record_t owner;
+    owner.owner_kind = runtime::host::owner_kind_t::node;
+    runtime::host::receive_record_t record;
+    record.kind = runtime::host::record_kind_t::actor_send;
+    runtime::messaging::envelope_header_t header;
+    header.channel_name = "mesh";
+    header.message_name = "payload";
+    auto parts = runtime::messaging::envelope_codec_t{}
+                   .encode_raw_body_parts (header, zlink::message_t::from ("42"))
+                   .take_items ();
+    auto decoded = runtime::decode_mesh_record_header (record, parts, false);
+    EXPECT_FALSE (
+      spots.dispatch_mesh_record (owner, record, parts, decoded, provider, serializers));
+    EXPECT_NO_THROW ((void) decoded.value ());
+    ASSERT_TRUE (decoded);
+    ASSERT_TRUE (*decoded);
+    EXPECT_EQ (decoded->value ().message_name, "payload");
+}
+
+TEST (RoutePayloadOwnership, ActorSendWithoutTerminalPreservesIngressHeaderAndFrames)
+{
+    service_collection_t services;
+    services.add_singleton<detail::actor_gateway_runtime_t> ();
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    auto state = std::make_shared<detail::spot_node_builder_state_t> ("node");
+    state->actor_types_by_id["actor"] = "player";
+    detail::spot_node_runtime_t spots (state);
+    runtime::host::ready_record_t owner;
+    owner.owner_kind = runtime::host::owner_kind_t::actor;
+    owner.actor =
+      detail::actor_ref_access_t::make (node_rid_t::from_string ("node"), "player", "actor", 1);
+    runtime::host::receive_record_t record;
+    record.kind = runtime::host::record_kind_t::actor_send;
+    runtime::messaging::envelope_header_t header;
+    header.kind = runtime::messaging::message_kind_t::command;
+    header.channel_name = "mesh";
+    header.message_name = "payload";
+    auto parts = runtime::messaging::envelope_codec_t{}
+                   .encode_raw_body_parts (header, zlink::message_t::from ("42"))
+                   .take_items ();
+    auto decoded = runtime::decode_mesh_record_header (record, parts, false);
+    parts[0] = zlink::message_t::from (std::string ("invalid header"));
+    EXPECT_FALSE (
+      spots.dispatch_mesh_record (owner, record, parts, decoded, provider, serializers));
+    ASSERT_TRUE (decoded);
+    ASSERT_TRUE (*decoded);
+    EXPECT_EQ (decoded->value ().message_name, "payload");
+    ASSERT_EQ (parts.size (), 2u);
+    EXPECT_EQ (parts[0].to_string (), "invalid header");
+    EXPECT_EQ (parts[1].to_string (), "42");
+}
+
+TEST (RoutePayloadOwnership, MeshIngressSkipsRecordsWithoutEnvelopeHeaders)
+{
+    runtime::host::receive_record_t record;
+    auto parts =
+      std::vector<zlink::message_t>{zlink::message_t::from (std::string ("invalid header"))};
+    for (auto kind : {runtime::host::record_kind_t::spot_multicast,
+                      runtime::host::record_kind_t::spot_control}) {
+        record.kind = kind;
+        EXPECT_FALSE (runtime::decode_mesh_record_header (record, parts, true));
+        ASSERT_EQ (parts.size (), 1u);
+        EXPECT_EQ (parts[0].to_string (), "invalid header");
+    }
+}
+
+TEST (RoutePayloadOwnership, MeshIngressRejectsMalformedRouteAndActorHeaders)
+{
+    runtime::host::receive_record_t record;
+    for (auto kind :
+         {runtime::host::record_kind_t::node_send, runtime::host::record_kind_t::actor_send,
+          runtime::host::record_kind_t::actor_request}) {
+        record.kind = kind;
+        auto parts =
+          std::vector<zlink::message_t>{zlink::message_t::from (std::string ("invalid header"))};
+        std::optional<result_t<runtime::messaging::envelope_header_t>> decoded;
+        ASSERT_NO_THROW (decoded = runtime::decode_mesh_record_header (record, parts, true));
+        ASSERT_TRUE (decoded);
+        EXPECT_FALSE (*decoded);
+        EXPECT_EQ (decoded->error_kind (), framework_error_kind_t::protocol_error);
+        service_collection_t services;
+        auto provider = services.build_provider ();
+        serializer_registry_t serializers;
+        detail::spot_node_runtime_t spots (
+          std::make_shared<detail::spot_node_builder_state_t> ("node"));
+        runtime::host::ready_record_t owner;
+        owner.owner_kind = runtime::host::owner_kind_t::node;
+        EXPECT_FALSE (
+          spots.dispatch_mesh_record (owner, record, parts, decoded, provider, serializers));
+        ASSERT_EQ (parts.size (), 1u);
+        if (kind == runtime::host::record_kind_t::node_send) {
+            detail::route_handler_registry_t handlers;
+            handler_registry_t filters;
+            detail::mesh_record_dispatcher_t dispatcher (provider, serializers, handlers, filters);
+            auto rejected = dispatcher.dispatch (record, std::move (parts), std::move (*decoded));
+            EXPECT_FALSE (rejected);
+            EXPECT_EQ (rejected.error_kind (), framework_error_kind_t::protocol_error);
+        }
+    }
 }
 
 class client_node_store_t : public runtime::in_memory_location_repository_t

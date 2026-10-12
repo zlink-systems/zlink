@@ -933,23 +933,6 @@ const std::string &client_server_bind_endpoint (const channel_capability_snapsho
 
 namespace zlink::framework
 {
-namespace
-{
-
-runtime::messaging::message_parts_t
-encode_route_payload_parts (runtime::messaging::envelope_header_t header,
-                            std::type_index,
-                            const route_client_t::payload_encoder_t &encode_payload,
-                            serializer_registry_t &serializers)
-{
-    auto serialized = encode_payload (serializers);
-    header.content_type = std::move (serialized.content_type);
-    runtime::messaging::envelope_codec_t envelope;
-    return envelope.encode_raw_body_parts (header,
-                                           detail::encoded_payload_to_raw (serialized.payload));
-}
-
-} // namespace
 
 
 namespace
@@ -1486,25 +1469,9 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
     }
     try {
         runtime::messaging::client_call_codec_t codec;
-        auto header = codec.create_envelope (runtime::messaging::message_kind_t::command,
-                                             router_channel_id, packet_name);
-        header.metadata = metadata;
-        detail::message_flow_tracer_t (state->runtime->dispatch)
-          .trace (message_flow_outcome_t::sent, [&] {
-              return message_flow_event_t{message_flow_outcome_t::sent,
-                                          dispatch_error_surface_t::route_mesh_channel,
-                                          dispatch_message_kind_t::send,
-                                          packet_name,
-                                          router_channel_id,
-                                          std::nullopt,
-                                          header.correlation_id,
-                                          target_node_rid.to_string (),
-                                          std::nullopt,
-                                          std::nullopt,
-                                          std::nullopt};
-          });
-        parts = encode_route_payload_parts (std::move (header), message_type, encode_payload,
-                                            *state->serializers);
+        parts = codec.encode_node_send_parts (router_channel_id, packet_name, target_node_rid,
+                                              metadata, state->runtime->dispatch,
+                                              *state->serializers, encode_payload);
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<void> (error);
@@ -1584,8 +1551,8 @@ task_t<result_t<void>> route_client_t::submit_channel_send_erased (
                                           std::nullopt,
                                           std::nullopt};
           });
-        auto parts = encode_route_payload_parts (std::move (header), message_type,
-                                                 std::move (encode_payload), *state->serializers);
+        auto parts =
+          codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
         co_return co_await sender (std::move (parts));
     }
     catch (const framework_exception_t &error) {
@@ -1639,8 +1606,8 @@ route_client_t::submit_request_erased (const std::shared_ptr<detail::route_clien
                                           std::nullopt,
                                           std::nullopt};
           });
-        parts = encode_route_payload_parts (std::move (header), request_type, encode_payload,
-                                            *state->serializers);
+        parts =
+          codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
     catch (const framework_exception_t &error) {
         return task_t<std::uint64_t> (detail::result_access_t::failure<std::uint64_t> (error));
@@ -1709,8 +1676,8 @@ route_client_t::submit_spot_send_erased (const std::shared_ptr<detail::route_cli
                                           std::nullopt,
                                           std::nullopt};
           });
-        parts = encode_route_payload_parts (std::move (header), message_type, encode_payload,
-                                            *state->serializers);
+        parts =
+          codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<void> (error);
@@ -1777,8 +1744,8 @@ task_t<std::uint64_t> route_client_t::submit_spot_request_erased (
                                           std::nullopt,
                                           std::nullopt};
           });
-        parts = encode_route_payload_parts (std::move (header), request_type, encode_payload,
-                                            *state->serializers);
+        parts =
+          codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
     catch (const framework_exception_t &error) {
         return task_t<std::uint64_t> (detail::result_access_t::failure<std::uint64_t> (error));
@@ -1859,8 +1826,8 @@ task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
                                           std::nullopt,
                                           std::nullopt};
           });
-        parts = encode_route_payload_parts (std::move (header), request_type, encode_payload,
-                                            *state->serializers);
+        parts =
+          codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<zlink::message_t> (error);
@@ -2008,8 +1975,8 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
                                           std::nullopt,
                                           std::nullopt};
           });
-        parts = encode_route_payload_parts (std::move (header), request_type,
-                                            std::move (encode_payload), *state->serializers);
+        parts =
+          codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<zlink::message_t> (error);
@@ -2133,8 +2100,8 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
                                           std::nullopt,
                                           std::nullopt};
           });
-        parts = encode_route_payload_parts (std::move (header), request_type, encode_payload,
-                                            *state->serializers);
+        parts =
+          codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<zlink::message_t> (error);

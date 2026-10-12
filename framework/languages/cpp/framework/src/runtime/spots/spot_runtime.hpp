@@ -171,6 +171,7 @@ class spot_node_builder_state_t
     runtime::exactly_once_table_t<std::string, zlink::message_t> dispatched_request_replies;
     struct pending_handoff_request_t
     {
+        static constexpr std::chrono::seconds default_timeout{30};
         actor_ref_t actor;
         runtime::protocol::actor_route_fence_t source_fence;
         std::uint64_t reply_route_id = 0;
@@ -364,9 +365,7 @@ class spot_node_builder_state_t
     std::map<std::string, std::uint64_t> core_actor_membership_epochs;
     std::map<std::string, std::shared_ptr<service::spot_t>> native_spots_by_id;
     std::shared_ptr<service::spot_t> routed_control_spot;
-    runtime::offload_executor_t route_client_lane_executor;
-    runtime::state_lane_t route_client_lane{route_client_lane_executor};
-    std::optional<route_client_t> route_client;
+    std::atomic<std::shared_ptr<const route_client_t>> route_client;
     struct queued_actor_packet_t
     {
         service::receive_record_t record;
@@ -1729,12 +1728,12 @@ class spot_node_runtime_t
       const service::ready_record_t &owner,
       const service::receive_record_t &record,
       std::vector<zlink::message_t> &parts,
+      const std::optional<result_t<runtime::messaging::envelope_header_t>> &decoded_header,
       service_provider_t &services,
       serializer_registry_t &serializers,
       std::function<void ()> deferred_terminal = {},
       bool *terminal_deferred = nullptr,
-      std::function<void ()> before_application_handler = {},
-      std::optional<result_t<runtime::messaging::envelope_header_t>> *decoded_header = nullptr);
+      std::function<void ()> before_application_handler = {});
     void set_route_client (route_client_t route_client);
     void on_destroy_actor (std::function<result_t<void> (const actor_ref_t &)> destroy_actor);
     void on_actor_ref_updated (std::function<result_t<void> (const actor_ref_t &)> update_actor);

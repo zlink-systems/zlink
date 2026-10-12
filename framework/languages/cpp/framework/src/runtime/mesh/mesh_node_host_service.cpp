@@ -48,6 +48,29 @@
 namespace zlink::framework::runtime
 {
 
+std::optional<result_t<messaging::envelope_header_t>> decode_mesh_record_header (
+  const host::receive_record_t &record, std::vector<zlink::message_t> &parts, bool capture_flow)
+{
+    using kind_t = host::record_kind_t;
+    switch (record.kind) {
+        case kind_t::spot_send:
+        case kind_t::spot_request:
+        case kind_t::node_send:
+        case kind_t::node_request:
+        case kind_t::channel_send:
+        case kind_t::channel_request:
+        case kind_t::actor_send:
+        case kind_t::actor_request:
+            break;
+        default:
+            return std::nullopt;
+    }
+    messaging::message_parts_t encoded (std::move (parts));
+    auto decoded = messaging::envelope_codec_t{}.decode_header (encoded, capture_flow);
+    parts = std::move (encoded).take_items ();
+    return std::move (decoded);
+}
+
 struct mesh_node_host_service_t::actor_destroy_callback_gate_t
 {
     std::mutex mutex;
@@ -2611,8 +2634,13 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   bool handled = false;
                                   try {
                                       run_direct ([&] {
+                                          const auto header = decode_mesh_record_header (
+                                            record, parts,
+                                            detail::message_flow_tracer_t (_dispatch_options)
+                                              .capture_enabled ());
                                           handled = spot_runtime.dispatch_mesh_record (
-                                            owner, record, parts, *_services, *_serializers);
+                                            owner, record, parts, header, *_services,
+                                            *_serializers);
                                       });
                                   }
                                   catch (...) {
@@ -2653,11 +2681,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   return;
                               }
                               run_direct ([&] {
-                                  std::optional<result_t<messaging::envelope_header_t>>
-                                    decoded_header;
-                                  if (spot_runtime.dispatch_mesh_record (
-                                        owner, record, parts, *_services, *_serializers, {},
-                                        nullptr, {}, &decoded_header)) {
+                                  auto decoded_header = decode_mesh_record_header (
+                                    record, parts,
+                                    detail::message_flow_tracer_t (_dispatch_options)
+                                      .capture_enabled ());
+                                  if (spot_runtime.dispatch_mesh_record (owner, record, parts,
+                                                                         decoded_header, *_services,
+                                                                         *_serializers)
+                                      || !decoded_header) {
                                       return;
                                   }
                                   detail::mesh_record_dispatcher_t dispatcher (
@@ -2981,14 +3012,15 @@ void mesh_node_host_service_t::dispatch_application (
           std::make_shared<application_dispatch_terminal_owner_t> (std::move (terminal));
         detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
         bool terminal_deferred = false;
-        std::optional<result_t<messaging::envelope_header_t>> decoded_header;
+        auto decoded_header = decode_mesh_record_header (
+          record, parts, detail::message_flow_tracer_t (dispatch_options).capture_enabled ());
         const auto handled = application_spot_runtime.dispatch_mesh_record (
-          owner, record, parts, *services, *serializers,
+          owner, record, parts, decoded_header, *services, *serializers,
           [deferred_terminal] { deferred_terminal->settle (); }, &terminal_deferred,
-          record.before_application_handler, &decoded_header);
+          record.before_application_handler);
         trace_mesh_application ("framework-dispatch", record, parts.size (),
                                 handled ? "handled" : "not-handled");
-        if (!handled
+        if (!handled && decoded_header
             && (owner.owner_kind == host::owner_kind_t::node
                 || owner.owner_kind == host::owner_kind_t::channel)) {
             detail::mesh_record_dispatcher_t dispatcher (

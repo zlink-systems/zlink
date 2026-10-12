@@ -2589,27 +2589,13 @@ result_t<void> actor_gateway_runtime_t::bind_session_route (
           auto submit_flow = runtime::flow_context_t::enter_current_or_create (
             flow_origin_t::application, flow.mode ());
           runtime::messaging::client_call_codec_t codec;
-          const auto header =
-            codec.create_envelope (runtime::messaging::message_kind_t::command, route_channel_name,
-                                   actor_bound_session_route_request_t::packet_name);
-          flow.trace (message_flow_outcome_t::sent, [&] {
-              return message_flow_event_t{message_flow_outcome_t::sent,
-                                          dispatch_error_surface_t::route_mesh_channel,
-                                          dispatch_message_kind_t::send,
-                                          header.message_name,
-                                          route_channel_name,
-                                          std::nullopt,
-                                          header.correlation_id,
-                                          target_node_rid.to_string (),
-                                          std::nullopt,
-                                          std::nullopt,
-                                          std::nullopt};
-          });
-          auto parts =
-            codec.encode_envelope_parts (header,
-                                         make_actor_bound_session_route_request (
-                                           *current_actor_ref, packet_name, payload_codec, payload),
-                                         *serializers);
+          auto parts = codec.encode_node_send_parts (
+            route_channel_name, actor_bound_session_route_request_t::packet_name, target_node_rid,
+            {}, state->dispatch, *serializers, [&] (serializer_registry_t &registry) {
+                return registry.get<actor_bound_session_route_request_t> ()
+                  .serialize_with_content_type (make_actor_bound_session_route_request (
+                    *current_actor_ref, packet_name, payload_codec, payload));
+            });
           const auto sent =
             co_await node->send_to_node (target_node_rid, std::move (parts).take_items ());
           if (sent != zlink::submit_result_t::ok)

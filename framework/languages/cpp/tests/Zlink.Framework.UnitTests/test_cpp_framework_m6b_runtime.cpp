@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 
@@ -676,8 +677,9 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
         old_dispatch_future = completion->get_future ();
         bool terminal_deferred = false;
         const auto accepted = old_spots.dispatch_mesh_record (
-          ready, record, parts, provider, serializers,
-          [completion] { completion->set_value (true); }, &terminal_deferred);
+          ready, record, parts,
+          zlink::framework::runtime::decode_mesh_record_header (record, parts, false), provider,
+          serializers, [completion] { completion->set_value (true); }, &terminal_deferred);
         if (!accepted || !terminal_deferred)
             completion->set_value (accepted);
     };
