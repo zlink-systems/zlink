@@ -660,10 +660,10 @@ The precise full signature is defined by
 | The host isn't accepting new submits. | Fails with that language's shutdown error. |
 
 <a id="reply-route-remains"></a>A reply route remains when the received message is a request with a reply token,
-the whole envelope header is a syntactically valid JSON object, and its `correlationId` is a non-empty
-string. If another header field is invalid in that case, the request completes with an error reply. If any
-of the three conditions fails, no reply is built and the failure is recorded once in runtime observability
-information, as for a one-way message.
+the whole envelope header is a syntactically valid JSON object, and `correlationId` is a string conforming to
+[Request Correlation and Business Flow Identification §3](../06-observability/04-flow-correlation.en.md#3-format-and-ownership).
+If another header field is invalid in that case, the request completes with an error reply. If this condition
+is not met, no reply is built and the failure is recorded once in runtime observability information.
 
 For a ChannelName call, the framework selects one Server member. A member in a
 draining state — finishing existing work while stopping new-work acceptance — is

@@ -589,10 +589,11 @@ Classic fanout publish에 적용하지 않는다.
 | One-way handler를 찾지 못하거나 payload를 해석하지 못했다. | Message를 handler에 전달하지 않고 runtime 관측 정보에 기록한다. |
 | Host가 새로운 submit을 받지 않는다. | 해당 언어의 shutdown 오류로 실패한다. |
 
-<a id="reply-route-remains"></a>Reply 경로는 수신한 message가 reply token을 가진 request이고, envelope header 전체가
-JSON 문법에 맞는 object이며, 그 `correlationId`가 비어 있지 않은 문자열일 때 남아 있다. 이때 다른 header
-field가 잘못되었으면 error reply로 완료한다. 세 조건 중 하나라도 맞지 않으면 reply를 만들지 않고 one-way와
-같이 runtime 관측 정보에 한 번 기록한다.
+<a id="reply-route-remains"></a>수신한 message가 reply token을 가진 request이고, envelope header 전체가 JSON
+문법에 맞는 object이며, `correlationId`가
+[Request 연결과 업무 흐름 식별 §3](../06-observability/04-flow-correlation.ko.md#3-형식과-소유권)의 형식에 맞는
+문자열이면 reply 경로가 남아 있다. 이때 다른 header field가 잘못되었으면 error reply로 완료한다. 이 조건을
+충족하지 못하면 reply를 만들지 않고 runtime 관측 정보에 실패를 한 번 기록한다.
 
 ChannelName 호출은 Framework가 Server member 하나를 선택한다. 기존 작업을 마치며 새 작업
 수락을 중단하는 drain 상태의 member는 이 선택 후보에서 제외하므로 새로운 ChannelName
