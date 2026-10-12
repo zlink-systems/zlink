@@ -26,7 +26,6 @@ import {
 import { invokeZLinkHandlerFilters } from '../handlers';
 import {
   decodeChannelPayload,
-  ZLinkChannelMessageKind,
   type ZLinkChannelEnvelope,
   type ZLinkChannelEnvelopeCodecRegistry
 } from './channel-envelope';
@@ -240,9 +239,7 @@ export class ZLinkChannelDispatchPipeline {
     readonly writeProtocolError?: (error: ZLinkFrameworkException) => Promise<void>;
   }): Promise<void> {
     const { info } = input;
-    const isRequest =
-      info.kind === ZLinkChannelMessageKind.Request ||
-      (info.kind === undefined && input.transportRequest);
+    const isRequest = input.transportRequest;
     let replied = false;
     if (isRequest && input.writeProtocolError !== undefined && info.correlationId !== undefined) {
       const protocolError = new ZLinkFrameworkException(

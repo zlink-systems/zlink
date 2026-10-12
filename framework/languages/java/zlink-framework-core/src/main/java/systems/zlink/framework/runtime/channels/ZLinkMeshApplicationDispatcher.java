@@ -210,8 +210,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                     request
                             && (record.receive().replyToken() != null || record.canReply())
                             && rejectedEnvelope != null
-                            && rejectedEnvelope.correlationId() != null
-                            && !rejectedEnvelope.correlationId().isEmpty();
+                            && rejectedEnvelope.canCorrelateReply();
             dispatchErrors.report(
                     new ZLinkDispatchFailure(
                             kind == RecordKind.NODE_REQUEST || kind == RecordKind.NODE_SEND

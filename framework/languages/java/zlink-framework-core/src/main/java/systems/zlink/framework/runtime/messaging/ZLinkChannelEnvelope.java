@@ -53,6 +53,8 @@ public final class ZLinkChannelEnvelope {
                     JsonFactory.builder()
                             .recyclerPool(JsonRecyclerPools.sharedBoundedPool())
                             .build());
+    private static final int CORRELATION_ID_MAX_BYTES = 64;
+    private static final int CORRELATION_ID_MAX_CHARACTER = 0x7f;
     private static final int HEADER_INITIAL_CAPACITY = 256;
     private static final int HEADER_WRITER_POOL_CAPACITY =
             Math.max(1, Runtime.getRuntime().availableProcessors());
@@ -108,6 +110,16 @@ public final class ZLinkChannelEnvelope {
                             ? DEFAULT_CONTENT_TYPE
                             : contentType;
             metadata = metadata == null || metadata.isEmpty() ? Map.of() : Map.copyOf(metadata);
+        }
+
+        public boolean canCorrelateReply() {
+            if (correlationId == null
+                    || correlationId.isEmpty()
+                    || correlationId.length() > CORRELATION_ID_MAX_BYTES) return false;
+            for (int index = 0; index < correlationId.length(); index++) {
+                if (correlationId.charAt(index) > CORRELATION_ID_MAX_CHARACTER) return false;
+            }
+            return true;
         }
 
         public boolean isError() {
@@ -650,11 +662,14 @@ public final class ZLinkChannelEnvelope {
                 }
             }
 
+            if (json.nextToken() != null) {
+                throw new IOException("ZLink envelope header must contain one JSON object");
+            }
             if (marker != FORMAT_MARKER) {
                 throw protocolError("ZLink envelope format marker is invalid", null);
             }
-            if (!kindIsInt) {
-                throw protocolError("ZLink envelope kind is missing", null);
+            if (!kindIsInt || kind < KIND_REQUEST || kind > KIND_ERROR) {
+                throw protocolError("ZLink envelope kind is invalid", null);
             }
             if (!channelNameIsString) {
                 throw protocolError("ZLink envelope channelName must be a string", null);
@@ -691,38 +706,45 @@ public final class ZLinkChannelEnvelope {
                     throw protocolError("ZLink envelope flow id must be UUIDv7", null);
                 }
             }
-            return new Header(
-                    kind,
-                    channelName,
-                    messageName,
-                    contentType,
-                    correlationId,
-                    deadline,
-                    topic,
-                    errorCode,
-                    errorMessage,
-                    source,
-                    metadata,
-                    flowId,
-                    flowOrigin);
-        } catch (IOException | ZLinkFrameworkException invalidHeader) {
-            // Keep only fields already read by this parser. Invalid metadata and flow
-            // fields cannot be copied into the error reply.
-            Header rejectedHeader =
+            Header header =
                     new Header(
                             kind,
                             channelName,
                             messageName,
                             contentType,
                             correlationId,
-                            null,
-                            null,
-                            null,
-                            null,
-                            null,
-                            Map.of(),
-                            null,
-                            null);
+                            deadline,
+                            topic,
+                            errorCode,
+                            errorMessage,
+                            source,
+                            metadata,
+                            flowId,
+                            flowOrigin);
+            if (correlationId != null && !header.canCorrelateReply()) {
+                throw protocolError("ZLink envelope correlationId must be 1..64 byte ASCII", null);
+            }
+            return header;
+        } catch (IOException | ZLinkFrameworkException invalidHeader) {
+            // Only a complete JSON object can retain reply identifiers. Invalid
+            // metadata and flow fields cannot be copied into the error reply.
+            Header rejectedHeader =
+                    invalidHeader instanceof IOException
+                            ? null
+                            : new Header(
+                                    kind,
+                                    channelName,
+                                    messageName,
+                                    contentType,
+                                    correlationId,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    Map.of(),
+                                    null,
+                                    null);
             throw new HeaderDecodeException(rejectedHeader, invalidHeader);
         }
     }

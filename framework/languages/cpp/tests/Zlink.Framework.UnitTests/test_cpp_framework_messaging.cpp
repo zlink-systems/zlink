@@ -259,24 +259,14 @@ int main ()
             return 188;
         }
 
-        // Keep the installed nlohmann conversion results as the decoder's
-        // reference for edge numeric and content-type values.  In particular,
-        // JSON number conversion is not equivalent to accepting only integral
-        // enum tokens.
-        for (const char *kind_value : {"3.75", "true", "4294967297"}) {
+        // Envelope kind uses the protocol's integer enum, without numeric coercion.
+        for (const char *kind_value : {"0", "6", "3.75", "true", "4294967297"}) {
             const std::string wire = std::string (R"({"formatMarker":242,"kind":)") + kind_value
                                      + R"(,"channelName":"c","messageName":"m"})";
-            bool dom_accepts = true;
-            int dom_kind = 0;
-            try {
-                dom_kind = nlohmann::json::parse (wire).at ("kind").get<int> ();
-            }
-            catch (const nlohmann::json::exception &) {
-                dom_accepts = false;
-            }
             const auto decoded = codec.decode_header (zlink::message_t::from (wire));
-            if (static_cast<bool> (decoded) != dom_accepts
-                || (decoded && static_cast<int> (decoded.value ().kind) != dom_kind)) {
+            if (decoded
+                || decoded.error_kind ()
+                     != zlink::framework::framework_error_kind_t::protocol_error) {
                 return 180;
             }
         }

@@ -9,6 +9,119 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Fact]
+    public async Task MalformedReplyRouteMatchesSharedFourLanguageContract()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        const string relative = "framework/test/fixtures/malformed-envelope-reply-route.tsv";
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, relative)))
+            directory = directory.Parent;
+        Assert.NotNull(directory);
+        int count = 0;
+        foreach (var row in File.ReadLines(Path.Combine(directory!.FullName, relative)))
+        {
+            if (row.Length == 0 || row.StartsWith('#'))
+                continue;
+            var fields = row.Split('\t');
+            bool request = bool.Parse(fields[1]);
+            var logger = new MeshFlowLoggerFactory();
+            await using var services = new ServiceCollection()
+                .AddSingleton<ILoggerFactory>(logger)
+                .AddTransient<MeshChannelRequestHandler>()
+                .BuildServiceProvider();
+            var registration = new ZLinkFrameworkRegistration();
+            registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            var spotNode = new ZLinkSpotNodeRegistration
+            {
+                SpotNodeName = "mesh",
+                RoutingId = RoutingId.From("mesh-node"),
+            };
+            var membership = new ZLinkMeshChannelMembership { ChannelName = "play" };
+            membership.RequestHandlers.Add(
+                new ZLinkChannelHandlerRegistration(
+                    typeof(MeshChannelRequestHandler),
+                    typeof(MeshRequest),
+                    typeof(MeshReply),
+                    "String"
+                )
+            );
+            spotNode.ChannelMemberships.Add(membership);
+            var runtime = new ZLinkFrameworkRuntime(
+                services,
+                null!,
+                registration,
+                new ZLinkHandlerRegistry([]),
+                new ZLinkHandlerDispatcher(
+                    services.GetRequiredService<IServiceScopeFactory>(),
+                    registration
+                )
+            );
+            var runner = new ZLinkRuntimeTaskRunner(
+                new ThrowingRuntimeErrorSink(),
+                CancellationToken.None
+            );
+            await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+                ZLinkMeshNodeRouteDispatcher.Create(
+                    services,
+                    registration,
+                    spotNode,
+                    runtime,
+                    runner
+                )
+            );
+            int replies = 0;
+            ZLinkEnvelopeHeader? replyHeader = null;
+            var parts = new[]
+            {
+                Message.From(System.Text.Encoding.UTF8.GetBytes(fields[2])),
+                Message.From(System.Text.Encoding.UTF8.GetBytes("request")),
+            };
+            Func<IReadOnlyList<Message>, SubmitResult>? reply = request
+                ? replyParts =>
+                {
+                    replies++;
+                    replyHeader = ZLinkEnvelopeCodec.DecodeHeader(replyParts, false);
+                    return SubmitResult.Ok;
+                }
+                : null;
+            await dispatcher.DispatchBatchAsync(
+                [
+                    new ZLinkBackendRouteReceived(
+                        parts,
+                        RoutingId.From("source-node"),
+                        null,
+                        request ? 41UL : null,
+                        reply,
+                        "play"
+                    ),
+                ],
+                CancellationToken.None
+            );
+            await runner.StopAsync();
+            Assert.True(replies == (fields[3] == "reply_error" ? 1 : 0), fields[0]);
+            if (replyHeader is not null)
+            {
+                Assert.Equal(ZLinkMessageKind.Error, replyHeader.Kind);
+                Assert.Equal("protocol_error", replyHeader.ErrorCode);
+                using var json = System.Text.Json.JsonDocument.Parse(fields[2]);
+                Assert.Equal(
+                    json.RootElement.GetProperty("correlationId").GetString(),
+                    replyHeader.CorrelationId
+                );
+            }
+            var errors = logger
+                .Messages.Where(line =>
+                    line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
+                )
+                .ToArray();
+            Assert.Single(errors);
+            Assert.Contains("reason=invalid_frame", errors[0], StringComparison.Ordinal);
+            Assert.Contains("action=" + fields[3], errors[0], StringComparison.Ordinal);
+            count++;
+        }
+        Assert.Equal(22, count);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]

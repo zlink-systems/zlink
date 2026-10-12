@@ -426,7 +426,7 @@ final class ZLinkMeshApplicationDispatcherTest {
     }
 
     @Test
-    void malformedHeaderRequestsReplyAndSendsDropOnce() throws Exception {
+    void malformedReplyRouteMatchesSharedFourLanguageContract() throws Exception {
         var events = new java.util.concurrent.LinkedBlockingQueue<String>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Level previousLevel = logger.getLevel();
@@ -434,9 +434,8 @@ final class ZLinkMeshApplicationDispatcherTest {
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
-                        if (record.getMessage().contains("event_id=zlink.dispatch_error")) {
+                        if (record.getMessage().contains("event_id=zlink.dispatch_error"))
                             events.add(record.getMessage());
-                        }
                     }
 
                     @Override
@@ -449,9 +448,9 @@ final class ZLinkMeshApplicationDispatcherTest {
         logger.addHandler(listener);
         try {
             MeshNodeRegistration mesh = new MeshNodeRegistration("game");
-            mesh.listen("inproc://mesh-malformed-header");
+            mesh.listen("inproc://shared-malformed-reply-route");
             mesh.channelName("play");
-            ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
+            var framework = new ZLinkFrameworkRegistration();
             framework.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             var dispatcher =
                     new ZLinkMeshApplicationDispatcher(
@@ -460,78 +459,57 @@ final class ZLinkMeshApplicationDispatcherTest {
                             framework,
                             ZLinkHandlerActivator.reflection(),
                             (token, parts) -> {
-                                throw new AssertionError(
-                                        "record reply callback must own the reply");
+                                throw new AssertionError("record callback must own replies");
                             });
-            String correlation = "0123456789abcdeffedcba9876543201";
-            for (RecordKind kind :
-                    List.of(
-                            RecordKind.NODE_SEND,
-                            RecordKind.CHANNEL_SEND,
-                            RecordKind.NODE_REQUEST,
-                            RecordKind.CHANNEL_REQUEST)) {
-                boolean request =
-                        kind == RecordKind.NODE_REQUEST || kind == RecordKind.CHANNEL_REQUEST;
-                for (String correlationJson :
-                        List.of("\"" + correlation + "\"", "null", "\"\"", "42")) {
-                    boolean canReply = request && correlationJson.equals("\"" + correlation + "\"");
-                    for (String invalidField :
-                            List.of(
-                                    "\"metadata\":{\"broken\":42}",
-                                    "\"contentType\":42",
-                                    "\"formatMarker\":0",
-                                    "\"metadata\":")) {
-                        CompletableFuture<ErrorReply> reply = new CompletableFuture<>();
-                        CompletableFuture<Void> closed = new CompletableFuture<>();
-                        try (var base = record(kind, "play", "request")) {
-                            String header =
-                                    "{\"formatMarker\":"
-                                            + ZLinkChannelEnvelope.FORMAT_MARKER
-                                            + ",\"kind\":"
-                                            + (request
-                                                    ? ZLinkChannelEnvelope.KIND_REQUEST
-                                                    : ZLinkChannelEnvelope.KIND_COMMAND)
-                                            + ",\"channelName\":\"play\",\"messageName\":\"String\","
-                                            + "\"correlationId\":"
-                                            + correlationJson
-                                            + ","
-                                            + invalidField
-                                            + "}";
-                            dispatcher.accept(
-                                    new ZLinkMeshDispatchRecord(
-                                            base.owner(),
-                                            base.receive(),
-                                            List.of(Message.from(header), Message.from("request")),
-                                            parts -> {
-                                                assertTrue(
-                                                        canReply,
-                                                        "uncorrelatable request or send must not reply");
+            var fixture =
+                    java.nio.file.Path.of(
+                            "../../../test/fixtures/malformed-envelope-reply-route.tsv");
+            int count = 0;
+            for (String row : java.nio.file.Files.readAllLines(fixture)) {
+                if (row.isEmpty() || row.startsWith("#")) continue;
+                String[] fields = row.split("\t");
+                boolean request = Boolean.parseBoolean(fields[1]);
+                boolean expectedReply = fields[3].equals("reply_error");
+                for (var kind :
+                        request
+                                ? List.of(RecordKind.NODE_REQUEST, RecordKind.CHANNEL_REQUEST)
+                                : List.of(RecordKind.NODE_SEND, RecordKind.CHANNEL_SEND)) {
+                    var reply = new CompletableFuture<ZLinkChannelEnvelope.Header>();
+                    var closed = new CompletableFuture<Void>();
+                    try (var base = record(kind, "play", "request")) {
+                        dispatcher.accept(
+                                new ZLinkMeshDispatchRecord(
+                                        base.owner(),
+                                        base.receive(),
+                                        List.of(Message.from(fields[2]), Message.from("request")),
+                                        parts ->
                                                 reply.complete(
-                                                        new ErrorReply(
-                                                                ZLinkFrameworkErrorReply.kind(
-                                                                        parts),
-                                                                ZLinkChannelEnvelope.decodeHeader(
-                                                                                parts.get(0), false)
-                                                                        .correlationId()));
-                                            },
-                                            () -> closed.complete(null)));
-                        }
-                        closed.get(2, TimeUnit.SECONDS);
-                        if (canReply) {
-                            assertEquals(
-                                    new ErrorReply(
-                                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR, correlation),
-                                    reply.get(2, TimeUnit.SECONDS));
-                        } else {
-                            assertFalse(reply.isDone());
-                        }
-                        String event = events.poll(2, TimeUnit.SECONDS);
-                        assertTrue(event != null && event.contains("reason=invalid_frame"));
-                        assertTrue(event.contains(canReply ? "action=reply_error" : "action=drop"));
-                        assertTrue(events.isEmpty(), "one dispatch error per malformed envelope");
+                                                        ZLinkChannelEnvelope.decodeHeader(
+                                                                parts.get(0), false)),
+                                        () -> closed.complete(null)));
                     }
+                    closed.get(2, TimeUnit.SECONDS);
+                    assertEquals(expectedReply, reply.isDone(), fields[0] + ":" + kind);
+                    if (expectedReply) {
+                        assertEquals(
+                                ZLinkChannelEnvelope.KIND_ERROR, reply.get().kind(), fields[0]);
+                        assertEquals("protocol_error", reply.get().errorCode(), fields[0]);
+                        var json =
+                                new com.fasterxml.jackson.databind.ObjectMapper()
+                                        .readTree(fields[2]);
+                        assertEquals(
+                                json.get("correlationId").textValue(),
+                                reply.get().correlationId(),
+                                fields[0]);
+                    }
+                    String event = events.poll(2, TimeUnit.SECONDS);
+                    assertTrue(event != null && event.contains("reason=invalid_frame"), fields[0]);
+                    assertTrue(event.contains("action=" + fields[3]), fields[0]);
+                    assertTrue(events.isEmpty(), fields[0] + ": one dispatch error");
                 }
+                count++;
             }
+            assertEquals(22, count);
         } finally {
             logger.removeHandler(listener);
             logger.setLevel(previousLevel);

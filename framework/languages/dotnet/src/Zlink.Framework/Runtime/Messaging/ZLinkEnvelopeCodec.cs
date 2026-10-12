@@ -102,6 +102,7 @@ internal sealed class ZLinkEnvelopeProtocolException(ZLinkEnvelopeHeader header,
 
 internal static class ZLinkEnvelopeCodec
 {
+    private const int MaximumCorrelationIdBytes = 64;
     private const string JsonContentType = "application/json";
     private static readonly UTF8Encoding StrictMetadataUtf8 = new(false, true);
     private const int MaximumSimpleHeaderCacheEntries = 4096;
@@ -375,6 +376,7 @@ internal static class ZLinkEnvelopeCodec
         DateTimeOffset? deadline = null;
         Dictionary<string, string>? metadata = null;
         string? metadataError = null;
+        string? fieldError = null;
         var complete = false;
         while (reader.Read())
         {
@@ -391,27 +393,42 @@ internal static class ZLinkEnvelopeCodec
             switch (field)
             {
                 case HeaderField.FormatMarker:
-                    // The Web JSON profile accepts a quoted byte for this
-                    // numeric property; enum fields retain integer-only input.
-                    formatMarker = JsonSerializer.Deserialize<byte>(
-                        ref reader,
-                        ZLinkJsonSerializerOptions.Default
-                    );
+                    if (
+                        reader.TokenType == JsonTokenType.Number
+                        && reader.TryGetByte(out var marker)
+                    )
+                        formatMarker = marker;
+                    else if (
+                        reader.TokenType == JsonTokenType.String
+                        && byte.TryParse(
+                            reader.GetString(),
+                            System.Globalization.NumberStyles.None,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out marker
+                        )
+                    )
+                        formatMarker = marker;
+                    else
+                    {
+                        formatMarker = 0;
+                        fieldError ??= "ZLink envelope format marker is invalid.";
+                        reader.Skip();
+                    }
                     break;
                 case HeaderField.Kind:
-                    kind = (ZLinkMessageKind)ReadHeaderInteger(ref reader);
+                    kind = (ZLinkMessageKind)ReadHeaderInteger(ref reader, ref fieldError);
                     break;
                 case HeaderField.ChannelName:
-                    channelName = ReadHeaderString(ref reader);
+                    channelName = ReadHeaderString(ref reader, ref fieldError);
                     break;
                 case HeaderField.MessageName:
-                    messageName = ReadHeaderString(ref reader);
+                    messageName = ReadHeaderString(ref reader, ref fieldError);
                     break;
                 case HeaderField.ContentType:
-                    contentType = ReadHeaderString(ref reader);
+                    contentType = ReadHeaderString(ref reader, ref fieldError);
                     break;
                 case HeaderField.CorrelationId:
-                    correlationId = ReadHeaderString(ref reader);
+                    correlationId = ReadHeaderString(ref reader, ref fieldError);
                     break;
                 case HeaderField.Deadline:
                     if (reader.TokenType == JsonTokenType.Null)
@@ -422,28 +439,32 @@ internal static class ZLinkEnvelopeCodec
                     )
                         deadline = timestamp;
                     else
-                        throw new JsonException("ZLink envelope deadline is invalid.");
+                    {
+                        deadline = null;
+                        fieldError ??= "ZLink envelope deadline is invalid.";
+                        reader.Skip();
+                    }
                     break;
                 case HeaderField.Topic:
-                    topic = ReadHeaderString(ref reader);
+                    topic = ReadHeaderString(ref reader, ref fieldError);
                     break;
                 case HeaderField.ErrorCode:
-                    errorCode = ReadHeaderString(ref reader);
+                    errorCode = ReadHeaderString(ref reader, ref fieldError);
                     break;
                 case HeaderField.ErrorMessage:
-                    errorMessage = ReadHeaderString(ref reader);
+                    errorMessage = ReadHeaderString(ref reader, ref fieldError);
                     break;
                 case HeaderField.Source:
-                    source = ReadHeaderString(ref reader);
+                    source = ReadHeaderString(ref reader, ref fieldError);
                     break;
                 case HeaderField.FlowId:
-                    flowId = ReadHeaderString(ref reader);
+                    flowId = ReadHeaderString(ref reader, ref fieldError);
                     break;
                 case HeaderField.FlowOrigin:
                     flowOrigin =
                         reader.TokenType == JsonTokenType.Null
                             ? null
-                            : (ZLinkFlowOrigin)ReadHeaderInteger(ref reader);
+                            : (ZLinkFlowOrigin)ReadHeaderInteger(ref reader, ref fieldError);
                     break;
                 case HeaderField.Metadata:
                     metadata = ReadHeaderMetadata(ref reader, out metadataError);
@@ -474,20 +495,28 @@ internal static class ZLinkEnvelopeCodec
             FlowOrigin = flowOrigin,
             Metadata = metadata,
         };
-        if (metadataError is not null)
-            throw new ZLinkEnvelopeProtocolException(header, metadataError);
+        if (fieldError is not null || metadataError is not null)
+            throw new ZLinkEnvelopeProtocolException(header, fieldError ?? metadataError!);
         return header;
     }
 
-    private static string? ReadHeaderString(ref Utf8JsonReader reader) =>
-        reader.TokenType is JsonTokenType.String or JsonTokenType.Null
-            ? reader.GetString()
-            : throw new JsonException("ZLink envelope string field is invalid.");
+    private static string? ReadHeaderString(ref Utf8JsonReader reader, ref string? error)
+    {
+        if (reader.TokenType is JsonTokenType.String or JsonTokenType.Null)
+            return reader.GetString();
+        error ??= "ZLink envelope string field is invalid.";
+        reader.Skip();
+        return null;
+    }
 
-    private static int ReadHeaderInteger(ref Utf8JsonReader reader) =>
-        reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var value)
-            ? value
-            : throw new JsonException("ZLink envelope integer field is invalid.");
+    private static int ReadHeaderInteger(ref Utf8JsonReader reader, ref string? error)
+    {
+        if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var value))
+            return value;
+        error ??= "ZLink envelope integer field is invalid.";
+        reader.Skip();
+        return 0;
+    }
 
     private static Dictionary<string, string>? ReadHeaderMetadata(
         ref Utf8JsonReader reader,
@@ -931,7 +960,7 @@ internal static class ZLinkEnvelopeCodec
             is ZLinkMessageKind.Request
                 or ZLinkMessageKind.Response
                 or ZLinkMessageKind.Error;
-        if (isReplyCorrelated && string.IsNullOrWhiteSpace(header.CorrelationId))
+        if (isReplyCorrelated && !CanCorrelateReply(header))
             throw new ZLinkEnvelopeProtocolException(
                 header,
                 $"ZLink {header.Kind} envelope requires a correlation id."
@@ -997,8 +1026,16 @@ internal static class ZLinkEnvelopeCodec
         return (header.FlowId, origin);
     }
 
-    public static bool CanCorrelateReply(ZLinkEnvelopeHeader header) =>
-        !string.IsNullOrWhiteSpace(header.CorrelationId);
+    public static bool CanCorrelateReply(ZLinkEnvelopeHeader header)
+    {
+        var correlation = header.CorrelationId;
+        if (string.IsNullOrEmpty(correlation) || correlation.Length > MaximumCorrelationIdBytes)
+            return false;
+        foreach (char value in correlation)
+            if (!char.IsAscii(value))
+                return false;
+        return true;
+    }
 
     public static string ProtocolErrorMessageName(ZLinkEnvelopeHeader header) =>
         string.IsNullOrWhiteSpace(header.MessageName)
