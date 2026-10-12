@@ -3169,7 +3169,7 @@ public sealed class ServiceRuntimeFoundationTests
         sourceSpot.Publish(channelName, topic, [payload]);
 
         using var first = await firstDelivery.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        await WaitUntilAsync(() => applicationJobQueue.GetStatus().CapacityWaiters == 1);
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().CapacityWaiters > 0);
         Assert.False(secondDelivery.Task.IsCompleted);
         var firstStatus = applicationJobQueue.GetStatus();
         Assert.Equal(1UL, firstStatus.QueuedApplicationJobs);
@@ -3189,9 +3189,43 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(2, Volatile.Read(ref deliveries));
     }
 
-    [Fact]
-    public async Task Managed_mesh_shutdown_keeps_application_permit_until_the_admitted_multicast_child_finishes()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Managed_mesh_shutdown_keeps_application_permit_until_the_admitted_multicast_child_finishes(
+        int publishCount
+    )
     {
+        const string channelName = "events";
+        const string topic = "created";
+        const string flowPathEnvironmentVariable = "ZLINK_MULTICAST_TEST_FLOW_PATH";
+        var suffix = Guid.NewGuid().ToString("N");
+        var flowPath = Environment.GetEnvironmentVariable(flowPathEnvironmentVariable);
+        using var listener = flowPath is null
+            ? null
+            : new TestHostMessageFlowListener($"{flowPath}.{suffix}.flow");
+        var options = new ZLinkDispatchOptionsModel();
+        options.Diagnostics.SetLevel(
+            listener is null ? ZLinkDiagnosticsLevel.Off : ZLinkDiagnosticsLevel.Normal
+        );
+        var flow = new ZLinkMessageFlowTracer(options);
+        void Trace(ZLinkMessageFlowOutcome outcome)
+        {
+            if (flow.Enabled(outcome))
+                flow.Trace(
+                    new ZLinkMessageFlowEvent(
+                        outcome,
+                        ZLinkDispatchErrorSurface.SpotSubscription,
+                        ZLinkDispatchMessageKind.Publish,
+                        ChannelName: channelName,
+                        Topic: topic
+                    )
+                    {
+                        FlowId = suffix,
+                        FlowOrigin = ZLinkFlowOrigin.Application,
+                    }
+                );
+        }
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var applicationJobQueue = new ZLinkApplicationJobQueue(
             new ZLinkApplicationJobQueueCapacity(
@@ -3212,13 +3246,10 @@ public sealed class ServiceRuntimeFoundationTests
             new ZLinkMeshCompletionTable(),
             applicationJobQueue
         );
-        var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://events-shutdown-source-{suffix}";
         var targetEndpoint = $"inproc://events-shutdown-target-{suffix}";
         var sourceRid = RoutingId.From("events-shutdown-source");
         var targetRid = RoutingId.From("events-shutdown-target");
-        const string channelName = "events";
-        const string topic = "created";
 
         source.SetRoutingId(sourceRid);
         source.SetBind(sourceEndpoint);
@@ -3239,7 +3270,10 @@ public sealed class ServiceRuntimeFoundationTests
         void Capture(ZLinkMeshDispatchPump.SpotDispatchState state)
         {
             if (state.Subscriptions.TryDequeue(out var message))
+            {
+                Trace(ZLinkMessageFlowOutcome.Received);
                 firstDelivery.TrySetResult(message);
+            }
         }
         var firstState = pump.RegisterSpot(firstSpot.SpotId);
         var secondState = pump.RegisterSpot(secondSpot.SpotId);
@@ -3269,20 +3303,27 @@ public sealed class ServiceRuntimeFoundationTests
 
         var sourceSpot = source.EntrySpot();
         using var payload = Message.From(new byte[] { 7, 8, 9 });
-        sourceSpot.Publish(channelName, topic, [payload]);
+        Trace(ZLinkMessageFlowOutcome.Sent);
+        for (var publication = 0; publication < publishCount; publication++)
+            sourceSpot.Publish(channelName, topic, [payload]);
 
         using var first = await firstDelivery.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        await WaitUntilAsync(() => applicationJobQueue.GetStatus().CapacityWaiters == 1);
+        // Spec application-job-queue §3: each live source can wait for a permit.
+        // The raw receive source can also wait while a multicast child is pending.
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().CapacityWaiters > 0);
+        Trace(ZLinkMessageFlowOutcome.Backpressured);
+        Assert.NotNull(first.ApplicationJobAdmission);
+        Assert.Equal(1UL, applicationJobQueue.GetStatus().QueuedApplicationJobs);
         Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);
 
         await pump.DisposeAsync();
         await target.DisposeAsync();
 
         Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);
-        if (first.ApplicationJobAdmission is { } admission)
-            await admission.ReleaseForHandlerStartAsync();
+        await first.ApplicationJobAdmission!.ReleaseForHandlerStartAsync();
         first.Dispose();
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
+        Trace(ZLinkMessageFlowOutcome.Completed);
     }
 
     [Fact]
