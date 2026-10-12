@@ -237,7 +237,8 @@ final class ZLinkChannelBlockingSubmissionTest {
             f.complete();
             var serial =
                     new ZLinkSerialExecutionQueue(
-                            Runnable::run, ZLinkExecutionLanePolicy.generic());
+                            java.util.concurrent.ForkJoinPool.commonPool(),
+                            ZLinkExecutionLanePolicy.generic());
             var permit =
                     jobs.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
                             .toCompletableFuture()
@@ -301,7 +302,7 @@ final class ZLinkChannelBlockingSubmissionTest {
 
     @Test
     void stateLaneRejectsBothTerminalsBeforeSubmissionAndLeavesCallsUsable() {
-        var lane = new ZLinkStateLane(Runnable::run);
+        var lane = new ZLinkStateLane(java.util.concurrent.ForkJoinPool.commonPool());
         try (Fixture f = new Fixture()) {
             f.complete();
             lane.runAsync(
@@ -412,7 +413,9 @@ final class ZLinkChannelBlockingSubmissionTest {
             runtime =
                     new ZLinkChannelCallRuntime(
                             new ZLinkMessageFlowTracer(
-                                    options.registration().dispatchOptions(), null, Runnable::run),
+                                    options.registration().dispatchOptions(),
+                                    null,
+                                    java.util.concurrent.ForkJoinPool.commonPool()),
                             scheduler,
                             new ZLinkChannelReplyDecoder(new ZLinkJsonMessageSerializer()),
                             null,

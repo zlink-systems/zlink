@@ -52,7 +52,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                         serializer,
                         codecs,
                         type -> new DerivedReplyHandler(),
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         List.of());
         Message request = text("request");
 
@@ -264,7 +264,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                 serializer,
                 codecs,
                 activator,
-                Runnable::run,
+                java.util.concurrent.ForkJoinPool.commonPool(),
                 List.of(CapturingFilter.class),
                 meshName);
     }

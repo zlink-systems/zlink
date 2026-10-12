@@ -227,15 +227,9 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                 // (mesh-node §7.1); replacement closes it through the owner.
                 replaceAfterClose(
                         local, remoteEndpoint, remoteRid, replacement.lifecycleGeneration());
-                var selectedRouteObserved = new CountDownLatch(2);
-                local.setPeerAdmissionSealGate(
-                        () -> {
-                            if (local.isPeerTransportConnected(remoteRid)) {
-                                selectedRouteObserved.countDown();
-                            }
-                            return drains.isSealed("mesh");
-                        });
-                await(() -> selectedRouteObserved.getCount() == 0);
+                // The seal is a policy query, not a periodic observation callback.
+                // Wait for the selected route owned by the existing receive observer.
+                await(() -> local.isPeerTransportConnected(remoteRid));
                 assertFalse(
                         local.announcedRouteGenerations.containsKey(remoteRid),
                         "sealed selected route must not have an announcement");

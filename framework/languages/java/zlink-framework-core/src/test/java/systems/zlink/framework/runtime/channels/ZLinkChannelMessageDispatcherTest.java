@@ -83,9 +83,12 @@ final class ZLinkChannelMessageDispatcherTest {
                 ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
                 ZLinkDispatchErrorReporter errors =
                         new ZLinkDispatchErrorReporter(
-                                options, ZLinkHandlerActivator.reflection(), Runnable::run);
+                                options,
+                                ZLinkHandlerActivator.reflection(),
+                                java.util.concurrent.ForkJoinPool.commonPool());
                 ZLinkChannelDispatchRegistry registry =
-                        new ZLinkChannelDispatchRegistry(Runnable::run);
+                        new ZLinkChannelDispatchRegistry(
+                                java.util.concurrent.ForkJoinPool.commonPool());
                 if (route) {
                     registry.registerRoute(
                             "orders",
@@ -158,8 +161,12 @@ final class ZLinkChannelMessageDispatcherTest {
             ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
             ZLinkDispatchErrorReporter errors =
                     new ZLinkDispatchErrorReporter(
-                            options, ZLinkHandlerActivator.reflection(), Runnable::run);
-            ZLinkChannelDispatchRegistry registry = new ZLinkChannelDispatchRegistry(Runnable::run);
+                            options,
+                            ZLinkHandlerActivator.reflection(),
+                            java.util.concurrent.ForkJoinPool.commonPool());
+            ZLinkChannelDispatchRegistry registry =
+                    new ZLinkChannelDispatchRegistry(
+                            java.util.concurrent.ForkJoinPool.commonPool());
             for (String channel : List.of("orders", "other")) {
                 if (route) {
                     registry.registerRoute(
@@ -344,8 +351,12 @@ final class ZLinkChannelMessageDispatcherTest {
             options.messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkDispatchErrorReporter errors =
                     new ZLinkDispatchErrorReporter(
-                            options, ZLinkHandlerActivator.reflection(), Runnable::run);
-            ZLinkChannelDispatchRegistry registry = new ZLinkChannelDispatchRegistry(Runnable::run);
+                            options,
+                            ZLinkHandlerActivator.reflection(),
+                            java.util.concurrent.ForkJoinPool.commonPool());
+            ZLinkChannelDispatchRegistry registry =
+                    new ZLinkChannelDispatchRegistry(
+                            java.util.concurrent.ForkJoinPool.commonPool());
             registry.registerClientServer(
                     "orders",
                     Map.of(),
@@ -389,8 +400,12 @@ final class ZLinkChannelMessageDispatcherTest {
             options.messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkDispatchErrorReporter errors =
                     new ZLinkDispatchErrorReporter(
-                            options, ZLinkHandlerActivator.reflection(), Runnable::run);
-            ZLinkChannelDispatchRegistry registry = new ZLinkChannelDispatchRegistry(Runnable::run);
+                            options,
+                            ZLinkHandlerActivator.reflection(),
+                            java.util.concurrent.ForkJoinPool.commonPool());
+            ZLinkChannelDispatchRegistry registry =
+                    new ZLinkChannelDispatchRegistry(
+                            java.util.concurrent.ForkJoinPool.commonPool());
             registry.registerRoute(
                     "routes",
                     Map.of(),
@@ -437,8 +452,12 @@ final class ZLinkChannelMessageDispatcherTest {
             options.messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkDispatchErrorReporter errors =
                     new ZLinkDispatchErrorReporter(
-                            options, ZLinkHandlerActivator.reflection(), Runnable::run);
-            ZLinkChannelDispatchRegistry registry = new ZLinkChannelDispatchRegistry(Runnable::run);
+                            options,
+                            ZLinkHandlerActivator.reflection(),
+                            java.util.concurrent.ForkJoinPool.commonPool());
+            ZLinkChannelDispatchRegistry registry =
+                    new ZLinkChannelDispatchRegistry(
+                            java.util.concurrent.ForkJoinPool.commonPool());
             registry.registerRoute("routes", Map.of(), Map.of());
             registry.registerInternalRequest(
                     "Request",
@@ -469,7 +488,7 @@ final class ZLinkChannelMessageDispatcherTest {
                 new ZLinkStringMessageSerializer(),
                 new ZLinkCodecRegistration(),
                 ZLinkHandlerActivator.reflection(),
-                Runnable::run,
+                java.util.concurrent.ForkJoinPool.commonPool(),
                 List.of());
     }
 

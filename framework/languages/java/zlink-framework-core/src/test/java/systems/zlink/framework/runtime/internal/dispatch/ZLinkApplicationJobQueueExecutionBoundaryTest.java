@@ -34,7 +34,9 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
     void reservationCrossesSerialBacklogAndReturnsBeforeFirstApplicationInstruction() {
         ZLinkApplicationJobQueue queue = queue(1);
         ZLinkSerialExecutionQueue serial =
-                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.generic());
+                new ZLinkSerialExecutionQueue(
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        ZLinkExecutionLanePolicy.generic());
         CompletableFuture<Void> handlerContinuation = new CompletableFuture<>();
         ZLinkApplicationJobQueue.Permit first =
                 queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
@@ -66,7 +68,7 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
         ZLinkApplicationJobQueue applicationJobs = queue(1);
         ZLinkSerialExecutionQueue serial =
                 new ZLinkSerialExecutionQueue(
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         ZLinkExecutionLanePolicy.generic(),
                         1,
                         java.time.Duration.ofSeconds(1));

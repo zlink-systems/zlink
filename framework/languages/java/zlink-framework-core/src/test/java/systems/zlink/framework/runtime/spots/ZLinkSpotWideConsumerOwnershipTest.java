@@ -29,12 +29,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class ZLinkSpotWideConsumerOwnershipTest {
     @Test
     void externalRetainedCutReturnsWhileSharedGateIsOccupied() throws Exception {
-        var spot = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+        var spot =
+                new ZLinkSerialExecutionQueue(
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        ZLinkExecutionLanePolicy.spot());
         var serials =
                 new ZLinkSpotSerialExecutor(
                         spot,
-                        Runnable::run,
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         ZLinkUserSpotExecutionMode.SPOT_WIDE,
                         false);
         var actor = serials.claimActorQueue("actor").toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -78,12 +81,15 @@ final class ZLinkSpotWideConsumerOwnershipTest {
 
     @Test
     void externalRelocationSealReturnsWhileSharedGateIsOccupied() throws Exception {
-        var spot = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+        var spot =
+                new ZLinkSerialExecutionQueue(
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        ZLinkExecutionLanePolicy.spot());
         var serials =
                 new ZLinkSpotSerialExecutor(
                         spot,
-                        Runnable::run,
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         ZLinkUserSpotExecutionMode.SPOT_WIDE,
                         false);
         serials.claimActorQueue("actor").toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -123,8 +129,8 @@ final class ZLinkSpotWideConsumerOwnershipTest {
         var serials =
                 new ZLinkSpotSerialExecutor(
                         new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot()),
-                        Runnable::run,
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         ZLinkUserSpotExecutionMode.SPOT_WIDE,
                         false);
         var actor = serials.claimActorQueue("actor").toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -177,33 +183,26 @@ final class ZLinkSpotWideConsumerOwnershipTest {
 
     @Test
     void rejectedSharedExecutorSettlesAnAcceptedActorRecord() throws Exception {
-        var rejectAfterAdmission = new CompletableFuture<Void>();
+        var admission = new CompletableFuture<Void>();
         var serials =
                 new ZLinkSpotSerialExecutor(
                         new ZLinkSerialExecutionQueue(
                                 ignored -> {
-                                    rejectAfterAdmission.join();
                                     throw new RejectedExecutionException("test rejection");
                                 },
                                 ZLinkExecutionLanePolicy.spot()),
-                        Runnable::run,
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         ZLinkUserSpotExecutionMode.SPOT_WIDE,
                         false);
         var actor = serials.claimActorQueue("actor").toCompletableFuture().get(5, TimeUnit.SECONDS);
-        var admission = new CompletableFuture<Void>();
         var settled =
                 serials.executeActor(
                         actor, 0, () -> CompletableFuture.completedFuture(null), admission);
-        try {
-            admission.get(5, TimeUnit.SECONDS);
-            rejectAfterAdmission.complete(null);
-            assertThrows(
-                    ExecutionException.class,
-                    () -> settled.toCompletableFuture().get(5, TimeUnit.SECONDS));
-        } finally {
-            rejectAfterAdmission.complete(null);
-        }
+        admission.get(5, TimeUnit.SECONDS);
+        assertThrows(
+                ExecutionException.class,
+                () -> settled.toCompletableFuture().get(5, TimeUnit.SECONDS));
     }
 
     @ParameterizedTest
@@ -212,7 +211,13 @@ final class ZLinkSpotWideConsumerOwnershipTest {
             throws Exception {
         var tasks = new LinkedBlockingQueue<Runnable>();
         var spot = new ZLinkSerialExecutionQueue(tasks::add, ZLinkExecutionLanePolicy.spot());
-        var serials = new ZLinkSpotSerialExecutor(spot, Runnable::run, tasks::add, mode, false);
+        var serials =
+                new ZLinkSpotSerialExecutor(
+                        spot,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        tasks::add,
+                        mode,
+                        false);
         var first = serials.claimActorQueue("first").toCompletableFuture().get(5, TimeUnit.SECONDS);
         var second =
                 serials.claimActorQueue("second").toCompletableFuture().get(5, TimeUnit.SECONDS);

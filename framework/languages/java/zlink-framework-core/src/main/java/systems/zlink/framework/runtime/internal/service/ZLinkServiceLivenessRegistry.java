@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -19,6 +20,7 @@ import java.util.function.Supplier;
 public final class ZLinkServiceLivenessRegistry {
     public static final Duration DEFAULT_PROBE_INTERVAL = Duration.ofSeconds(5);
     public static final Duration DEFAULT_PEER_TIMEOUT = Duration.ofSeconds(15);
+    private static final Duration NO_MANAGEMENT_DEADLINE = Duration.ofMillis(-1);
     private final long probeIntervalNanos;
     private final long peerTimeoutNanos;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -107,6 +109,27 @@ public final class ZLinkServiceLivenessRegistry {
 
     public Tick tick(long nowNanos) {
         return inStateLane(() -> tickCore(nowNanos));
+    }
+
+    /** Uses the existing probe and expiry deadlines; no periodic data recheck is scheduled. */
+    public Duration waitTimeout(long nowNanos) {
+        return inStateLane(
+                () -> {
+                    if (peers.isEmpty()) return NO_MANAGEMENT_DEADLINE;
+                    long next = Long.MAX_VALUE;
+                    for (PeerState state : peers.values())
+                        next =
+                                Math.min(
+                                        next,
+                                        Math.min(state.nextProbeNanos, state.deadlineNanos.get()));
+                    if (next <= nowNanos) return Duration.ZERO;
+                    long remaining = next - nowNanos;
+                    long millis = TimeUnit.NANOSECONDS.toMillis(remaining);
+                    if (remaining % TimeUnit.MILLISECONDS.toNanos(1) != 0) millis++;
+                    // The public poller uses integer milliseconds. Keep a positive
+                    // sub-millisecond deadline wait blocking at that resolution.
+                    return Duration.ofMillis(Math.min(millis, Integer.MAX_VALUE));
+                });
     }
 
     private Tick tickCore(long nowNanos) {

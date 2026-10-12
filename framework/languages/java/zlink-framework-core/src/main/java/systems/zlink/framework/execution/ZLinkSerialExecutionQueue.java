@@ -19,8 +19,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
@@ -52,14 +51,7 @@ public final class ZLinkSerialExecutionQueue {
     private static final ThreadLocal<ZLinkSerialExecutionQueue> CURRENT = new ThreadLocal<>();
     private static final ThreadLocal<CompletableFuture<Void>> CURRENT_GATE = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> CURRENT_RELEASE_DEFERRED = new ThreadLocal<>();
-    // A queue never runs a drain on its submitter's stack.  This is shared by
-    // every owner; it is deliberately not an executor per Spot, Actor, or
-    // session.
-    private static final ExecutorService DRAIN_EXECUTOR =
-            Executors.newVirtualThreadPerTaskExecutor();
-
     private final Executor executor;
-    private final ExecutorService ownedExecutor;
     private final ZLinkExecutionLanePolicy lanePolicy;
     private final ZLinkSerialExecutionQueue timerOwner;
     private final int lifecycleBurstLimit;
@@ -224,14 +216,7 @@ public final class ZLinkSerialExecutionQueue {
 
         private void schedule() {
             try {
-                DRAIN_EXECUTOR.execute(
-                        () -> {
-                            try {
-                                spot.executor.execute(this::drain);
-                            } catch (RuntimeException rejected) {
-                                rejectReady(rejected);
-                            }
-                        });
+                spot.executor.execute(this::drain);
             } catch (RuntimeException rejected) {
                 rejectReady(rejected);
             }
@@ -674,13 +659,7 @@ public final class ZLinkSerialExecutionQueue {
                 || ownerTimeBudget.isZero()) {
             throw new IllegalArgumentException("serial queue limits are invalid");
         }
-        if (executor == null) {
-            this.ownedExecutor = Executors.newVirtualThreadPerTaskExecutor();
-            this.executor = ownedExecutor;
-        } else {
-            this.ownedExecutor = null;
-            this.executor = executor;
-        }
+        this.executor = executor == null ? ForkJoinPool.commonPool() : executor;
         this.lanePolicy = Objects.requireNonNull(lanePolicy, "lanePolicy");
         this.timerOwner = timerOwner;
         this.lifecycleBurstLimit = lifecycleBurstLimit;
@@ -700,9 +679,6 @@ public final class ZLinkSerialExecutionQueue {
 
     public void close() {
         assert assertRelocationBoundariesFinished();
-        if (ownedExecutor != null) {
-            ownedExecutor.shutdown();
-        }
     }
 
     private synchronized boolean assertRelocationBoundariesFinished() {
@@ -1278,14 +1254,6 @@ public final class ZLinkSerialExecutionQueue {
             sharedSpotGate.post(this);
             return;
         }
-        try {
-            DRAIN_EXECUTOR.execute(this::drainScheduled);
-        } catch (RuntimeException rejected) {
-            throw new IllegalStateException("serial queue drain executor rejected", rejected);
-        }
-    }
-
-    private void drainScheduled() {
         try {
             executor.execute(
                     () -> {

@@ -247,7 +247,9 @@ final class ZLinkSpotPublisherRuntimeTest {
                         },
                         1);
         ZLinkSerialExecutionQueue queue =
-                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+                new ZLinkSerialExecutionQueue(
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        ZLinkExecutionLanePolicy.spot());
         try (runtime) {
             runtime.publish("mesh", "channel", "topic", "occupied").submit();
             assertTrue(firstCoreStarted.await(1, TimeUnit.SECONDS));

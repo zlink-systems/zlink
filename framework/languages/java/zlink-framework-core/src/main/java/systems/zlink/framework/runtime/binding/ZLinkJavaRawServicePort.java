@@ -433,8 +433,10 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 var remaining =
                         inStateLane(() -> List.copyOf(receivePollers.reversed().entrySet()));
                 for (var entry : remaining) {
-                    entry.getValue().close();
                     entry.getKey().close();
+                    // Core polling §5 pins registered sockets and reports close
+                    // as POLLERR, waking the receiver before its poller is disposed.
+                    entry.getValue().close();
                     inStateLane(() -> receivePollers.remove(entry.getKey()));
                 }
                 if (ownsContext) context.close();

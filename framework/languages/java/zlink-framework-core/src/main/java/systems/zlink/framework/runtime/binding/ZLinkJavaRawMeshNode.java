@@ -95,7 +95,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
@@ -134,7 +133,6 @@ final class ZLinkJavaRawMeshNode
     private static final int MAX_INGRESS_BATCH = 64;
     private static final long MAX_INGRESS_BATCH_BYTES = 4L * 1024 * 1024;
     private static final long MAX_INGRESS_BATCH_NANOS = 2_000_000L;
-    private static final Duration MAX_INGRESS_WAIT_TIMEOUT = Duration.ofMillis(100);
     private static final long MAX_INFRASTRUCTURE_CONTROL_BYTES = 256L * 1024;
     private static final long MAX_INFRASTRUCTURE_PAYLOAD_BYTES = 4_294_966_774L;
     private static final String RELOCATION_CONTROL_PACKET =
@@ -176,13 +174,10 @@ final class ZLinkJavaRawMeshNode
     private final ZLinkServiceM6AWireCodec wire = new ZLinkServiceM6AWireCodec();
     private final ZLinkServiceM6BWireCodec statefulWire = new ZLinkServiceM6BWireCodec();
     private final ZLinkServiceLivenessRegistry liveness;
-    private final Duration ingressWaitTimeout;
     private final ScheduledExecutorService deadlines = ZLinkProcessExecutionLanes.deadlines();
     private final Executor applicationDispatch = ZLinkProcessExecutionLanes.applicationLane();
     private final ZLinkServiceOperationRegistry operations =
             new ZLinkServiceOperationRegistry(deadlines);
-    private final ConcurrentLinkedQueue<PeerCloseRequest> pendingPeerCloseRequests =
-            new ConcurrentLinkedQueue<>();
     // RID -> route generation Core selected, as last observed by the receive pump (the ROUTER's
     // one route observer, Core ROUTER §10.1). Only that thread replaces this immutable copy while
     // the pump runs.
@@ -287,10 +282,6 @@ final class ZLinkJavaRawMeshNode
         this.port = new ZLinkJavaRawServicePort(context);
         this.currentTimeMillis = Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
-        this.ingressWaitTimeout =
-                livenessProbeInterval.compareTo(MAX_INGRESS_WAIT_TIMEOUT) < 0
-                        ? livenessProbeInterval
-                        : MAX_INGRESS_WAIT_TIMEOUT;
         this.liveness =
                 new ZLinkServiceLivenessRegistry(livenessProbeInterval, livenessPeerTimeout);
         this.port.setReceiveSource(liveness::connection);
@@ -968,33 +959,17 @@ final class ZLinkJavaRawMeshNode
                 || !closeRequestedPeerIntents.add(connectionIntentId)) {
             return;
         }
-        pendingPeerCloseRequests.add(new PeerCloseRequest(connectionIntentId, intent.endpoint()));
-        signalStateChanged(intent.expectedRoutingId());
-    }
-
-    private void drainPeerCloseRequests() {
-        PeerCloseRequest request;
-        while ((request = pendingPeerCloseRequests.poll()) != null) {
-            PeerIntent intent = peerIntents.get(request.connectionIntentId());
-            RouterSocket current = router;
-            if (intent == null
-                    || current == null
-                    || !closeRequestedPeerIntents.contains(request.connectionIntentId())) {
-                continue;
-            }
-            try {
-                current.disconnect(request.endpoint());
-            } catch (RuntimeException failure) {
-                if (!request.endpoint().startsWith("inproc://")) {
-                    closeRequestedPeerIntents.remove(request.connectionIntentId());
-                }
-                // An inproc peer can disappear before this pump reaches the
-                // exact close. Keep its request until Core reports no selected
-                // route for the intent's peer. A non-inproc transport retries
-                // from a later descriptor observation.
+        // Core owns endpoint disconnect and wakes the existing route observer.
+        // Posting this control call behind that observer's wait would require polling.
+        try {
+            router.disconnect(intent.endpoint());
+        } catch (RuntimeException failure) {
+            if (!intent.endpoint().startsWith("inproc://")) {
+                closeRequestedPeerIntents.remove(connectionIntentId);
             }
         }
         finishRequestedIntentCloses();
+        signalStateChanged(intent.expectedRoutingId());
     }
 
     @Override
@@ -4498,10 +4473,7 @@ final class ZLinkJavaRawMeshNode
         state = MeshNodeState.STOPPED;
         ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
         ExecutorService currentPump = pump;
-        if (currentPump != null) {
-            currentPump.shutdownNow();
-            awaitExecutorTermination(currentPump);
-        }
+        if (currentPump != null) currentPump.shutdownNow();
         pendingReplyRelays
                 .values()
                 .forEach(
@@ -4521,6 +4493,7 @@ final class ZLinkJavaRawMeshNode
         receiveFlowRegistration = () -> {};
         currentReceiveFlowRegistration.close();
         port.close();
+        if (currentPump != null) awaitExecutorTermination(currentPump);
         signalLifecycleEnded();
     }
 
@@ -4556,13 +4529,14 @@ final class ZLinkJavaRawMeshNode
 
     private void pumpTurn(RouterSocket pumpSocket) {
         if (closed.get()) return;
-        int ready = port.waitForReady(pumpSocket, ingressWaitTimeout);
+        int ready = port.waitForReady(pumpSocket, liveness.waitTimeout(System.nanoTime()));
+        if (closed.get()) return;
         long now = System.nanoTime();
         // The existing pump remains this ROUTER's one route observer.
         if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
             observeSelectedRoutes();
         }
-        drainPeerCloseRequests();
+        finishRequestedIntentCloses();
         announceExpectedPeers();
         tickLiveness(now);
         if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0) {
@@ -7431,8 +7405,6 @@ final class ZLinkJavaRawMeshNode
                     && livenessReady;
         }
     }
-
-    private record PeerCloseRequest(long connectionIntentId, String endpoint) {}
 
     private void disconnectNotRequiredTransport(RoutingId peer) {
         RouterSocket current = router;

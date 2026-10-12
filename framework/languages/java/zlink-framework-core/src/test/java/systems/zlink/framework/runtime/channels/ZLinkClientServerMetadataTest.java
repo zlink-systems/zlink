@@ -40,8 +40,9 @@ final class ZLinkClientServerMetadataTest {
                 new ZLinkDispatchErrorReporter(
                         options.registration().dispatchOptions(),
                         ZLinkHandlerActivator.reflection(),
-                        Runnable::run);
-        var registry = new ZLinkChannelDispatchRegistry(Runnable::run);
+                        java.util.concurrent.ForkJoinPool.commonPool());
+        var registry =
+                new ZLinkChannelDispatchRegistry(java.util.concurrent.ForkJoinPool.commonPool());
         registry.registerClientServer(
                 "work",
                 Map.of(
@@ -61,7 +62,7 @@ final class ZLinkClientServerMetadataTest {
                         new ZLinkJsonMessageSerializer(),
                         new ZLinkCodecRegistration(),
                         ZLinkHandlerActivator.reflection(),
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         List.of());
         var dispatcher =
                 new ZLinkChannelMessageDispatcher(

@@ -17,6 +17,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -63,14 +64,11 @@ final class ZLinkActorDispatchSerials {
     }
 
     private static ZLinkActorDispatchTarget createLegacyTarget(Executor executor) {
+        Executor sharedWorker = executor == null ? ForkJoinPool.commonPool() : executor;
         ZLinkSerialExecutionQueue queue =
-                new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot());
+                new ZLinkSerialExecutionQueue(sharedWorker, ZLinkExecutionLanePolicy.spot());
         return new ZLinkSpotSerialExecutor(
-                queue,
-                executor == null ? Runnable::run : executor,
-                executor == null ? Runnable::run : executor,
-                ZLinkUserSpotExecutionMode.PER_ACTOR,
-                false);
+                queue, sharedWorker, sharedWorker, ZLinkUserSpotExecutionMode.PER_ACTOR, false);
     }
 
     private CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot> targetAsync(

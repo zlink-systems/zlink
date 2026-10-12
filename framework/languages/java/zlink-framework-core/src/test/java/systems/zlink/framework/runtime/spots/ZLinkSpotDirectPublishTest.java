@@ -50,11 +50,15 @@ final class ZLinkSpotDirectPublishTest {
         var outbound =
                 new ZLinkSpotDirectOutbound(
                         new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         new ZLinkMessageFlowTracer(
-                                options, ZLinkHandlerActivator.reflection(), Runnable::run));
+                                options,
+                                ZLinkHandlerActivator.reflection(),
+                                java.util.concurrent.ForkJoinPool.commonPool()));
         ZLinkSerialExecutionQueue queue =
-                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+                new ZLinkSerialExecutionQueue(
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        ZLinkExecutionLanePolicy.spot());
 
         try (Message payload = Message.from("payload".getBytes(StandardCharsets.UTF_8))) {
             CompletionStage<Void> dispatch =
@@ -112,9 +116,11 @@ final class ZLinkSpotDirectPublishTest {
         var outbound =
                 new ZLinkSpotDirectOutbound(
                         new ZLinkSpotRouteMessages(serializer),
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         new ZLinkMessageFlowTracer(
-                                options, ZLinkHandlerActivator.reflection(), Runnable::run));
+                                options,
+                                ZLinkHandlerActivator.reflection(),
+                                java.util.concurrent.ForkJoinPool.commonPool()));
 
         try (Message payload = Message.from("payload".getBytes(StandardCharsets.UTF_8))) {
             var result =
@@ -145,9 +151,11 @@ final class ZLinkSpotDirectPublishTest {
         var outbound =
                 new ZLinkSpotDirectOutbound(
                         new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         new ZLinkMessageFlowTracer(
-                                options, ZLinkHandlerActivator.reflection(), Runnable::run));
+                                options,
+                                ZLinkHandlerActivator.reflection(),
+                                java.util.concurrent.ForkJoinPool.commonPool()));
 
         try (Message payload = Message.from("payload".getBytes(StandardCharsets.UTF_8))) {
             var publicStage =
@@ -181,9 +189,11 @@ final class ZLinkSpotDirectPublishTest {
         var outbound =
                 new ZLinkSpotDirectOutbound(
                         new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         new ZLinkMessageFlowTracer(
-                                options, ZLinkHandlerActivator.reflection(), Runnable::run));
+                                options,
+                                ZLinkHandlerActivator.reflection(),
+                                java.util.concurrent.ForkJoinPool.commonPool()));
 
         try (Message payload = Message.from("payload".getBytes(StandardCharsets.UTF_8))) {
             var publicStage =

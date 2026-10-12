@@ -640,7 +640,7 @@ final class ZLinkActorDispatchSerialsTest {
             AtomicReference<ZLinkActorDispatchTarget> owner) {
         return new ZLinkActorDispatchSerials(
                 new Object(),
-                Runnable::run,
+                java.util.concurrent.ForkJoinPool.commonPool(),
                 actorId ->
                         CompletableFuture.completedFuture(
                                 new ZLinkActorDispatchTarget.ActivationSnapshot(
@@ -649,9 +649,11 @@ final class ZLinkActorDispatchSerialsTest {
 
     private static ZLinkActorDispatchTarget actorTarget() {
         return new ZLinkSpotSerialExecutor(
-                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot()),
-                Runnable::run,
-                Runnable::run,
+                new ZLinkSerialExecutionQueue(
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        ZLinkExecutionLanePolicy.spot()),
+                java.util.concurrent.ForkJoinPool.commonPool(),
+                java.util.concurrent.ForkJoinPool.commonPool(),
                 ZLinkUserSpotExecutionMode.PER_ACTOR,
                 false);
     }

@@ -233,7 +233,9 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
         FakeRouter router = new FakeRouter();
         ZLinkSerialExecutionQueue serial =
-                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.generic());
+                new ZLinkSerialExecutionQueue(
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        ZLinkExecutionLanePolicy.generic());
         CompletableFuture<Void> handlerEntered = new CompletableFuture<>();
         CompletableFuture<Void> releaseHandler = new CompletableFuture<>();
         CompletableFuture<Void> controlReceived = new CompletableFuture<>();

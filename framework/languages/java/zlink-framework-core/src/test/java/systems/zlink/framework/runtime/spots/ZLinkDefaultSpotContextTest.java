@@ -790,7 +790,7 @@ final class ZLinkDefaultSpotContextTest {
         private final ZLinkBackendSpot backendSpot = backendSpot();
 
         TestHost() {
-            this(Runnable::run);
+            this(java.util.concurrent.ForkJoinPool.commonPool());
         }
 
         TestHost(Executor executor) {

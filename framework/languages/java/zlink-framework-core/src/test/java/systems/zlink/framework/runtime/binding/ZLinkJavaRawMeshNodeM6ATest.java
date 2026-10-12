@@ -1009,7 +1009,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             } catch (IllegalStateException closing) {
                 // The host observes the same close and retries on its next directory read.
             }
-            Method drain = ZLinkJavaRawMeshNode.class.getDeclaredMethod("drainPeerCloseRequests");
+            Method drain =
+                    ZLinkJavaRawMeshNode.class.getDeclaredMethod("finishRequestedIntentCloses");
             drain.setAccessible(true);
             drain.invoke(local);
             // Keep the listener absent until Core has retired the original intent.

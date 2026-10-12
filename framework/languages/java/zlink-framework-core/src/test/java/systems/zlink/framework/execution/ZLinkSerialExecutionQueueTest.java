@@ -331,7 +331,9 @@ final class ZLinkSerialExecutionQueueTest {
     @Test
     void firstDrainDoesNotRunOnTheSubmitterStack() throws Exception {
         ZLinkSerialExecutionQueue queue =
-                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.generic());
+                new ZLinkSerialExecutionQueue(
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        ZLinkExecutionLanePolicy.generic());
         AtomicBoolean ranOnSubmitterStack = new AtomicBoolean();
         CompletableFuture<Void> started = new CompletableFuture<>();
         Thread submitter = Thread.currentThread();
@@ -354,18 +356,21 @@ final class ZLinkSerialExecutionQueueTest {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         Executor executor =
-                command -> {
-                    if (submissions.incrementAndGet() == 1) {
-                        entered.countDown();
-                        try {
-                            assertTrue(release.await(3, TimeUnit.SECONDS));
-                        } catch (InterruptedException interrupted) {
-                            Thread.currentThread().interrupt();
-                            throw new IllegalStateException(interrupted);
-                        }
-                    }
-                    command.run();
-                };
+                command ->
+                        java.util.concurrent.ForkJoinPool.commonPool()
+                                .execute(
+                                        () -> {
+                                            if (submissions.incrementAndGet() == 1) {
+                                                entered.countDown();
+                                                try {
+                                                    assertTrue(release.await(3, TimeUnit.SECONDS));
+                                                } catch (InterruptedException interrupted) {
+                                                    Thread.currentThread().interrupt();
+                                                    throw new IllegalStateException(interrupted);
+                                                }
+                                            }
+                                            command.run();
+                                        });
         ZLinkSerialExecutionQueue queue = batchQueue(executor, Duration.ofSeconds(10));
         List<Integer> order = new ArrayList<>();
         List<CompletableFuture<Void>> results = new ArrayList<>();
@@ -865,7 +870,9 @@ final class ZLinkSerialExecutionQueueTest {
     @Test
     void failedHandlersDoNotChangeAnyTryAdmission() throws Exception {
         ZLinkSerialExecutionQueue queue =
-                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.generic());
+                new ZLinkSerialExecutionQueue(
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        ZLinkExecutionLanePolicy.generic());
         var executions = new java.util.concurrent.atomic.AtomicInteger();
         java.util.function.Supplier<CompletionStage<Void>> failure =
                 () -> {

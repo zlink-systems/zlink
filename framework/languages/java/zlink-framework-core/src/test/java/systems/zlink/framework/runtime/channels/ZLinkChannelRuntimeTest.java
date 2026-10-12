@@ -141,7 +141,9 @@ final class ZLinkChannelRuntimeTest {
         CompletableFuture<String> reply = new CompletableFuture<>();
         ZLinkDispatchErrorReporter errors =
                 new ZLinkDispatchErrorReporter(
-                        options.registration().dispatchOptions(), handlers(), Runnable::run);
+                        options.registration().dispatchOptions(),
+                        handlers(),
+                        java.util.concurrent.ForkJoinPool.commonPool());
         ZLinkChannelMessageDispatcher dispatcher =
                 new ZLinkChannelMessageDispatcher(
                         registry,
@@ -149,7 +151,7 @@ final class ZLinkChannelRuntimeTest {
                                 new ZLinkStringMessageSerializer(),
                                 new ZLinkCodecRegistration(),
                                 ZLinkHandlerActivator.reflection(),
-                                Runnable::run,
+                                java.util.concurrent.ForkJoinPool.commonPool(),
                                 List.of()),
                         new ZLinkChannelDispatchReporter(errors),
                         errors.flow());

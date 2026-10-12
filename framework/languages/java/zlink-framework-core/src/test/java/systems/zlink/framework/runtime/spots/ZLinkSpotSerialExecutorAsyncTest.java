@@ -41,9 +41,10 @@ final class ZLinkSpotSerialExecutorAsyncTest {
         var serials =
                 new ZLinkSpotSerialExecutor(
                         new ZLinkSerialExecutionQueue(
-                                Runnable::run, ZLinkExecutionLanePolicy.spot()),
-                        Runnable::run,
-                        Runnable::run,
+                                java.util.concurrent.ForkJoinPool.commonPool(),
+                                ZLinkExecutionLanePolicy.spot()),
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         ZLinkUserSpotExecutionMode.SPOT_WIDE,
                         false);
         var activation =
@@ -99,8 +100,8 @@ final class ZLinkSpotSerialExecutorAsyncTest {
         var serials =
                 new ZLinkSpotSerialExecutor(
                         new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot()),
-                        Runnable::run,
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         ZLinkUserSpotExecutionMode.PER_ACTOR,
                         false);
         Field laneField = ZLinkSpotSerialExecutor.class.getDeclaredField("stateLane");
@@ -138,8 +139,8 @@ final class ZLinkSpotSerialExecutorAsyncTest {
         var serials =
                 new ZLinkSpotSerialExecutor(
                         new ZLinkSerialExecutionQueue(ZLinkExecutionLanePolicy.spot()),
-                        Runnable::run,
-                        Runnable::run,
+                        java.util.concurrent.ForkJoinPool.commonPool(),
+                        java.util.concurrent.ForkJoinPool.commonPool(),
                         ZLinkUserSpotExecutionMode.PER_ACTOR,
                         false);
         Field laneField = ZLinkSpotSerialExecutor.class.getDeclaredField("stateLane");
