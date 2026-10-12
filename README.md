@@ -200,6 +200,9 @@ Licensing differs by repository layer.
 | `framework/` | [Functional Source License 1.1, ALv2 Future License](./framework/LICENSE) |
 | Language-specific Framework `http-client` packages | Apache License 2.0 |
 
+**From 1.0.0, `framework/` moves to the zlink License:** one machine stays free, and each extra machine needs a paid license.
+Releases before 1.0.0 keep their current license and stay free on any number of machines.
+
 See the [license guide](./doc/license/README.md) and
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for detailed terms, the
 two-year Apache License 2.0 conversion policy, and redistribution notices.
