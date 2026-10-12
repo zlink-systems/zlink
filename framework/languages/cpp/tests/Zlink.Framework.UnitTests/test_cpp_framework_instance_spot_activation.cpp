@@ -1654,8 +1654,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, RetiredOwnerRequestCompletesWithUnav
 
     EXPECT_TRUE (runtime->dispatch_mesh_record (
       owner, record, request_parts,
-      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false), provider,
-      serializers));
+      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false).value (),
+      provider, serializers));
     ASSERT_EQ (2u, reply_parts.size ());
     const auto reply_header = codec.decode_header (messaging::message_parts_t (reply_parts));
     ASSERT_TRUE (reply_header);

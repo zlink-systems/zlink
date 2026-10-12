@@ -527,33 +527,37 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
 
     result_t<envelope_header_t> finish (std::optional<envelope_header_t> *rejection_context)
     {
-        if (_kind.type != header_value_t::number || _channel_name.type != header_value_t::string
-            || _message_name.type != header_value_t::string)
-            return failure ("ZLink envelope header has invalid required fields");
-        if (_content_type.type != header_value_t::missing
-            && _content_type.type != header_value_t::string)
-            return failure ("ZLink envelope header contentType is invalid");
-        if (!optional_string (_correlation_id) || !optional_string (_deadline)
-            || !optional_string (_topic) || !optional_string (_error_code)
-            || !optional_string (_error_message) || !optional_string (_source)
-            || !number_or_default (_format_marker))
-            return failure ("ZLink envelope header has an invalid field type");
-        if (_capture_flow && (!optional_string (_flow_id) || !number_or_default (_flow_origin)))
-            return failure ("ZLink envelope header flow fields are invalid");
-
         envelope_header_t header;
         header.kind = static_cast<message_kind_t> (_kind.number);
         header.channel_name = std::move (_channel_name.string);
         header.message_name = std::move (_message_name.string);
-        header.content_type = _content_type.type == header_value_t::missing
-                                ? envelope_codec_t::default_content_type
-                                : std::move (_content_type.string);
+        header.content_type = _content_type.type == header_value_t::string
+                                ? std::move (_content_type.string)
+                                : envelope_codec_t::default_content_type;
         header.correlation_id = std::move (_correlation_id.string);
         header.deadline = take_optional (_deadline);
         header.topic = take_optional (_topic);
         header.error_code = take_optional (_error_code);
         header.error_message = take_optional (_error_message);
         header.source = take_optional (_source);
+        const auto reject = [&] (const std::string &message) {
+            if (rejection_context)
+                *rejection_context = std::move (header);
+            return failure (message);
+        };
+        if (_kind.type != header_value_t::number || _channel_name.type != header_value_t::string
+            || _message_name.type != header_value_t::string)
+            return reject ("ZLink envelope header has invalid required fields");
+        if (_content_type.type != header_value_t::missing
+            && _content_type.type != header_value_t::string)
+            return reject ("ZLink envelope header contentType is invalid");
+        if (!optional_string (_correlation_id) || !optional_string (_deadline)
+            || !optional_string (_topic) || !optional_string (_error_code)
+            || !optional_string (_error_message) || !optional_string (_source)
+            || !number_or_default (_format_marker))
+            return reject ("ZLink envelope header has an invalid field type");
+        if (_capture_flow && (!optional_string (_flow_id) || !number_or_default (_flow_origin)))
+            return reject ("ZLink envelope header flow fields are invalid");
         if (_capture_flow) {
             header.flow_id = take_optional (_flow_id);
             if (_flow_origin.type == header_value_t::number)
@@ -565,14 +569,10 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
                                                    header.flow_id ? &*header.flow_id : nullptr,
                                                    header.flow_origin);
             !valid) {
-            return result_t<envelope_header_t>::failure (valid.error_kind (),
-                                                         valid.error ()->what ());
+            header.flow_id.reset ();
+            header.flow_origin.reset ();
+            return reject (valid.error ()->what ());
         }
-        const auto reject = [&] (const std::string &message) {
-            if (rejection_context)
-                *rejection_context = std::move (header);
-            return failure (message);
-        };
         if (!_parse_error.empty ())
             return reject (_parse_error);
         if (!_root_object || !_root_closed || _depth != 0)
@@ -804,14 +804,18 @@ envelope_codec_t::decode_header (const zlink::message_t &message,
     }
 }
 
-result_t<envelope_header_t> envelope_codec_t::decode_header (const message_parts_t &parts,
-                                                             bool capture_flow) const
+result_t<envelope_header_t>
+envelope_codec_t::decode_header (const message_parts_t &parts,
+                                 bool capture_flow,
+                                 std::optional<envelope_header_t> *rejection_context) const
 {
     if (parts.size () == 0) {
+        if (rejection_context)
+            rejection_context->reset ();
         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
                                                      "ZLink envelope header part is missing");
     }
-    return decode_header (parts[0], capture_flow);
+    return decode_header (parts[0], capture_flow, rejection_context);
 }
 
 result_t<zlink::message_t> envelope_codec_t::decode_body (const message_parts_t &parts) const

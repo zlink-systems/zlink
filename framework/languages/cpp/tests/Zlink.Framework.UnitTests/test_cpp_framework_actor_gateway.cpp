@@ -2290,8 +2290,8 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
         auto parts = std::move (encoded).take_items ();
         return spots.dispatch_mesh_record (
           owner, record, parts,
-          zlink::framework::runtime::decode_mesh_record_header (record, parts, false), provider,
-          serializers);
+          zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
+          provider, serializers);
     };
     const auto wait_for_calls = [&] (int expected) {
         const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
@@ -4235,8 +4235,8 @@ int early_zero_generation_leave_waits_for_source_transfer_completion ()
         bool terminal_deferred = false;
         const auto handled = spots.dispatch_mesh_record (
           owner, record, parts,
-          zlink::framework::runtime::decode_mesh_record_header (record, parts, false), provider,
-          serializers, std::move (transfer_owner_reservation), &terminal_deferred);
+          zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
+          provider, serializers, std::move (transfer_owner_reservation), &terminal_deferred);
         return handled && (!owns_terminal || terminal_deferred);
     };
 
@@ -5581,8 +5581,8 @@ int parked_request_reply_case (const std::string &requester_rid,
 
     (void) spots.dispatch_mesh_record (
       owner, record, request_parts,
-      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false), provider,
-      serializers);
+      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false).value (),
+      provider, serializers);
 
     // The request must park (not dispatch) and the pending handoff entry
     // that owns the original reply token must be recorded despite the
@@ -5828,8 +5828,8 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
     // dispatch shape used while the transfer window is still open.
     (void) spots.dispatch_mesh_record (
       owner, record, request_parts,
-      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false), provider,
-      serializers);
+      zlink::framework::runtime::decode_mesh_record_header (record, request_parts, false).value (),
+      provider, serializers);
 
     const auto reply_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     for (;;) {

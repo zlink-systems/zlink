@@ -48,10 +48,14 @@
 namespace zlink::framework::runtime
 {
 
-std::optional<result_t<messaging::envelope_header_t>> decode_mesh_record_header (
-  const host::receive_record_t &record, std::vector<zlink::message_t> &parts, bool capture_flow)
+result_t<std::optional<messaging::envelope_header_t>>
+decode_mesh_record_header (const host::receive_record_t &record,
+                           std::vector<zlink::message_t> &parts,
+                           bool capture_flow,
+                           const dispatch_options_t &dispatch_options)
 {
     using kind_t = host::record_kind_t;
+    using header_result_t = result_t<std::optional<messaging::envelope_header_t>>;
     switch (record.kind) {
         case kind_t::spot_send:
         case kind_t::spot_request:
@@ -63,12 +67,60 @@ std::optional<result_t<messaging::envelope_header_t>> decode_mesh_record_header 
         case kind_t::actor_request:
             break;
         default:
-            return std::nullopt;
+            return header_result_t::success (std::nullopt);
     }
     messaging::message_parts_t encoded (std::move (parts));
-    auto decoded = messaging::envelope_codec_t{}.decode_header (encoded, capture_flow);
+    std::optional<messaging::envelope_header_t> rejected_header;
+    auto decoded =
+      messaging::envelope_codec_t{}.decode_header (encoded, capture_flow, &rejected_header);
     parts = std::move (encoded).take_items ();
-    return std::move (decoded);
+    if (decoded)
+        return header_result_t::success (std::move (decoded.value ()));
+
+    const bool request =
+      record.kind == kind_t::node_request || record.kind == kind_t::channel_request
+      || record.kind == kind_t::spot_request || record.kind == kind_t::actor_request;
+    const bool can_correlate = rejected_header && !rejected_header->correlation_id.empty ();
+    auto submitted = zlink::submit_result_t::terminated;
+    if (request && can_correlate) {
+        detail::channel_reply_writer_t replies;
+        auto reply = replies.reply_raw_envelope (
+          replies.create_error_header (rejected_header->channel_name, *rejected_header,
+                                       *decoded.error ()),
+          zlink::message_t::from (""));
+        submitted = host::reply (record.reply_token, reply.items ());
+    }
+    detail::dispatch_error_reporter_t (dispatch_options).report_lazy ([&] {
+        const auto surface =
+          record.kind == kind_t::actor_send || record.kind == kind_t::actor_request
+            ? dispatch_error_surface_t::spot_actor
+          : record.kind == kind_t::spot_send || record.kind == kind_t::spot_request
+            ? dispatch_error_surface_t::spot_route
+          : record.kind == kind_t::node_send || record.kind == kind_t::node_request
+            ? dispatch_error_surface_t::node
+            : dispatch_error_surface_t::route_mesh_channel;
+        message_dispatch_error_event_t event{
+          surface, request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
+          dispatch_error_reason_t::invalid_frame,
+          submitted == zlink::submit_result_t::ok ? dispatch_error_action_t::reply_error
+                                                  : dispatch_error_action_t::drop};
+        event.channel_name = record.channel_name;
+        event.source_rid = record.source_node_rid.to_string ();
+        event.exception = decoded.exception ();
+        if (rejected_header) {
+            if (!rejected_header->message_name.empty ())
+                event.packet_name = rejected_header->message_name;
+            if (!rejected_header->channel_name.empty ())
+                event.channel_name = rejected_header->channel_name;
+            if (can_correlate)
+                event.correlation_id = rejected_header->correlation_id;
+            event.flow_id = rejected_header->flow_id;
+            event.flow_origin = rejected_header->flow_origin;
+        }
+        return event;
+    });
+    return detail::propagate_failure<std::optional<messaging::envelope_header_t>> (
+      decoded, "MeshNode envelope header decode failed");
 }
 
 struct mesh_node_host_service_t::actor_destroy_callback_gate_t
@@ -2637,9 +2689,13 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                           const auto header = decode_mesh_record_header (
                                             record, parts,
                                             detail::message_flow_tracer_t (_dispatch_options)
-                                              .capture_enabled ());
+                                              .capture_enabled (),
+                                            _dispatch_options);
+                                          if (!header) {
+                                              return;
+                                          }
                                           handled = spot_runtime.dispatch_mesh_record (
-                                            owner, record, parts, header, *_services,
+                                            owner, record, parts, header.value (), *_services,
                                             *_serializers);
                                       });
                                   }
@@ -2684,18 +2740,21 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   auto decoded_header = decode_mesh_record_header (
                                     record, parts,
                                     detail::message_flow_tracer_t (_dispatch_options)
-                                      .capture_enabled ());
+                                      .capture_enabled (),
+                                    _dispatch_options);
+                                  if (!decoded_header)
+                                      return;
                                   if (spot_runtime.dispatch_mesh_record (owner, record, parts,
-                                                                         decoded_header, *_services,
-                                                                         *_serializers)
-                                      || !decoded_header) {
+                                                                         decoded_header.value (),
+                                                                         *_services, *_serializers)
+                                      || !decoded_header.value ()) {
                                       return;
                                   }
                                   detail::mesh_record_dispatcher_t dispatcher (
                                     *_services, *_serializers, registration->handlers, *_filters,
                                     _dispatch_options);
                                   (void) dispatcher.dispatch (record, std::move (parts),
-                                                              std::move (decoded_header.value ()));
+                                                              std::move (*decoded_header.value ()));
                               });
                           },
                           accept_application_receive, next_application_receive))
@@ -3013,21 +3072,26 @@ void mesh_node_host_service_t::dispatch_application (
         detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
         bool terminal_deferred = false;
         auto decoded_header = decode_mesh_record_header (
-          record, parts, detail::message_flow_tracer_t (dispatch_options).capture_enabled ());
+          record, parts, detail::message_flow_tracer_t (dispatch_options).capture_enabled (),
+          dispatch_options);
+        if (!decoded_header) {
+            deferred_terminal->settle ();
+            return;
+        }
         const auto handled = application_spot_runtime.dispatch_mesh_record (
-          owner, record, parts, decoded_header, *services, *serializers,
+          owner, record, parts, decoded_header.value (), *services, *serializers,
           [deferred_terminal] { deferred_terminal->settle (); }, &terminal_deferred,
           record.before_application_handler);
         trace_mesh_application ("framework-dispatch", record, parts.size (),
                                 handled ? "handled" : "not-handled");
-        if (!handled && decoded_header
+        if (!handled && decoded_header.value ()
             && (owner.owner_kind == host::owner_kind_t::node
                 || owner.owner_kind == host::owner_kind_t::channel)) {
             detail::mesh_record_dispatcher_t dispatcher (
               *services, *serializers, registration->handlers, *filters, dispatch_options,
               record.before_application_handler);
             const auto dispatched =
-              dispatcher.dispatch (record, std::move (parts), std::move (decoded_header.value ()));
+              dispatcher.dispatch (record, std::move (parts), std::move (*decoded_header.value ()));
             trace_mesh_application ("route-dispatch", record, 0,
                                     dispatched ? "success" : "failure");
         }

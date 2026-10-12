@@ -31,8 +31,11 @@ namespace zlink::framework::runtime
 
 class location_runtime_t;
 
-std::optional<result_t<messaging::envelope_header_t>> decode_mesh_record_header (
-  const host::receive_record_t &record, std::vector<zlink::message_t> &parts, bool capture_flow);
+result_t<std::optional<messaging::envelope_header_t>>
+decode_mesh_record_header (const host::receive_record_t &record,
+                           std::vector<zlink::message_t> &parts,
+                           bool capture_flow,
+                           const dispatch_options_t &dispatch_options = {});
 
 // Owns every resource charged to one admitted application dispatch until its
 // synchronous or deferred terminal settles. This internal value is separate

@@ -1728,7 +1728,7 @@ class spot_node_runtime_t
       const service::ready_record_t &owner,
       const service::receive_record_t &record,
       std::vector<zlink::message_t> &parts,
-      const std::optional<result_t<runtime::messaging::envelope_header_t>> &decoded_header,
+      const std::optional<runtime::messaging::envelope_header_t> &decoded_header,
       service_provider_t &services,
       serializer_registry_t &serializers,
       std::function<void ()> deferred_terminal = {},

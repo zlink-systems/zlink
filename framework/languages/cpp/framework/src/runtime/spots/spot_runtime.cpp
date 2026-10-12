@@ -14469,7 +14469,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
   const service::ready_record_t &owner,
   const service::receive_record_t &record,
   std::vector<zlink::message_t> &parts,
-  const std::optional<result_t<runtime::messaging::envelope_header_t>> &decoded_header,
+  const std::optional<runtime::messaging::envelope_header_t> &decoded_header,
   service_provider_t &services,
   serializer_registry_t &serializers,
   std::function<void ()> deferred_terminal,
@@ -14478,8 +14478,6 @@ bool spot_node_runtime_t::dispatch_mesh_record (
 {
     if (terminal_deferred)
         *terminal_deferred = false;
-    if (decoded_header && !*decoded_header)
-        return false;
     if (owner.owner_kind == service::owner_kind_t::spot
         && record.kind == service::record_kind_t::spot_multicast) {
         const auto context = find_context (spot_id_t (owner.spot_id));
@@ -14507,7 +14505,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         const auto route_client = _state->route_client.load (std::memory_order_acquire);
         runtime::messaging::message_parts_t encoded (std::move (parts));
         runtime::messaging::envelope_codec_t codec;
-        const auto &header = decoded_header->value ();
+        const auto &header = *decoded_header;
         if (!route_client) {
             parts = std::move (encoded).take_items ();
             return false;
@@ -14912,7 +14910,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         }
         runtime::messaging::message_parts_t encoded (std::move (parts));
         runtime::messaging::envelope_codec_t codec;
-        const auto &header = decoded_header->value ();
+        const auto &header = *decoded_header;
         detail::channel_reply_writer_t replies;
         auto reply_error = [&] (const framework_exception_t &error) {
             if (record.kind != service::record_kind_t::actor_request)

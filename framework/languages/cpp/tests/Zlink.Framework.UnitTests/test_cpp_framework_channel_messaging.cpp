@@ -793,8 +793,9 @@ int main ()
         off_options.message_flow (message_flow_log_mode_t::off);
         detail::mesh_record_dispatcher_t off (provider, serializers, handlers, filters,
                                               off_options);
-        if (!off.dispatch (record, parts (malformed),
-                           codec.decode_header (msg::message_parts_t (parts (malformed)), false))
+        if (!off.dispatch (
+              record, parts (malformed),
+              codec.decode_header (msg::message_parts_t (parts (malformed)), false).value ())
             || handler.invocations != 1 || handler.last_value != 42)
             return 220;
         dispatch_options_t options;
@@ -808,13 +809,12 @@ int main ()
           });
         detail::mesh_record_dispatcher_t on (provider, serializers, handlers, filters, options);
         if (!on.dispatch (record, parts (wire),
-                          codec.decode_header (msg::message_parts_t (parts (wire)), true))
+                          codec.decode_header (msg::message_parts_t (parts (wire)), true).value ())
             || !preserved || handler.invocations != 2 || handler.last_value != 42)
             return 221;
         auto invalid_parts = parts (malformed);
         auto decoded = runtime::decode_mesh_record_header (record, invalid_parts, true);
-        const auto rejected = on.dispatch (record, std::move (invalid_parts), std::move (*decoded));
-        if (rejected || rejected.error_kind () != framework_error_kind_t::protocol_error
+        if (decoded || decoded.error_kind () != framework_error_kind_t::protocol_error
             || handler.invocations != 2)
             return 222;
     }

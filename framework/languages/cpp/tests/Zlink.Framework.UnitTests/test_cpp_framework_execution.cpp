@@ -2594,8 +2594,8 @@ bool verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()
     bool terminal_deferred = false;
     const auto dispatched = spot_node_runtime_t (node).dispatch_mesh_record (
       owner, record, parts,
-      zlink::framework::runtime::decode_mesh_record_header (record, parts, false), provider,
-      serializers,
+      zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
+      provider, serializers,
       [&ingress_terminals] { ingress_terminals.fetch_add (1, std::memory_order_acq_rel); },
       &terminal_deferred);
 
@@ -7319,7 +7319,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
                                                std::vector<zlink::message_t> parts) {
                 (void) source_spots.dispatch_mesh_record (
                   owner, record, parts,
-                  zlink::framework::runtime::decode_mesh_record_header (record, parts, false),
+                  zlink::framework::runtime::decode_mesh_record_header (record, parts, false)
+                    .value (),
                   source_provider, serializers);
             });
             std::this_thread::sleep_for (1ms);
@@ -7332,7 +7333,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
                                                std::vector<zlink::message_t> parts) {
                 (void) target_spots.dispatch_mesh_record (
                   owner, record, parts,
-                  zlink::framework::runtime::decode_mesh_record_header (record, parts, false),
+                  zlink::framework::runtime::decode_mesh_record_header (record, parts, false)
+                    .value (),
                   target_provider, serializers);
             });
             std::this_thread::sleep_for (1ms);

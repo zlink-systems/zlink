@@ -678,8 +678,9 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
         bool terminal_deferred = false;
         const auto accepted = old_spots.dispatch_mesh_record (
           ready, record, parts,
-          zlink::framework::runtime::decode_mesh_record_header (record, parts, false), provider,
-          serializers, [completion] { completion->set_value (true); }, &terminal_deferred);
+          zlink::framework::runtime::decode_mesh_record_header (record, parts, false).value (),
+          provider, serializers, [completion] { completion->set_value (true); },
+          &terminal_deferred);
         if (!accepted || !terminal_deferred)
             completion->set_value (accepted);
     };
