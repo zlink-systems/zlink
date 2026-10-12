@@ -170,6 +170,41 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task ColdActivation_RetainsRuntimeOperationBeforeReadyPublication()
+    {
+        const string spotId = "held-ready-owner";
+        AsynchronousLocationStore? store = null;
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            locationStoreWrapper: inner =>
+                store = new AsynchronousLocationStore(
+                    inner,
+                    ZLinkProviderLocationRepository.AuthorityMetaKey(
+                        ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId)
+                    ),
+                    heldWriteOrdinal: AsynchronousLocationStore.ReadyAuthorityWriteOrdinal
+                ),
+            relocationStore: new InMemoryRelocationStore()
+        );
+        Task? stop = null;
+        try
+        {
+            await SendInstanceIntentAsync(runtime, spotId);
+            await store!.TerminalWriteEntered.Task.WaitAsync(OwnerLeaseObservationTimeout);
+            Assert.True(runtime.SnapshotOperationAdmissions().ActiveCount > 0);
+            stop = runtime.StopAsync(CancellationToken.None).AsTask();
+            Assert.False(stop.IsCompleted);
+        }
+        finally
+        {
+            store!.ReleaseTerminalWrite.TrySetResult();
+            await (stop ?? runtime.StopAsync(CancellationToken.None).AsTask());
+        }
+    }
+
+    [Fact]
     public async Task ColdActivation_RejectsDescriptorOwnerLeaseWithoutExpiry()
     {
         const string corruptOwnerId = "corrupt-cold-owner";
@@ -1010,10 +1045,12 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private sealed class AsynchronousLocationStore(
         IZLinkLocationStore inner,
-        ZLinkStoreKey? heldAuthority = null
+        ZLinkStoreKey? heldAuthority = null,
+        int heldWriteOrdinal = AsynchronousLocationStore.TerminalCursorWriteOrdinal
     ) : IZLinkLocationStore
     {
-        private const int TerminalCursorWriteOrdinal = 3; // Reserve, Ready commit, terminal cursor.
+        internal const int ReadyAuthorityWriteOrdinal = 2;
+        internal const int TerminalCursorWriteOrdinal = 3;
         private int _authorityWrites;
         public TaskCompletionSource TerminalWriteEntered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1051,7 +1088,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 && request.Mutations.Any(m =>
                     m is ZLinkStoreMutation.Put put && put.Key == authority
                 )
-                && Interlocked.Increment(ref _authorityWrites) == TerminalCursorWriteOrdinal
+                && Interlocked.Increment(ref _authorityWrites) == heldWriteOrdinal
             )
             {
                 TerminalWriteEntered.TrySetResult();
