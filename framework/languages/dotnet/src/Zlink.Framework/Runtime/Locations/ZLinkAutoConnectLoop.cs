@@ -58,12 +58,15 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
     {
         await TickAsync(cancellationToken).ConfigureAwait(false);
         _cts = new CancellationTokenSource();
+        // Workers receive the token of the source created here; StopAsync clears _cts
+        // before it awaits them, so a worker must not read the field again.
+        var token = _cts.Token;
         using (ExecutionContext.SuppressFlow())
         {
-            _loop = Task.Run(() => LoopAsync(_cts.Token), CancellationToken.None);
+            _loop = Task.Run(() => LoopAsync(token), CancellationToken.None);
             if (_watchStore is not null)
             {
-                _watch = Task.Run(() => WatchAsync(_cts.Token), CancellationToken.None);
+                _watch = Task.Run(() => WatchAsync(token), CancellationToken.None);
             }
         }
     }
