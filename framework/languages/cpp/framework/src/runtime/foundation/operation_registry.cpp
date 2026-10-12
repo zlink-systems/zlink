@@ -2,8 +2,10 @@
 
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
+#include "runtime/dispatch/dispatch_limits.hpp"
 
 #include <condition_variable>
+#include <bit>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -273,11 +275,11 @@ bool operation_registry_t::register_operation (call_id_t id,
     if (_closed || _pending.contains (id)) {
         return false;
     }
-    const auto inserted =
-      _pending.emplace (id, pending_t{deadline, {}, std::move (target_routing_id)});
+    const auto inserted = _pending.emplace (id, pending_t{{}, std::move (target_routing_id), {}});
     if (!inserted.second)
         return false;
     try {
+        index_deadline (id, deadline, inserted.first->second);
         auto completion =
           _completion_dispatcher->create_completion_item (std::move (callback), _drain_state);
         completion->request_metric = std::move (request_metric);
@@ -286,9 +288,86 @@ bool operation_registry_t::register_operation (call_id_t id,
         return true;
     }
     catch (...) {
+        unindex_deadline (inserted.first->second);
         _pending.erase (inserted.first);
         throw;
     }
+}
+
+unsigned operation_registry_t::key_bit (const deadline_node_t &node, unsigned bit) noexcept
+{
+    return static_cast<unsigned> (
+      (node.key[bit / deadline_word_bits] >> (deadline_word_bits - 1 - bit % deadline_word_bits))
+      & 1);
+}
+
+operation_registry_t::clock_t::time_point
+operation_registry_t::deadline_value (const deadline_node_t &node) noexcept
+{
+    using rep_t = clock_t::duration::rep;
+    static_assert (sizeof (rep_t) == sizeof (std::uint64_t));
+    const auto raw = node.key[0] ^ (std::uint64_t{1} << (deadline_word_bits - 1));
+    return clock_t::time_point (clock_t::duration (std::bit_cast<rep_t> (raw)));
+}
+
+// The radix key has a fixed width: deadline, then the full operation identity.
+// Registration and removal visit at most 192 branches, independent of pending count.
+void operation_registry_t::index_deadline (const call_id_t &id,
+                                           clock_t::time_point deadline,
+                                           pending_t &pending)
+{
+    auto &leaf = pending.index;
+    leaf.key = {static_cast<std::uint64_t> (deadline.time_since_epoch ().count ())
+                  ^ (std::uint64_t{1} << (deadline_word_bits - 1)),
+                id.high, id.low};
+    if (!_deadlines) {
+        _deadlines = &leaf;
+        return;
+    }
+    auto *other = _deadlines;
+    while (other->bit < deadline_key_bits)
+        other = other->children[key_bit (leaf, other->bit)];
+    unsigned differing = 0;
+    while (leaf.key[differing / deadline_word_bits] == other->key[differing / deadline_word_bits])
+        differing += deadline_word_bits;
+    differing += std::countl_zero (leaf.key[differing / deadline_word_bits]
+                                   ^ other->key[differing / deadline_word_bits]);
+    auto **position = &_deadlines;
+    while ((*position)->bit < differing)
+        position = &(*position)->children[key_bit (leaf, (*position)->bit)];
+    auto branch = std::make_unique<deadline_node_t> ();
+    branch->bit = differing;
+    const auto side = key_bit (leaf, differing);
+    branch->children[side] = &leaf;
+    branch->children[1 - side] = *position;
+    *position = branch.release ();
+}
+
+void operation_registry_t::unindex_deadline (const pending_t &pending) noexcept
+{
+    auto **position = &_deadlines;
+    deadline_node_t **parent_position = nullptr;
+    while (*position && (*position)->bit < deadline_key_bits) {
+        parent_position = position;
+        position = &(*position)->children[key_bit (pending.index, (*position)->bit)];
+    }
+    if (*position != &pending.index)
+        return;
+    if (!parent_position) {
+        _deadlines = nullptr;
+        return;
+    }
+    auto *parent = *parent_position;
+    *parent_position = parent->children[parent->children[0] == *position ? 1 : 0];
+    delete parent;
+}
+
+const operation_registry_t::deadline_node_t *operation_registry_t::first_deadline () const noexcept
+{
+    auto *first = _deadlines;
+    while (first && first->bit < deadline_key_bits)
+        first = first->children[0];
+    return first;
 }
 
 bool operation_registry_t::take (const call_id_t &id,
@@ -300,6 +379,7 @@ bool operation_registry_t::take (const call_id_t &id,
         return false;
     }
     completion = std::move (found->second.completion);
+    unindex_deadline (found->second);
     _pending.erase (found);
     return true;
 }
@@ -406,6 +486,7 @@ std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &
                 continue;
             }
             completions.append (std::move (entry->second.completion), terminal);
+            unindex_deadline (entry->second);
             entry = _pending.erase (entry);
         }
     }
@@ -417,17 +498,18 @@ std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &
 std::size_t operation_registry_t::expire (clock_t::time_point now)
 {
     operation_completion_chain_t completions;
-    {
+    const auto turn_deadline = clock_t::now () + runtime::dispatch_limits::receive_batch_time;
+    while (clock_t::now () < turn_deadline) {
         std::lock_guard lock (_mutex);
-        for (auto entry = _pending.begin (); entry != _pending.end ();) {
-            if (entry->second.deadline > now) {
-                ++entry;
-                continue;
-            }
-            completions.append (std::move (entry->second.completion),
-                                operation_terminal_t::timed_out);
-            entry = _pending.erase (entry);
-        }
+        const auto *first = first_deadline ();
+        if (!first)
+            break;
+        const auto entry = _pending.find (call_id_t{first->key[1], first->key[2]});
+        if (deadline_value (*first) > now)
+            break;
+        completions.append (std::move (entry->second.completion), operation_terminal_t::timed_out);
+        unindex_deadline (entry->second);
+        _pending.erase (entry);
     }
     const auto expired = completions.size;
     _completion_dispatcher->post_chain (std::move (completions));
@@ -438,12 +520,10 @@ std::optional<operation_registry_t::clock_t::time_point>
 operation_registry_t::next_deadline () const
 {
     std::lock_guard lock (_mutex);
-    std::optional<clock_t::time_point> result;
-    for (const auto &[_, pending] : _pending) {
-        if (!result || pending.deadline < *result)
-            result = pending.deadline;
-    }
-    return result;
+    const auto *first = first_deadline ();
+    if (!first)
+        return {};
+    return deadline_value (*first);
 }
 
 std::size_t operation_registry_t::shutdown ()
@@ -457,6 +537,7 @@ std::size_t operation_registry_t::shutdown ()
             for (auto &[id, pending] : _pending) {
                 static_cast<void> (id);
                 completions.append (std::move (pending.completion), operation_terminal_t::shutdown);
+                unindex_deadline (pending);
             }
             _pending.clear ();
             stopped = completions.size;

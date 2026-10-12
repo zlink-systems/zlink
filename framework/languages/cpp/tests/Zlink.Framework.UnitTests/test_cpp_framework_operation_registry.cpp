@@ -10,6 +10,8 @@
 #include <barrier>
 #include <chrono>
 #include <fstream>
+#include <filesystem>
+#include <iterator>
 #include <stdexcept>
 #include <thread>
 
@@ -50,6 +52,21 @@ template <typename Predicate> bool wait_until (Predicate predicate)
 
 int main ()
 {
+    // E3 is constant-time registration; maintenance and nearest-deadline
+    // lookup must not enumerate the pending identity table.
+    {
+        std::ifstream source (
+          std::filesystem::path (__FILE__).parent_path ().parent_path ().parent_path ()
+          / "framework/src/runtime/foundation/operation_registry.cpp");
+        assert (source);
+        const std::string text ((std::istreambuf_iterator<char> (source)), {});
+        const auto expiry =
+          text.substr (text.find ("std::size_t operation_registry_t::expire"),
+                       text.find ("std::size_t operation_registry_t::shutdown")
+                         - text.find ("std::size_t operation_registry_t::expire"));
+        assert (expiry.find ("_pending.begin") == std::string::npos);
+        assert (expiry.find (" : _pending") == std::string::npos);
+    }
     const auto &fixture = completion_terminal_fixture ();
     assert (fixture.at ("fixture") == "zlink.framework.completion-terminal");
     assert (fixture.at ("version") == 1);
@@ -83,6 +100,39 @@ int main ()
 
     foundation::operation_registry_t registry;
     const auto now = foundation::operation_registry_t::clock_t::now ();
+    {
+        foundation::operation_registry_t ordered;
+        std::array<bool, 128> active{};
+        active.fill (true);
+        for (std::size_t index = 0; index < active.size (); ++index)
+            assert (ordered.register_operation (id (static_cast<std::uint8_t> (index + 1)),
+                                                now + std::chrono::microseconds (index ^ 63),
+                                                [] (auto, auto) {}));
+        for (std::size_t step = 0; step < active.size (); ++step) {
+            std::optional<foundation::operation_registry_t::clock_t::time_point> expected;
+            for (std::size_t index = 0; index < active.size (); ++index) {
+                const auto deadline = now + std::chrono::microseconds (index ^ 63);
+                if (active[index] && (!expected || deadline < *expected))
+                    expected = deadline;
+            }
+            assert (ordered.next_deadline () == expected);
+            const auto removed = step * 37 % active.size ();
+            assert (ordered.unregister (id (static_cast<std::uint8_t> (removed + 1))));
+            active[removed] = false;
+        }
+        assert (!ordered.next_deadline ());
+        assert (ordered.register_operation (
+          id (1), foundation::operation_registry_t::clock_t::time_point::min (),
+          [] (auto, auto) {}));
+        assert (ordered.register_operation (
+          id (2), foundation::operation_registry_t::clock_t::time_point::max (),
+          [] (auto, auto) {}));
+        assert (ordered.expire (foundation::operation_registry_t::clock_t::time_point::min ())
+                == 1);
+        assert (ordered.next_deadline ()
+                == foundation::operation_registry_t::clock_t::time_point::max ());
+        assert (ordered.unregister (id (2)));
+    }
     bool zero_rejected = false;
     try {
         (void) registry.register_operation (foundation::call_id_t{}, now, [] (auto, auto) {});

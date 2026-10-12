@@ -6,10 +6,12 @@
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 
 #include <chrono>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -68,19 +70,36 @@ class operation_registry_t
   private:
     using id_hash_t = runtime::call_id_hash_t;
 
+    static constexpr unsigned deadline_word_bits = std::numeric_limits<std::uint64_t>::digits;
+    static constexpr unsigned deadline_key_words = 3;
+    static constexpr unsigned deadline_key_bits = deadline_key_words * deadline_word_bits;
+
+    struct deadline_node_t
+    {
+        std::array<std::uint64_t, deadline_key_words> key{};
+        unsigned bit = deadline_key_bits;
+        deadline_node_t *children[2]{};
+    };
+
     struct pending_t
     {
-        clock_t::time_point deadline;
         std::unique_ptr<operation_completion_item_t> completion;
         std::vector<std::uint8_t> target_routing_id;
+        deadline_node_t index;
     };
 
     bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
+    void index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
+    void unindex_deadline (const pending_t &pending) noexcept;
+    const deadline_node_t *first_deadline () const noexcept;
+    static unsigned key_bit (const deadline_node_t &node, unsigned bit) noexcept;
+    static clock_t::time_point deadline_value (const deadline_node_t &node) noexcept;
 
     std::shared_ptr<operation_completion_dispatcher_t> _completion_dispatcher;
     std::shared_ptr<operation_registry_drain_state_t> _drain_state;
     mutable std::mutex _mutex;
     std::unordered_map<call_id_t, pending_t, id_hash_t> _pending;
+    deadline_node_t *_deadlines = nullptr;
     bool _closed = false;
 };
 
