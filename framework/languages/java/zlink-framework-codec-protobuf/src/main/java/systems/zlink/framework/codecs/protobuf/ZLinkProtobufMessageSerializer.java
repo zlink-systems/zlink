@@ -11,7 +11,15 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
 final class ZLinkProtobufMessageSerializer implements ZLinkMessageSerializer {
+    private static final String PARSER_METHOD_NAME = "parser";
     static final ZLinkProtobufMessageSerializer INSTANCE = new ZLinkProtobufMessageSerializer();
+    private final ClassValue<Parser<?>> parsers =
+            new ClassValue<>() {
+                @Override
+                protected Parser<?> computeValue(Class<?> type) {
+                    return parserFor(type);
+                }
+            };
 
     private ZLinkProtobufMessageSerializer() {}
 
@@ -44,11 +52,14 @@ final class ZLinkProtobufMessageSerializer implements ZLinkMessageSerializer {
             throw new IllegalArgumentException(
                     "Protobuf codec cannot prepare payload type " + type.getName());
         }
+        if (type != null) {
+            parsers.get(type);
+        }
     }
 
-    private static <T> T parseProtobuf(ZLinkEncodedPayload payload, Class<T> type) {
+    private <T> T parseProtobuf(ZLinkEncodedPayload payload, Class<T> type) {
         try {
-            Parser<?> parser = parserFor(type);
+            Parser<?> parser = parsers.get(type);
             return type.cast(parser.parseFrom(payload.bytes()));
         } catch (InvalidProtocolBufferException ex) {
             throw new IllegalArgumentException(
@@ -58,7 +69,7 @@ final class ZLinkProtobufMessageSerializer implements ZLinkMessageSerializer {
 
     private static Parser<?> parserFor(Class<?> type) {
         try {
-            Method parserMethod = type.getMethod("parser");
+            Method parserMethod = type.getMethod(PARSER_METHOD_NAME);
             Object parser = parserMethod.invoke(null);
             if (parser instanceof Parser<?> typedParser) {
                 return typedParser;

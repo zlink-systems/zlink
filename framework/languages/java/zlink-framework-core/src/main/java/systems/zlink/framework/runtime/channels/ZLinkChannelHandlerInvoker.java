@@ -8,7 +8,6 @@ import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
@@ -33,9 +32,9 @@ import java.util.function.Supplier;
 
 final class ZLinkChannelHandlerInvoker {
     private final ZLinkMessageSerializer serializer;
+    private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final ZLinkCodecRegistration codecs;
     private final ZLinkHandlerActivator handlerFactory;
-    private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final List<Class<? extends ZLinkHandlerFilter>> filterTypes;
     private final String meshName;
 
@@ -65,12 +64,16 @@ final class ZLinkChannelHandlerInvoker {
             List<Class<? extends ZLinkHandlerFilter>> filterTypes,
             String meshName) {
         this.serializer = serializer;
+        this.suspendHandlerInvokers = suspendHandlerInvokers;
         this.codecs = codecs;
         this.handlerFactory = handlerFactory;
         Objects.requireNonNull(handlerExecutor, "handlerExecutor");
-        this.suspendHandlerInvokers = suspendHandlerInvokers;
         this.filterTypes = filterTypes;
         this.meshName = meshName;
+    }
+
+    List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers() {
+        return suspendHandlerInvokers;
     }
 
     <T> CompletionStage<T> executeHandler(Supplier<CompletionStage<T>> operation) {
@@ -176,20 +179,10 @@ final class ZLinkChannelHandlerInvoker {
             ZLinkMessageContext context,
             ZLinkHandlerInstanceOwner handlers) {
         try {
-            if (registration.handlerMethod() != null) {
-                return invokeVoidMethodHandler(
-                        registration.handlerType(),
-                        registration.handlerMethod(),
-                        message,
-                        context,
-                        handlers);
-            }
             Object handler = handlers.instance(registration.handlerType());
-            return ZLinkHandlerMethodInvoker.invokeHandler(
-                            handler,
-                            "handle",
-                            new Object[] {message, context},
-                            suspendHandlerInvokers)
+            return registration
+                    .invocation()
+                    .invoke(handler, message, context)
                     .thenApply(ignored -> null);
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
@@ -262,17 +255,8 @@ final class ZLinkChannelHandlerInvoker {
             ZLinkMessageContext context,
             ZLinkHandlerInstanceOwner handlers) {
         try {
-            if (registration.handlerMethod() != null) {
-                return invokeReplyMethodHandler(
-                        registration.handlerType(),
-                        registration.handlerMethod(),
-                        request,
-                        context,
-                        handlers);
-            }
             Object handler = handlers.instance(registration.handlerType());
-            return ZLinkHandlerMethodInvoker.invokeHandler(
-                    handler, "handle", new Object[] {request, context}, suspendHandlerInvokers);
+            return registration.invocation().invoke(handler, request, context);
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -333,90 +317,25 @@ final class ZLinkChannelHandlerInvoker {
             ZLinkPublishMessageContext context,
             ZLinkHandlerInstanceOwner handlers) {
         try {
-            if (registration.handlerMethod() != null) {
-                return invokeVoidMethodHandler(
-                        registration.handlerType(),
-                        registration.handlerMethod(),
-                        message,
-                        context,
-                        handlers);
-            }
             Object handler = handlers.instance(registration.handlerType());
-            return ZLinkHandlerMethodInvoker.invokeHandler(
-                            handler,
-                            "handle",
-                            new Object[] {message, context},
-                            suspendHandlerInvokers)
+            return registration
+                    .invocation()
+                    .invoke(handler, message, context)
                     .thenApply(ignored -> null);
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
     }
 
-    private CompletionStage<Void> invokeVoidMethodHandler(
-            Class<?> handlerType,
-            Method method,
-            Object message,
-            ZLinkMessageContext context,
-            ZLinkHandlerInstanceOwner handlers) {
-        try {
-            Object handler = handlers.instance(handlerType);
-            return ZLinkHandlerMethodInvoker.invoke(
-                            handler,
-                            method,
-                            methodArguments(method, message, context),
-                            suspendHandlerInvokers)
-                    .thenApply(ignored -> null);
-        } catch (RuntimeException ex) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "failed to invoke handler method: "
-                                    + handlerType.getName()
-                                    + "."
-                                    + method.getName(),
-                            ex));
-        }
-    }
-
-    private CompletionStage<Object> invokeReplyMethodHandler(
-            Class<?> handlerType,
-            Method method,
-            Object message,
-            ZLinkMessageContext context,
-            ZLinkHandlerInstanceOwner handlers) {
-        try {
-            Object handler = handlers.instance(handlerType);
-            return ZLinkHandlerMethodInvoker.invoke(
-                    handler,
-                    method,
-                    methodArguments(method, message, context),
-                    suspendHandlerInvokers);
-        } catch (RuntimeException ex) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "failed to invoke handler method: "
-                                    + handlerType.getName()
-                                    + "."
-                                    + method.getName(),
-                            ex));
-        }
-    }
-
     static Object[] methodArguments(Method method, Object message, ZLinkMessageContext context) {
-        Class<?>[] parameterTypes = ZLinkHandlerMethodInvoker.logicalParameterTypes(method);
-        Object[] arguments = new Object[parameterTypes.length];
-        arguments[0] = message;
-        for (int index = 1; index < parameterTypes.length; index++) {
-            if (parameterTypes[index].isInstance(context)) {
-                arguments[index] = context;
-            } else {
-                arguments[index] = null;
-            }
-        }
-        return arguments;
+        return ZLinkHandlerMethodInvoker.prepareChannel(
+                        method.getDeclaringClass(),
+                        method,
+                        null,
+                        context == null ? ZLinkMessageContext.class : context.getClass())
+                .arguments(message, context);
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
     CompletionStage<Void> invokeRouteSendHandler(
             String channelName,
             ChannelRouteSendHandlerRegistration registration,
@@ -588,18 +507,15 @@ final class ZLinkChannelHandlerInvoker {
             Object message,
             ZLinkRouteMessageContext context,
             ZLinkHandlerInstanceOwner handlers) {
-        Object handler = handlers.instance(registration.handlerType());
-        if (registration.handlerMethod() != null) {
-            return ZLinkHandlerMethodInvoker.invoke(
-                            handler,
-                            registration.handlerMethod(),
-                            methodArguments(registration.handlerMethod(), message, context),
-                            suspendHandlerInvokers)
+        try {
+            Object handler = handlers.instance(registration.handlerType());
+            return registration
+                    .invocation()
+                    .invoke(handler, message, context)
                     .thenApply(ignored -> null);
+        } catch (RuntimeException ex) {
+            return CompletableFuture.failedFuture(ex);
         }
-        return ZLinkHandlerMethodInvoker.invokeHandler(
-                        handler, "handle", new Object[] {message, context}, suspendHandlerInvokers)
-                .thenApply(ignored -> null);
     }
 
     private CompletionStage<Object> invokeRouteRequestHandlerCore(
@@ -607,16 +523,12 @@ final class ZLinkChannelHandlerInvoker {
             Object request,
             ZLinkRouteMessageContext context,
             ZLinkHandlerInstanceOwner handlers) {
-        Object handler = handlers.instance(registration.handlerType());
-        if (registration.handlerMethod() != null) {
-            return ZLinkHandlerMethodInvoker.invoke(
-                    handler,
-                    registration.handlerMethod(),
-                    methodArguments(registration.handlerMethod(), request, context),
-                    suspendHandlerInvokers);
+        try {
+            Object handler = handlers.instance(registration.handlerType());
+            return registration.invocation().invoke(handler, request, context);
+        } catch (RuntimeException ex) {
+            return CompletableFuture.failedFuture(ex);
         }
-        return ZLinkHandlerMethodInvoker.invokeHandler(
-                handler, "handle", new Object[] {request, context}, suspendHandlerInvokers);
     }
 
     private <T> CompletionStage<ZLinkFilterPipeline.Result<T>> invokeWithFilters(

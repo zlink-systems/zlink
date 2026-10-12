@@ -24,10 +24,8 @@ import java.util.function.Supplier;
 
 final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSessionContext>
         implements ZLinkSessionPacketDispatcher<TSessionContext> {
-    private final Map<String, Object> handlers;
-    private final ZLinkMessageSerializer serializer;
+    private final Map<String, Handler> handlers;
     private final Executor handlerExecutor;
-    private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
 
     ZLinkSessionPacketDispatcherRuntime(
             List<Class<?>> handlerTypes,
@@ -35,63 +33,30 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
             ZLinkMessageSerializer serializer,
             Executor handlerExecutor,
             List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers) {
-        this.handlers = buildHandlerMap(handlerTypes, handlerFactory);
-        this.serializer = Objects.requireNonNull(serializer, "serializer");
+        Objects.requireNonNull(serializer, "serializer");
+        this.handlers =
+                buildHandlerMap(handlerTypes, handlerFactory, serializer, suspendHandlerInvokers);
         this.handlerExecutor = Objects.requireNonNull(handlerExecutor, "handlerExecutor");
-        this.suspendHandlerInvokers = List.copyOf(suspendHandlerInvokers);
     }
 
     @Override
     public CompletionStage<Boolean> tryHandle(
             TSessionContext context, ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
-        Object handler = handlers.get(dispatch.packetName());
+        Handler handler = handlers.get(dispatch.packetName());
         if (handler == null) {
             return CompletableFuture.completedFuture(false);
         }
-        if (handler instanceof ZLinkTypedSessionPacketHandler<?, ?> typedHandler) {
-            return executeHandler(
-                            () -> invokeTypedHandler(typedHandler, context, dispatch, payload))
-                    .thenApply(ignored -> true);
-        }
-        Class<?> messageType = messageType(handler);
-        if (messageType != null) {
-            Object decoded = payload.decode(messageType);
-            return executeHandler(
-                            () ->
-                                    ZLinkHandlerMethodInvoker.invokeHandler(
-                                                    handler,
-                                                    "handle",
-                                                    new Object[] {context, dispatch, decoded},
-                                                    suspendHandlerInvokers)
-                                            .thenApply(ignored -> null))
-                    .thenApply(ignored -> true);
-        }
         return executeHandler(
-                        () ->
-                                ZLinkHandlerMethodInvoker.invokeHandler(
-                                                handler,
-                                                "handle",
-                                                new Object[] {context, dispatch, payload},
-                                                suspendHandlerInvokers)
-                                        .thenApply(ignored -> null))
+                        () -> {
+                            Object decoded =
+                                    handler.messageType() == null
+                                            ? payload
+                                            : payload.decode(handler.messageType());
+                            return handler.invocation()
+                                    .invoke(handler.instance(), context, dispatch, decoded)
+                                    .thenApply(ignored -> null);
+                        })
                 .thenApply(ignored -> true);
-    }
-
-    @SuppressWarnings("unchecked")
-    private CompletionStage<Void> invokeTypedHandler(
-            ZLinkTypedSessionPacketHandler<?, ?> handler,
-            TSessionContext context,
-            ZLinkSessionDispatchContext dispatch,
-            ZLinkMessage payload) {
-        ZLinkTypedSessionPacketHandler<TSessionContext, Object> typed =
-                (ZLinkTypedSessionPacketHandler<TSessionContext, Object>) handler;
-        Object decoded = payload.decode(typed.messageType());
-        return ZLinkHandlerMethodInvoker.invokeHandler(
-                        typed,
-                        "handle",
-                        new Object[] {context, dispatch, decoded},
-                        suspendHandlerInvokers)
-                .thenApply(ignored -> null);
     }
 
     private <T> CompletionStage<T> executeHandler(Supplier<CompletionStage<T>> operation) {
@@ -130,12 +95,33 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
     }
 
     private static <TSessionContext extends ZLinkSessionContext>
-            Map<String, Object> buildHandlerMap(
-                    List<Class<?>> handlerTypes, ZLinkHandlerActivator handlerFactory) {
-        Map<String, Object> map = new HashMap<>();
+            Map<String, Handler> buildHandlerMap(
+                    List<Class<?>> handlerTypes,
+                    ZLinkHandlerActivator handlerFactory,
+                    ZLinkMessageSerializer serializer,
+                    List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
+        Map<String, Handler> map = new HashMap<>();
         for (Class<?> handlerType : handlerTypes) {
             Object handler = handlerFactory.create(handlerType);
-            String packetName = packetName(handler);
+            Class<?> messageType =
+                    handler instanceof ZLinkTypedSessionPacketHandler<?, ?> typed
+                            ? typed.messageType()
+                            : messageType(handler);
+            if (messageType != null) serializer.prepare(messageType);
+            var method =
+                    ZLinkHandlerMethodInvoker.requireHandlerMethodForTypes(
+                            handlerType,
+                            ZLinkHandlerMethodInvoker.HANDLER_METHOD_NAME,
+                            null,
+                            ZLinkSessionDispatchContext.class,
+                            messageType == null ? ZLinkMessage.class : messageType);
+            var invocation =
+                    ZLinkHandlerMethodInvoker.prepare(method, 0, 1, 2)
+                            .withSuspendInvokers(suspendInvokers);
+            String packetName =
+                    handler instanceof ZLinkTypedSessionPacketHandler<?, ?>
+                            ? ZLinkPacketNames.resolve(messageType)
+                            : packetName(handler);
             if (packetName == null
                     || packetName.isBlank()
                     || !packetName.equals(packetName.trim())) {
@@ -143,7 +129,8 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
                         "session packet handler must declare a non-empty packet name: "
                                 + handlerType.getName());
             }
-            if (map.putIfAbsent(packetName, handler) != null) {
+            if (map.putIfAbsent(packetName, new Handler(handler, messageType, invocation))
+                    != null) {
                 throw new ZLinkConfigurationException(
                         "duplicate session packet handler '" + packetName + "' for stream node");
             }
@@ -152,9 +139,6 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
     }
 
     private static String packetName(Object handler) {
-        if (handler instanceof ZLinkTypedSessionPacketHandler<?, ?> typedHandler) {
-            return ZLinkPacketNames.resolve(typedHandler.messageType());
-        }
         try {
             Object value = handler.getClass().getMethod("packetName").invoke(handler);
             return value instanceof String text ? text : null;
@@ -176,4 +160,9 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
                     "session packet handler messageType() failed: " + handler.getClass().getName());
         }
     }
+
+    private record Handler(
+            Object instance,
+            Class<?> messageType,
+            ZLinkHandlerMethodInvoker.PreparedMethod invocation) {}
 }

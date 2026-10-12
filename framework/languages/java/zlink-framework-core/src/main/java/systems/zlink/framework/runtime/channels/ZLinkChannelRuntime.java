@@ -539,7 +539,9 @@ public final class ZLinkChannelRuntime
                                         ChannelRegistration::fanoutApplicationTopics));
         ZLinkScannedHandlerCatalog handlerCatalog =
                 ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
-        ZLinkChannelHandlerCatalog channelHandlers = new ZLinkChannelHandlerCatalog(handlerCatalog);
+        ZLinkChannelHandlerCatalog channelHandlers =
+                new ZLinkChannelHandlerCatalog(
+                        handlerCatalog, registration.suspendHandlerInvokers());
         ZLinkChannelRuntimeConfigurator configurator =
                 new ZLinkChannelRuntimeConfigurator(
                         backend,

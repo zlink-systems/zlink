@@ -33,7 +33,14 @@ final class ZLinkSpotRuntimeActorArgumentsTest {
         ZLinkMessageContext context = requestContext("PlaceMarkReq");
 
         Object[] args =
-                ZLinkSpotHandlerInvoker.actorPacketArguments(method, spot, actor, context, request);
+                systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker.prepareActor(
+                                DotnetShapeHandler.class,
+                                method,
+                                TestSpot.class,
+                                TestActor.class,
+                                Request.class,
+                                ZLinkMessageContext.class)
+                        .arguments(spot, actor, context, request);
 
         assertSame(spot, args[0]);
         assertSame(actor, args[1]);

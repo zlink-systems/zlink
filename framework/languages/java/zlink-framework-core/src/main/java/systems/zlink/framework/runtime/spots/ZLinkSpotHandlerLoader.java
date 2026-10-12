@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
@@ -38,14 +39,24 @@ final class ZLinkSpotHandlerLoader {
     private final ZLinkScannedHandlerCatalog scannedHandlers;
     private final ZLinkSpotActorHandlerCatalog actorHandlers;
     private final ZLinkHandlerActivator handlerFactory;
+    private final List<ZLinkSuspendInvocationAdapter> suspendInvokers;
 
     ZLinkSpotHandlerLoader(
             ZLinkScannedHandlerCatalog scannedHandlers,
             ZLinkSpotActorHandlerCatalog actorHandlers,
             ZLinkHandlerActivator handlerFactory) {
+        this(scannedHandlers, actorHandlers, handlerFactory, List.of());
+    }
+
+    ZLinkSpotHandlerLoader(
+            ZLinkScannedHandlerCatalog scannedHandlers,
+            ZLinkSpotActorHandlerCatalog actorHandlers,
+            ZLinkHandlerActivator handlerFactory,
+            List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
         this.scannedHandlers = scannedHandlers;
         this.actorHandlers = actorHandlers;
         this.handlerFactory = handlerFactory;
+        this.suspendInvokers = suspendInvokers;
     }
 
     ZLinkSpotHandlerCatalog.Registrations load(
@@ -61,6 +72,12 @@ final class ZLinkSpotHandlerLoader {
                     handlerType, spotType, packetHandlers, subscriptionHandlers);
             handlerFactory.prepare(handlerType);
         }
+        packetHandlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
+        subscriptionHandlers.replaceAll(
+                (topic, handlers) ->
+                        handlers.stream()
+                                .map(handler -> handler.withSuspendInvokers(suspendInvokers))
+                                .toList());
         return new ZLinkSpotHandlerCatalog.Registrations(packetHandlers, subscriptionHandlers);
     }
 

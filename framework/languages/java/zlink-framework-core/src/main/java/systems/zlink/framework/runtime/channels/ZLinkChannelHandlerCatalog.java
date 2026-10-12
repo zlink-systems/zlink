@@ -4,6 +4,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 
 import java.util.HashMap;
 import java.util.List;
@@ -13,8 +14,17 @@ import java.util.Set;
 final class ZLinkChannelHandlerCatalog {
     private final ZLinkScannedHandlerCatalog scannedHandlers;
 
+    private final List<ZLinkSuspendInvocationAdapter> suspendInvokers;
+
     ZLinkChannelHandlerCatalog(ZLinkScannedHandlerCatalog scannedHandlers) {
+        this(scannedHandlers, List.of());
+    }
+
+    ZLinkChannelHandlerCatalog(
+            ZLinkScannedHandlerCatalog scannedHandlers,
+            List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
         this.scannedHandlers = scannedHandlers;
+        this.suspendInvokers = suspendInvokers;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -37,6 +47,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelRequestHandlerRegistration handler : channel.requestHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
+        handlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -59,6 +70,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelSendHandlerRegistration handler : channel.sendHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
+        handlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -81,6 +93,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelPublishHandlerRegistration handler : channel.publishHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
+        handlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -105,6 +118,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelRouteRequestHandlerRegistration handler : channel.routeRequestHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
+        handlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -125,6 +139,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelRouteSendHandlerRegistration handler : channel.routeSendHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
+        handlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
         return Map.copyOf(handlers);
     }
 

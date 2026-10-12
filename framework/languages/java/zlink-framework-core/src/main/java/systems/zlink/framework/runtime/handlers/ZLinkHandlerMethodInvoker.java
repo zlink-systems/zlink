@@ -18,6 +18,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public final class ZLinkHandlerMethodInvoker {
+    public static final String HANDLER_METHOD_NAME = "handle";
     private static final String CONTINUATION_CLASS_NAME = "kotlin.coroutines.Continuation";
     private static final List<ZLinkSuspendInvocationAdapter> SUSPEND_INVOKERS =
             ServiceLoader.load(ZLinkSuspendInvocationAdapter.class).stream()
@@ -25,6 +26,200 @@ public final class ZLinkHandlerMethodInvoker {
                     .toList();
 
     private ZLinkHandlerMethodInvoker() {}
+
+    public static PreparedMethod prepareChannel(
+            Class<?> handlerType, Method method, Class<?> payloadType, Class<?> contextType) {
+        Method selected =
+                method == null
+                        ? requireHandlerMethodForTypes(
+                                handlerType, HANDLER_METHOD_NAME, payloadType, contextType)
+                        : method;
+        Class<?>[] parameters = logicalParameterTypes(selected);
+        int[] arguments = new int[parameters.length];
+        for (int index = 1; index < arguments.length; index++) {
+            arguments[index] = parameters[index].isAssignableFrom(contextType) ? 1 : -1;
+        }
+        return prepare(selected, arguments);
+    }
+
+    public static Method requireHandlerMethodForTypes(
+            Class<?> handlerType, String methodName, Class<?>... argumentTypes) {
+        Method bridge = null;
+        for (Method method : handlerType.getMethods()) {
+            if (!methodName.equals(method.getName())) continue;
+            Class<?>[] parameters = logicalParameterTypes(method);
+            if (parameters.length != argumentTypes.length) continue;
+            boolean matches = true;
+            for (int index = 0; index < parameters.length; index++) {
+                if (argumentTypes[index] != null
+                        && !wrapPrimitive(parameters[index])
+                                .isAssignableFrom(wrapPrimitive(argumentTypes[index]))) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                if (!method.isBridge()) return method;
+                bridge = method;
+            }
+        }
+        if (bridge != null) return bridge;
+        throw new ZLinkConfigurationException(
+                "handler method is not found: " + handlerType.getName() + "." + methodName);
+    }
+
+    public static PreparedMethod prepareSpot(
+            Class<?> handlerType,
+            Method method,
+            Class<?> spotType,
+            Class<?> payloadType,
+            Class<?> contextType) {
+        Method selected =
+                method == null
+                        ? requireHandlerMethodForTypes(
+                                handlerType,
+                                HANDLER_METHOD_NAME,
+                                spotType,
+                                payloadType,
+                                contextType)
+                        : method;
+        if (method == null) return prepare(selected, 0, 1, 2);
+        Class<?>[] parameters = logicalParameterTypes(selected);
+        if (parameters.length == 2) return prepare(selected, 0, 1);
+        int[] arguments = new int[parameters.length];
+        for (int index = 0; index < parameters.length; index++) {
+            arguments[index] =
+                    parameters[index].isAssignableFrom(contextType)
+                            ? 2
+                            : parameters[index].isAssignableFrom(spotType) ? 0 : 1;
+        }
+        return prepare(selected, arguments);
+    }
+
+    public static PreparedMethod prepareActor(
+            Class<?> handlerType,
+            Method method,
+            Class<?> spotType,
+            Class<?> actorType,
+            Class<?> payloadType,
+            Class<?> contextType) {
+        Method selected =
+                method == null
+                        ? requireHandlerMethodForTypes(
+                                handlerType,
+                                HANDLER_METHOD_NAME,
+                                spotType,
+                                actorType,
+                                contextType,
+                                payloadType)
+                        : method;
+        return logicalParameterTypes(selected).length == 2
+                ? prepare(selected, 1, 3)
+                : prepare(selected, 0, 1, 2, 3);
+    }
+
+    public static PreparedMethod prepare(Method method, int... arguments) {
+        method.setAccessible(true);
+        ZLinkSuspendInvocationAdapter suspendInvoker = null;
+        if (isKotlinSuspendMethod(method)) {
+            suspendInvoker =
+                    SUSPEND_INVOKERS.stream()
+                            .filter(invoker -> invoker.supports(method))
+                            .findFirst()
+                            .orElseThrow(
+                                    () ->
+                                            new ZLinkConfigurationException(
+                                                    "Kotlin suspend handler requires a registered ZLinkSuspendInvocationAdapter: "
+                                                            + method.getDeclaringClass().getName()
+                                                            + "."
+                                                            + method.getName()));
+        }
+        boolean identity = true;
+        for (int index = 0; index < arguments.length; index++) {
+            if (arguments[index] != index) identity = false;
+        }
+        return new PreparedMethod(
+                method, identity ? null : arguments.clone(), arguments.length, suspendInvoker);
+    }
+
+    public static final class PreparedMethod {
+        private final Method method;
+        private final int[] argumentIndices;
+        private final int argumentCount;
+        private final ZLinkSuspendInvocationAdapter suspendInvoker;
+
+        private PreparedMethod(
+                Method method,
+                int[] argumentIndices,
+                int argumentCount,
+                ZLinkSuspendInvocationAdapter suspendInvoker) {
+            this.method = method;
+            this.argumentIndices = argumentIndices;
+            this.argumentCount = argumentCount;
+            this.suspendInvoker = suspendInvoker;
+        }
+
+        public Method method() {
+            return method;
+        }
+
+        public PreparedMethod withSuspendInvokers(
+                Collection<ZLinkSuspendInvocationAdapter> invokers) {
+            if (suspendInvoker == null || invokers == null || invokers.isEmpty()) return this;
+            ZLinkSuspendInvocationAdapter selected =
+                    invokers.stream()
+                            .filter(invoker -> invoker.supports(method))
+                            .findFirst()
+                            .orElseThrow(
+                                    () ->
+                                            new ZLinkConfigurationException(
+                                                    "Kotlin suspend handler requires a registered ZLinkSuspendInvocationAdapter: "
+                                                            + method.getDeclaringClass().getName()
+                                                            + "."
+                                                            + method.getName()));
+            return new PreparedMethod(method, argumentIndices, argumentCount, selected);
+        }
+
+        public Object[] arguments(Object... values) {
+            if (argumentIndices == null) {
+                return values.length == argumentCount
+                        ? values
+                        : Arrays.copyOf(values, argumentCount);
+            }
+            Object[] arguments = new Object[argumentIndices.length];
+            for (int index = 0; index < arguments.length; index++) {
+                int source = argumentIndices[index];
+                arguments[index] = source < 0 ? null : values[source];
+            }
+            return arguments;
+        }
+
+        public CompletionStage<Object> invoke(Object handler, Object... values) {
+            Object[] arguments = arguments(values);
+            ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+            if (suspendInvoker != null) {
+                return suspendInvoker.invoke(handler, method, arguments);
+            }
+            try {
+                Object result = method.invoke(handler, arguments);
+                if (result instanceof CompletionStage<?> stage) {
+                    return stage.thenApply(value -> (Object) value);
+                }
+                return CompletableFuture.completedFuture(result);
+            } catch (IllegalAccessException | InvocationTargetException ex) {
+                return CompletableFuture.failedFuture(unwrapReflectionFailure(ex));
+            } catch (IllegalArgumentException ex) {
+                return CompletableFuture.failedFuture(
+                        new ZLinkConfigurationException(
+                                "handler method arguments do not match: "
+                                        + method.getDeclaringClass().getName()
+                                        + "."
+                                        + method.getName()
+                                        + argumentTypesMessage(arguments),
+                                ex));
+            }
+        }
+    }
 
     public static boolean isKotlinSuspendMethod(Method method) {
         Class<?>[] parameterTypes = method.getParameterTypes();
@@ -78,24 +273,11 @@ public final class ZLinkHandlerMethodInvoker {
         Objects.requireNonNull(handlerType, "handlerType");
         Objects.requireNonNull(methodName, "methodName");
         Object[] args = logicalArguments == null ? new Object[0] : logicalArguments;
-        for (Method method : handlerType.getMethods()) {
-            if (!methodName.equals(method.getName())) {
-                continue;
-            }
-            Class<?>[] parameterTypes = logicalParameterTypes(method);
-            if (parameterTypes.length != args.length) {
-                continue;
-            }
-            if (argumentsMatch(parameterTypes, args)) {
-                return method;
-            }
+        Class<?>[] types = new Class<?>[args.length];
+        for (int index = 0; index < args.length; index++) {
+            types[index] = args[index] == null ? null : args[index].getClass();
         }
-        throw new ZLinkConfigurationException(
-                "handler method is not found: "
-                        + handlerType.getName()
-                        + "."
-                        + methodName
-                        + argumentTypesMessage(args));
+        return requireHandlerMethodForTypes(handlerType, methodName, types);
     }
 
     public static CompletionStage<Object> invoke(
@@ -103,59 +285,15 @@ public final class ZLinkHandlerMethodInvoker {
             Method method,
             Object[] logicalArguments,
             Collection<ZLinkSuspendInvocationAdapter> suspendInvokers) {
-        if (!isKotlinSuspendMethod(method)) {
-            try {
-                method.setAccessible(true);
-                ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
-                Object result = method.invoke(handler, logicalArguments);
-                if (result instanceof CompletionStage<?> stage) {
-                    return stage.thenApply(value -> (Object) value);
-                }
-                return CompletableFuture.completedFuture(result);
-            } catch (IllegalAccessException | InvocationTargetException ex) {
-                return CompletableFuture.failedFuture(unwrapReflectionFailure(ex));
-            } catch (IllegalArgumentException ex) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkConfigurationException(
-                                "handler method arguments do not match: "
-                                        + method.getDeclaringClass().getName()
-                                        + "."
-                                        + method.getName()
-                                        + argumentTypesMessage(logicalArguments),
-                                ex));
-            }
+        int[] indices = new int[logicalArguments.length];
+        for (int index = 0; index < indices.length; index++) indices[index] = index;
+        try {
+            return prepare(method, indices)
+                    .withSuspendInvokers(suspendInvokers)
+                    .invoke(handler, logicalArguments);
+        } catch (ZLinkConfigurationException ex) {
+            return CompletableFuture.failedFuture(ex);
         }
-        Collection<ZLinkSuspendInvocationAdapter> effectiveInvokers =
-                suspendInvokers == null || suspendInvokers.isEmpty()
-                        ? SUSPEND_INVOKERS
-                        : suspendInvokers;
-        for (ZLinkSuspendInvocationAdapter invoker : effectiveInvokers) {
-            if (invoker.supports(method)) {
-                ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
-                return invoker.invoke(handler, method, logicalArguments);
-            }
-        }
-        return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                        "Kotlin suspend handler requires a registered"
-                                + " ZLinkSuspendInvocationAdapter: "
-                                + method.getDeclaringClass().getName()
-                                + "."
-                                + method.getName()));
-    }
-
-    private static boolean argumentsMatch(Class<?>[] parameterTypes, Object[] arguments) {
-        for (int index = 0; index < parameterTypes.length; index++) {
-            Object argument = arguments[index];
-            if (argument == null) {
-                continue;
-            }
-            Class<?> parameterType = wrapPrimitive(parameterTypes[index]);
-            if (!parameterType.isInstance(argument)) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static String argumentTypesMessage(Object[] arguments) {

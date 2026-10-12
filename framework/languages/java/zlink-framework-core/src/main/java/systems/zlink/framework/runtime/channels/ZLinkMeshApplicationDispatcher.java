@@ -158,6 +158,17 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                         .getOrDefault(name, List.of()),
                                                 scannedHandlers,
                                                 framework.handlerExecutor())));
+        for (Namespace namespace : namespaces.values()) {
+            var adapters = invoker.suspendHandlerInvokers();
+            namespace.routeSends.replaceAll(
+                    (name, handler) -> handler.withSuspendInvokers(adapters));
+            namespace.routeRequests.replaceAll(
+                    (name, handler) -> handler.withSuspendInvokers(adapters));
+            namespace.channelSends.replaceAll(
+                    (name, handler) -> handler.withSuspendInvokers(adapters));
+            namespace.channelRequests.replaceAll(
+                    (name, handler) -> handler.withSuspendInvokers(adapters));
+        }
     }
 
     @Override

@@ -256,15 +256,13 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private CompletionStage<Void> invokeHandler(
-            Object handlerSpot, Class<?> handlerType, ZLinkTimerTick tick) {
+            Object handlerSpot,
+            Class<?> handlerType,
+            ZLinkHandlerMethodInvoker.PreparedMethod invocation,
+            ZLinkTimerTick tick) {
         try {
             Object handler = handlers.instance(handlerType);
-            return ZLinkHandlerMethodInvoker.invokeHandler(
-                            handler,
-                            "handle",
-                            new Object[] {handlerSpot, tick},
-                            suspendHandlerInvokers)
-                    .thenApply(ignored -> null);
+            return invocation.invoke(handler, handlerSpot, tick).thenApply(ignored -> null);
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
@@ -306,9 +304,21 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         return current;
     }
 
+    private ZLinkHandlerMethodInvoker.PreparedMethod prepareInvocation(Class<?> handlerType) {
+        var method =
+                ZLinkHandlerMethodInvoker.requireHandlerMethodForTypes(
+                        handlerType,
+                        ZLinkHandlerMethodInvoker.HANDLER_METHOD_NAME,
+                        null,
+                        ZLinkTimerTick.class);
+        return ZLinkHandlerMethodInvoker.prepare(method, 0, 1)
+                .withSuspendInvokers(suspendHandlerInvokers);
+    }
+
     private final class ManagedTimer implements ZLinkTimer {
         private final String name;
         private final Class<?> handlerType;
+        private final ZLinkHandlerMethodInvoker.PreparedMethod invocation;
         private final ZLinkTimerOptions options;
         private final ZLinkSpotTimerSchedule schedule;
         private volatile boolean disposed;
@@ -324,6 +334,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             handlers.prepare(handlerType);
             this.name = name;
             this.handlerType = handlerType;
+            this.invocation = prepareInvocation(handlerType);
             this.options = options;
             this.schedule = new ZLinkSpotTimerSchedule(name, period, options);
         }
@@ -332,6 +343,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             handlers.prepare(snapshot.handlerType());
             this.name = snapshot.name();
             this.handlerType = snapshot.handlerType();
+            this.invocation = prepareInvocation(handlerType);
             this.options = snapshot.schedule().options();
             this.schedule = new ZLinkSpotTimerSchedule(snapshot.schedule());
             this.nextScheduledAt = snapshot.nextScheduledAt().orElse(null);
@@ -450,6 +462,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                     : invokeHandler(
                                                     invocation.spot(),
                                                     invocation.handlerType(),
+                                                    this.invocation,
                                                     tick)
                                             .whenComplete(
                                                     (ignored, error) ->

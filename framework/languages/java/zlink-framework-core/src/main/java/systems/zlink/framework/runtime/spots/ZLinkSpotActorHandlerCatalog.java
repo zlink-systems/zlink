@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
@@ -33,12 +34,21 @@ import java.util.concurrent.CompletionStage;
 
 final class ZLinkSpotActorHandlerCatalog {
     private final ZLinkMessageSerializer serializer;
+    private final List<ZLinkSuspendInvocationAdapter> suspendInvokers;
     private final Map<String, List<SpotActorPacketHandlerRegistration>> handlersByPacket =
             new HashMap<>();
 
     ZLinkSpotActorHandlerCatalog(
             ZLinkScannedHandlerCatalog scannedHandlers, ZLinkMessageSerializer serializer) {
+        this(scannedHandlers, serializer, List.of());
+    }
+
+    ZLinkSpotActorHandlerCatalog(
+            ZLinkScannedHandlerCatalog scannedHandlers,
+            ZLinkMessageSerializer serializer,
+            List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
         this.serializer = serializer;
+        this.suspendInvokers = suspendInvokers;
         for (ZLinkScannedHandler handler : scannedHandlers.handlers()) {
             if (handler.surface() != ZLinkScannedHandlerSurface.SPOT
                     || (handler.kind() != ZLinkScannedHandlerKind.ACTOR_SEND
@@ -173,7 +183,7 @@ final class ZLinkSpotActorHandlerCatalog {
                         "duplicate Spot actor packet handler packet: " + registration.packetName());
             }
         }
-        packetHandlers.add(registration);
+        packetHandlers.add(registration.withSuspendInvokers(suspendInvokers));
         serializer.prepare(registration.messageType());
         serializer.prepare(registration.replyType());
     }

@@ -474,9 +474,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         registration.workers().idleTimeout());
         ZLinkScannedHandlerCatalog scannedHandlers =
                 ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
-        this.actorHandlers = new ZLinkSpotActorHandlerCatalog(scannedHandlers, serializer);
+        this.actorHandlers =
+                new ZLinkSpotActorHandlerCatalog(
+                        scannedHandlers, serializer, suspendHandlerInvokers);
         this.handlerLoader =
-                new ZLinkSpotHandlerLoader(scannedHandlers, actorHandlers, handlerFactory);
+                new ZLinkSpotHandlerLoader(
+                        scannedHandlers,
+                        actorHandlers,
+                        handlerFactory,
+                        spotHandlerInvoker.suspendHandlerInvokers());
         ZLinkChannelBackendAdapter channelAdapter =
                 backendFactory.createChannelAdapter(adapterOptions);
         ZLinkSpotBackendAdapter spotAdapter =
