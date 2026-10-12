@@ -410,7 +410,7 @@ The [reply token](../00-foundation/02-glossary.en.md#reply-token) a Server reque
 receives can only be used for the current request. Once the final reply is
 made once, it can't be reused.
 
-If a reply route can be restored after any of the following failures, the request
+If [a reply route remains](02-channel-messaging.en.md#reply-route-remains) after any of the following failures, the request
 completes with a structured error reply.
 
 - No handler found

@@ -362,7 +362,7 @@ sequenceDiagram
 Server request handler가 받는 [reply token](../00-foundation/02-glossary.ko.md#reply-token)은 현재
 request에만 사용할 수 있다. 최종 reply를 한 번 만든 뒤에는 다시 사용할 수 없다.
 
-다음 실패에서 reply 경로를 복원할 수 있으면 구조화된 error reply로 request를
+다음 실패에서 [reply 경로가 남아 있으면](02-channel-messaging.ko.md#reply-route-remains) 구조화된 error reply로 request를
 완료한다.
 
 - Handler를 찾을 수 없음
