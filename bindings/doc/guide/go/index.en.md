@@ -20,6 +20,9 @@ this guide focuses on the Go API surface.
 
 ## Installation
 
+> **Not published yet.** This binding is not on the Go module proxy yet; it ships after performance work.
+> The commands below show how it will install. Do not run `go get zlink.systems/zlink` now: the module path does not resolve yet.
+
 Ships as the **`zlink.systems/zlink`** module. The native core is bundled
 per platform.
 

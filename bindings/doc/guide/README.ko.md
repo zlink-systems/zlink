@@ -36,9 +36,9 @@ zlink를 사용하는 방법**(설치, 관용 예제, 타입 매핑, 언어 고�
 | C++ | [cpp/](cpp/index.ko.md) | doxygen | `zlink::cpp` (CMake) |
 | Java | [java/](java/index.ko.md) | javadoc | `systems.zlink:zlink` |
 | Node | [node/](node/index.ko.md) | typedoc | `@zlink-systems/zlink` |
-| Python | [python/](python/index.ko.md) | sphinx | `zlink` (PyPI) |
-| Go | [go/](go/index.ko.md) | godoc | `zlink.systems/zlink` |
-| Rust | [rust/](rust/index.ko.md) | rustdoc | `zlink` (crates.io) |
+| Python | [python/](python/index.ko.md) | sphinx | `zlink` (PyPI) — 아직 배포 안 함 |
+| Go | [go/](go/index.ko.md) | godoc | `zlink.systems/zlink` — 아직 배포 안 함 |
+| Rust | [rust/](rust/index.ko.md) | rustdoc | `zlink` (crates.io) — 아직 배포 안 함 |
 | Kotlin | [java/ §Kotlin](java/index.ko.md#kotlin) | (java 공유) | `systems.zlink:zlink` |
 | JavaScript | [node/ §JavaScript](node/index.ko.md#javascript) | (node 공유) | `@zlink-systems/zlink` |
 

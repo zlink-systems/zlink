@@ -38,9 +38,9 @@ release package, follow [building bindings against a local Core](local-core-runt
 | C++ | [cpp/](cpp/index.en.md) | doxygen | `zlink::cpp` (CMake) |
 | Java | [java/](java/index.en.md) | javadoc | `systems.zlink:zlink` |
 | Node | [node/](node/index.en.md) | typedoc | `@zlink-systems/zlink` |
-| Python | [python/](python/index.en.md) | sphinx | `zlink` (PyPI) |
-| Go | [go/](go/index.en.md) | godoc | `zlink.systems/zlink` |
-| Rust | [rust/](rust/index.en.md) | rustdoc | `zlink` (crates.io) |
+| Python | [python/](python/index.en.md) | sphinx | `zlink` (PyPI) — not published yet |
+| Go | [go/](go/index.en.md) | godoc | `zlink.systems/zlink` — not published yet |
+| Rust | [rust/](rust/index.en.md) | rustdoc | `zlink` (crates.io) — not published yet |
 | Kotlin | [java/ §Kotlin](java/index.en.md#kotlin) | (shared with java) | `systems.zlink:zlink` |
 | JavaScript | [node/ §JavaScript](node/index.en.md#javascript) | (shared with node) | `@zlink-systems/zlink` |
 

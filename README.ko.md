@@ -121,9 +121,7 @@ service runtime도, service C ABI도 공유하지 않습니다. 공유하는 것
 | .NET / C# | `dotnet add package Zlink` |
 | Java, Kotlin | `systems.zlink:zlink` |
 | Node.js, JavaScript | `npm install @zlink-systems/zlink` |
-| Python | `pip install zlink` |
-| Go | `go get zlink.systems/zlink` |
-| Rust | `cargo add zlink` |
+| Python, Go, Rust | 아직 배포하지 않습니다. 성능 작업을 마친 뒤 배포합니다 |
 
 C는 별도 Binding이 아니라 공개 Core API입니다. 각 Binding은 PAIR, PUB/SUB,
 DEALER/ROUTER, request/reply, STREAM, monitoring 샘플을 함께 제공합니다.

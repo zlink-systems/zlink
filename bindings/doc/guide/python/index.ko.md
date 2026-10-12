@@ -18,6 +18,9 @@ CPU architecture는 별도 Core 0.9.0 candidate와 clean consumer 검증이 끝�
 
 ## 설치와 첫 송수신
 
+> **아직 배포하지 않았습니다.** 이 바인딩은 아직 PyPI에 없습니다. 성능 작업을 마친 뒤 배포합니다.
+> 아래 명령은 배포 뒤의 설치 방법입니다. 지금 `pip install zlink`를 실행하지 마세요. PyPI의 `zlink` 패키지는 다른 프로젝트의 것입니다.
+
 ```python
 import zlink
 
