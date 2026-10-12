@@ -15,7 +15,12 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkMessageMetadata? metadata = null
     )
     {
-        var message = ZLinkEnvelopeCodec.DecodeBody(parts, descriptor.MessageType, codecs);
+        var message = ZLinkEnvelopeCodec.DecodeBody(
+            parts,
+            descriptor.MessageType,
+            header.ContentType,
+            codecs
+        );
 
         var context = new ZLinkRouteMessageContext(
             routerChannelId,
@@ -91,8 +96,71 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkMessageMetadata? metadata = null
     )
     {
-        var message = ZLinkEnvelopeCodec.DecodeBody(parts, descriptor.MessageType, codecs);
+        var message = ZLinkEnvelopeCodec.DecodeBody(
+            parts,
+            descriptor.MessageType,
+            header.ContentType,
+            codecs
+        );
+        return await InvokeRequestAsync(
+                descriptor,
+                routerChannelId,
+                sourceRid,
+                header,
+                message,
+                cancellationToken,
+                metadata
+            )
+            .ConfigureAwait(false);
+    }
 
+    internal async ValueTask<ZLinkRouteHandlerReply> InvokeRequestAsync(
+        ZLinkRouteHandlerDescriptor descriptor,
+        string routerChannelId,
+        RoutingId sourceRid,
+        ZLinkEnvelopeHeader header,
+        ZLinkMultipartPayloadView parts,
+        CancellationToken cancellationToken,
+        ZLinkMessageMetadata? metadata = null
+    )
+    {
+        var message = ZLinkEnvelopeCodec.DecodeBody(
+            parts,
+            descriptor.MessageType,
+            header.ContentType,
+            codecs
+        );
+        try
+        {
+            var reply = await InvokeRequestAsync(
+                    descriptor,
+                    routerChannelId,
+                    sourceRid,
+                    header,
+                    message,
+                    cancellationToken,
+                    metadata
+                )
+                .ConfigureAwait(false);
+            return reply with { OwnedRequest = message as Message };
+        }
+        catch
+        {
+            (message as Message)?.Dispose();
+            throw;
+        }
+    }
+
+    private async ValueTask<ZLinkRouteHandlerReply> InvokeRequestAsync(
+        ZLinkRouteHandlerDescriptor descriptor,
+        string routerChannelId,
+        RoutingId sourceRid,
+        ZLinkEnvelopeHeader header,
+        object? message,
+        CancellationToken cancellationToken,
+        ZLinkMessageMetadata? metadata
+    )
+    {
         var context = new ZLinkRouteMessageContext(
             routerChannelId,
             null,
@@ -121,4 +189,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
     }
 }
 
-internal readonly record struct ZLinkRouteHandlerReply(object? Message, Type? MessageType);
+internal readonly record struct ZLinkRouteHandlerReply(
+    object? Message,
+    Type? MessageType,
+    Message? OwnedRequest = null
+);

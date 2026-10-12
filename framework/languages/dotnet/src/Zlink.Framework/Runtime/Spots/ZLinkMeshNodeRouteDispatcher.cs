@@ -575,35 +575,23 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                 if (received.ChannelName is { } channelName)
                     await DispatchChannelAsync(received, channelName, header, cancellationToken)
                         .ConfigureAwait(false);
-                else if (
-                    header.Kind == ZLinkMessageKind.Command
-                    && received.ApplicationPayloadView is { } commandView
-                )
+                else if (received.ApplicationPayloadView is { } payloadView)
                     await DispatchNodeRouteAsync(
                             received,
                             header,
                             received.Parts,
                             cancellationToken,
-                            commandView
+                            payloadView
                         )
                         .ConfigureAwait(false);
                 else
-                {
-                    Message[]? materialized = null;
-                    try
-                    {
-                        var parts = received.ApplicationPayloadView is { } view
-                            ? materialized = view.RetainMessages().ToArray()
-                            : received.Parts;
-                        await DispatchNodeRouteAsync(received, header, parts, cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        if (materialized is not null)
-                            ZLinkMessageParts.DisposeAll(materialized);
-                    }
-                }
+                    await DispatchNodeRouteAsync(
+                            received,
+                            header,
+                            received.Parts,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
             }
         }
     }
@@ -706,17 +694,29 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         ZLinkRouteHandlerReply reply;
         try
         {
-            reply = await _routeInvoker
-                .InvokeRequestAsync(
-                    descriptor,
-                    _meshName.Value,
-                    sourceRid,
-                    header,
-                    parts,
-                    cancellationToken,
-                    received.Metadata
-                )
-                .ConfigureAwait(false);
+            reply = payloadView is not null
+                ? await _routeInvoker
+                    .InvokeRequestAsync(
+                        descriptor,
+                        _meshName.Value,
+                        sourceRid,
+                        header,
+                        payloadView,
+                        cancellationToken,
+                        received.Metadata
+                    )
+                    .ConfigureAwait(false)
+                : await _routeInvoker
+                    .InvokeRequestAsync(
+                        descriptor,
+                        _meshName.Value,
+                        sourceRid,
+                        header,
+                        parts,
+                        cancellationToken,
+                        received.Metadata
+                    )
+                    .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -736,9 +736,9 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                 )
                 .ConfigureAwait(false);
         }
-        catch (Exception)
+        finally
         {
-            throw;
+            reply.OwnedRequest?.Dispose();
         }
         scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Replied);
     }
