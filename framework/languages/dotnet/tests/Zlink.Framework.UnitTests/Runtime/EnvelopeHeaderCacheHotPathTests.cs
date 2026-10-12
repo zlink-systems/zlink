@@ -5,12 +5,16 @@ using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class EnvelopeHeaderCacheHotPathTests
+public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutputHelper output)
 {
-    [Fact]
-    public void WarmEncodingAllocatesOnlyTheOwnedMessage()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WarmEncodingAllocatesOnlyTheOwnedMessage(bool request)
     {
         var header = Header("cache-allocation");
+        if (request)
+            header = header with { Kind = ZLinkMessageKind.Request, CorrelationId = "request-1" };
         byte[] bytes;
         using (var encoded = ZLinkEnvelopeCodec.EncodeHeader(header))
             bytes = encoded.ToArray();
@@ -32,6 +36,9 @@ public sealed class EnvelopeHeaderCacheHotPathTests
             using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
         }
         var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        output.WriteLine(
+            $"request={request}: header={encodedBytes / iterations} B/message, native={directBytes / iterations} B/message"
+        );
         Assert.True(
             encodedBytes <= directBytes + iterations * 16L,
             $"Warm encoding allocated {encodedBytes} bytes; owned Message allocated {directBytes} bytes."
