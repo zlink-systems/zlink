@@ -370,7 +370,8 @@ int run_message_follow_host ()
             for (const auto &record : claim->records) {
                 if (record.parts.size () != 1)
                     continue;
-                const auto notice = decode_message_follow (record.parts.front ());
+                const auto notice =
+                  decode_message_follow (runtime::protocol::message_bytes (record.parts.front ()));
                 const auto source = std::visit (
                   [] (const auto &route) {
                       return routing_id_string (route.target_node_routing_id);

@@ -2664,7 +2664,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                     *_services, *_serializers, registration->handlers, *_filters,
                                     _dispatch_options);
                                   (void) dispatcher.dispatch (record, std::move (parts),
-                                                              std::move (decoded_header));
+                                                              std::move (decoded_header.value ()));
                               });
                           },
                           accept_application_receive, next_application_receive))
@@ -2995,7 +2995,7 @@ void mesh_node_host_service_t::dispatch_application (
               *services, *serializers, registration->handlers, *filters, dispatch_options,
               record.before_application_handler);
             const auto dispatched =
-              dispatcher.dispatch (record, std::move (parts), std::move (decoded_header));
+              dispatcher.dispatch (record, std::move (parts), std::move (decoded_header.value ()));
             trace_mesh_application ("route-dispatch", record, 0,
                                     dispatched ? "success" : "failure");
         }

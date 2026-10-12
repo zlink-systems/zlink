@@ -199,8 +199,7 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
     constexpr std::uint64_t request_sequence = 51;
     constexpr std::uint64_t correlation = 61;
     const std::string mailbox_owner = descriptor.channel_name;
-    /* The reply path reads the request's channel-envelope header, so the
-     * synthetic record carries a real envelope header frame. */
+    /* The synthetic record carries the ingress header and its wire frame. */
     messaging::envelope_header_t request_header;
     request_header.kind = messaging::message_kind_t::request;
     request_header.channel_name = descriptor.channel_name;
@@ -208,11 +207,16 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
     request_header.correlation_id = "reply-claim-corr";
     const auto request_header_bytes =
       messaging::envelope_codec_t{}.encode_header (request_header).to_bytes ();
-    assert (server.mailbox ().try_enqueue (
-      mesh::service_mailbox_record_t{mailbox_owner, mesh::service_mailbox_domain_t::application,
+    auto request_record =
+      mesh::service_mailbox_record_t{mailbox_owner,
+                                     mesh::service_mailbox_domain_t::application,
                                      zlink::framework::detail::backend::materialize_binding_parts (
                                        {request_header_bytes, bytes ("request")}),
-                                     source_routing_id, std::nullopt, correlation}));
+                                     source_routing_id,
+                                     std::nullopt,
+                                     correlation};
+    request_record.envelope_header = request_header;
+    assert (server.mailbox ().try_enqueue (std::move (request_record)));
     assert (server.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
       mailbox_owner, mesh::service_mailbox_domain_t::application,
       zlink::framework::detail::backend::materialize_binding_parts ({{0x02}})}));

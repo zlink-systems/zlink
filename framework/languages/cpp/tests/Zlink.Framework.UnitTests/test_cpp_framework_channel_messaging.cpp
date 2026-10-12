@@ -792,8 +792,9 @@ int main ()
         off_options.message_flow (message_flow_log_mode_t::off);
         detail::mesh_record_dispatcher_t off (provider, serializers, handlers, filters,
                                               off_options);
-        if (!off.dispatch (record, parts (malformed)) || handler.invocations != 1
-            || handler.last_value != 42)
+        if (!off.dispatch (record, parts (malformed),
+                           codec.decode_header (msg::message_parts_t (parts (malformed)), false))
+            || handler.invocations != 1 || handler.last_value != 42)
             return 220;
         dispatch_options_t options;
         options.message_flow (message_flow_log_mode_t::normal);
@@ -805,10 +806,13 @@ int main ()
                     event.flow_id == header.flow_id && event.flow_origin == header.flow_origin;
           });
         detail::mesh_record_dispatcher_t on (provider, serializers, handlers, filters, options);
-        if (!on.dispatch (record, parts (wire)) || !preserved || handler.invocations != 2
-            || handler.last_value != 42)
+        if (!on.dispatch (record, parts (wire),
+                          codec.decode_header (msg::message_parts_t (parts (wire)), true))
+            || !preserved || handler.invocations != 2 || handler.last_value != 42)
             return 221;
-        const auto rejected = on.dispatch (record, parts (malformed));
+        const auto rejected =
+          on.dispatch (record, parts (malformed),
+                       codec.decode_header (msg::message_parts_t (parts (malformed)), true));
         if (rejected || rejected.error_kind () != framework_error_kind_t::protocol_error
             || handler.invocations != 2)
             return 222;

@@ -1379,26 +1379,9 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                 std::optional<protocol::application_payload_t> pending_reply;
                 std::optional<framework_exception_t> pending_failure_reply;
                 try {
-                    /* ClientServer application records ride the channel
-                 * envelope: [JSON header, payload]. flow-correlation §4: at
-                 * Off the wire flow pair is neither validated nor
-                 * materialized at this ingress. */
-                    if (!record.envelope_header) {
-                        auto envelope_header =
-                          runtime::messaging::envelope_codec_t{}.decode_header (
-                            record.parts[0],
-                            detail::message_flow_tracer_t (_channel_runtime.dispatch_options_ref ())
-                              .capture_enabled ());
-                        if (!envelope_header) {
-                            throw framework_exception_t (
-                              framework_error_kind_t::protocol_error,
-                              envelope_header.error () != nullptr
-                                ? envelope_header.error ()->what ()
-                                : "ClientServer request envelope is malformed");
-                        }
-                        record.envelope_header.emplace (std::move (envelope_header.value ()));
-                    }
-                    auto &request_envelope = *record.envelope_header;
+                    /* Ingress validates the envelope and captures flow fields.
+                     * The worker consumes its header and the native payload. */
+                    auto &request_envelope = record.envelope_header;
                     const auto &message = record.parts[1];
                     detail::inbound_message_context_t inbound;
                     inbound.before_application_handler = record.before_application_handler;

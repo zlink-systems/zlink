@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "spot_runtime.hpp"
-#include "runtime/mesh/mesh_record_dispatcher.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 
@@ -14503,18 +14502,17 @@ bool spot_node_runtime_t::dispatch_mesh_record (
     if (route_send || route_request) {
         const auto route_client =
           _state->route_client_lane.run ([&] { return _state->route_client; }).get ();
-        if (!route_client)
-            return false;
-
         runtime::messaging::message_parts_t encoded (std::move (parts));
         runtime::messaging::envelope_codec_t codec;
-        auto header = detail::mesh_record_dispatcher_t::decode_header (encoded, _state->dispatch);
-        if (!header) {
+        auto header = codec.decode_header (
+          encoded, detail::message_flow_tracer_t (_state->dispatch).capture_enabled ());
+        if (!header || !route_client) {
             if (decoded_header)
                 decoded_header->emplace (std::move (header));
             parts = std::move (encoded).take_items ();
             return false;
         }
+
         if (node_record && record.kind == service::record_kind_t::node_send
             && header.value ().message_name == actor_handoff_terminal_packet) {
             const auto terminal_route = handoff_terminal_route (header.value ().metadata);

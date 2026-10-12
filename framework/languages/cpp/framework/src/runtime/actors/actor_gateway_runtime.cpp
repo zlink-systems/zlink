@@ -8,6 +8,8 @@
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
+#include "runtime/messaging/client_call_codec.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
@@ -2549,25 +2551,26 @@ actor_gateway_runtime_t::bind_session_stream (std::string actor_id,
     return previous;
 }
 
-result_t<void>
-actor_gateway_runtime_t::bind_session_route (actor_ref_t actor_ref,
-                                             route_client_t route_client,
-                                             std::string route_channel_name,
-                                             zlink::routing_id_t target_node_rid,
-                                             stream_codec_t codec,
-                                             bool replace_existing,
-                                             std::optional<zlink::routing_id_t> session_rid)
+result_t<void> actor_gateway_runtime_t::bind_session_route (
+  actor_ref_t actor_ref,
+  std::shared_ptr<runtime::host::public_host_runtime_t> node,
+  serializer_registry_t &serializers,
+  std::string route_channel_name,
+  zlink::routing_id_t target_node_rid,
+  stream_codec_t codec,
+  bool replace_existing,
+  std::optional<zlink::routing_id_t> session_rid)
 {
     const auto actor_id = std::string (actor_ref.actor_id ().value ());
     actor_bound_session_route_t route{target_node_rid, std::move (session_rid),
                                       actor_ref.object_generation ()};
     return bind_session_components (
       _state, std::move (actor_ref),
-      [state = _state, actor_id, route_client = std::move (route_client),
+      [state = _state, actor_id, node = std::move (node), serializers = &serializers,
        route_channel_name = std::move (route_channel_name),
-       target_node_rid = std::move (target_node_rid)] (std::string packet_name,
-                                                       stream_codec_t payload_codec,
-                                                       const zlink::message_t &payload) mutable {
+       target_node_rid =
+         std::move (target_node_rid)] (std::string packet_name, stream_codec_t payload_codec,
+                                       const zlink::message_t &payload) -> task_t<void> {
           const auto current_actor_ref = state->sync ([&] () -> std::optional<actor_ref_t> {
               const auto found = state->actors_by_id.find (actor_id);
               if (found == state->actors_by_id.end () || !found->second.bound) {
@@ -2576,22 +2579,43 @@ actor_gateway_runtime_t::bind_session_route (actor_ref_t actor_ref,
               return found->second.ref;
           });
           if (!current_actor_ref) {
-              return task_t<void> (result_t<void>::failure (framework_error_kind_t::not_configured,
-                                                            "actor session is not bound"));
+              throw framework_exception_t (framework_error_kind_t::not_configured,
+                                           "actor session is not bound");
           }
-          try {
-              route_client
-                .send_to_node (route_channel_name, target_node_rid,
-                               make_actor_bound_session_route_request (
-                                 *current_actor_ref, packet_name, payload_codec, payload))
-                .async ()
-                .result ()
-                .value ();
-              return task_t<void> (result_t<void>::success ());
-          }
-          catch (const framework_exception_t &error) {
-              return task_t<void> (detail::result_access_t::failure<void> (error));
-          }
+          if (!node)
+              throw framework_exception_t (framework_error_kind_t::not_configured,
+                                           "actor session transport is not configured");
+          const message_flow_tracer_t flow (state->dispatch);
+          auto submit_flow = runtime::flow_context_t::enter_current_or_create (
+            flow_origin_t::application, flow.mode ());
+          runtime::messaging::client_call_codec_t codec;
+          const auto header =
+            codec.create_envelope (runtime::messaging::message_kind_t::command, route_channel_name,
+                                   actor_bound_session_route_request_t::packet_name);
+          flow.trace (message_flow_outcome_t::sent, [&] {
+              return message_flow_event_t{message_flow_outcome_t::sent,
+                                          dispatch_error_surface_t::route_mesh_channel,
+                                          dispatch_message_kind_t::send,
+                                          header.message_name,
+                                          route_channel_name,
+                                          std::nullopt,
+                                          header.correlation_id,
+                                          target_node_rid.to_string (),
+                                          std::nullopt,
+                                          std::nullopt,
+                                          std::nullopt};
+          });
+          auto parts =
+            codec.encode_envelope_parts (header,
+                                         make_actor_bound_session_route_request (
+                                           *current_actor_ref, packet_name, payload_codec, payload),
+                                         *serializers);
+          const auto sent =
+            co_await node->send_to_node (target_node_rid, std::move (parts).take_items ());
+          if (sent != zlink::submit_result_t::ok)
+              throw framework_exception_t (runtime::messaging::map_submit_result_error_kind (sent),
+                                           "actor session send failed");
+          co_return;
       },
       codec, replace_existing, std::move (route));
 }

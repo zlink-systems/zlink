@@ -3,20 +3,11 @@
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
 
 #include "runtime/channels/route_packet_dispatcher.hpp"
-#include "runtime/diagnostics/message_flow_tracer.hpp"
 
 #include <utility>
 
 namespace zlink::framework::detail
 {
-
-result_t<runtime::messaging::envelope_header_t>
-mesh_record_dispatcher_t::decode_header (const runtime::messaging::message_parts_t &parts,
-                                         const dispatch_options_t &options)
-{
-    return runtime::messaging::envelope_codec_t{}.decode_header (
-      parts, message_flow_tracer_t (options).capture_enabled ());
-}
 
 mesh_record_dispatcher_t::mesh_record_dispatcher_t (
   service_provider_t &services,
@@ -34,10 +25,10 @@ mesh_record_dispatcher_t::mesh_record_dispatcher_t (
 {
 }
 
-result_t<void> mesh_record_dispatcher_t::dispatch (
-  const runtime::host::receive_record_t &record,
-  std::vector<zlink::message_t> parts,
-  std::optional<result_t<runtime::messaging::envelope_header_t>> decoded_header) const
+result_t<void>
+mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &record,
+                                    std::vector<zlink::message_t> parts,
+                                    result_t<runtime::messaging::envelope_header_t> header) const
 {
     using record_kind_t = runtime::host::record_kind_t;
     if (record.kind != record_kind_t::node_send && record.kind != record_kind_t::node_request
@@ -48,8 +39,6 @@ result_t<void> mesh_record_dispatcher_t::dispatch (
     }
 
     runtime::messaging::message_parts_t message_parts (std::move (parts));
-    auto header = decoded_header ? std::move (*decoded_header)
-                                 : decode_header (message_parts, _dispatch_options);
     if (!header) {
         return detail::propagate_failure<void> (header, "MeshNode envelope header decode failed");
     }

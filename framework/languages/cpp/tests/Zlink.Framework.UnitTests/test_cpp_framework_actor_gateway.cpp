@@ -1630,11 +1630,12 @@ int bound_session_route_installs_sink_and_fence_together ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
+    serializer_registry_t serializers;
     auto state = std::make_shared<actor_gateway_state_t> ();
     actor_gateway_runtime_t gateway (state);
     const auto actor = test_actor_ref ("route-node", "support-user", "route-actor", 5);
     const auto bound = gateway.bind_session_route (
-      actor, route_client_t{}, "actor-route",
+      actor, nullptr, serializers, "actor-route",
       zlink::routing_id_t::from (std::string ("session-node")), stream_codec_t::message_pack, true,
       std::make_optional (zlink::routing_id_t::from (std::string ("session-rid"))));
     if (!bound) {
@@ -1655,7 +1656,7 @@ int bound_session_route_installs_sink_and_fence_together ()
     }
 
     const auto non_replacing = gateway.bind_session_route (
-      actor, route_client_t{}, "replacement-route",
+      actor, nullptr, serializers, "replacement-route",
       zlink::routing_id_t::from (std::string ("replacement-node")), stream_codec_t::json, false,
       std::make_optional (zlink::routing_id_t::from (std::string ("replacement-rid"))));
     if (!non_replacing) {
@@ -1669,7 +1670,7 @@ int bound_session_route_installs_sink_and_fence_together ()
 
     const auto wrong_type = test_actor_ref ("route-node", "other-actor", "route-actor", 5);
     const auto rejected =
-      gateway.bind_session_route (wrong_type, route_client_t{}, "actor-route",
+      gateway.bind_session_route (wrong_type, nullptr, serializers, "actor-route",
                                   zlink::routing_id_t::from (std::string ("other-node")));
     if (rejected || rejected.error_kind () != framework_error_kind_t::type_mismatch) {
         return 6;

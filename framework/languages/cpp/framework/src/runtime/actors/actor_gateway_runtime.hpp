@@ -35,6 +35,11 @@ namespace zlink::framework::runtime::stateful
 struct stream_binding_t;
 }
 
+namespace zlink::framework::runtime::host
+{
+class public_host_runtime_t;
+}
+
 namespace zlink::framework::detail
 {
 
@@ -343,7 +348,8 @@ class actor_gateway_runtime_t
                          std::uint16_t actor_slot = 0);
     result_t<void>
     bind_session_route (actor_ref_t actor_ref,
-                        route_client_t route_client,
+                        std::shared_ptr<runtime::host::public_host_runtime_t> node,
+                        serializer_registry_t &serializers,
                         std::string route_channel_name,
                         zlink::routing_id_t target_node_rid,
                         stream_codec_t codec = stream_codec_t::message_pack,

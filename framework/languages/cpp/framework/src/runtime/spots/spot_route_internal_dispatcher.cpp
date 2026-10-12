@@ -216,8 +216,8 @@ result_t<void> spot_route_internal_dispatcher_t::bind_actor_session_route (
   bool replace_existing) const
 {
     auto bound = actor_gateway.bind_session_route (
-      actor_ref, _route_client, std::move (route_channel_name), session_node_rid,
-      stream_codec_t::message_pack, replace_existing, std::move (session_rid));
+      actor_ref, _runtime.native_node (), *_serializers, std::move (route_channel_name),
+      session_node_rid, stream_codec_t::message_pack, replace_existing, std::move (session_rid));
     return bound;
 }
 

@@ -17,10 +17,6 @@ namespace zlink::framework::detail
 class mesh_record_dispatcher_t
 {
   public:
-    static result_t<runtime::messaging::envelope_header_t>
-    decode_header (const runtime::messaging::message_parts_t &parts,
-                   const dispatch_options_t &options);
-
     mesh_record_dispatcher_t (service_provider_t &services,
                               serializer_registry_t &serializers,
                               const route_handler_registry_t &handlers,
@@ -28,10 +24,9 @@ class mesh_record_dispatcher_t
                               dispatch_options_t dispatch_options = {},
                               std::function<void ()> before_application_handler = {});
 
-    result_t<void> dispatch (
-      const runtime::host::receive_record_t &record,
-      std::vector<zlink::message_t> parts,
-      std::optional<result_t<runtime::messaging::envelope_header_t>> decoded_header = {}) const;
+    result_t<void> dispatch (const runtime::host::receive_record_t &record,
+                             std::vector<zlink::message_t> parts,
+                             result_t<runtime::messaging::envelope_header_t> header) const;
 
   private:
     service_provider_t *_services;

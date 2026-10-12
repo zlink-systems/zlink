@@ -446,7 +446,11 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                   channel_name, mesh::service_mailbox_domain_t::application,
                   std::move (received->parts), std::move (received->source_routing_id),
                   received->reply_token};
-                (void) co_await reply (rejected, *application_header->error (), &rejection_context);
+                if (rejection_context)
+                    rejected.envelope_header = std::move (*rejection_context);
+                else
+                    rejected.envelope_header.channel_name = channel_name;
+                (void) co_await reply (rejected, *application_header->error ());
             }
         }
         co_return client_server_pump_result_t::protocol_error;
@@ -585,7 +589,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                                               permit->release_for_handler_entry ();
                                               permit.reset ();
                                           }};
-    record.envelope_header.emplace (std::move (envelope));
+    record.envelope_header = std::move (envelope);
     received_application_record_t received_record{
       std::move (record), std::move (application_permit), received_at, received.route_generation};
     if (application_records) {
@@ -696,29 +700,20 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
     if (request.parts.empty ()) {
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
-    std::optional<result_t<messaging::envelope_header_t>> decoded;
-    const auto *request_header = request.envelope_header ? &*request.envelope_header : nullptr;
-    if (!request_header) {
-        decoded.emplace (
-          messaging::envelope_codec_t{}.decode_header (request.parts.front (), false));
-        if (!*decoded)
-            throw std::invalid_argument (
-              "ClientServer reply requires a decodable request envelope");
-        request_header = &decoded->value ();
-    }
+    const auto &request_header = request.envelope_header;
     const auto port = _port;
     if (!port)
         co_return false;
     zlink::framework::detail::channel_reply_writer_t writer;
     auto header = writer.create_reply_header (messaging::message_kind_t::response,
-                                              request_header->channel_name, *request_header);
+                                              request_header.channel_name, request_header);
     header.content_type = payload.content_type;
     auto parts = envelope_wire_parts (
       writer.reply_raw_envelope (header, zlink::message_t::from (payload.payload_bytes ())));
     const auto delivered =
       port->reply ({request.source_routing_id, request.reply_token, {}}, parts);
     trace_client_server_lazy ("server-reply", [&] {
-        return "channel=" + request_header->channel_name + " packet=" + request_header->message_name
+        return "channel=" + request_header.channel_name + " packet=" + request_header.message_name
                + " client=" + routing_id_label (request.source_routing_id) + " reply_token="
                + (request.reply_token ? std::string ("present") : std::string ("-"))
                + " delivered=" + (delivered ? "true" : "false");
@@ -726,31 +721,15 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
     co_return delivered;
 }
 
-task_t<bool> raw_client_server_server_t::reply (
-  const mesh::service_mailbox_record_t &request,
-  const framework_exception_t &error,
-  const std::optional<messaging::envelope_header_t> *decoded_context)
+task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
+                                                const framework_exception_t &error)
 {
     if (request.source_routing_id.empty () || !request.reply_token)
         co_return false;
     if (request.parts.empty ()) {
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
-    std::optional<messaging::envelope_header_t> owned_header;
-    if (!decoded_context && request.envelope_header)
-        decoded_context = &request.envelope_header;
-    if (!decoded_context) {
-        auto decoded = messaging::envelope_codec_t{}.decode_header (request.parts.front (), false);
-        if (decoded)
-            owned_header = std::move (decoded.value ());
-        decoded_context = &owned_header;
-    }
-    if (!*decoded_context) {
-        owned_header.emplace ();
-        owned_header->channel_name = request.owner;
-        decoded_context = &owned_header;
-    }
-    const auto &decoded_header = **decoded_context;
+    const auto &decoded_header = request.envelope_header;
     const auto port = _port;
     if (!port)
         co_return false;
