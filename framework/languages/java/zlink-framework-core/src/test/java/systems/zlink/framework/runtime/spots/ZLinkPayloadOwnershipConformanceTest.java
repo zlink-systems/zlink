@@ -243,7 +243,13 @@ final class ZLinkPayloadOwnershipConformanceTest {
 
     private static SpotSubscriptionHandlerRegistration registration(Class<?> handlerType) {
         return new SpotSubscriptionHandlerRegistration(
-                "topic", handlerType, null, Object.class, Probe.class, "Probe");
+                "topic",
+                handlerType,
+                null,
+                Object.class,
+                Probe.class,
+                "Probe",
+                java.util.List.of());
     }
 
     private static JsonNode fixture() throws Exception {

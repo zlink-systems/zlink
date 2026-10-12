@@ -42,7 +42,6 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -108,7 +107,6 @@ public final class ZLinkChannelRuntime
     private final ZLinkCodecRegistration codecs;
     private final ZLinkHandlerActivator handlerFactory;
     private final Executor handlerExecutor;
-    private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final List<Class<? extends ZLinkHandlerFilter>> filterTypes;
     private final ZLinkChannelHandlerInvoker channelHandlerInvoker;
     private final ZLinkChannelReceiveLoops receiveLoops;
@@ -476,7 +474,6 @@ public final class ZLinkChannelRuntime
                 ZLinkFlowContext.propagating(
                         Objects.requireNonNull(registration.handlerExecutor(), "handlerExecutor"));
         this.dispatchRegistry = new ZLinkChannelDispatchRegistry(registration.serialExecutor());
-        this.suspendHandlerInvokers = registration.suspendHandlerInvokers();
         this.filterTypes = List.copyOf(registration.filters());
         this.channelHandlerInvoker =
                 new ZLinkChannelHandlerInvoker(
@@ -484,7 +481,6 @@ public final class ZLinkChannelRuntime
                         codecs,
                         this.handlerFactory,
                         this.handlerExecutor,
-                        suspendHandlerInvokers,
                         filterTypes);
         this.receiveLoops = new ZLinkChannelReceiveLoops(registration.applicationJobQueue());
         this.defaultRequestTimeout = registration.defaultRequestTimeout();

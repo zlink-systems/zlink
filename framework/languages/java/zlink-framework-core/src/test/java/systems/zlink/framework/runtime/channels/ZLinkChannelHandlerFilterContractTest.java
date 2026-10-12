@@ -53,7 +53,6 @@ final class ZLinkChannelHandlerFilterContractTest {
                         codecs,
                         type -> new DerivedReplyHandler(),
                         Runnable::run,
-                        List.of(),
                         List.of());
         Message request = text("request");
 
@@ -61,10 +60,11 @@ final class ZLinkChannelHandlerFilterContractTest {
                 invoker.invokeRequestHandler(
                                 "channel-a",
                                 new ChannelRequestHandlerRegistration(
-                                        DerivedReplyHandler.class,
-                                        String.class,
-                                        BaseReply.class,
-                                        "request"),
+                                                DerivedReplyHandler.class,
+                                                String.class,
+                                                BaseReply.class,
+                                                "request")
+                                        .prepare(java.util.List.of()),
                                 request)
                         .toCompletableFuture()
                         .join();
@@ -86,7 +86,8 @@ final class ZLinkChannelHandlerFilterContractTest {
         routeMesh
                 .invokeSendHandler(
                         "channel-a",
-                        new ChannelSendHandlerRegistration(SendHandler.class, String.class, "send"),
+                        new ChannelSendHandlerRegistration(SendHandler.class, String.class, "send")
+                                .prepare(java.util.List.of()),
                         payload)
                 .toCompletableFuture()
                 .join();
@@ -94,7 +95,8 @@ final class ZLinkChannelHandlerFilterContractTest {
                 .invokeRequestHandler(
                         "channel-a",
                         new ChannelRequestHandlerRegistration(
-                                RequestHandler.class, String.class, String.class, "request"),
+                                        RequestHandler.class, String.class, String.class, "request")
+                                .prepare(java.util.List.of()),
                         payload)
                 .toCompletableFuture()
                 .join()
@@ -103,7 +105,8 @@ final class ZLinkChannelHandlerFilterContractTest {
                 .invokeRouteSendHandler(
                         null,
                         new ChannelRouteSendHandlerRegistration(
-                                RouteSendHandler.class, String.class, "node-send"),
+                                        RouteSendHandler.class, String.class, "node-send")
+                                .prepare(java.util.List.of()),
                         RoutingId.from("source"),
                         payload)
                 .toCompletableFuture()
@@ -112,10 +115,11 @@ final class ZLinkChannelHandlerFilterContractTest {
                 .invokeRouteRequestHandler(
                         null,
                         new ChannelRouteRequestHandlerRegistration(
-                                RouteRequestHandler.class,
-                                String.class,
-                                String.class,
-                                "node-request"),
+                                        RouteRequestHandler.class,
+                                        String.class,
+                                        String.class,
+                                        "node-request")
+                                .prepare(java.util.List.of()),
                         RoutingId.from("source"),
                         payload)
                 .toCompletableFuture()
@@ -125,7 +129,8 @@ final class ZLinkChannelHandlerFilterContractTest {
                 .invokePublishHandler(
                         "fanout-a",
                         new ChannelPublishHandlerRegistration(
-                                PublishHandler.class, String.class, "publish"),
+                                        PublishHandler.class, String.class, "publish")
+                                .prepare(java.util.List.of()),
                         "topic-a",
                         payload)
                 .toCompletableFuture()
@@ -134,7 +139,8 @@ final class ZLinkChannelHandlerFilterContractTest {
                 .invokeRequestHandler(
                         "channel-b",
                         new ChannelRequestHandlerRegistration(
-                                RequestHandler.class, String.class, String.class, "request"),
+                                        RequestHandler.class, String.class, String.class, "request")
+                                .prepare(java.util.List.of()),
                         payload)
                 .toCompletableFuture()
                 .join()
@@ -165,10 +171,11 @@ final class ZLinkChannelHandlerFilterContractTest {
                                         .invokeRequestHandler(
                                                 "channel-a",
                                                 new ChannelRequestHandlerRegistration(
-                                                        RequestHandler.class,
-                                                        String.class,
-                                                        String.class,
-                                                        "request"),
+                                                                RequestHandler.class,
+                                                                String.class,
+                                                                String.class,
+                                                                "request")
+                                                        .prepare(java.util.List.of()),
                                                 text("request"))
                                         .toCompletableFuture()
                                         .join());
@@ -187,10 +194,11 @@ final class ZLinkChannelHandlerFilterContractTest {
                 .invokeRouteRequestHandler(
                         "legacy-mesh",
                         new ChannelRouteRequestHandlerRegistration(
-                                RouteRequestHandler.class,
-                                String.class,
-                                String.class,
-                                "node-request"),
+                                        RouteRequestHandler.class,
+                                        String.class,
+                                        String.class,
+                                        "node-request")
+                                .prepare(java.util.List.of()),
                         RoutingId.from("source"),
                         payload)
                 .toCompletableFuture()
@@ -208,8 +216,8 @@ final class ZLinkChannelHandlerFilterContractTest {
         ZLinkChannelHandlerInvoker invoker = invoker(probe, null);
         Message payload = text("event");
         ChannelPublishHandlerRegistration registration =
-                new ChannelPublishHandlerRegistration(
-                        PublishHandler.class, String.class, "publish");
+                new ChannelPublishHandlerRegistration(PublishHandler.class, String.class, "publish")
+                        .prepare(java.util.List.of());
 
         invoker.invokePublishHandler("fanout-a", registration, "topic-a", payload)
                 .toCompletableFuture()
@@ -250,7 +258,6 @@ final class ZLinkChannelHandlerFilterContractTest {
                 codecs,
                 activator,
                 Runnable::run,
-                List.of(),
                 List.of(CapturingFilter.class),
                 meshName);
     }

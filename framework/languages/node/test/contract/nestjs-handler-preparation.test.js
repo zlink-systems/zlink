@@ -4,11 +4,84 @@ require('reflect-metadata');
 const { prepareNestHandlerFactory } = require('../../packages/nestjs/dist/providers');
 const { createManualSendHandlers } = require('../../packages/nestjs/dist/handler-adapters');
 
+test('adapters and runtime resolvers share the registration factory map', async () => {
+  const framework = require('../../packages/framework/dist/internal');
+  const {
+    createRuntimeHost,
+    nestHandlerFactories
+  } = require('../../packages/nestjs/dist/providers');
+  class Handler {
+    async handle() {}
+  }
+  const registration = framework.createFrameworkRegistration();
+  registration.filterTypes.push(Handler);
+  const moduleRef = {
+    get() {
+      return undefined;
+    }
+  };
+  const discovery = {
+    getProviders() {
+      return [];
+    }
+  };
+  const original = Reflect.getMetadata;
+  let constructorReads = 0;
+  const runtimes = [];
+  Reflect.getMetadata = (key, type, ...args) => {
+    if (key === 'design:paramtypes' && type === Handler) constructorReads++;
+    return original(key, type, ...args);
+  };
+  try {
+    const factories = nestHandlerFactories(registration);
+    createManualSendHandlers(
+      [{ handlerType: Handler, packetName: 'message' }],
+      moduleRef,
+      factories
+    );
+    for (let index = 0; index < 3; index++)
+      runtimes.push(createRuntimeHost(registration, moduleRef, discovery));
+    assert.equal(nestHandlerFactories(registration), factories);
+    assert.equal(constructorReads, 1);
+  } finally {
+    Reflect.getMetadata = original;
+    for (const runtime of runtimes) await runtime.shutdown();
+  }
+});
+
+test('one registration prepares a repeated manual handler type once', () => {
+  class Handler {
+    async handle() {}
+  }
+  const original = Reflect.getMetadata;
+  let constructorReads = 0;
+  Reflect.getMetadata = (key, type, ...args) => {
+    if (key === 'design:paramtypes' && type === Handler) constructorReads++;
+    return original(key, type, ...args);
+  };
+  try {
+    createManualSendHandlers(
+      [
+        { handlerType: Handler, packetName: 'first' },
+        { handlerType: Handler, packetName: 'second' }
+      ],
+      {}
+    );
+    assert.equal(constructorReads, 1);
+  } finally {
+    Reflect.getMetadata = original;
+  }
+});
+
 test('registered manual handler prepares metadata before dispatch and constructs before suspension', async () => {
   let constructed = 0;
   class Handler {
-    constructor() { constructed++; }
-    async handle(message) { assert.equal(message, 'payload'); }
+    constructor() {
+      constructed++;
+    }
+    async handle(message) {
+      assert.equal(message, 'payload');
+    }
   }
   const [registration] = createManualSendHandlers(
     [{ handlerType: Handler, packetName: 'message' }],
@@ -16,7 +89,10 @@ test('registered manual handler prepares metadata before dispatch and constructs
   );
   const original = Reflect.getMetadata;
   let metadataReads = 0;
-  Reflect.getMetadata = (...args) => { metadataReads++; return original(...args); };
+  Reflect.getMetadata = (...args) => {
+    metadataReads++;
+    return original(...args);
+  };
   try {
     const completion = registration.handler.handle(Buffer.from('"payload"'), {});
     const constructedBeforeSuspension = constructed;
@@ -56,7 +132,9 @@ test('prepared constructor and property dependencies share the current scope onl
   const { PROPERTY_DEPS_METADATA } = require('@nestjs/common/constants');
   class Dependency {}
   class Handler {
-    constructor(dependency) { this.dependency = dependency; }
+    constructor(dependency) {
+      this.dependency = dependency;
+    }
   }
   Reflect.defineMetadata('design:paramtypes', [Dependency], Handler);
   Reflect.defineMetadata(PROPERTY_DEPS_METADATA, [{ key: 'property', type: Dependency }], Handler);

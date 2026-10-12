@@ -9,15 +9,14 @@ import java.lang.reflect.Method;
 import java.util.Collection;
 
 record ChannelPublishHandlerRegistration(
-        Class<?> handlerType, Class<?> messageType, String packetName, PreparedMethod invocation) {
+        Class<?> handlerType,
+        Class<?> messageType,
+        String packetName,
+        Method declaredMethod,
+        PreparedMethod invocation) {
     ChannelPublishHandlerRegistration(
-            Class<?> handlerType, Method handlerMethod, Class<?> messageType, String packetName) {
-        this(
-                handlerType,
-                messageType,
-                packetName,
-                ZLinkHandlerMethodInvoker.prepareChannel(
-                        handlerType, handlerMethod, messageType, ZLinkPublishMessageContext.class));
+            Class<?> handlerType, Method declaredMethod, Class<?> messageType, String packetName) {
+        this(handlerType, messageType, packetName, declaredMethod, null);
     }
 
     ChannelPublishHandlerRegistration(
@@ -25,18 +24,22 @@ record ChannelPublishHandlerRegistration(
         this(handlerType, (Method) null, messageType, packetName);
     }
 
-    Method handlerMethod() {
-        return invocation.method();
-    }
-
-    ChannelPublishHandlerRegistration withSuspendInvokers(
-            Collection<ZLinkSuspendInvocationAdapter> invokers) {
+    ChannelPublishHandlerRegistration prepare(Collection<ZLinkSuspendInvocationAdapter> invokers) {
         return new ChannelPublishHandlerRegistration(
-                handlerType, messageType, packetName, invocation.withSuspendInvokers(invokers));
+                handlerType,
+                messageType,
+                packetName,
+                null,
+                ZLinkHandlerMethodInvoker.prepareChannel(
+                        handlerType,
+                        declaredMethod,
+                        messageType,
+                        ZLinkPublishMessageContext.class,
+                        invokers));
     }
 
     ChannelPublishHandlerRegistration withPacketName(String packetName) {
         return new ChannelPublishHandlerRegistration(
-                handlerType, messageType, packetName, invocation);
+                handlerType, messageType, packetName, declaredMethod, invocation);
     }
 }

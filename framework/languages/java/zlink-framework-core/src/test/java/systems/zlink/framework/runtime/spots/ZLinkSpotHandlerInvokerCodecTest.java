@@ -40,7 +40,8 @@ final class ZLinkSpotHandlerInvokerCodecTest {
                         Probe.class,
                         Void.class,
                         "Probe",
-                        false);
+                        false,
+                        java.util.List.of());
 
         try (Message payload = Message.from(new byte[] {1})) {
             invoker.invokePacket(
@@ -104,7 +105,8 @@ final class ZLinkSpotHandlerInvokerCodecTest {
                         Probe.class,
                         Void.class,
                         "Probe",
-                        false);
+                        false,
+                        java.util.List.of());
 
         try (Message payload = Message.from(new byte[] {1})) {
             ZLinkFrameworkException failure =
@@ -137,7 +139,8 @@ final class ZLinkSpotHandlerInvokerCodecTest {
                         Probe.class,
                         Void.class,
                         "Probe",
-                        false);
+                        false,
+                        java.util.List.of());
 
         try (Message payload = Message.from(payloadBytes)) {
             invoker.invokePacket(

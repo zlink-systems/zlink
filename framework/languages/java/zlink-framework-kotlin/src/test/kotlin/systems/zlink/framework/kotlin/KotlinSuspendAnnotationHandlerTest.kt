@@ -61,6 +61,44 @@ import systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory
 
 final class KotlinSuspendAnnotationHandlerTest {
     @Test
+    fun preparedSuspendInvocationSelectsConfiguredAdapterOnce() {
+        val delegate = ZLinkCoroutineSuspendHandlerInvoker()
+        var selections = 0
+        val adapter =
+            object : ZLinkSuspendInvocationAdapter {
+                override fun supports(method: Method): Boolean {
+                    selections++
+                    return delegate.supports(method)
+                }
+
+                override fun invoke(handler: Any, method: Method, logicalArguments: Array<Any>) =
+                    delegate.invoke(handler, method, logicalArguments)
+            }
+        val invocation =
+            ZLinkHandlerMethodInvoker.prepareChannel(
+                KotlinSuspendingInterfaceRequestHandler::class.java,
+                null,
+                ProfileRequest::class.java,
+                ZLinkMessageContext::class.java,
+                listOf(adapter),
+            )
+        assertEquals(1, selections)
+        for (name in listOf("Ada", "Grace")) {
+            val reply =
+                invocation
+                    .invoke(
+                        KotlinSuspendingInterfaceRequestHandler(),
+                        ProfileRequest(name),
+                        requestContext("profile"),
+                    )
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS)
+            assertEquals(ProfileReply("profile:$name"), reply)
+        }
+        assertEquals(1, selections)
+    }
+
+    @Test
     fun clientServerRoleBuildersAllowSameAndDifferentChannelNames() {
         val options = DefaultZLinkFrameworkOptions()
 
@@ -134,16 +172,18 @@ final class KotlinSuspendAnnotationHandlerTest {
         assertEquals(InterfaceSpot::class.java, timer.spotType())
         assertEquals("interface-timer", timer.timerName())
         val requestMethod =
-            ZLinkHandlerMethodInvoker.requireHandlerMethod(
+            ZLinkHandlerMethodInvoker.requireHandlerMethodForTypes(
                 request.handlerType(),
                 "handle",
-                arrayOf(ProfileRequest("Ada"), requestContext("profile")),
+                ProfileRequest::class.java,
+                ZLinkMessageContext::class.java,
             )
         val timerMethod =
-            ZLinkHandlerMethodInvoker.requireHandlerMethod(
+            ZLinkHandlerMethodInvoker.requireHandlerMethodForTypes(
                 timer.handlerType(),
                 "handle",
-                arrayOfNulls<Any>(2),
+                null,
+                null,
             )
         assertTrue(ZLinkHandlerMethodInvoker.isKotlinSuspendMethod(requestMethod))
         assertTrue(ZLinkHandlerMethodInvoker.isKotlinSuspendMethod(timerMethod))
@@ -172,12 +212,14 @@ final class KotlinSuspendAnnotationHandlerTest {
         val handler = KotlinSuspendingInterfaceRequestHandler()
 
         val reply =
-            ZLinkHandlerMethodInvoker.invokeHandler(
-                    handler,
-                    "handle",
-                    arrayOf(ProfileRequest("Ada"), requestContext("profile")),
+            ZLinkHandlerMethodInvoker.prepareChannel(
+                    handler.javaClass,
+                    null,
+                    ProfileRequest::class.java,
+                    ZLinkMessageContext::class.java,
                     listOf(ZLinkCoroutineSuspendHandlerInvoker()),
                 )
+                .invoke(handler, ProfileRequest("Ada"), requestContext("profile"))
                 .toCompletableFuture()
                 .get(1, TimeUnit.SECONDS)
 
@@ -188,10 +230,11 @@ final class KotlinSuspendAnnotationHandlerTest {
     fun kotlinSuspendInvocationFailsClearlyWhenNoProviderSupportsTheMethod() {
         val handler = KotlinSuspendingInterfaceRequestHandler()
         val method =
-            ZLinkHandlerMethodInvoker.requireHandlerMethod(
+            ZLinkHandlerMethodInvoker.requireHandlerMethodForTypes(
                 handler.javaClass,
                 "handle",
-                arrayOf(ProfileRequest("Ada"), requestContext("profile")),
+                ProfileRequest::class.java,
+                ZLinkMessageContext::class.java,
             )
         val unsupportedInvoker =
             object : ZLinkSuspendInvocationAdapter {
@@ -204,19 +247,11 @@ final class KotlinSuspendAnnotationHandlerTest {
             }
 
         val failure =
-            assertThrows<ExecutionException> {
-                ZLinkHandlerMethodInvoker.invoke(
-                        handler,
-                        method,
-                        arrayOf(ProfileRequest("Ada"), requestContext("profile")),
-                        listOf(unsupportedInvoker),
-                    )
-                    .toCompletableFuture()
-                    .get(1, TimeUnit.SECONDS)
+            assertThrows<ZLinkConfigurationException> {
+                ZLinkHandlerMethodInvoker.prepare(method, listOf(unsupportedInvoker), 0, 1)
             }
 
-        assertTrue(failure.cause is ZLinkConfigurationException)
-        assertTrue(failure.cause!!.message!!.contains("registered ZLinkSuspendInvocationAdapter"))
+        assertTrue(failure.message!!.contains("registered ZLinkSuspendInvocationAdapter"))
     }
 
     @Test
@@ -225,7 +260,8 @@ final class KotlinSuspendAnnotationHandlerTest {
         val method = handler.javaClass.getMethod("handle", ProfileRequest::class.java)
 
         val reply =
-            ZLinkHandlerMethodInvoker.invoke(handler, method, arrayOf(ProfileRequest("Ada")))
+            ZLinkHandlerMethodInvoker.prepare(method, emptyList(), 0)
+                .invoke(handler, ProfileRequest("Ada"))
                 .toCompletableFuture()
                 .get(1, TimeUnit.SECONDS)
 
@@ -274,11 +310,8 @@ final class KotlinSuspendAnnotationHandlerTest {
             KotlinSpringSuspendSpotActorHandler::class.java.methods.single { it.name == "request" }
 
         val reply =
-            ZLinkHandlerMethodInvoker.invoke(
-                    handler,
-                    method,
-                    arrayOf(PlayerActor("p1"), PlayerCommand("move")),
-                )
+            ZLinkHandlerMethodInvoker.prepare(method, emptyList(), 0, 1)
+                .invoke(handler, PlayerActor("p1"), PlayerCommand("move"))
                 .toCompletableFuture()
                 .get(1, TimeUnit.SECONDS)
 
@@ -292,7 +325,8 @@ final class KotlinSuspendAnnotationHandlerTest {
             KotlinCoroutineContextHandler::class.java.methods.single { it.name == "request" }
 
         val reply =
-            ZLinkHandlerMethodInvoker.invoke(handler, method, arrayOf(ProfileRequest("Ada")))
+            ZLinkHandlerMethodInvoker.prepare(method, emptyList(), 0)
+                .invoke(handler, ProfileRequest("Ada"))
                 .toCompletableFuture()
                 .get(1, TimeUnit.SECONDS)
 
@@ -319,15 +353,17 @@ final class KotlinSuspendAnnotationHandlerTest {
                     }
                 val result = CompletableFuture<Any?>()
                 val queue = ZLinkSerialExecutionQueue()
+                val invocation =
+                    ZLinkHandlerMethodInvoker.prepare(
+                        method,
+                        listOf(ZLinkCoroutineSuspendHandlerInvoker(firstDispatcher)),
+                        0,
+                    )
 
                 queue.enqueue(
                     {
-                        ZLinkHandlerMethodInvoker.invoke(
-                                handler,
-                                method,
-                                arrayOf(ProfileRequest("Ada")),
-                                listOf(ZLinkCoroutineSuspendHandlerInvoker(firstDispatcher)),
-                            )
+                        invocation
+                            .invoke(handler, ProfileRequest("Ada"))
                             .whenComplete { reply, error ->
                                 if (error == null) {
                                     result.complete(reply)
@@ -364,12 +400,8 @@ final class KotlinSuspendAnnotationHandlerTest {
                 }
 
             val reply =
-                ZLinkHandlerMethodInvoker.invoke(
-                        handler,
-                        method,
-                        arrayOf(ProfileRequest("Ada")),
-                        invokers,
-                    )
+                ZLinkHandlerMethodInvoker.prepare(method, invokers, 0)
+                    .invoke(handler, ProfileRequest("Ada"))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS)
 
@@ -392,11 +424,8 @@ final class KotlinSuspendAnnotationHandlerTest {
                 }
 
             val reply =
-                ZLinkHandlerMethodInvoker.invoke(
-                        handler,
-                        method,
-                        arrayOf(ProfileRequest("Ada"), requestContext("profile")),
-                    )
+                ZLinkHandlerMethodInvoker.prepare(method, emptyList(), 0, 1)
+                    .invoke(handler, ProfileRequest("Ada"), requestContext("profile"))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS)
 
@@ -412,7 +441,8 @@ final class KotlinSuspendAnnotationHandlerTest {
 
         val failure =
             assertThrows<ExecutionException> {
-                ZLinkHandlerMethodInvoker.invoke(handler, method, arrayOf(ProfileRequest("Ada")))
+                ZLinkHandlerMethodInvoker.prepare(method, emptyList(), 0)
+                    .invoke(handler, ProfileRequest("Ada"))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS)
             }
@@ -431,7 +461,8 @@ final class KotlinSuspendAnnotationHandlerTest {
 
         val failure =
             assertThrows<CancellationException> {
-                ZLinkHandlerMethodInvoker.invoke(handler, method, arrayOf(ProfileRequest("Ada")))
+                ZLinkHandlerMethodInvoker.prepare(method, emptyList(), 0)
+                    .invoke(handler, ProfileRequest("Ada"))
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS)
             }

@@ -39,7 +39,8 @@ final class ZLinkSpotRuntimeActorArgumentsTest {
                                 TestSpot.class,
                                 TestActor.class,
                                 Request.class,
-                                ZLinkMessageContext.class)
+                                ZLinkMessageContext.class,
+                                java.util.List.of())
                         .arguments(spot, actor, context, request);
 
         assertSame(spot, args[0]);

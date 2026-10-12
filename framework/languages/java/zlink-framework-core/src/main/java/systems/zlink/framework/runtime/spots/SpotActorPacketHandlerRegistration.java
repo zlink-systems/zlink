@@ -26,7 +26,8 @@ record SpotActorPacketHandlerRegistration(
             Class<?> messageType,
             Class<?> replyType,
             String packetName,
-            ZLinkScannedHandlerKind kind) {
+            ZLinkScannedHandlerKind kind,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
         this(
                 handlerType,
                 spotType,
@@ -41,23 +42,7 @@ record SpotActorPacketHandlerRegistration(
                         spotType,
                         actorType,
                         messageType,
-                        ZLinkMessageContext.class));
-    }
-
-    Method handlerMethod() {
-        return invocation.method();
-    }
-
-    SpotActorPacketHandlerRegistration withSuspendInvokers(
-            Collection<ZLinkSuspendInvocationAdapter> invokers) {
-        return new SpotActorPacketHandlerRegistration(
-                handlerType,
-                spotType,
-                actorType,
-                messageType,
-                replyType,
-                packetName,
-                kind,
-                invocation.withSuspendInvokers(invokers));
+                        ZLinkMessageContext.class,
+                        invokers));
     }
 }

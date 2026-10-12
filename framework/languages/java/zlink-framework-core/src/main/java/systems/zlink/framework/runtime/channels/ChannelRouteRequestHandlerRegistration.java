@@ -13,20 +13,15 @@ record ChannelRouteRequestHandlerRegistration(
         Class<?> requestType,
         Class<?> replyType,
         String packetName,
+        Method declaredMethod,
         PreparedMethod invocation) {
     ChannelRouteRequestHandlerRegistration(
             Class<?> handlerType,
-            Method handlerMethod,
+            Method declaredMethod,
             Class<?> requestType,
             Class<?> replyType,
             String packetName) {
-        this(
-                handlerType,
-                requestType,
-                replyType,
-                packetName,
-                ZLinkHandlerMethodInvoker.prepareChannel(
-                        handlerType, handlerMethod, requestType, ZLinkRouteMessageContext.class));
+        this(handlerType, requestType, replyType, packetName, declaredMethod, null);
     }
 
     ChannelRouteRequestHandlerRegistration(
@@ -34,22 +29,24 @@ record ChannelRouteRequestHandlerRegistration(
         this(handlerType, (Method) null, requestType, replyType, packetName);
     }
 
-    Method handlerMethod() {
-        return invocation.method();
-    }
-
-    ChannelRouteRequestHandlerRegistration withSuspendInvokers(
+    ChannelRouteRequestHandlerRegistration prepare(
             Collection<ZLinkSuspendInvocationAdapter> invokers) {
         return new ChannelRouteRequestHandlerRegistration(
                 handlerType,
                 requestType,
                 replyType,
                 packetName,
-                invocation.withSuspendInvokers(invokers));
+                null,
+                ZLinkHandlerMethodInvoker.prepareChannel(
+                        handlerType,
+                        declaredMethod,
+                        requestType,
+                        ZLinkRouteMessageContext.class,
+                        invokers));
     }
 
     ChannelRouteRequestHandlerRegistration withPacketName(String packetName) {
         return new ChannelRouteRequestHandlerRegistration(
-                handlerType, requestType, replyType, packetName, invocation);
+                handlerType, requestType, replyType, packetName, declaredMethod, invocation);
     }
 }

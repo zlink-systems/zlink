@@ -10,17 +10,14 @@ import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 
-import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -32,7 +29,6 @@ import java.util.function.Supplier;
 
 final class ZLinkChannelHandlerInvoker {
     private final ZLinkMessageSerializer serializer;
-    private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final ZLinkCodecRegistration codecs;
     private final ZLinkHandlerActivator handlerFactory;
     private final List<Class<? extends ZLinkHandlerFilter>> filterTypes;
@@ -43,16 +39,8 @@ final class ZLinkChannelHandlerInvoker {
             ZLinkCodecRegistration codecs,
             ZLinkHandlerActivator handlerFactory,
             Executor handlerExecutor,
-            List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
             List<Class<? extends ZLinkHandlerFilter>> filterTypes) {
-        this(
-                serializer,
-                codecs,
-                handlerFactory,
-                handlerExecutor,
-                suspendHandlerInvokers,
-                filterTypes,
-                null);
+        this(serializer, codecs, handlerFactory, handlerExecutor, filterTypes, null);
     }
 
     ZLinkChannelHandlerInvoker(
@@ -60,20 +48,14 @@ final class ZLinkChannelHandlerInvoker {
             ZLinkCodecRegistration codecs,
             ZLinkHandlerActivator handlerFactory,
             Executor handlerExecutor,
-            List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
             List<Class<? extends ZLinkHandlerFilter>> filterTypes,
             String meshName) {
         this.serializer = serializer;
-        this.suspendHandlerInvokers = suspendHandlerInvokers;
         this.codecs = codecs;
         this.handlerFactory = handlerFactory;
         Objects.requireNonNull(handlerExecutor, "handlerExecutor");
         this.filterTypes = filterTypes;
         this.meshName = meshName;
-    }
-
-    List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers() {
-        return suspendHandlerInvokers;
     }
 
     <T> CompletionStage<T> executeHandler(Supplier<CompletionStage<T>> operation) {
@@ -325,15 +307,6 @@ final class ZLinkChannelHandlerInvoker {
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
-    }
-
-    static Object[] methodArguments(Method method, Object message, ZLinkMessageContext context) {
-        return ZLinkHandlerMethodInvoker.prepareChannel(
-                        method.getDeclaringClass(),
-                        method,
-                        null,
-                        context == null ? ZLinkMessageContext.class : context.getClass())
-                .arguments(message, context);
     }
 
     CompletionStage<Void> invokeRouteSendHandler(

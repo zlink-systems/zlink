@@ -47,7 +47,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelRequestHandlerRegistration handler : channel.requestHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
-        handlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
+        handlers.replaceAll((name, handler) -> handler.prepare(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -70,7 +70,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelSendHandlerRegistration handler : channel.sendHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
-        handlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
+        handlers.replaceAll((name, handler) -> handler.prepare(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -93,7 +93,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelPublishHandlerRegistration handler : channel.publishHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
-        handlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
+        handlers.replaceAll((name, handler) -> handler.prepare(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -118,7 +118,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelRouteRequestHandlerRegistration handler : channel.routeRequestHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
-        handlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
+        handlers.replaceAll((name, handler) -> handler.prepare(suspendInvokers));
         return Map.copyOf(handlers);
     }
 
@@ -139,7 +139,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelRouteSendHandlerRegistration handler : channel.routeSendHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
-        handlers.replaceAll((name, handler) -> handler.withSuspendInvokers(suspendInvokers));
+        handlers.replaceAll((name, handler) -> handler.prepare(suspendInvokers));
         return Map.copyOf(handlers);
     }
 

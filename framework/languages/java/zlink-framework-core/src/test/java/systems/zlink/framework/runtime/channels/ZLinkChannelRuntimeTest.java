@@ -130,10 +130,11 @@ final class ZLinkChannelRuntimeTest {
                 Map.of(
                         "Request",
                         new ChannelRequestHandlerRegistration(
-                                PendingCloseRequestHandler.class,
-                                String.class,
-                                String.class,
-                                "Request")));
+                                        PendingCloseRequestHandler.class,
+                                        String.class,
+                                        String.class,
+                                        "Request")
+                                .prepare(java.util.List.of())));
         closeHandlerEntered = new CompletableFuture<>();
         closeHandlerTerminal = new CompletableFuture<>();
         AtomicInteger replies = new AtomicInteger();
@@ -149,7 +150,6 @@ final class ZLinkChannelRuntimeTest {
                                 new ZLinkCodecRegistration(),
                                 ZLinkHandlerActivator.reflection(),
                                 Runnable::run,
-                                List.of(),
                                 List.of()),
                         new ZLinkChannelDispatchReporter(errors),
                         errors.flow());
@@ -495,7 +495,14 @@ final class ZLinkChannelRuntimeTest {
         Method method =
                 ContextHandler.class.getMethod("handle", String.class, ZLinkMessageContext.class);
 
-        Object[] arguments = ZLinkChannelHandlerInvoker.methodArguments(method, "hello", context);
+        Object[] arguments =
+                systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker.prepareChannel(
+                                ContextHandler.class,
+                                method,
+                                String.class,
+                                ZLinkMessageContext.class,
+                                java.util.List.of())
+                        .arguments("hello", context);
 
         assertSame("hello", arguments[0]);
         assertSame(context, arguments[1]);

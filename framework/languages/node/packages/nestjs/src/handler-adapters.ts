@@ -12,18 +12,24 @@ import type { ZLinkNestManualHandlerOptions } from './contracts';
 import type { ZLinkNestHandlerMetadata } from './handler-metadata';
 import type { DiscoveredNestProvider } from './provider-discovery';
 import { currentNestDispatchContext } from './dispatch-scope';
-import { prepareNestHandlerFactory, type NestHandlerFactory } from './providers';
+import {
+  registeredNestHandlerFactory,
+  type NestHandlerFactory,
+  type NestHandlerFactories
+} from './providers';
 
 export function createDiscoveredRequestHandlers(
   providerRefs: readonly DiscoveredNestProvider[],
   handlerGroups: readonly string[] | undefined,
-  moduleRef: ModuleRef
+  moduleRef: ModuleRef,
+  factories: NestHandlerFactories = new Map()
 ): NonNullable<ZLinkChannelOptions['requestHandlers']> {
   return createDiscoveredHandlerRegistrations(
     providerRefs,
     handlerGroups,
     'request',
     moduleRef,
+    factories,
     (ref, metadata, factory) => ({
       async handle(payload: Buffer, context: ZLinkMessageContext) {
         const result = await invokeDiscoveredHandler(
@@ -45,13 +51,15 @@ export function createDiscoveredRequestHandlers(
 export function createDiscoveredSendHandlers(
   providerRefs: readonly DiscoveredNestProvider[],
   handlerGroups: readonly string[] | undefined,
-  moduleRef: ModuleRef
+  moduleRef: ModuleRef,
+  factories: NestHandlerFactories = new Map()
 ): NonNullable<NonNullable<ZLinkChannelOptions['routeMesh']>['sendHandlers']> {
   return createDiscoveredHandlerRegistrations(
     providerRefs,
     handlerGroups,
     'send',
     moduleRef,
+    factories,
     (ref, metadata, factory) => ({
       async handle(payload: Buffer, context: ZLinkRouteMessageContext) {
         await invokeDiscoveredHandler(moduleRef, ref, metadata, factory, payload, context);
@@ -63,13 +71,15 @@ export function createDiscoveredSendHandlers(
 export function createDiscoveredChannelSendHandlers(
   providerRefs: readonly DiscoveredNestProvider[],
   handlerGroups: readonly string[] | undefined,
-  moduleRef: ModuleRef
+  moduleRef: ModuleRef,
+  factories: NestHandlerFactories = new Map()
 ): NonNullable<ZLinkChannelOptions['sendHandlers']> {
   return createDiscoveredHandlerRegistrations(
     providerRefs,
     handlerGroups,
     'send',
     moduleRef,
+    factories,
     (ref, metadata, factory) => ({
       async handle(payload: Buffer, context: ZLinkMessageContext) {
         await invokeDiscoveredHandler(moduleRef, ref, metadata, factory, payload, context);
@@ -81,13 +91,15 @@ export function createDiscoveredChannelSendHandlers(
 export function createDiscoveredPublishHandlers(
   providerRefs: readonly DiscoveredNestProvider[],
   handlerGroups: readonly string[] | undefined,
-  moduleRef: ModuleRef
+  moduleRef: ModuleRef,
+  factories: NestHandlerFactories = new Map()
 ): NonNullable<ZLinkChannelOptions['publishHandlers']> {
   return createDiscoveredHandlerRegistrations(
     providerRefs,
     handlerGroups,
     'publish',
     moduleRef,
+    factories,
     (ref, metadata, factory) => ({
       async handle(payload: Buffer, context: ZLinkPublishMessageContext) {
         await invokeDiscoveredHandler(moduleRef, ref, metadata, factory, payload, context);
@@ -98,33 +110,39 @@ export function createDiscoveredPublishHandlers(
 
 export function createManualRequestHandlers(
   handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
-  moduleRef: ModuleRef
+  moduleRef: ModuleRef,
+  factories: NestHandlerFactories = new Map()
 ): NonNullable<ZLinkChannelOptions['requestHandlers']> {
   return createManualHandlerRegistrations<ZLinkMessageContext, unknown>(
     handlerTypes,
     moduleRef,
+    factories,
     (result) => result
   );
 }
 
 export function createManualPublishHandlers(
   handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
-  moduleRef: ModuleRef
+  moduleRef: ModuleRef,
+  factories: NestHandlerFactories = new Map()
 ): NonNullable<ZLinkChannelOptions['publishHandlers']> {
   return createManualHandlerRegistrations<ZLinkPublishMessageContext, void>(
     handlerTypes,
     moduleRef,
+    factories,
     () => undefined
   );
 }
 
 export function createManualSendHandlers(
   handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
-  moduleRef: ModuleRef
+  moduleRef: ModuleRef,
+  factories: NestHandlerFactories = new Map()
 ): NonNullable<ZLinkChannelOptions['sendHandlers']> {
   return createManualHandlerRegistrations<ZLinkMessageContext, void>(
     handlerTypes,
     moduleRef,
+    factories,
     () => undefined
   );
 }
@@ -135,6 +153,7 @@ type ManualHandlerContext =
 function createManualHandlerRegistrations<TContext extends ManualHandlerContext, TResult>(
   handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
   moduleRef: ModuleRef,
+  factories: NestHandlerFactories,
   result: (value: unknown) => TResult
 ): Array<{
   readonly packetName: string;
@@ -143,7 +162,7 @@ function createManualHandlerRegistrations<TContext extends ManualHandlerContext,
   };
 }> {
   return (handlerTypes ?? []).map((registration) => {
-    const factory = prepareNestHandlerFactory(registration.handlerType, moduleRef);
+    const factory = registeredNestHandlerFactory(factories, registration.handlerType, moduleRef);
     return {
       packetName: registration.packetName,
       handler: {
@@ -168,6 +187,7 @@ function createDiscoveredHandlerRegistrations<THandler>(
   handlerGroups: readonly string[] | undefined,
   kind: string,
   moduleRef: ModuleRef,
+  factories: NestHandlerFactories,
   createHandler: (
     ref: DiscoveredNestProvider,
     metadata: ZLinkNestHandlerMetadata,
@@ -181,7 +201,7 @@ function createDiscoveredHandlerRegistrations<THandler>(
       handler: createHandler(
         ref,
         metadata,
-        prepareNestHandlerFactory(ref.handlerKey as Type, moduleRef)
+        registeredNestHandlerFactory(factories, ref.handlerKey as Type, moduleRef)
       )
     };
   });

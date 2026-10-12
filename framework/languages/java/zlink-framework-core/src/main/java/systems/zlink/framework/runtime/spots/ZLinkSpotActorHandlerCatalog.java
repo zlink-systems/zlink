@@ -117,7 +117,8 @@ final class ZLinkSpotActorHandlerCatalog {
                         shape.messageType(),
                         replyType,
                         ZLinkPacketNames.resolve(shape.messageType(), explicitPacketName),
-                        kind));
+                        kind,
+                        suspendInvokers));
     }
 
     private void registerInterfaceHandler(Class<?> handlerType) {
@@ -165,7 +166,8 @@ final class ZLinkSpotActorHandlerCatalog {
                                 ? requireClassArgument(handlerType, arguments[3])
                                 : Void.class,
                         ZLinkPacketNames.resolve(messageType),
-                        kind));
+                        kind,
+                        suspendInvokers));
     }
 
     private void add(SpotActorPacketHandlerRegistration registration) {
@@ -183,21 +185,19 @@ final class ZLinkSpotActorHandlerCatalog {
                         "duplicate Spot actor packet handler packet: " + registration.packetName());
             }
         }
-        packetHandlers.add(registration.withSuspendInvokers(suspendInvokers));
+        packetHandlers.add(registration);
         serializer.prepare(registration.messageType());
         serializer.prepare(registration.replyType());
     }
 
-    private static SpotActorPacketHandlerRegistration createScannedRegistration(
+    private SpotActorPacketHandlerRegistration createScannedRegistration(
             ZLinkScannedHandler handler) {
         if (handler.handlerMethod() != null) {
             ActorMessageShape shape =
                     actorPacketHandlerShape(
                             handler.handlerType(),
                             handler.handlerMethod(),
-                            handler.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST
-                                    ? ZLinkMessageContext.class
-                                    : ZLinkMessageContext.class);
+                            ZLinkMessageContext.class);
             return new SpotActorPacketHandlerRegistration(
                     handler.handlerType(),
                     handler.handlerMethod(),
@@ -206,7 +206,8 @@ final class ZLinkSpotActorHandlerCatalog {
                     handler.messageType(),
                     handler.replyType(),
                     handler.packetName(),
-                    handler.kind());
+                    handler.kind(),
+                    suspendInvokers);
         }
         ParameterizedType matched = findActorPacketInterface(handler.handlerType(), handler.kind());
         if (matched == null) {
@@ -223,7 +224,8 @@ final class ZLinkSpotActorHandlerCatalog {
                 handler.messageType(),
                 handler.replyType(),
                 handler.packetName(),
-                handler.kind());
+                handler.kind(),
+                suspendInvokers);
     }
 
     private static ParameterizedType findActorPacketInterface(

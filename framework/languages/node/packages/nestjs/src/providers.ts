@@ -374,7 +374,7 @@ function createProviderResolver(
   discovery: DiscoveryService | undefined,
   registration: ZLinkFrameworkRegistration
 ): ZLinkProviderResolver {
-  const factories = new Map<Type, NestHandlerFactory>();
+  const factories = nestHandlerFactories(registration);
   const types = new Set<Type>([...registration.spotFactories, ...registration.filterTypes]);
   for (const node of registration.spotNodes.values()) {
     if (node.entrySpotType !== undefined) types.add(node.entrySpotType);
@@ -409,8 +409,7 @@ function createProviderResolver(
     }
   }
   function prepareHandler(type: Type): void {
-    if (factories.has(type)) return;
-    factories.set(type, prepareNestHandlerFactory(type, moduleRef));
+    registeredNestHandlerFactory(factories, type, moduleRef);
   }
   for (const type of types) prepareHandler(type);
   function createHandler<T>(
@@ -507,6 +506,33 @@ function createProviderResolver(
     })
   );
   return resolver;
+}
+
+const NEST_HANDLER_FACTORIES = Symbol('Nest handler factories');
+export type NestHandlerFactories = Map<Type, NestHandlerFactory>;
+type PreparedNestRegistration = ZLinkFrameworkRegistration & {
+  [NEST_HANDLER_FACTORIES]?: NestHandlerFactories;
+};
+
+export function nestHandlerFactories(
+  registration: ZLinkFrameworkRegistration,
+  prepared?: NestHandlerFactories
+): NestHandlerFactories {
+  const owner = registration as PreparedNestRegistration;
+  return (owner[NEST_HANDLER_FACTORIES] ??= prepared ?? new Map());
+}
+
+export function registeredNestHandlerFactory<T>(
+  factories: NestHandlerFactories,
+  type: Type<T>,
+  moduleRef: ModuleRef
+): NestHandlerFactory<T> {
+  let factory = factories.get(type);
+  if (factory === undefined) {
+    factory = prepareNestHandlerFactory(type, moduleRef);
+    factories.set(type, factory);
+  }
+  return factory as NestHandlerFactory<T>;
 }
 
 export type NestHandlerFactory<T = unknown> = (

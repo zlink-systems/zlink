@@ -24,7 +24,8 @@ record SpotPacketHandlerRegistration(
             Class<?> messageType,
             Class<?> replyType,
             String packetName,
-            boolean request) {
+            boolean request,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
         this(
                 handlerType,
                 spotType,
@@ -33,23 +34,12 @@ record SpotPacketHandlerRegistration(
                 packetName,
                 request,
                 ZLinkHandlerMethodInvoker.prepareSpot(
-                        handlerType, method, spotType, messageType, ZLinkMessageContext.class));
-    }
-
-    Method handlerMethod() {
-        return invocation.method();
-    }
-
-    SpotPacketHandlerRegistration withSuspendInvokers(
-            Collection<ZLinkSuspendInvocationAdapter> invokers) {
-        return new SpotPacketHandlerRegistration(
-                handlerType,
-                spotType,
-                messageType,
-                replyType,
-                packetName,
-                request,
-                invocation.withSuspendInvokers(invokers));
+                        handlerType,
+                        method,
+                        spotType,
+                        messageType,
+                        ZLinkMessageContext.class,
+                        invokers));
     }
 }
 
@@ -66,7 +56,8 @@ record SpotSubscriptionHandlerRegistration(
             Method method,
             Class<?> spotType,
             Class<?> messageType,
-            String packetName) {
+            String packetName,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
         this(
                 topic,
                 handlerType,
@@ -78,21 +69,7 @@ record SpotSubscriptionHandlerRegistration(
                         method,
                         spotType,
                         messageType,
-                        ZLinkPublishMessageContext.class));
-    }
-
-    Method handlerMethod() {
-        return invocation.method();
-    }
-
-    SpotSubscriptionHandlerRegistration withSuspendInvokers(
-            Collection<ZLinkSuspendInvocationAdapter> invokers) {
-        return new SpotSubscriptionHandlerRegistration(
-                topic,
-                handlerType,
-                spotType,
-                messageType,
-                packetName,
-                invocation.withSuspendInvokers(invokers));
+                        ZLinkPublishMessageContext.class,
+                        invokers));
     }
 }

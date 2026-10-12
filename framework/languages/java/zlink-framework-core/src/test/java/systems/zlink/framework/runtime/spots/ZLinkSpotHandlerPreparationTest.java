@@ -20,8 +20,9 @@ final class ZLinkSpotHandlerPreparationTest {
                         String.class,
                         Void.class,
                         "message",
-                        false);
-        assertNotNull(registration.handlerMethod());
+                        false,
+                        java.util.List.of());
+        assertNotNull(registration.invocation().method());
     }
 
     public static final class Handler {

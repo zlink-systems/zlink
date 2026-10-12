@@ -115,9 +115,7 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
                             null,
                             ZLinkSessionDispatchContext.class,
                             messageType == null ? ZLinkMessage.class : messageType);
-            var invocation =
-                    ZLinkHandlerMethodInvoker.prepare(method, 0, 1, 2)
-                            .withSuspendInvokers(suspendInvokers);
+            var invocation = ZLinkHandlerMethodInvoker.prepare(method, suspendInvokers, 0, 1, 2);
             String packetName =
                     handler instanceof ZLinkTypedSessionPacketHandler<?, ?>
                             ? ZLinkPacketNames.resolve(messageType)

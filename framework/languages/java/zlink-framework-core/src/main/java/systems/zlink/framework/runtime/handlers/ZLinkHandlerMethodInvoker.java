@@ -12,7 +12,6 @@ import java.lang.reflect.WildcardType;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
-import java.util.Objects;
 import java.util.ServiceLoader;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -28,7 +27,11 @@ public final class ZLinkHandlerMethodInvoker {
     private ZLinkHandlerMethodInvoker() {}
 
     public static PreparedMethod prepareChannel(
-            Class<?> handlerType, Method method, Class<?> payloadType, Class<?> contextType) {
+            Class<?> handlerType,
+            Method method,
+            Class<?> payloadType,
+            Class<?> contextType,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
         Method selected =
                 method == null
                         ? requireHandlerMethodForTypes(
@@ -39,7 +42,7 @@ public final class ZLinkHandlerMethodInvoker {
         for (int index = 1; index < arguments.length; index++) {
             arguments[index] = parameters[index].isAssignableFrom(contextType) ? 1 : -1;
         }
-        return prepare(selected, arguments);
+        return prepare(selected, invokers, arguments);
     }
 
     public static Method requireHandlerMethodForTypes(
@@ -73,7 +76,8 @@ public final class ZLinkHandlerMethodInvoker {
             Method method,
             Class<?> spotType,
             Class<?> payloadType,
-            Class<?> contextType) {
+            Class<?> contextType,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
         Method selected =
                 method == null
                         ? requireHandlerMethodForTypes(
@@ -83,9 +87,9 @@ public final class ZLinkHandlerMethodInvoker {
                                 payloadType,
                                 contextType)
                         : method;
-        if (method == null) return prepare(selected, 0, 1, 2);
+        if (method == null) return prepare(selected, invokers, 0, 1, 2);
         Class<?>[] parameters = logicalParameterTypes(selected);
-        if (parameters.length == 2) return prepare(selected, 0, 1);
+        if (parameters.length == 2) return prepare(selected, invokers, 0, 1);
         int[] arguments = new int[parameters.length];
         for (int index = 0; index < parameters.length; index++) {
             arguments[index] =
@@ -93,7 +97,7 @@ public final class ZLinkHandlerMethodInvoker {
                             ? 2
                             : parameters[index].isAssignableFrom(spotType) ? 0 : 1;
         }
-        return prepare(selected, arguments);
+        return prepare(selected, invokers, arguments);
     }
 
     public static PreparedMethod prepareActor(
@@ -102,7 +106,8 @@ public final class ZLinkHandlerMethodInvoker {
             Class<?> spotType,
             Class<?> actorType,
             Class<?> payloadType,
-            Class<?> contextType) {
+            Class<?> contextType,
+            Collection<ZLinkSuspendInvocationAdapter> invokers) {
         Method selected =
                 method == null
                         ? requireHandlerMethodForTypes(
@@ -114,25 +119,28 @@ public final class ZLinkHandlerMethodInvoker {
                                 payloadType)
                         : method;
         return logicalParameterTypes(selected).length == 2
-                ? prepare(selected, 1, 3)
-                : prepare(selected, 0, 1, 2, 3);
+                ? prepare(selected, invokers, 1, 3)
+                : prepare(selected, invokers, 0, 1, 2, 3);
     }
 
-    public static PreparedMethod prepare(Method method, int... arguments) {
+    public static PreparedMethod prepare(
+            Method method, Collection<ZLinkSuspendInvocationAdapter> invokers, int... arguments) {
         method.setAccessible(true);
         ZLinkSuspendInvocationAdapter suspendInvoker = null;
         if (isKotlinSuspendMethod(method)) {
             suspendInvoker =
-                    SUSPEND_INVOKERS.stream()
-                            .filter(invoker -> invoker.supports(method))
-                            .findFirst()
-                            .orElseThrow(
-                                    () ->
-                                            new ZLinkConfigurationException(
-                                                    "Kotlin suspend handler requires a registered ZLinkSuspendInvocationAdapter: "
-                                                            + method.getDeclaringClass().getName()
-                                                            + "."
-                                                            + method.getName()));
+                    (invokers == null || invokers.isEmpty() ? SUSPEND_INVOKERS : invokers)
+                            .stream()
+                                    .filter(invoker -> invoker.supports(method))
+                                    .findFirst()
+                                    .orElseThrow(
+                                            () ->
+                                                    new ZLinkConfigurationException(
+                                                            "Kotlin suspend handler requires a registered ZLinkSuspendInvocationAdapter: "
+                                                                    + method.getDeclaringClass()
+                                                                            .getName()
+                                                                    + "."
+                                                                    + method.getName()));
         }
         boolean identity = true;
         for (int index = 0; index < arguments.length; index++) {
@@ -161,23 +169,6 @@ public final class ZLinkHandlerMethodInvoker {
 
         public Method method() {
             return method;
-        }
-
-        public PreparedMethod withSuspendInvokers(
-                Collection<ZLinkSuspendInvocationAdapter> invokers) {
-            if (suspendInvoker == null || invokers == null || invokers.isEmpty()) return this;
-            ZLinkSuspendInvocationAdapter selected =
-                    invokers.stream()
-                            .filter(invoker -> invoker.supports(method))
-                            .findFirst()
-                            .orElseThrow(
-                                    () ->
-                                            new ZLinkConfigurationException(
-                                                    "Kotlin suspend handler requires a registered ZLinkSuspendInvocationAdapter: "
-                                                            + method.getDeclaringClass().getName()
-                                                            + "."
-                                                            + method.getName()));
-            return new PreparedMethod(method, argumentIndices, argumentCount, selected);
         }
 
         public Object[] arguments(Object... values) {
@@ -252,48 +243,6 @@ public final class ZLinkHandlerMethodInvoker {
                         + handlerType.getName()
                         + "."
                         + method.getName());
-    }
-
-    public static CompletionStage<Object> invoke(
-            Object handler, Method method, Object[] logicalArguments) {
-        return invoke(handler, method, logicalArguments, SUSPEND_INVOKERS);
-    }
-
-    public static CompletionStage<Object> invokeHandler(
-            Object handler,
-            String methodName,
-            Object[] logicalArguments,
-            Collection<ZLinkSuspendInvocationAdapter> suspendInvokers) {
-        Method method = requireHandlerMethod(handler.getClass(), methodName, logicalArguments);
-        return invoke(handler, method, logicalArguments, suspendInvokers);
-    }
-
-    public static Method requireHandlerMethod(
-            Class<?> handlerType, String methodName, Object[] logicalArguments) {
-        Objects.requireNonNull(handlerType, "handlerType");
-        Objects.requireNonNull(methodName, "methodName");
-        Object[] args = logicalArguments == null ? new Object[0] : logicalArguments;
-        Class<?>[] types = new Class<?>[args.length];
-        for (int index = 0; index < args.length; index++) {
-            types[index] = args[index] == null ? null : args[index].getClass();
-        }
-        return requireHandlerMethodForTypes(handlerType, methodName, types);
-    }
-
-    public static CompletionStage<Object> invoke(
-            Object handler,
-            Method method,
-            Object[] logicalArguments,
-            Collection<ZLinkSuspendInvocationAdapter> suspendInvokers) {
-        int[] indices = new int[logicalArguments.length];
-        for (int index = 0; index < indices.length; index++) indices[index] = index;
-        try {
-            return prepare(method, indices)
-                    .withSuspendInvokers(suspendInvokers)
-                    .invoke(handler, logicalArguments);
-        } catch (ZLinkConfigurationException ex) {
-            return CompletableFuture.failedFuture(ex);
-        }
     }
 
     private static String argumentTypesMessage(Object[] arguments) {

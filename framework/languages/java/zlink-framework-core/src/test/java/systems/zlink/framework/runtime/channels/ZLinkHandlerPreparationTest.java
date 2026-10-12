@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import org.junit.jupiter.api.Test;
@@ -13,10 +14,18 @@ import java.util.concurrent.CompletionStage;
 
 final class ZLinkHandlerPreparationTest {
     @Test
+    void configuredDeclarationDoesNotSelectAnInvocationBeforeCatalogConfiguration() {
+        var declaration =
+                new ChannelRouteSendHandlerRegistration(Handler.class, String.class, "message");
+        assertNull(declaration.invocation());
+    }
+
+    @Test
     void declaredPrimitivePayloadBindsItsBoxedInvocationValue() {
         var registration =
                 new ChannelRequestHandlerRegistration(
-                        PrimitiveHandler.class, int.class, int.class, "number");
+                                PrimitiveHandler.class, int.class, int.class, "number")
+                        .prepare(java.util.List.of());
         assertEquals(
                 7,
                 registration
@@ -36,11 +45,12 @@ final class ZLinkHandlerPreparationTest {
     void annotatedMethodReceivesOnlyItsDeclaredArguments() throws Exception {
         var registration =
                 new ChannelRequestHandlerRegistration(
-                        SingleParameterHandler.class,
-                        SingleParameterHandler.class.getMethod("handle", String.class),
-                        String.class,
-                        String.class,
-                        "message");
+                                SingleParameterHandler.class,
+                                SingleParameterHandler.class.getMethod("handle", String.class),
+                                String.class,
+                                String.class,
+                                "message")
+                        .prepare(java.util.List.of());
         assertEquals(
                 "message",
                 registration
@@ -59,11 +69,12 @@ final class ZLinkHandlerPreparationTest {
     @Test
     void interfaceMethodIsSelectedBeforeDispatchAndRetainedAcrossPacketNaming() {
         var registration =
-                new ChannelRouteSendHandlerRegistration(Handler.class, String.class, null);
-        assertNotNull(registration.handlerMethod());
+                new ChannelRouteSendHandlerRegistration(Handler.class, String.class, null)
+                        .prepare(java.util.List.of());
+        assertNotNull(registration.invocation().method());
         assertSame(
-                registration.handlerMethod(),
-                registration.withPacketName("message").handlerMethod());
+                registration.invocation().method(),
+                registration.withPacketName("message").invocation().method());
     }
 
     public static final class Handler {

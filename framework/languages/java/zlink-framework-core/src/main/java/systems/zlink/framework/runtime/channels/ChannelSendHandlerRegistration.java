@@ -9,32 +9,36 @@ import java.lang.reflect.Method;
 import java.util.Collection;
 
 record ChannelSendHandlerRegistration(
-        Class<?> handlerType, Class<?> messageType, String packetName, PreparedMethod invocation) {
+        Class<?> handlerType,
+        Class<?> messageType,
+        String packetName,
+        Method declaredMethod,
+        PreparedMethod invocation) {
     ChannelSendHandlerRegistration(
-            Class<?> handlerType, Method handlerMethod, Class<?> messageType, String packetName) {
-        this(
-                handlerType,
-                messageType,
-                packetName,
-                ZLinkHandlerMethodInvoker.prepareChannel(
-                        handlerType, handlerMethod, messageType, ZLinkMessageContext.class));
+            Class<?> handlerType, Method declaredMethod, Class<?> messageType, String packetName) {
+        this(handlerType, messageType, packetName, declaredMethod, null);
     }
 
     ChannelSendHandlerRegistration(Class<?> handlerType, Class<?> messageType, String packetName) {
         this(handlerType, (Method) null, messageType, packetName);
     }
 
-    Method handlerMethod() {
-        return invocation.method();
-    }
-
-    ChannelSendHandlerRegistration withSuspendInvokers(
-            Collection<ZLinkSuspendInvocationAdapter> invokers) {
+    ChannelSendHandlerRegistration prepare(Collection<ZLinkSuspendInvocationAdapter> invokers) {
         return new ChannelSendHandlerRegistration(
-                handlerType, messageType, packetName, invocation.withSuspendInvokers(invokers));
+                handlerType,
+                messageType,
+                packetName,
+                null,
+                ZLinkHandlerMethodInvoker.prepareChannel(
+                        handlerType,
+                        declaredMethod,
+                        messageType,
+                        ZLinkMessageContext.class,
+                        invokers));
     }
 
     ChannelSendHandlerRegistration withPacketName(String packetName) {
-        return new ChannelSendHandlerRegistration(handlerType, messageType, packetName, invocation);
+        return new ChannelSendHandlerRegistration(
+                handlerType, messageType, packetName, declaredMethod, invocation);
     }
 }

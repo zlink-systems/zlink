@@ -311,8 +311,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                         ZLinkHandlerMethodInvoker.HANDLER_METHOD_NAME,
                         null,
                         ZLinkTimerTick.class);
-        return ZLinkHandlerMethodInvoker.prepare(method, 0, 1)
-                .withSuspendInvokers(suspendHandlerInvokers);
+        return ZLinkHandlerMethodInvoker.prepare(method, suspendHandlerInvokers, 0, 1);
     }
 
     private final class ManagedTimer implements ZLinkTimer {
