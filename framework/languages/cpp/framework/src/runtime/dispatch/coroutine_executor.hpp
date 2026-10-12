@@ -87,6 +87,7 @@ class coroutine_executor_t
 
     void drain ();
     void post_native_continuation (std::function<void ()> work);
+    bool is_current () noexcept;
 
   private:
     std::mutex _mutex;

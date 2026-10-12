@@ -2455,7 +2455,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [this, node, receive_permit] (mesh::service_mailbox_record_t &record) {
                   std::lock_guard lock (_dispatch_gate_mutex);
                   if (!_accept_application_dispatch.load (std::memory_order_relaxed)
-                      || !current_location_owner ()) {
+                      || !_location_runtime || !_location_runtime->owner_lease_usable ()) {
                       if (record.before_application_handler)
                           record.before_application_handler = {};
                       else
@@ -3060,8 +3060,8 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
 
     {
         std::lock_guard lock (_dispatch_gate_mutex);
-        if (!_accept_application_dispatch.load (std::memory_order_relaxed)
-            || !current_location_owner ())
+        if (!_accept_application_dispatch.load (std::memory_order_relaxed) || !_location_runtime
+            || !_location_runtime->owner_lease_usable ())
             return zlink::submit_result_t::terminated;
     }
     auto application_permit =
@@ -3072,8 +3072,8 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
       std::make_shared<application_job_queue_t::permit_t> (std::move (*application_permit));
     {
         std::lock_guard lock (_dispatch_gate_mutex);
-        if (!_accept_application_dispatch.load (std::memory_order_relaxed)
-            || !current_location_owner ())
+        if (!_accept_application_dispatch.load (std::memory_order_relaxed) || !_location_runtime
+            || !_location_runtime->owner_lease_usable ())
             return zlink::submit_result_t::terminated;
         application_job->mark_queued ();
     }

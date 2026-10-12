@@ -103,6 +103,11 @@ struct operation_completion_chain_t
 
 thread_local bool completion_dispatcher_current = false;
 
+bool is_on_completion_dispatcher () noexcept
+{
+    return completion_dispatcher_current;
+}
+
 class operation_completion_dispatcher_t
 {
   public:

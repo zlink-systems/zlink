@@ -2,6 +2,8 @@
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/foundation/operation_registry.hpp"
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #endif
@@ -63,6 +65,161 @@ TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
     state_lane_t lane (executor);
 
     EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
+}
+
+TEST (ZLinkStateLane, CallerDrainedTaskDoesNotWaitForUnrelatedExecutorWork)
+{
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    executor.submit ([&] {
+        entered.set_value ();
+        released.wait ();
+    });
+    entered.get_future ().wait ();
+    auto task = lane.run_task ([&] {
+        EXPECT_TRUE (lane.is_on_lane ());
+        return 42;
+    });
+    const auto ready = task.result_for (std::chrono::milliseconds::zero ());
+    release.set_value ();
+    ASSERT_TRUE (ready.has_value ());
+    EXPECT_EQ (42, ready->value ());
+    EXPECT_EQ (nullptr, state_lane_t::current ());
+}
+
+zlink::framework::task_t<int> wrap_completion_task (zlink::framework::task_t<int> task)
+{
+    co_return co_await task;
+}
+
+class stopped_completion_executor_t final : public offload_executor_t
+{
+  public:
+    bool try_submit_internal (std::function<void ()> work) override
+    {
+        if (_drain)
+            return false;
+        _drain = std::move (work);
+        return true;
+    }
+
+    void finish_accepted_drain () { _drain (); }
+
+  private:
+    std::function<void ()> _drain;
+};
+
+TEST (ZLinkStateLane, RejectedCompletionDoesNotResumeCallerInsideTheLane)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    configure_handler_coroutine_executor (1);
+    install_host_context_hooks ();
+    stopped_completion_executor_t executor;
+    state_lane_t lane (executor);
+    ASSERT_TRUE (lane.try_post ([] {}));
+    auto pending = lane.run_task ([] { return 42; });
+    auto caller = wrap_completion_task (std::move (pending));
+    bool resumed_inside_lane = false;
+    detail::observe_task_terminal (
+      caller, [&] (const auto &) { resumed_inside_lane = state_lane_t::current () != nullptr; });
+    executor.finish_accepted_drain ();
+    shutdown_handler_coroutine_executor ();
+    EXPECT_FALSE (resumed_inside_lane);
+    EXPECT_EQ (framework_error_kind_t::shutting_down, caller.result ().error_kind ());
+}
+
+TEST (ZLinkStateLane, PendingResultOutsideLaneDoesNotWaitForAnotherExecutor)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    configure_handler_coroutine_executor (1);
+    install_host_context_hooks ();
+    std::promise<void> host_entered;
+    std::promise<void> host_release;
+    auto host_released = host_release.get_future ();
+    handler_coroutine_executor ().post_native_continuation ([&] {
+        host_entered.set_value ();
+        host_released.wait ();
+    });
+    host_entered.get_future ().wait ();
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    std::promise<void> lane_entered;
+    std::promise<void> lane_release;
+    auto lane_released = lane_release.get_future ();
+    ASSERT_TRUE (lane.try_post ([&] {
+        lane_entered.set_value ();
+        lane_released.wait ();
+    }));
+    lane_entered.get_future ().wait ();
+    auto caller = wrap_completion_task (lane.run_task ([] { return 42; }));
+    lane_release.set_value ();
+    executor.drain ();
+    const auto ready = caller.result_for (std::chrono::milliseconds::zero ());
+    host_release.set_value ();
+    shutdown_handler_coroutine_executor ();
+    ASSERT_TRUE (ready.has_value ());
+    EXPECT_EQ (42, ready->value ());
+}
+
+TEST (ZLinkStateLane, OperationDispatcherCompletesInternalWrappersWithoutAnotherTurn)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    configure_handler_coroutine_executor (1);
+    install_host_context_hooks ();
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    handler_coroutine_executor ().post_native_continuation ([&] {
+        entered.set_value ();
+        released.wait ();
+    });
+    entered.get_future ().wait ();
+    foundation::operation_registry_t registry;
+    task_completion_source_t<int> source;
+    auto task = wrap_completion_task (wrap_completion_task (source.task ()));
+    std::thread::id dispatcher_thread;
+    std::thread::id caller_thread;
+    detail::observe_task_terminal (task, [&] (const auto &) {
+        EXPECT_EQ (nullptr, state_lane_t::current ());
+        caller_thread = std::this_thread::get_id ();
+    });
+    const call_id_t id{1, 1};
+    ASSERT_TRUE (registry.register_operation (
+      id, foundation::operation_registry_t::clock_t::time_point::max (), [&] (auto, auto) {
+          dispatcher_thread = std::this_thread::get_id ();
+          source.complete (result_t<int>::success (42));
+      }));
+    ASSERT_TRUE (registry.complete (id, {}));
+    registry.shutdown ();
+    const auto ready = task.result_for (std::chrono::milliseconds::zero ());
+    release.set_value ();
+    shutdown_handler_coroutine_executor ();
+    ASSERT_TRUE (ready.has_value ());
+    EXPECT_EQ (42, ready->value ());
+    EXPECT_EQ (dispatcher_thread, caller_thread);
+}
+
+TEST (ZLinkStateLane, CallerDrainedVoidAndFailureTasksLeaveTheLaneBeforeCompletion)
+{
+    using namespace zlink::framework;
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    EXPECT_TRUE (lane.run_task ([] {}).result ().has_value ());
+    EXPECT_EQ (nullptr, state_lane_t::current ());
+    auto failed = lane.run_task ([] () -> int {
+        throw framework_exception_t (framework_error_kind_t::not_configured, "not configured");
+    });
+    EXPECT_EQ (framework_error_kind_t::not_configured, failed.result ().error_kind ());
+    EXPECT_EQ (nullptr, state_lane_t::current ());
+    detail::observe_task_completion (failed, [&] (const auto &) {
+        EXPECT_EQ (42, lane.run_task ([] { return 42; }).result ().value ());
+    });
 }
 
 TEST (ZLinkStateLane, StandaloneTaskCompletionAllowsLaneReentry)

@@ -15,6 +15,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -227,27 +228,38 @@ class state_lane_t
     {
         using value_t = std::invoke_result_t<std::decay_t<Work> &>;
         throw_if_reentrant ();
+        auto invoke_work = [work = std::forward<Work> (work)] () mutable {
+            try {
+                if constexpr (std::is_void_v<value_t>) {
+                    std::invoke (work);
+                    return result_t<void>::success ();
+                } else {
+                    return result_t<value_t>::success (std::invoke (work));
+                }
+            }
+            catch (const framework_exception_t &error) {
+                return result_t<value_t>::failure (error.kind (), error.what ());
+            }
+            catch (const std::exception &error) {
+                return result_t<value_t>::failure (framework_error_kind_t::internal_failure,
+                                                   error.what ());
+            }
+            catch (...) {
+                return result_t<value_t>::failure (framework_error_kind_t::internal_failure,
+                                                   "unhandled state lane exception");
+            }
+        };
+        std::optional<result_t<value_t>> inline_result;
+        if (schedule_drain (true, [&] { inline_result.emplace (invoke_work ()); })) {
+            // No task has been published yet. Both the lane scope and its
+            // drain claim have ended before any caller can observe completion.
+            return task_t<value_t> (std::move (*inline_result));
+        }
         auto completion = std::make_shared<task_completion_source_t<value_t>> ();
         auto task = completion->task ();
         if (!enqueue (
-              [this, completion, work = std::forward<Work> (work)] () mutable {
-                  result_t<value_t> result = [&] {
-                      try {
-                          return result_t<value_t>::success (std::invoke (work));
-                      }
-                      catch (const framework_exception_t &error) {
-                          return result_t<value_t>::failure (error.kind (), error.what ());
-                      }
-                      catch (const std::exception &error) {
-                          return result_t<value_t>::failure (
-                            framework_error_kind_t::internal_failure, error.what ());
-                      }
-                      catch (...) {
-                          return result_t<value_t>::failure (
-                            framework_error_kind_t::internal_failure,
-                            "unhandled state lane exception");
-                      }
-                  }();
+              [this, completion, invoke_work = std::move (invoke_work)] () mutable {
+                  auto result = invoke_work ();
                   if (!_executor.try_submit_internal (
                         [completion, result = std::move (result)] () mutable {
                             completion->complete (std::move (result));
@@ -262,7 +274,11 @@ class state_lane_t
               }))
             throw std::runtime_error ("state lane is closed");
         schedule_drain (true);
-        return task;
+        // A pending lane result needs its caller's scope-exit handoff even
+        // when executor shutdown rejects the physical result delivery. Task
+        // wrappers themselves do not add another continuation turn.
+        return detail::with_task_resume_scheduler (std::move (task),
+                                                   detail::capture_runtime_scope_exit_scheduler ());
     }
 
     // Queues synchronous state work without waiting for it.  Its exception is
@@ -287,11 +303,43 @@ class state_lane_t
     };
 
     bool enqueue (std::function<void ()> work, std::function<void (std::exception_ptr)> abandon);
-    void schedule_drain (bool inline_drain);
+    bool schedule_drain (bool inline_drain, const std::function<void ()> &own_work = {});
     void drain_loop ();
     void abandon_pending (std::exception_ptr error) noexcept;
 
     static thread_local state_lane_t *_current_lane;
+
+    class current_scope_t
+    {
+      public:
+        explicit current_scope_t (state_lane_t *lane) noexcept :
+            _previous (std::exchange (_current_lane, lane))
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+            ,
+            _previous_infrastructure_owner (
+              std::exchange (::zlink::framework::detail::current_infrastructure_wait_owner, lane))
+#endif
+        {
+        }
+
+        ~current_scope_t ()
+        {
+            _current_lane = _previous;
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+            ::zlink::framework::detail::current_infrastructure_wait_owner =
+              _previous_infrastructure_owner;
+#endif
+        }
+
+        current_scope_t (const current_scope_t &) = delete;
+        current_scope_t &operator= (const current_scope_t &) = delete;
+
+      private:
+        state_lane_t *_previous;
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+        const void *_previous_infrastructure_owner;
+#endif
+    };
 
     offload_executor_t &_executor;
     mutable std::mutex _mailbox_mutex;

@@ -39,6 +39,7 @@ inline constexpr char registered_execution_context_shutting_down_message[] =
 // binding operations own no executor lifetime; invocation and post admission
 // are serialized with host shutdown.
 task_scheduler_t capture_runtime_native_continuation_scheduler ();
+task_scheduler_t capture_runtime_scope_exit_scheduler ();
 void ensure_blocking_submit_allowed ();
 std::stop_token current_wait_owner ();
 std::stop_token exchange_wait_owner (std::stop_token token);
@@ -50,6 +51,7 @@ bool exchange_infrastructure_wait (bool value) noexcept;
 struct runtime_execution_hooks_t
 {
     task_scheduler_t (*capture_scheduler) ();
+    task_scheduler_t (*capture_scope_exit_scheduler) ();
     void (*ensure_blocking_allowed) ();
 };
 
@@ -310,31 +312,21 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
     task_wait_registration_t (std::function<void (bool, const ambient_context_snapshot_t &)> work,
                               task_scheduler_t explicit_scheduler) :
         _work (std::move (work)),
+        _scheduler (std::move (explicit_scheduler)),
         _turn (capture_current_serial_turn ()),
         _ambient (capture_ambient_context ())
     {
-        // After a Yield released the turn, the Spot queue places the
-        // continuation: its resume record, or its closed-queue failure path,
-        // delivers the result (handler turn and execution gate §3·§4). A
-        // second runtime hop would resume the handler outside that turn.
+        // Completion owners place the caller's turn (hot path E5 and state
+        // lane scope exit). Internal task wrappers propagate that result in
+        // the same turn. Explicit scope-exit and Yield schedulers own their
+        // handoff (execution gate §3·§4).
         const bool turn_released = _turn && _turn->released ();
         if (turn_released)
             _turn.reset ();
         if (_turn)
             _ambient.wait_owner = _turn->wait_cancellation ();
-        if (!turn_released)
+        if (!_scheduler && !turn_released)
             _scheduler = capture_runtime_native_continuation_scheduler ();
-        if (explicit_scheduler) {
-            _scheduler = [explicit_scheduler = std::move (explicit_scheduler),
-                          runtime = std::move (_scheduler)] (std::function<void ()> work) {
-                explicit_scheduler ([runtime, work = std::move (work)] () mutable {
-                    if (runtime)
-                        runtime (std::move (work));
-                    else if (work)
-                        work ();
-                });
-            };
-        }
     }
 
     bool has_wait_owner () const noexcept { return _ambient.wait_owner.stop_possible (); }

@@ -237,7 +237,7 @@ class infrastructure_request_retry_state_t final
         }
         auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
           _port->request (_target_routing_id, _request_parts, remaining));
-        detail::observe_task_completion (
+        detail::observe_task_terminal (
           *running, [self = shared_from_this (),
                      running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
               self->settle (settled);
@@ -375,7 +375,7 @@ task_t<bool> submit_registered_infrastructure_request (
     }
     auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
       port->request (target_routing_id, std::move (request_parts), timeout));
-    detail::observe_task_completion (
+    detail::observe_task_terminal (
       *running, [operations = std::move (operations), operation, correlation,
                  decode_reply = std::move (decode_reply),
                  running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
@@ -959,7 +959,7 @@ task_t<bool> raw_mesh_node_owner_t::observe_request (
         co_return false;
     }
     const auto operations = _operations;
-    detail::observe_task_completion (
+    detail::observe_task_terminal (
       *running, [operations, operation, correlation,
                  running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
           if (!settled) {
@@ -1235,7 +1235,7 @@ raw_mesh_node_owner_t::start_send_on_lane (std::vector<std::uint8_t> target_rout
                 return send_start_result_t{send_start_state_t::terminated, std::nullopt, {}};
             }
             const auto operations = _operations;
-            detail::observe_task_completion (
+            detail::observe_task_terminal (
               *running, [operations, operation, completion,
                          running] (const result_t<zlink::submit_result_t> &settled) {
                   if (!settled) {
@@ -2225,7 +2225,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                 + " targetBytes=" + std::to_string (target_routing_id.size ()));
     auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
       port->request (target_routing_id, std::move (parts), timeout));
-    detail::observe_task_completion (
+    detail::observe_task_terminal (
       *running, [operations, id, correlation,
                  running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
           if (!settled) {
