@@ -36,3 +36,10 @@ val activeBoundaryTest by tasks.registering(JavaExec::class) {
     dependsOn(tasks.testClasses)
 }
 tasks.check { dependsOn(activeBoundaryTest) }
+
+val admissionProgressTest by tasks.registering(JavaExec::class) {
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.client.AdmissionProgressTest")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(admissionProgressTest) }

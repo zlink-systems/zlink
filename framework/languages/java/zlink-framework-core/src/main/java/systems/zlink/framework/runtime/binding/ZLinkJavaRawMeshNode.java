@@ -2841,18 +2841,25 @@ final class ZLinkJavaRawMeshNode
                         });
     }
 
+    private boolean isReadyInstanceTarget(ZLinkServiceM6BWireCodec.InstanceRoute route) {
+        // MeshNode §7.1: application records use the admitted selected route.
+        // A Core route can exist before the service HELLO/ADMIT exchange.
+        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
+                topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());
+        return localDescriptor != null
+                && peer.isPresent()
+                && isReadyPeer(peer.orElseThrow())
+                && peer.orElseThrow().descriptor().lifecycleGeneration()
+                        == route.targetNodeGeneration();
+    }
+
     CompletionStage<Void> sendInstanceSpot(
             ZLinkServiceM6BWireCodec.InstanceRoute route,
             String stableType,
             String sourceSpotId,
             byte[] metadata,
             List<Message> parts) {
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());
-        if ((peer.isPresent()
-                        && peer.orElseThrow().descriptor().lifecycleGeneration()
-                                != route.targetNodeGeneration())
-                || localDescriptor == null) {
+        if (!isReadyInstanceTarget(route)) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -2957,11 +2964,7 @@ final class ZLinkJavaRawMeshNode
                     deadlineNanos,
                     requestAdmission);
         }
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peer(route.targetNodeRid());
-        if (peer.isPresent()
-                && peer.orElseThrow().descriptor().lifecycleGeneration()
-                        != route.targetNodeGeneration()) {
+        if (!isReadyInstanceTarget(route)) {
             return CompletableFuture.failedFuture(
                     ZLinkFrameworkErrorOrigin.framework(
                             ZLinkBackendRequestResult.NOT_CONNECTED.toFrameworkErrorKind(),
