@@ -57,9 +57,19 @@ single-use, 중복 option과 terminal 재호출 오류는
 `submit_sync()`를 노출한다). **Node.js는 동기 blocking 종결자를 제공하지 않는다(§4.1).** 실제 shared
 Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한다.
 
+<a id="request-admitted-stage"></a>
+**Messaging request는 admission 단계를 함께 돌려준다.** Messaging request의 일반 비동기 terminal은
+reply를 기다리는 값을 돌려주고, 같은 값에서 `admitted` 단계를 노출한다. `admitted`는 그 call의
+[source-local admission](../00-foundation/02-glossary.ko.md#source-local-admission)에서 one-way 비동기
+terminal과 같은 의미로 끝난다 — 성공하면 반환 데이터 없이 완료하고, admission 전에 실패하면 그 실패로
+완료한다. `admitted`가 실패하면 reply도 같은 원인으로 끝난다. 두 단계는 각각 정확히 한 번 끝난다. 그래서
+send와 request는 같은 admission 경계를 caller에게 준다: caller가 다음 제출을 늦추려면 이전 call의
+admission을 기다린다. `admitted`는 `Backpressured` 상태를 드러내지 않는다(§5) — capacity를 기다리는 동안
+완료되지 않을 뿐이다. 언어별 type과 이름은 §16의 언어별 interface가 정한다.
+
 **Framework가 돌려주는 비동기 완료 표현에도 [binding의 제출 간 stage 격리 규칙](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#submission-stage-isolation)을 적용한다.** 이 문서가 다루는 비동기 종결자가 admission 또는 application 결과를 직접 반환하거나 binding 결과를 변환해서 반환할 때, 반환 표현이나 그것이 참조하는 상태의 공유 때문에 한 호출에 가한 완료 상태 변경·취소·소비·대기 해제가 다른 호출의 완료 상태나 소비 가능성에 전파되어서는 안 된다. 이미 완료된 결과를 공유하는 경우도 같다. 정상적인 자원 회수에 따른 다른 호출의 진행은 기존 admission·lifecycle 계약을 따른다.
 
-검증은 Framework가 실제로 노출하는 종결자의 완료 표현과 관측 결과를 사용하여, 이미 반환된 다른 호출의 결과와 이후 호출의 결과가 공유 상태 때문에 오염되지 않는지 확인한다. Binding 결과 객체의 구조나 `Backpressured` 결과를 Framework에 노출하도록 요구하지 않는다.
+검증은 Framework가 실제로 노출하는 종결자의 완료 표현과 관측 결과를 사용하여, 이미 반환된 다른 호출의 결과와 이후 호출의 결과가 공유 상태 때문에 오염되지 않는지 확인한다. `Backpressured` 결과를 Framework에 노출하도록 요구하지 않는다.
 
 격리의 책임은 그 완료 표현을 반환하는 계층에 있다. Framework queue 대기의 취소, binding operation의 caller wait 취소와 late completion 정리의 소유권은 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다. 반환 표현의 격리를 위해 cancellation을 지원하는 pending stage의 cancellation 연결을 제거하거나, binding의 operation state·registry·재제출을 Framework에 추가하지 않는다.
 
@@ -447,8 +457,9 @@ Framework runtime이 binding의 HWM-managed send 계열(PAIR send, routed send,
 `result == BACKPRESSURED`일 때만 `admitted`를 기다렸다가 재개하며, request는 `reply`를 소비한다.
 이렇게 해서 "HWM에 걸렸을 때만 기다린다"를 정확히 구현한다 — 지금까지는 stage 하나로 admission과
 reply를 구분할 수 없어 [3단계 backpressure](04-application-job-queue-and-backpressure.ko.md) 대기가 정확하지
-않았다. framework **공개 terminal은 backpressure를 노출하지 않으며**(§5, `Backpressured`는 public
-result가 아니다), 이 소비는 framework 내부 구현에만 있다. Core send-completion 통지가 완료를
+않았다. framework 공개 terminal은 binding의 `result`를 노출하지 않는다(§5, `Backpressured`는 public
+result가 아니다). One-way terminal의 완료와 messaging request의 공개 `admitted` 단계([§2](#request-admitted-stage))는
+이 소비가 admission에서 끝날 때 일어난다. Core send-completion 통지가 완료를
 구동하므로 framework는 별도 executor나 offload로 감싸지 않는다. Binding terminal의 이름·반환
 타입·결과 객체 계약 자체는
 [바인딩 routed 전송 계약과 비동기 완료 표면 정책](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md)이
@@ -503,7 +514,9 @@ interface가 소유한다.
 동기 blocking 종결자는 runtime 실행 문맥에서 `InvalidOperation`으로 실패한다(§4 F2-a).
 
 각 언어별 interface는 terminator별 return type, cancellation 인자, callback 또는
-coroutine 표현을 고정한다. 언어 표준 표현이 달라도 같은 operation의 완료 시점,
+coroutine 표현을 고정한다. Messaging request의 일반 비동기 terminal은 위 표의 언어 표준 비동기 값처럼
+await해 reply를 얻는 값이고, [§2](#request-admitted-stage)의 `admitted` 단계를 같은 값의 member로
+제공한다. 그 type과 member 이름은 각 언어별 interface가 정한다. 언어 표준 표현이 달라도 같은 operation의 완료 시점,
 ordering과 오류 분류는 달라지지 않는다.
 
 C++ `task_t`는 호출할 때 operation을 시작하므로 `async()`를 결과 사용 여부에 따라
