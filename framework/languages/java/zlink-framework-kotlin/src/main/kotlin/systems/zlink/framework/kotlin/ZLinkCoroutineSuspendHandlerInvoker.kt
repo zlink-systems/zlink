@@ -61,7 +61,6 @@ internal class ZLinkCoroutineSuspendHandlerInvoker : ZLinkSuspendInvocationAdapt
         @Suppress("UNCHECKED_CAST")
         arguments[arguments.lastIndex] = continuation as Continuation<Any?>
         try {
-            method.isAccessible = true
             val result = method.invoke(handler, *arguments)
             if (result !== COROUTINE_SUSPENDED) {
                 continuation.resume(if (result === Unit) null else result)
