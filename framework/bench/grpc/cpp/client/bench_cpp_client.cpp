@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -827,10 +828,13 @@ using json = nlohmann::json;
 class framework_driver_t final : public driver_t
 {
   public:
-    int request_window () const override { return unlimited_request_window; }
+    int request_window () const override { return _window; }
 
-    framework_driver_t (const options_t &options, bool command) :
-        _options (options), _command (command), _host (std::vector<int>{}, bench_http_callback_t{})
+    framework_driver_t (const options_t &options, int window, bool command) :
+        _options (options),
+        _window (command ? unlimited_request_window : window),
+        _command (command),
+        _host (std::vector<int>{}, bench_http_callback_t{})
     {
         auto &app = _host.app ();
         auto &config = app.add_zlink_framework ();
@@ -935,12 +939,17 @@ class framework_driver_t final : public driver_t
         std::vector<size_t> free_slots;
         std::vector<size_t> completed_slots;
         size_t in_flight = 0;
+        constexpr size_t admission_notification = std::numeric_limits<size_t>::max ();
+        std::optional<fw::task_t<void>> preceding_admission;
         auto completion_signal = std::make_shared<completion_signal_t> ();
         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
         do {
             close_window (deadline);
-            // Each turn submits after the preceding source-local admission.
-            if (clock_t_::now () < deadline) {
+            // Admission sequences submits; the pattern window bounds replies.
+            if (clock_t_::now () < deadline
+                && (!preceding_admission || preceding_admission->await_ready ())
+                && (_window == unlimited_request_window
+                    || in_flight < static_cast<size_t> (_window))) {
                 const auto sent = now_ns ();
                 auto payload = make_payload (size, phase);
                 counters.enter ();
@@ -955,11 +964,14 @@ class framework_driver_t final : public driver_t
                 }
                 auto submission = submit<T> (std::move (payload));
                 if constexpr (std::is_void_v<T>) {
-                    (void) submission.result ();
+                    preceding_admission = submission;
                 } else {
-                    auto admitted = submission.admitted ();
-                    (void) admitted.result ();
+                    preceding_admission = submission.admitted ();
                 }
+                fw::detail::observe_task_completion (
+                  *preceding_admission, [completion_signal] (const auto &) {
+                      completion_signal->notify (admission_notification);
+                  });
                 pending[slot].emplace (std::move (submission), sent, _seq - 1);
                 fw::detail::observe_task_completion (
                   pending[slot]->task,
@@ -968,6 +980,8 @@ class framework_driver_t final : public driver_t
             }
             completion_signal->take_completed (completed_slots);
             for (const size_t slot : completed_slots) {
+                if (slot == admission_notification)
+                    continue;
                 auto &item = *pending[slot];
                 const auto &result = item.task.result ();
                 bool valid = static_cast<bool> (result);
@@ -1004,7 +1018,9 @@ class framework_driver_t final : public driver_t
             const auto now = clock_t_::now ();
             if (now >= hard_stop)
                 break;
-            const bool can_submit = now < deadline;
+            const bool can_submit =
+              now < deadline && (!preceding_admission || preceding_admission->await_ready ())
+              && (_window == unlimited_request_window || in_flight < static_cast<size_t> (_window));
             if (in_flight != 0 && !can_submit)
                 completion_signal->wait_until (now < deadline ? deadline : hard_stop);
         } while (clock_t_::now () < deadline || in_flight != 0);
@@ -1012,6 +1028,7 @@ class framework_driver_t final : public driver_t
     }
 
     const options_t &_options;
+    int _window;
     bool _command;
     stats_http_server_t _host;
     zlink::routing_id_t _target_node = zlink::routing_id_t::from ("bench-server");
@@ -1074,7 +1091,7 @@ class source_t
                 else if (_options.implementation == "zlink-cpp")
                     _driver = std::make_unique<zlink_raw_driver_t> (_options, window, command);
                 else if (_options.implementation == "zlink-framework-cpp")
-                    _driver = std::make_unique<framework_driver_t> (_options, command);
+                    _driver = std::make_unique<framework_driver_t> (_options, window, command);
                 else
                     throw std::runtime_error ("unknown implementation: " + _options.implementation);
 

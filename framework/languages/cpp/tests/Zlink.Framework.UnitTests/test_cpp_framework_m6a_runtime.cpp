@@ -222,6 +222,42 @@ void verify_bound_session_bind_retries_until_route_is_admitted ()
     target.close ();
 }
 
+void verify_bound_session_bind_exposes_only_accepted_attempt ()
+{
+    using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{.descriptor = descriptor ("bind-stage-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{.descriptor = descriptor ("bind-stage-target")});
+    source.start ();
+    target.start ();
+    const auto remote = target.topology ().local_descriptor ();
+    auto accepted = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    auto admission = accepted->task ();
+    std::promise<completion_t> completion_promise;
+    auto completion = completion_promise.get_future ();
+    assert (await_task (source.request_bound_session_bind (
+      remote.node_routing_id, bound_session_bind_request (remote, "stage-bind-actor"), 2s,
+      [&completion_promise] (foundation::operation_terminal_t terminal,
+                             std::vector<std::uint8_t> payload) {
+          completion_promise.set_value ({terminal, std::move (payload)});
+      },
+      accepted)));
+    assert (!admission.await_ready ());
+    assert (completion.wait_for (0ms) == std::future_status::timeout);
+    admit_pair (source, target, remote);
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (!admission.await_ready () && std::chrono::steady_clock::now () < deadline) {
+        (void) await_task (source.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+        (void) await_task (target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+    }
+    assert (admission.await_ready () && admission.result ());
+    assert (completion.wait_for (0ms) == std::future_status::timeout);
+    complete_bound_session_bind (source, target, completion, "stage-bind-actor");
+    source.close ();
+    target.close ();
+}
+
 void verify_bound_session_bind_permanent_absence_is_bounded ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
@@ -3456,6 +3492,7 @@ int main (int argc, char **argv)
             == zlink::request_result_t::not_connected);
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
+    verify_bound_session_bind_exposes_only_accepted_attempt ();
     verify_bound_session_bind_permanent_absence_is_bounded ();
     verify_bound_session_bind_reply_completes_registered_operation ();
     verify_actor_create_retries_until_route_is_admitted ();

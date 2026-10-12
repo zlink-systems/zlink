@@ -3964,8 +3964,6 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
               framework_error_kind_t::not_configured,
               "Remote Actor session binding was not accepted");
         }
-        if (submitted)
-            co_await detail::request_admitted_t{};
         const auto reply = co_await output;
         if (reply.terminal_result == 0) {
             co_return result_t<application_actor_session_bind_outcome_t>::success (

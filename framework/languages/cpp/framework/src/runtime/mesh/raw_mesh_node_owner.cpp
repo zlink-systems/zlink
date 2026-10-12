@@ -210,7 +210,8 @@ class infrastructure_request_retry_state_t final
       detail::backend::raw_message_t request_parts,
       std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)>
         decode_reply,
-      clock_t::time_point deadline) :
+      clock_t::time_point deadline,
+      std::shared_ptr<task_completion_source_t<void>> admitted) :
         _port (std::move (port)),
         _operations (std::move (operations)),
         _operation (operation),
@@ -219,6 +220,7 @@ class infrastructure_request_retry_state_t final
         _request_parts (std::move (request_parts)),
         _decode_reply (std::move (decode_reply)),
         _deadline (deadline),
+        _admission (std::move (admitted)),
         _retry_timer (boost::asio::system_executor ())
     {
     }
@@ -236,9 +238,19 @@ class infrastructure_request_retry_state_t final
             exhaust ();
             return;
         }
+        // Route eligibility failures belong to this pending admission, not to
+        // the public Core admission stage. Only the accepted attempt forwards it.
+        auto accepted = _admission ? std::make_shared<task_completion_source_t<void>> () : nullptr;
         auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-          _port->request (_target_routing_id, _request_parts, remaining));
-        detail::observe_task_terminal (
+          _port->request (_target_routing_id, _request_parts, remaining, {}, accepted));
+        if (accepted) {
+            detail::observe_task_completion (
+              accepted->task (), [admitted = _admission] (const result_t<void> &result) {
+                  if (result)
+                      admitted->complete (result);
+              });
+        }
+        detail::observe_task_completion (
           *running, [self = shared_from_this (),
                      running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
               self->settle (settled);
@@ -254,14 +266,11 @@ class infrastructure_request_retry_state_t final
             return;
         }
         const auto &completion = settled.value ();
-        _admitted |= completion.failure
-                     && completion.failure->phase
-                          == detail::backend::raw_request_failure_phase_t::completion_terminal
-                     && !completion.failure->submit_result;
         trace_mesh ("infrastructure-request-result correlation=" + std::to_string (_correlation)
                     + " result=" + std::to_string (static_cast<int> (completion.terminal)));
-        if (completion.terminal == zlink::request_result_t::not_connected
-            || completion.terminal == zlink::request_result_t::timed_out) {
+        if (completion.terminal == zlink::request_result_t::not_connected && completion.failure
+            && completion.failure->phase
+                 == detail::backend::raw_request_failure_phase_t::initial_admission) {
             schedule_retry ();
             return;
         }
@@ -321,11 +330,7 @@ class infrastructure_request_retry_state_t final
         (void) _operations->fail (_operation, terminal);
     }
 
-    void exhaust ()
-    {
-        fail (_admitted ? foundation::operation_terminal_t::timed_out
-                        : foundation::operation_terminal_t::route_unavailable);
-    }
+    void exhaust () { fail (foundation::operation_terminal_t::route_unavailable); }
 
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
     std::shared_ptr<foundation::operation_registry_t> _operations;
@@ -335,7 +340,7 @@ class infrastructure_request_retry_state_t final
     detail::backend::raw_message_t _request_parts;
     std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> _decode_reply;
     clock_t::time_point _deadline;
-    bool _admitted = false;
+    std::shared_ptr<task_completion_source_t<void>> _admission;
     boost::asio::steady_timer _retry_timer;
 };
 
@@ -347,7 +352,8 @@ task_t<bool> submit_registered_infrastructure_request_with_retry (
   std::vector<std::uint8_t> target_routing_id,
   detail::backend::raw_message_t request_parts,
   std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> decode_reply,
-  foundation::operation_registry_t::clock_t::time_point deadline)
+  foundation::operation_registry_t::clock_t::time_point deadline,
+  std::shared_ptr<task_completion_source_t<void>> admitted = {})
 {
     if (!port || deadline <= foundation::operation_registry_t::clock_t::now ()) {
         (void) operations->fail (operation, foundation::operation_terminal_t::route_unavailable);
@@ -355,7 +361,8 @@ task_t<bool> submit_registered_infrastructure_request_with_retry (
     }
     auto retry = std::make_shared<infrastructure_request_retry_state_t> (
       std::move (port), std::move (operations), operation, correlation,
-      std::move (target_routing_id), std::move (request_parts), std::move (decode_reply), deadline);
+      std::move (target_routing_id), std::move (request_parts), std::move (decode_reply), deadline,
+      std::move (admitted));
     retry->start ();
     co_return true;
 }
@@ -1909,8 +1916,9 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
             id = operation_id (local.lifecycle_generation, correlation);
             record.correlation = correlation;
             request_parts = {protocol::encode_bound_session_bind (record)};
-            registered = operations->register_operation (id, deadline, std::move (callback),
-                                                         actor_owner_routing_id);
+            registered = operations->register_operation (
+              id, foundation::operation_registry_t::clock_t::time_point::max (),
+              std::move (callback), actor_owner_routing_id);
         }
     }
     if (!port) {
@@ -1920,7 +1928,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
     if (!registered)
         co_return false;
 
-    co_return co_await submit_registered_infrastructure_request (
+    co_return co_await submit_registered_infrastructure_request_with_retry (
       std::move (port), operations, id, correlation, actor_owner_routing_id,
       std::move (request_parts),
       [] (const detail::backend::raw_message_t &parts) {
@@ -1936,7 +1944,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
           }
           return parts.front ();
       },
-      timeout, std::move (admitted));
+      deadline, std::move (admitted));
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
