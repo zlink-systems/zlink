@@ -426,6 +426,119 @@ final class ZLinkMeshApplicationDispatcherTest {
     }
 
     @Test
+    void malformedHeaderRequestsReplyAndSendsDropOnce() throws Exception {
+        var events = new java.util.concurrent.LinkedBlockingQueue<String>();
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Level previousLevel = logger.getLevel();
+        Handler listener =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        if (record.getMessage().contains("event_id=zlink.dispatch_error")) {
+                            events.add(record.getMessage());
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.setLevel(Level.ALL);
+        logger.addHandler(listener);
+        try {
+            MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+            mesh.listen("inproc://mesh-malformed-header");
+            mesh.channelName("play");
+            ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
+            framework.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            var dispatcher =
+                    new ZLinkMeshApplicationDispatcher(
+                            mesh,
+                            new ZLinkStringMessageSerializer(),
+                            framework,
+                            ZLinkHandlerActivator.reflection(),
+                            (token, parts) -> {
+                                throw new AssertionError(
+                                        "record reply callback must own the reply");
+                            });
+            String correlation = "0123456789abcdeffedcba9876543201";
+            for (RecordKind kind :
+                    List.of(
+                            RecordKind.NODE_SEND,
+                            RecordKind.CHANNEL_SEND,
+                            RecordKind.NODE_REQUEST,
+                            RecordKind.CHANNEL_REQUEST)) {
+                boolean request =
+                        kind == RecordKind.NODE_REQUEST || kind == RecordKind.CHANNEL_REQUEST;
+                for (String correlationJson :
+                        List.of("\"" + correlation + "\"", "null", "\"\"", "42")) {
+                    boolean canReply = request && correlationJson.equals("\"" + correlation + "\"");
+                    for (String invalidField :
+                            List.of(
+                                    "\"metadata\":{\"broken\":42}",
+                                    "\"contentType\":42",
+                                    "\"formatMarker\":0",
+                                    "\"metadata\":")) {
+                        CompletableFuture<ErrorReply> reply = new CompletableFuture<>();
+                        CompletableFuture<Void> closed = new CompletableFuture<>();
+                        try (var base = record(kind, "play", "request")) {
+                            String header =
+                                    "{\"formatMarker\":"
+                                            + ZLinkChannelEnvelope.FORMAT_MARKER
+                                            + ",\"kind\":"
+                                            + (request
+                                                    ? ZLinkChannelEnvelope.KIND_REQUEST
+                                                    : ZLinkChannelEnvelope.KIND_COMMAND)
+                                            + ",\"channelName\":\"play\",\"messageName\":\"String\","
+                                            + "\"correlationId\":"
+                                            + correlationJson
+                                            + ","
+                                            + invalidField
+                                            + "}";
+                            dispatcher.accept(
+                                    new ZLinkMeshDispatchRecord(
+                                            base.owner(),
+                                            base.receive(),
+                                            List.of(Message.from(header), Message.from("request")),
+                                            parts -> {
+                                                assertTrue(
+                                                        canReply,
+                                                        "uncorrelatable request or send must not reply");
+                                                reply.complete(
+                                                        new ErrorReply(
+                                                                ZLinkFrameworkErrorReply.kind(
+                                                                        parts),
+                                                                ZLinkChannelEnvelope.decodeHeader(
+                                                                                parts.get(0), false)
+                                                                        .correlationId()));
+                                            },
+                                            () -> closed.complete(null)));
+                        }
+                        closed.get(2, TimeUnit.SECONDS);
+                        if (canReply) {
+                            assertEquals(
+                                    new ErrorReply(
+                                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR, correlation),
+                                    reply.get(2, TimeUnit.SECONDS));
+                        } else {
+                            assertFalse(reply.isDone());
+                        }
+                        String event = events.poll(2, TimeUnit.SECONDS);
+                        assertTrue(event != null && event.contains("reason=invalid_frame"));
+                        assertTrue(event.contains(canReply ? "action=reply_error" : "action=drop"));
+                        assertTrue(events.isEmpty(), "one dispatch error per malformed envelope");
+                    }
+                }
+            }
+        } finally {
+            logger.removeHandler(listener);
+            logger.setLevel(previousLevel);
+        }
+    }
+
+    @Test
     void scannedChannelHandlerUsesMatchingChannelNameWithoutManualGroupMapping() throws Exception {
         MeshNodeRegistration mesh = new MeshNodeRegistration("game");
         mesh.listen("inproc://mesh-dispatch-scanned-channel");

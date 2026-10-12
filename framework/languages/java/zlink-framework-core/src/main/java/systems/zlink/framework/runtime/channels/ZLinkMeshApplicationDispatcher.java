@@ -199,20 +199,19 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             //  A JSON-object first frame that is not a valid shared envelope
             //  is a protocol error (C++ decode parity).
             recordDrop(record, ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED);
-            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header rejectedEnvelope;
-            try {
-                rejectedEnvelope =
-                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
-                                .decodeDispatchHeader(record.parts(), false);
-            } catch (systems.zlink.framework.errors.ZLinkFrameworkException unreadableEnvelope) {
-                rejectedEnvelope = null;
-            }
+            var rejectedEnvelope =
+                    invalidEnvelope
+                                    instanceof
+                                    ZLinkChannelEnvelope.HeaderDecodeException decodedFailure
+                            ? decodedFailure.header()
+                            : null;
             boolean request = kind == RecordKind.NODE_REQUEST || kind == RecordKind.CHANNEL_REQUEST;
             boolean canReply =
                     request
                             && (record.receive().replyToken() != null || record.canReply())
                             && rejectedEnvelope != null
-                            && rejectedEnvelope.correlationId() != null;
+                            && rejectedEnvelope.correlationId() != null
+                            && !rejectedEnvelope.correlationId().isEmpty();
             dispatchErrors.report(
                     new ZLinkDispatchFailure(
                             kind == RecordKind.NODE_REQUEST || kind == RecordKind.NODE_SEND
