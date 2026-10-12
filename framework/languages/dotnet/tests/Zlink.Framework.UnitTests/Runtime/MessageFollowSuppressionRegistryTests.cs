@@ -73,14 +73,12 @@ public sealed class MessageFollowSuppressionRegistryTests
     }
 
     [Fact]
-    public void ActorLeaseCannotStartANoticeBeforeCommitOrAfterExpiry()
+    public void ActorLeaseStartsANoticeAtInstallationAndRejectsAfterExpiry()
     {
         var time = new ManualTimeProvider();
-        var lease = new ZLinkActorMessageFollowLease(time);
+        var lease = new ZLinkActorMessageFollowLease(time, TimeSpan.FromSeconds(1));
         var fence = Fence("target-a", targetNodeGeneration: 2);
 
-        Assert.False(lease.TryBeginMessageFollowNotice(fence));
-        lease.Commit(TimeSpan.FromSeconds(1));
         Assert.True(lease.TryBeginMessageFollowNotice(fence));
         lease.AbortMessageFollowNotice(fence);
 
@@ -92,9 +90,8 @@ public sealed class MessageFollowSuppressionRegistryTests
     [Fact]
     public void ActorLeaseCancellationAtomicallyClosesNoticeAdmission()
     {
-        var lease = new ZLinkActorMessageFollowLease(TimeProvider.System);
+        var lease = new ZLinkActorMessageFollowLease(TimeProvider.System, TimeSpan.FromMinutes(1));
         var fence = Fence("target-a", targetNodeGeneration: 2);
-        lease.Commit(TimeSpan.FromMinutes(1));
 
         lease.Cancel();
 

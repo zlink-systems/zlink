@@ -488,7 +488,7 @@ internal sealed class ZLinkSpotRetireScheduler(
             {
                 //  Spec 30 §11: the SafeToShutdown obligation starts at
                 //  seal, not at cutover — waiting until
-                //  CommitMessageFollow would let a shutdown query race
+                //  cutover would let a shutdown query race
                 //  the seal-to-cutover window. Attaching the token in
                 //  the same locked call as the seal closes the window
                 //  where a status read could observe the seal without
@@ -1038,16 +1038,14 @@ internal sealed class ZLinkSpotRetireScheduler(
                     participant.AuthorityOwnerGeneration,
                     targetFound.Snapshot.AuthorityOwnerGeneration,
                     checked((ulong)activeInventory.SourceOwner.LeaseGeneration),
-                    checked((ulong)activeReservation.TargetOwner.LeaseGeneration)
+                    checked((ulong)activeReservation.TargetOwner.LeaseGeneration),
+                    runtime.Registration.Locations.Options.MessageFollowDuration,
+                    runtime.Registration.Locations.Options.RelocationCutoverWaitTimeout
                 );
                 var backlog = runtime.RelayStandaloneActorRelocationTrailing(
                     capture.State,
                     capture.SourceActor,
                     trailing
-                );
-                capture.State.Handoff.CommitMessageFollow(
-                    runtime.Registration.Locations.Options.MessageFollowDuration,
-                    runtime.Registration.Locations.Options.RelocationCutoverWaitTimeout
                 );
                 return backlog;
             });

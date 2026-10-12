@@ -749,7 +749,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             // the concrete session node rid — the actor's current owner node — or
             // its pushes can never route back to the session.
             //  Spec 30 §11: the SafeToShutdown obligation starts at seal, not
-            //  at cutover — waiting until CommitMessageFollow would let a
+            //  at cutover — waiting until cutover would let a
             //  shutdown query race the seal-to-cutover window. Attaching the
             //  token in the same locked call as the seal itself closes the
             //  window where a status read could observe the seal without the
@@ -1056,17 +1056,15 @@ internal sealed class ZLinkActorRemoteJoiner(
                 actorAuthorityOwnerGeneration,
                 published.AuthorityOwnerGeneration,
                 checked((ulong)runtime.LocationLifecycle!.OwnerToken.LeaseGeneration),
-                admission.Snapshot.OwnerLeaseGeneration
+                admission.Snapshot.OwnerLeaseGeneration,
+                registration.Locations.Options.MessageFollowDuration,
+                registration.Locations.Options.RelocationCutoverWaitTimeout
             );
             markSourceLeft();
             var trailingDeliveries = runtime.RelayStandaloneActorRelocationTrailing(
                 actorState,
                 actorRef,
                 trailingFrames
-            );
-            actorState.Handoff.CommitMessageFollow(
-                registration.Locations.Options.MessageFollowDuration,
-                registration.Locations.Options.RelocationCutoverWaitTimeout
             );
             if (
                 trailingDeliveries.Count != 0
