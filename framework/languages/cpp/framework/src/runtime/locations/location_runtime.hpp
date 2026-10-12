@@ -52,6 +52,15 @@ class owner_lease_claim_rejected_error_t final : public std::runtime_error
 
 class location_runtime_t
 {
+    friend struct location_runtime_test_access_t;
+    struct owner_lease_snapshot_t
+    {
+        std::optional<location_owner_token_t> token;
+        std::optional<std::chrono::steady_clock::time_point> admission_deadline;
+        bool healthy = false;
+        std::optional<std::chrono::system_clock::time_point> renewed_at;
+    };
+
     struct heartbeat_attempt_t;
 
     struct lease_renew_outcome_t
@@ -104,7 +113,8 @@ class location_runtime_t
     task_t<observation_status_t> observation_status_task () const
     {
         return _lane.run_task ([this] {
-            return observation_status_t{_last_error, _owner_lease_healthy, _owner_lease_renewed_at};
+            const auto lease = _owner_lease.load (std::memory_order_acquire);
+            return observation_status_t{_last_error, lease->healthy, lease->renewed_at};
         });
     }
 
@@ -126,15 +136,16 @@ class location_runtime_t
 
     std::optional<location_owner_token_t> current_owner_token () const
     {
-        return current_owner_token_task ().result ().value ();
+        const auto lease = _owner_lease.load (std::memory_order_acquire);
+        return owner_lease_usable (*lease, std::chrono::steady_clock::now ())
+                 ? lease->token
+                 : std::optional<location_owner_token_t>{};
     }
 
     task_t<std::optional<location_owner_token_t>> current_owner_token_task () const
     {
-        return _lane.run_task ([this] {
-            return owner_lease_usable_on_lane () ? _owner_token
-                                                 : std::optional<location_owner_token_t>{};
-        });
+        return task_t<std::optional<location_owner_token_t>> (
+          result_t<std::optional<location_owner_token_t>>::success (current_owner_token ()));
     }
 
     /* Draining marker (graceful-drain-handoff §3.1): peer rows written while
@@ -164,17 +175,18 @@ class location_runtime_t
 
     bool owner_lease_healthy () const noexcept
     {
-        return _lane.run_checked ([this] { return _owner_lease_healthy; }).get ();
+        return _owner_lease.load (std::memory_order_acquire)->healthy;
     }
 
     bool owner_lease_usable () const noexcept
     {
-        return _lane.run_checked ([this] { return owner_lease_usable_on_lane (); }).get ();
+        const auto lease = _owner_lease.load (std::memory_order_acquire);
+        return owner_lease_usable (*lease, std::chrono::steady_clock::now ());
     }
 
     std::optional<std::chrono::system_clock::time_point> owner_lease_renewed_at () const
     {
-        return _lane.run_checked ([this] { return _owner_lease_renewed_at; }).get ();
+        return _owner_lease.load (std::memory_order_acquire)->renewed_at;
     }
 
     std::optional<std::string> last_error () const
@@ -252,12 +264,7 @@ class location_runtime_t
                 };
                 await_cleanup ([&] { return _store->remove_all_by_owner (*token); });
                 await_cleanup ([&] { return _store->release_owner_lease (*token); });
-                _lane
-                  .run_checked ([this] {
-                      _owner_token.reset ();
-                      _owner_lease_admission_deadline.reset ();
-                  })
-                  .get ();
+                _lane.run_checked ([this] { clear_owner_lease_on_lane (); }).get ();
             }
             return true;
         }
@@ -326,15 +333,32 @@ class location_runtime_t
     }
 
   private:
-    bool owner_lease_usable_on_lane () const noexcept
+    static bool owner_lease_usable (const owner_lease_snapshot_t &lease,
+                                    std::chrono::steady_clock::time_point now) noexcept
     {
-        return _owner_token.has_value () && _owner_lease_admission_deadline.has_value ()
-               && std::chrono::steady_clock::now () < *_owner_lease_admission_deadline;
+        return lease.token.has_value () && lease.admission_deadline.has_value ()
+               && now < *lease.admission_deadline;
+    }
+
+    template <typename Work> void update_owner_lease_on_lane (Work work) const
+    {
+        auto lease = *_owner_lease.load (std::memory_order_acquire);
+        work (lease);
+        _owner_lease.store (std::make_shared<const owner_lease_snapshot_t> (std::move (lease)),
+                            std::memory_order_release);
+    }
+
+    void clear_owner_lease_on_lane () const
+    {
+        update_owner_lease_on_lane ([] (auto &lease) {
+            lease.token.reset ();
+            lease.admission_deadline.reset ();
+        });
     }
 
     std::optional<location_owner_token_t> current_owner_token_unchecked () const
     {
-        return _lane.run_checked ([this] { return _owner_token; }).get ();
+        return _owner_lease.load (std::memory_order_acquire)->token;
     }
 
     static std::chrono::milliseconds
@@ -399,22 +423,24 @@ class location_runtime_t
                                           std::chrono::steady_clock::time_point started_at)
     {
         auto *runtime = attempt->runtime;
-        co_await lease_lane (
-          attempt, [runtime, token = std::move (token), expires_at, store_now, started_at] {
-              const auto admission_lifetime =
-                expires_at > store_now + runtime->_options.owner_lease_fencing_margin
-                  ? expires_at - store_now - runtime->_options.owner_lease_fencing_margin
-                  : std::chrono::system_clock::duration::zero ();
-              runtime->_owner_token = token;
-              runtime->_owner_lease_healthy = true;
-              runtime->_owner_lease_renewed_at = store_now;
-              runtime->_owner_lease_admission_deadline =
-                started_at
-                + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-                  admission_lifetime);
-              runtime->_last_error.reset ();
-              return true;
-          });
+        co_await lease_lane (attempt, [runtime, token = std::move (token), expires_at, store_now,
+                                       started_at] () mutable {
+            const auto admission_lifetime =
+              expires_at > store_now + runtime->_options.owner_lease_fencing_margin
+                ? expires_at - store_now - runtime->_options.owner_lease_fencing_margin
+                : std::chrono::system_clock::duration::zero ();
+            runtime->update_owner_lease_on_lane ([&] (auto &lease) {
+                lease.token = std::move (token);
+                lease.healthy = true;
+                lease.renewed_at = store_now;
+                lease.admission_deadline =
+                  started_at
+                  + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+                    admission_lifetime);
+            });
+            runtime->_last_error.reset ();
+            return true;
+        });
     }
 
     static task_t<void> heartbeat_failure (std::shared_ptr<heartbeat_attempt_t> attempt,
@@ -422,8 +448,7 @@ class location_runtime_t
     {
         auto *runtime = attempt->runtime;
         co_await lease_lane (attempt, [runtime, message = std::move (message)] () mutable {
-            runtime->_owner_lease_healthy = false;
-            runtime->_last_error = std::move (message);
+            runtime->record_failure_on_lane (std::move (message));
             return true;
         });
     }
@@ -478,8 +503,8 @@ class location_runtime_t
         const auto started_at = attempt->started_at;
         std::optional<std::string> unexpected_failure;
         try {
-            const auto owner_token =
-              co_await lease_lane (attempt, [runtime] { return runtime->_owner_token; });
+            const auto owner_token = co_await lease_lane (
+              attempt, [runtime] { return runtime->current_owner_token_unchecked (); });
             if (auto heartbeat = attempt->heartbeat.lock ();
                 heartbeat && heartbeat->stop.load (std::memory_order_acquire))
                 co_return outcome;
@@ -526,8 +551,7 @@ class location_runtime_t
                         co_return outcome;
                     }
                     co_await lease_lane (attempt, [runtime] {
-                        runtime->_owner_token.reset ();
-                        runtime->_owner_lease_admission_deadline.reset ();
+                        runtime->clear_owner_lease_on_lane ();
                         return true;
                     });
                 } else {
@@ -675,12 +699,7 @@ class location_runtime_t
             record_store_error ();
             record_failure (error.what ());
         }
-        _lane
-          .run_checked ([this] {
-              _owner_token.reset ();
-              _owner_lease_admission_deadline.reset ();
-          })
-          .get ();
+        _lane.run_checked ([this] { clear_owner_lease_on_lane (); }).get ();
     }
 
     static std::string make_owner_id ()
@@ -785,12 +804,13 @@ class location_runtime_t
 
     void record_failure (std::string message) const
     {
-        _lane
-          .run_checked ([&] {
-              _owner_lease_healthy = false;
-              _last_error = std::move (message);
-          })
-          .get ();
+        _lane.run_checked ([&] { record_failure_on_lane (std::move (message)); }).get ();
+    }
+
+    void record_failure_on_lane (std::string message) const
+    {
+        update_owner_lease_on_lane ([] (auto &lease) { lease.healthy = false; });
+        _last_error = std::move (message);
     }
 
     location_repository_t *_store;
@@ -801,13 +821,12 @@ class location_runtime_t
     std::atomic_bool _started = false;
     std::thread _heartbeat;
     std::shared_ptr<heartbeat_owner_t> _heartbeat_state;
+    // Lane teardown finishes accepted turns before their state is destroyed.
+    mutable std::atomic<std::shared_ptr<const owner_lease_snapshot_t>> _owner_lease{
+      std::make_shared<const owner_lease_snapshot_t> ()};
+    mutable std::optional<std::string> _last_error;
     offload_executor_t _lane_executor;
     mutable state_lane_t _lane{_lane_executor};
-    mutable bool _owner_lease_healthy = false;
-    mutable std::optional<std::chrono::system_clock::time_point> _owner_lease_renewed_at;
-    mutable std::optional<std::chrono::steady_clock::time_point> _owner_lease_admission_deadline;
-    mutable std::optional<location_owner_token_t> _owner_token;
-    mutable std::optional<std::string> _last_error;
 };
 
 } // namespace zlink::framework::runtime

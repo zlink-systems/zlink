@@ -87,17 +87,20 @@ bool state_lane_t::enqueue (std::function<void ()> work,
 
 bool state_lane_t::schedule_drain (bool inline_drain, const std::function<void ()> &own_work)
 {
-    {
-        std::lock_guard lock (_mailbox_mutex);
+    std::unique_lock lock (_mailbox_mutex, std::defer_lock);
+    if (own_work) {
+        lock.lock ();
         // A caller may execute its own turn only when it has no predecessor.
         // Claim admission and that FIFO check under the mailbox's existing lock.
-        if (own_work && (!_mailbox.empty () || _closed.load (std::memory_order_acquire)))
-            return false;
-        bool expected = false;
-        if (!_scheduled.compare_exchange_strong (expected, true, std::memory_order_acq_rel,
-                                                 std::memory_order_acquire))
+        if (!_mailbox.empty () || _closed.load (std::memory_order_acquire))
             return false;
     }
+    bool expected = false;
+    if (!_scheduled.compare_exchange_strong (expected, true, std::memory_order_acq_rel,
+                                             std::memory_order_acquire))
+        return false;
+    if (lock.owns_lock ())
+        lock.unlock ();
     // Run and Close may execute the FIFO they own. TryPost keeps its existing
     // no-wait contract by transferring that same ownership to the executor.
     if (inline_drain) {

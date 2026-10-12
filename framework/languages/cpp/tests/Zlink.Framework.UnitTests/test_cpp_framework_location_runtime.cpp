@@ -19,6 +19,33 @@
 #include <stop_token>
 #include <thread>
 
+namespace zlink::framework::runtime
+{
+struct location_runtime_test_access_t
+{
+    static state_lane_t &lane (location_runtime_t &runtime) { return runtime._lane; }
+    static auto snapshot (const location_runtime_t &runtime)
+    {
+        return runtime._owner_lease.load (std::memory_order_acquire);
+    }
+    static void set_deadline (location_runtime_t &runtime,
+                              std::chrono::steady_clock::time_point deadline)
+    {
+        runtime._lane
+          .run_checked ([&] {
+              runtime.update_owner_lease_on_lane (
+                [&] (auto &lease) { lease.admission_deadline = deadline; });
+          })
+          .get ();
+    }
+    static bool usable_at (const location_runtime_t &runtime,
+                           std::chrono::steady_clock::time_point now)
+    {
+        return location_runtime_t::owner_lease_usable (*snapshot (runtime), now);
+    }
+};
+} // namespace zlink::framework::runtime
+
 namespace
 {
 
@@ -27,9 +54,71 @@ using zlink::framework::runtime::in_memory_location_repository_t;
 using zlink::framework::runtime::location_runtime_t;
 
 constexpr auto heartbeat_observation_timeout = std::chrono::seconds (5);
+constexpr auto admission_observation_timeout = std::chrono::milliseconds (100);
 const location_options_t asynchronous_heartbeat_options{
   .owner_lease_renew_interval = std::chrono::milliseconds (5),
   .owner_lease_ttl = std::chrono::seconds (15)};
+
+TEST (ZLinkFrameworkLocationRuntime, ReceiveAdmissionDoesNotJoinBusyLocationLane)
+{
+    in_memory_location_repository_t store;
+    location_runtime_t runtime (store, {}, "owner-admission-snapshot");
+    runtime.renew_owner_lease_once ();
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ().share ();
+    auto &lane = zlink::framework::runtime::location_runtime_test_access_t::lane (runtime);
+    ASSERT_TRUE (lane.try_post ([&] {
+        entered.set_value ();
+        released.wait ();
+    }));
+    entered.get_future ().wait ();
+    auto admission = std::async (std::launch::async, [&] {
+        const auto token = runtime.current_owner_token ();
+        const auto pending = runtime.current_owner_token_task ();
+        if (!token || !pending.await_ready ())
+            return false;
+        const auto task_token = pending.result ().value ();
+        return runtime.owner_lease_usable () && task_token.has_value ()
+               && task_token->owner_id == token->owner_id
+               && task_token->lease_generation == token->lease_generation
+               && runtime.owner_lease_healthy () && runtime.owner_lease_renewed_at ().has_value ();
+    });
+    const auto status = admission.wait_for (admission_observation_timeout);
+    release.set_value ();
+    EXPECT_EQ (status, std::future_status::ready);
+    EXPECT_TRUE (admission.get ());
+    EXPECT_TRUE (runtime.cleanup_owner ());
+    EXPECT_FALSE (runtime.owner_lease_usable ());
+}
+
+TEST (ZLinkFrameworkLocationRuntime, AdmissionSnapshotPreservesStrictExpiryAndRelease)
+{
+    using access_t = zlink::framework::runtime::location_runtime_test_access_t;
+    in_memory_location_repository_t store;
+    location_runtime_t runtime (store, {}, "owner-admission-expiry");
+    EXPECT_FALSE (runtime.owner_lease_usable ());
+    runtime.renew_owner_lease_once ();
+    auto previous = access_t::snapshot (runtime);
+    const auto deadline = std::chrono::steady_clock::now ();
+    access_t::set_deadline (runtime, deadline);
+    EXPECT_TRUE (access_t::usable_at (runtime, deadline - std::chrono::steady_clock::duration (1)));
+    EXPECT_FALSE (access_t::usable_at (runtime, deadline));
+    EXPECT_FALSE (
+      access_t::usable_at (runtime, deadline + std::chrono::steady_clock::duration (1)));
+    EXPECT_FALSE (runtime.owner_lease_usable ());
+    EXPECT_FALSE (runtime.current_owner_token ().has_value ());
+    runtime.renew_owner_lease_once ();
+    EXPECT_TRUE (runtime.owner_lease_usable ());
+    EXPECT_NE (previous, access_t::snapshot (runtime));
+    EXPECT_TRUE (runtime.cleanup_owner ());
+    EXPECT_FALSE (runtime.owner_lease_usable ());
+    EXPECT_FALSE (runtime.current_owner_token ().has_value ());
+    EXPECT_TRUE (previous->token.has_value ());
+    const auto retained = std::weak_ptr{previous};
+    previous.reset ();
+    EXPECT_TRUE (retained.expired ());
+}
 
 TEST (ZLinkFrameworkLocationRuntime, RejectsLeaseTimeoutLongerThanFencedRenewalWindow)
 {
