@@ -201,7 +201,7 @@ TEST (CppFrameworkRouteClientChannelRouting, ResolvesRouteMeshAndClientServerCha
           co_return zlink::framework::result_t<void>::success ();
       },
       [&] (message_parts_t parts, std::chrono::milliseconds timeout)
-        -> zlink::framework::task_t<zlink::framework::result_t<message_parts_t>> {
+        -> zlink::framework::request_task_t<zlink::framework::result_t<message_parts_t>> {
           const auto header = envelope.decode_header (parts, false);
           const auto body = envelope.decode_body (parts);
           if (!header || !body || header.value ().kind != message_kind_t::request
@@ -227,6 +227,7 @@ TEST (CppFrameworkRouteClientChannelRouting, ResolvesRouteMeshAndClientServerCha
           reply_header.content_type = serialized.content_type;
           auto reply_parts = envelope.encode_raw_body_parts (
             reply_header, zlink::framework::detail::encoded_payload_to_raw (serialized.payload));
+          co_await zlink::framework::detail::request_admitted_t{};
           co_return zlink::framework::result_t<message_parts_t>::success (std::move (reply_parts));
       });
 
@@ -255,14 +256,14 @@ TEST (CppFrameworkRouteClientChannelRouting, ResolvesRouteMeshAndClientServerCha
               || metadata != std::map<std::string, std::string>{{"tenant-id", "tenant-42"}}) {
               client_server_request_error =
                 "ClientServer request did not receive the typed payload";
-              return zlink::framework::task_t<zlink::message_t> (
+              return zlink::framework::request_task_t<zlink::message_t> (
                 zlink::framework::result_t<zlink::message_t>::failure (
                   framework_error_kind_t::internal_failure, client_server_request_error));
           }
           ++client_server_request_count;
           const auto serialized =
             serializers.get<route_reply_t> ().serialize_with_content_type (route_reply_t{38});
-          return zlink::framework::task_t<zlink::message_t> (
+          return zlink::framework::request_task_t<zlink::message_t> (
             zlink::framework::result_t<zlink::message_t>::success (
               zlink::framework::detail::encoded_payload_to_raw (serialized.payload)));
       });

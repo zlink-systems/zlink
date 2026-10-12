@@ -1588,7 +1588,7 @@ task_t<void> client_server_location_runtime_t::send (const std::string &channel_
     co_return;
 }
 
-task_t<zlink::message_t>
+request_task_t<zlink::message_t>
 client_server_location_runtime_t::request (const std::string &channel_name,
                                            std::string packet_name,
                                            std::string content_type,

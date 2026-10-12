@@ -19,7 +19,7 @@ class channel_outbound_exchange_t
   public:
     explicit channel_outbound_exchange_t (std::shared_ptr<channel_runtime_state_t> state);
 
-    task_t<zlink::message_t>
+    request_task_t<zlink::message_t>
     submit_request (std::string channel_name,
                     std::string packet_name,
                     std::type_index request_type,

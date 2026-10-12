@@ -1912,7 +1912,7 @@ class spot_node_runtime_t
     // actor was moving, in arrival order. The commit path calls this once to fill
     // the commit request and once more after the ack for packets that raced it.
     std::vector<handoff_packet_t> take_actor_handoff_backlog (const actor_ref_t &actor_ref);
-    task_t<std::optional<zlink::message_t>>
+    request_task_t<std::optional<zlink::message_t>>
     relay_local_actor_packet (const actor_ref_t &actor_ref,
                               const runtime::messaging::envelope_header_t &header,
                               const zlink::message_t &payload,

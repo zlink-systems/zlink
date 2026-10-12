@@ -25,6 +25,7 @@ namespace zlink::framework
 {
 
 template <typename T> class task_t;
+template <typename T> class request_task_t;
 template <typename T> class task_completion_source_t;
 
 namespace detail
@@ -757,6 +758,7 @@ template <typename T> class task_t
     template <typename U>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
     friend class task_completion_source_t<T>;
+    template <typename U> friend class request_task_t;
     template <typename U>
     friend std::optional<result_t<U>>
     detail::observe_task_result_for (const task_t<U> &, std::chrono::milliseconds, std::stop_token);
@@ -822,6 +824,7 @@ template <> class task_t<void>
     template <typename U>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
     friend class task_completion_source_t<void>;
+    template <typename U> friend class request_task_t;
     template <typename U>
     friend std::optional<result_t<U>>
     detail::observe_task_result_for (const task_t<U> &, std::chrono::milliseconds, std::stop_token);

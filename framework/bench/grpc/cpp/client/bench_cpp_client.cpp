@@ -175,7 +175,9 @@ struct counters_t
 class driver_t
 {
   public:
+    static constexpr int unlimited_request_window = 0;
     virtual ~driver_t () = default;
+    virtual int request_window () const = 0;
     std::function<void ()> boundary;
     void close_window (clock_t_::time_point deadline)
     {
@@ -219,6 +221,8 @@ template <typename TReply> struct grpc_call_t
 class grpc_driver_t : public driver_t
 {
   public:
+    int request_window () const override { return _window; }
+
     grpc_driver_t (const options_t &options, int window, bool command_path) :
         _options (options), _window (window), _command_path (command_path)
     {
@@ -465,6 +469,8 @@ bool grpc_driver_t::validate<google::protobuf::Empty> (
 class zlink_raw_driver_t : public driver_t
 {
   public:
+    int request_window () const override { return _window; }
+
     zlink_raw_driver_t (const options_t &options, int window, bool command_path) :
         _options (options), _window (window), _command_path (command_path)
     {
@@ -821,11 +827,10 @@ using json = nlohmann::json;
 class framework_driver_t final : public driver_t
 {
   public:
-    framework_driver_t (const options_t &options, int window, bool command) :
-        _options (options),
-        _window (window),
-        _command (command),
-        _host (std::vector<int>{}, bench_http_callback_t{})
+    int request_window () const override { return unlimited_request_window; }
+
+    framework_driver_t (const options_t &options, bool command) :
+        _options (options), _command (command), _host (std::vector<int>{}, bench_http_callback_t{})
     {
         auto &app = _host.app ();
         auto &config = app.add_zlink_framework ();
@@ -898,7 +903,7 @@ class framework_driver_t final : public driver_t
         return payload;
     }
 
-    template <typename T> fw::task_t<T> submit (payload_t payload)
+    template <typename T> auto submit (payload_t payload)
     {
         if constexpr (std::is_void_v<T>)
             return _client->send_to_node ("bench", _target_node, std::move (payload)).async ();
@@ -927,8 +932,6 @@ class framework_driver_t final : public driver_t
             uint64_t seq;
         };
         std::vector<std::optional<pending_t>> pending;
-        if (_window > 0)
-            pending.reserve (static_cast<size_t> (_window));
         std::vector<size_t> free_slots;
         std::vector<size_t> completed_slots;
         size_t in_flight = 0;
@@ -936,9 +939,8 @@ class framework_driver_t final : public driver_t
         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
         do {
             close_window (deadline);
-            // Unbounded admission submits once per cooperative completion-pump turn.
-            while (clock_t_::now () < deadline
-                   && (_window <= 0 || in_flight < static_cast<size_t> (_window))) {
+            // Each turn submits after the preceding source-local admission.
+            if (clock_t_::now () < deadline) {
                 const auto sent = now_ns ();
                 auto payload = make_payload (size, phase);
                 counters.enter ();
@@ -951,13 +953,18 @@ class framework_driver_t final : public driver_t
                     slot = free_slots.back ();
                     free_slots.pop_back ();
                 }
-                pending[slot].emplace (submit<T> (std::move (payload)), sent, _seq - 1);
+                auto submission = submit<T> (std::move (payload));
+                if constexpr (std::is_void_v<T>) {
+                    (void) submission.result ();
+                } else {
+                    auto admitted = submission.admitted ();
+                    (void) admitted.result ();
+                }
+                pending[slot].emplace (std::move (submission), sent, _seq - 1);
                 fw::detail::observe_task_completion (
                   pending[slot]->task,
                   [completion_signal, slot] (const auto &) { completion_signal->notify (slot); });
                 ++in_flight;
-                if (_window <= 0)
-                    break;
             }
             completion_signal->take_completed (completed_slots);
             for (const size_t slot : completed_slots) {
@@ -997,8 +1004,7 @@ class framework_driver_t final : public driver_t
             const auto now = clock_t_::now ();
             if (now >= hard_stop)
                 break;
-            const bool can_submit =
-              now < deadline && (_window <= 0 || in_flight < static_cast<size_t> (_window));
+            const bool can_submit = now < deadline;
             if (in_flight != 0 && !can_submit)
                 completion_signal->wait_until (now < deadline ? deadline : hard_stop);
         } while (clock_t_::now () < deadline || in_flight != 0);
@@ -1006,7 +1012,6 @@ class framework_driver_t final : public driver_t
     }
 
     const options_t &_options;
-    int _window;
     bool _command;
     stats_http_server_t _host;
     zlink::routing_id_t _target_node = zlink::routing_id_t::from ("bench-server");
@@ -1069,7 +1074,7 @@ class source_t
                 else if (_options.implementation == "zlink-cpp")
                     _driver = std::make_unique<zlink_raw_driver_t> (_options, window, command);
                 else if (_options.implementation == "zlink-framework-cpp")
-                    _driver = std::make_unique<framework_driver_t> (_options, window, command);
+                    _driver = std::make_unique<framework_driver_t> (_options, command);
                 else
                     throw std::runtime_error ("unknown implementation: " + _options.implementation);
 
@@ -1229,7 +1234,7 @@ class source_t
         cell.implementation = _options.implementation;
         cell.pattern = _options.pattern;
         cell.payload_size = _options.payload_size;
-        cell.request_window = pattern_window (_options.pattern);
+        cell.request_window = _driver->request_window ();
         cell.logical_cores_value = logical_cores ();
         const auto target_before = fetch_stats ("127.0.0.1", _options.target_stats_port);
         if (!target_before)

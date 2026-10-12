@@ -1934,7 +1934,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       [&] (const zlink::routing_id_t &node_rid, const std::string &spot_id,
            std::uint64_t generation, zlink::framework::runtime::messaging::message_parts_t parts,
            std::chrono::milliseconds)
-        -> zlink::framework::task_t<
+        -> zlink::framework::request_task_t<
           zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>> {
           if (node_rid.to_string () == "node-instance" && spot_id == "instance-spot"
               && generation == 11)
@@ -1942,6 +1942,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
           auto header = envelope_codec.decode_header (parts).value ();
           header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
           lease_target_reply_t reply{"node-instance"};
+          co_await zlink::framework::detail::request_admitted_t{};
           co_return zlink::framework::
             result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
               envelope_codec.encode_parts (header, reply, serializers));
@@ -3602,8 +3603,9 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     };
     const auto mesh_request = [] (zlink::framework::runtime::messaging::message_parts_t parts,
                                   std::chrono::milliseconds)
-      -> zlink::framework::task_t<
+      -> zlink::framework::request_task_t<
         zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>> {
+        co_await zlink::framework::detail::request_admitted_t{};
         co_return zlink::framework::result_t<
           zlink::framework::runtime::messaging::message_parts_t>::success (std::move (parts));
     };
@@ -3611,8 +3613,10 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       [] (std::string, std::string, zlink::message_t,
           std::map<std::string, std::string>) -> zlink::framework::task_t<void> { co_return; };
     const auto client_server_request =
-      [] (std::string, std::string, zlink::message_t message, std::chrono::milliseconds,
-          std::map<std::string, std::string>) -> zlink::framework::task_t<zlink::message_t> {
+      [] (
+        std::string, std::string, zlink::message_t message, std::chrono::milliseconds,
+        std::map<std::string, std::string>) -> zlink::framework::request_task_t<zlink::message_t> {
+        co_await zlink::framework::detail::request_admitted_t{};
         co_return std::move (message);
     };
 

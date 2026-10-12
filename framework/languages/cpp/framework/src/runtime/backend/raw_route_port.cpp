@@ -296,10 +296,12 @@ task_t<raw_request_completion_t>
 raw_route_port_t::request (const raw_bytes_t &target_routing_id,
                            raw_message_t parts,
                            std::chrono::milliseconds timeout,
-                           runtime::mesh::service_liveness_registry_t::connection_t admission)
+                           runtime::mesh::service_liveness_registry_t::connection_t admission,
+                           std::shared_ptr<task_completion_source_t<void>> admitted)
 {
     auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
     auto result = source->task ();
+    observe_raw_request_admission_failure (result, admitted);
     // Route selection happens synchronously inside .async(). Keep that initial
     // admission boundary separate from the pending terminal: the same errno
     // has different meaning after Core has issued a WRITABLE wait token.
@@ -328,17 +330,11 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
             stages.emplace (submit_request_once (
               [&] { return std::move (operation).timeout (timeout).async (); }));
         }
-        observe_request_completion (std::move (*stages), source, std::move (admission));
-    }
-    catch (const zlink::submit_error_t &error) {
-        const auto phase = raw_request_failure_phase_t::initial_admission;
-        const auto result = runtime::messaging::map_submit_request_result (error.result (), false);
-        source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
-          result, {}, raw_request_failure_t{phase, error.result (), error.internal_errno ()}}));
+        observe_request_completion (std::move (*stages), source, std::move (admission), admitted);
     }
     catch (const std::exception &error) {
-        source->complete (result_t<raw_request_completion_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ()));
+        source->complete (
+          raw_request_failure_result (error, raw_request_failure_phase_t::initial_admission));
     }
     catch (...) {
         source->complete (result_t<raw_request_completion_t>::failure (

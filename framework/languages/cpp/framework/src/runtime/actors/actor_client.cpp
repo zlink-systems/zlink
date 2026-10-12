@@ -323,7 +323,7 @@ actor_request_call_t &actor_request_call_t::metadata (std::string key, std::stri
     return *this;
 }
 
-task_t<message_t> actor_request_call_t::async_message ()
+request_task_t<message_t> actor_request_call_t::async_message ()
 {
     return start (false);
 }
@@ -333,7 +333,7 @@ task_t<message_t> actor_request_call_t::yield_message ()
     return start (true);
 }
 
-task_t<message_t> actor_request_call_t::start (bool release_turn)
+request_task_t<message_t> actor_request_call_t::start (bool release_turn)
 {
     if (!runtime::current_actor_execution.actor_key.empty ()) {
         const auto separator = runtime::current_actor_execution.actor_key.rfind (':');
@@ -342,13 +342,13 @@ task_t<message_t> actor_request_call_t::start (bool release_turn)
             ? runtime::current_actor_execution.actor_key
             : runtime::current_actor_execution.actor_key.substr (separator + 1);
         if (current_actor_id == _actor_id.value ()) {
-            return task_t<message_t> (result_t<message_t>::failure (
+            return request_task_t<message_t> (result_t<message_t>::failure (
               framework_error_kind_t::invalid_operation,
               "awaited request to the current Actor cannot complete while its FIFO claim is held"));
         }
     }
     if (release_turn && !detail::current_serial_turn_allows_yield ()) {
-        return detail::unsupported_yield_task<message_t> ();
+        return request_task_t<message_t> (detail::unsupported_yield_task<message_t> ().result ());
     }
     auto turn_plan = detail::prepare_serial_turn_await (release_turn);
     detail::actor_request_turn_intent_scope_t request_intent (release_turn);
@@ -381,26 +381,6 @@ bool actor_request_requires_current_spot_gate (std::string_view target_spot_id, 
 namespace
 {
 
-task_t<result_t<messaging::message_parts_t>>
-wait_for_actor_completion (detail::mesh_node_runtime_t &node,
-                           const detail::host::pending_operation_t &operation_id)
-{
-    try {
-        auto completion = co_await node.await_completion (operation_id);
-        if (completion.record.terminal_result != 0) {
-            runtime::messaging::request_failure_mapper_t failure_mapper;
-            const auto mapped = failure_mapper.reply_header_exception (
-              static_cast<std::uint32_t> (completion.record.terminal_result),
-              static_cast<std::uint32_t> (completion.record.failure_errno), "Actor request");
-            co_return detail::result_access_t::failure<messaging::message_parts_t> (mapped);
-        }
-        co_return result_t<messaging::message_parts_t>::success (
-          messaging::message_parts_t (std::move (completion.parts)));
-    }
-    catch (const framework_exception_t &error) {
-        co_return detail::result_access_t::failure<messaging::message_parts_t> (error);
-    }
-}
 
 } // namespace
 
@@ -504,11 +484,12 @@ class actor_client_impl_t final : public actor_client_t
         co_return;
     }
 
-    task_t<message_t> request_erased (actor_id_t actor_id,
-                                      std::string packet_name,
-                                      message_t request,
-                                      std::optional<std::chrono::milliseconds> timeout,
-                                      const actor_request_call_t::metadata_map_t &metadata) override
+    request_task_t<message_t>
+    request_erased (actor_id_t actor_id,
+                    std::string packet_name,
+                    message_t request,
+                    std::optional<std::chrono::milliseconds> timeout,
+                    const actor_request_call_t::metadata_map_t &metadata) override
     {
         /* The metadata reference belongs to a caller-owned call object that
          * can unwind while this coroutine is suspended: keep a frame-owned copy
@@ -819,7 +800,7 @@ class actor_client_impl_t final : public actor_client_t
           runtime::protocol::wire_operation_id_t{}, 0, true);
     }
 
-    task_t<result_t<message_t>>
+    request_task_t<result_t<message_t>>
     submit_request (const resolved_actor_t &actor,
                     std::string packet_name,
                     message_t request,
@@ -847,7 +828,7 @@ class actor_client_impl_t final : public actor_client_t
           message_t::from_raw (*relayed.value (), _serializers));
     }
 
-    task_t<result_t<std::optional<zlink::message_t>>>
+    request_task_t<result_t<std::optional<zlink::message_t>>>
     relay_actor_packet (detail::mesh_node_runtime_t &runtime,
                         const resolved_actor_t &actor,
                         runtime::messaging::message_kind_t kind,
@@ -888,9 +869,12 @@ class actor_client_impl_t final : public actor_client_t
                 co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
             }
             detail::host::pending_operation_t operation_id;
-            const auto submit = co_await runtime.request_to_actor (
+            auto submission = runtime.request_to_actor (
               actor.native_ref, copied, operation_id, timeout, {}, actor.authority_owner_generation,
               actor.owner_lease_generation);
+            auto admitted = co_await detail::request_admission_source_t{};
+            runtime.observe_request_failure (operation_id, admitted, "Actor request");
+            const auto submit = co_await submission;
             if (submit != zlink::submit_result_t::ok) {
                 if (submit == zlink::submit_result_t::terminated) {
                     co_return detail::boundary_failure<std::optional<zlink::message_t>> (
@@ -901,7 +885,8 @@ class actor_client_impl_t final : public actor_client_t
                     .kind (),
                   "actor request was not accepted");
             }
-            auto reply = co_await wait_for_actor_completion (runtime, operation_id);
+            co_await detail::request_admitted_t{};
+            auto reply = co_await runtime.await_request_reply (operation_id, "Actor request");
             if (!reply) {
                 co_return detail::propagate_failure<std::optional<zlink::message_t>> (
                   reply, std::string ("actor request completion failed for node/generation '")

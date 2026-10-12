@@ -360,6 +360,18 @@ task_t<bool> submit_registered_infrastructure_request_with_retry (
     co_return true;
 }
 
+task_t<bool> await_request_admission (task_t<void> admitted)
+{
+    try {
+        co_await admitted;
+        co_return true;
+    }
+    catch (const framework_exception_t &) {
+        // The existing native reply observer completes the operation failure.
+        co_return false;
+    }
+}
+
 task_t<bool> submit_registered_infrastructure_request (
   std::shared_ptr<detail::backend::raw_route_port_t> port,
   std::shared_ptr<foundation::operation_registry_t> operations,
@@ -368,14 +380,17 @@ task_t<bool> submit_registered_infrastructure_request (
   std::vector<std::uint8_t> target_routing_id,
   detail::backend::raw_message_t request_parts,
   std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> decode_reply,
-  std::chrono::milliseconds timeout)
+  std::chrono::milliseconds timeout,
+  std::shared_ptr<task_completion_source_t<void>> admitted = {})
 {
     if (!port || timeout <= std::chrono::milliseconds::zero ()) {
         (void) operations->fail (operation, foundation::operation_terminal_t::transport_failed);
         co_return false;
     }
+    auto accepted =
+      admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
     auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-      port->request (target_routing_id, std::move (request_parts), timeout));
+      port->request (target_routing_id, std::move (request_parts), timeout, {}, accepted));
     detail::observe_task_terminal (
       *running, [operations = std::move (operations), operation, correlation,
                  decode_reply = std::move (decode_reply),
@@ -418,7 +433,7 @@ task_t<bool> submit_registered_infrastructure_request (
                                        foundation::operation_terminal_t::transport_failed);
           }
       });
-    co_return true;
+    co_return co_await await_request_admission (accepted->task ());
 }
 
 } // namespace
@@ -1092,6 +1107,8 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
         foundation::call_id_t operation;
         std::uint64_t correlation = 0;
         std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running;
+        std::shared_ptr<task_completion_source_t<void>> admitted =
+          std::make_shared<task_completion_source_t<void>> ();
         bool registered = false;
     };
     auto start =
@@ -1125,7 +1142,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
                     value.running =
                       std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
                         port->request (target_routing_id, std::move (wire), timeout,
-                                       std::move (admission)));
+                                       std::move (admission), value.admitted));
                 }
                 catch (...) {
                     (void) _operations->unregister (value.operation);
@@ -1141,8 +1158,10 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "raw mesh request registry is closed");
     }
-    co_return co_await observe_request (start->operation, start->correlation,
-                                        std::move (start->running));
+    auto admitted = start->admitted->task ();
+    (void) co_await observe_request (start->operation, start->correlation,
+                                     std::move (start->running));
+    co_return co_await await_request_admission (std::move (admitted));
 }
 
 struct raw_mesh_node_owner_t::send_completion_state_t
@@ -1864,7 +1883,8 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
   const std::vector<std::uint8_t> &actor_owner_routing_id,
   protocol::bound_session_bind_t record,
   std::chrono::milliseconds timeout,
-  foundation::operation_registry_t::callback_t callback)
+  foundation::operation_registry_t::callback_t callback,
+  std::shared_ptr<task_completion_source_t<void>> admitted)
 {
     if (record.actor.target_node_routing_id != actor_owner_routing_id) {
         throw std::invalid_argument ("bound Session bind Actor authority target is inconsistent");
@@ -1889,9 +1909,8 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
             id = operation_id (local.lifecycle_generation, correlation);
             record.correlation = correlation;
             request_parts = {protocol::encode_bound_session_bind (record)};
-            registered = operations->register_operation (
-              id, foundation::operation_registry_t::clock_t::time_point::max (),
-              std::move (callback), actor_owner_routing_id);
+            registered = operations->register_operation (id, deadline, std::move (callback),
+                                                         actor_owner_routing_id);
         }
     }
     if (!port) {
@@ -1901,7 +1920,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
     if (!registered)
         co_return false;
 
-    co_return co_await submit_registered_infrastructure_request_with_retry (
+    co_return co_await submit_registered_infrastructure_request (
       std::move (port), operations, id, correlation, actor_owner_routing_id,
       std::move (request_parts),
       [] (const detail::backend::raw_message_t &parts) {
@@ -1917,7 +1936,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
           }
           return parts.front ();
       },
-      deadline);
+      timeout, std::move (admitted));
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
@@ -2223,8 +2242,9 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     const auto operations = _operations;
     trace_mesh ("infrastructure-request-submit correlation=" + std::to_string (correlation)
                 + " targetBytes=" + std::to_string (target_routing_id.size ()));
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
     auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-      port->request (target_routing_id, std::move (parts), timeout));
+      port->request (target_routing_id, std::move (parts), timeout, {}, admitted));
     detail::observe_task_terminal (
       *running, [operations, id, correlation,
                  running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
@@ -2282,7 +2302,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                 {}, foundation::operation_terminal_t::protocol_error);
           }
       });
-    co_return true;
+    co_return co_await await_request_admission (admitted->task ());
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_user_spot_close (

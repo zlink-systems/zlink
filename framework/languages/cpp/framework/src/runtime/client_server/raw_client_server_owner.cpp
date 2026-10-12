@@ -1395,7 +1395,7 @@ raw_client_server_client_t::send (const protocol::application_payload_t &payload
     co_return submitted;
 }
 
-task_t<client_server_request_completion_t>
+request_task_t<client_server_request_completion_t>
 raw_client_server_client_t::request (const protocol::application_payload_t &payload,
                                      std::chrono::milliseconds timeout,
                                      std::map<std::string, std::string> metadata)
@@ -1451,7 +1451,8 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
       std::chrono::ceil<std::chrono::milliseconds> (deadline - std::chrono::steady_clock::now ());
     if (remaining <= std::chrono::milliseconds::zero ())
         co_return client_server_request_completion_t{foundation::operation_terminal_t::timed_out};
-    auto completion = co_await port->request (wire, remaining, state.admission);
+    auto admitted = co_await detail::request_admission_source_t{};
+    auto completion = co_await port->request (wire, remaining, state.admission, admitted);
     trace_client_server_lazy ("client-request-complete", [&] {
         return "channel=" + channel + " correlation=" + correlation_id
                + " result=" + std::to_string (static_cast<int> (completion.terminal))

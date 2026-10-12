@@ -754,7 +754,7 @@ int main ()
     const auto send_begin =
       actor_client_runtime.find ("task_t<void> send_erased (actor_id_t actor_id");
     const auto send_end = actor_client_runtime.find (
-      "task_t<message_t> request_erased (actor_id_t actor_id", send_begin);
+      "request_task_t<message_t> request_erased (actor_id_t actor_id", send_begin);
     const auto actor_send = send_begin != std::string::npos && send_end != std::string::npos
                               ? actor_client_runtime.substr (send_begin, send_end - send_begin)
                               : std::string{};

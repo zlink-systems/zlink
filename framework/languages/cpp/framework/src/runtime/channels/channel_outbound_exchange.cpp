@@ -296,7 +296,7 @@ class channel_native_client_t
 
     ~channel_native_client_t () { close (); }
 
-    task_t<runtime::messaging::message_parts_t>
+    request_task_t<runtime::messaging::message_parts_t>
     request (const runtime::messaging::message_parts_t &parts,
              const endpoint_provider_t &endpoints,
              std::chrono::milliseconds timeout)
@@ -308,7 +308,7 @@ class channel_native_client_t
         return runtime::messaging::with_request_deadline (std::move (operation), caller_deadline);
     }
 
-    task_t<runtime::messaging::message_parts_t>
+    request_task_t<runtime::messaging::message_parts_t>
     request_native (const runtime::messaging::message_parts_t &parts,
                     const endpoint_provider_t &endpoints,
                     std::chrono::milliseconds timeout,
@@ -367,6 +367,9 @@ class channel_native_client_t
                   deadline));
                 caller_deadline = pending->caller_deadline;
             }
+            if (pending->admission)
+                co_await std::move (*pending->admission);
+            co_await detail::request_admitted_t{};
             auto reply = co_await std::move (pending->reply);
             co_return runtime::messaging::message_parts_t (std::move (reply));
         }
@@ -952,7 +955,7 @@ struct channel_request_terminal_trace_t
 
 } // namespace
 
-task_t<zlink::message_t>
+request_task_t<zlink::message_t>
 channel_outbound_exchange_t::submit_request (std::string channel_name,
                                              std::string packet_name,
                                              std::type_index request_type,

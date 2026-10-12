@@ -2,6 +2,8 @@
 #pragma once
 
 #include <zlink/framework/contracts/detail/call_facade.hpp>
+#include <zlink/framework/contracts/dispatch/request_task.hpp>
+#include <zlink/framework/contracts/dispatch/request_task.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 
 #include <chrono>
@@ -52,7 +54,7 @@ template <typename TReply> class request_call_t
 {
   public:
     using metadata_map_t = std::map<std::string, std::string>;
-    using submit_fn_t = std::function<task_t<TReply> (
+    using submit_fn_t = std::function<request_task_t<TReply> (
       const std::string &, std::chrono::milliseconds, const metadata_map_t &)>;
     using preflight_fn_t = std::function<result_t<void> (bool)>;
 
@@ -77,7 +79,7 @@ template <typename TReply> class request_call_t
         return *this;
     }
 
-    task_t<TReply> async () { return start (false); }
+    request_task_t<TReply> async () { return start (false); }
 
     TReply submit ()
     {
@@ -88,15 +90,15 @@ template <typename TReply> class request_call_t
     task_t<TReply> yield () { return start (true); }
 
   private:
-    task_t<TReply> start (bool release_turn)
+    request_task_t<TReply> start (bool release_turn)
     {
         if (release_turn && !detail::current_serial_turn_allows_yield ()) {
-            return detail::unsupported_yield_task<TReply> ();
+            return request_task_t<TReply> (detail::unsupported_yield_task<TReply> ().result ());
         }
         if (_preflight) {
             const auto admitted = _preflight (release_turn);
             if (!admitted) {
-                return task_t<TReply> (
+                return request_task_t<TReply> (
                   admitted.error ()
                     ? detail::result_access_t::failure<TReply> (*admitted.error ())
                     : result_t<TReply>::failure (framework_error_kind_t::internal_failure,
@@ -104,19 +106,27 @@ template <typename TReply> class request_call_t
             }
         }
         if (_immediate) {
-            return task_t<TReply> (*_immediate);
+            return request_task_t<TReply> (*_immediate);
         }
         if (!_submit) {
-            return task_t<TReply> (
+            return request_task_t<TReply> (
               result_t<TReply>::failure (framework_error_kind_t::protocol_error,
                                          "request call is not bound to a channel client"));
         }
         auto turn_plan = detail::prepare_serial_turn_await (release_turn);
         if (!turn_plan) {
-            return _submit (_packet_name, _timeout, _metadata);
+            return submit_owned (_submit, _packet_name, _timeout, _metadata);
         }
-        auto pending = _submit (_packet_name, _timeout, _metadata);
+        auto pending = submit_owned (_submit, _packet_name, _timeout, _metadata);
         return detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
+    }
+
+    static request_task_t<TReply> submit_owned (submit_fn_t submit,
+                                                std::string packet_name,
+                                                std::chrono::milliseconds timeout,
+                                                metadata_map_t metadata)
+    {
+        co_return co_await submit (packet_name, timeout, metadata);
     }
 
     std::optional<result_t<TReply>> _immediate;
@@ -131,7 +141,7 @@ class channel_request_call_t
 {
   public:
     using metadata_map_t = std::map<std::string, std::string>;
-    using submit_fn_t = std::function<task_t<zlink::message_t> (
+    using submit_fn_t = std::function<request_task_t<zlink::message_t> (
       const std::string &, std::chrono::milliseconds, const metadata_map_t &)>;
 
     channel_request_call_t () = default;
@@ -157,7 +167,7 @@ class channel_request_call_t
         return *this;
     }
 
-    template <typename TReply> task_t<TReply> async () { return start<TReply> (false); }
+    template <typename TReply> request_task_t<TReply> async () { return start<TReply> (false); }
 
     template <typename TReply> TReply submit ()
     {
@@ -168,7 +178,7 @@ class channel_request_call_t
     template <typename TReply> task_t<TReply> yield () { return start<TReply> (true); }
 
   protected:
-    template <typename TReply> task_t<TReply> start (bool release_turn)
+    template <typename TReply> request_task_t<TReply> start (bool release_turn)
     {
         /* `async()` and `yield()` are commonly called on a temporary returned
          * by MessageBus::request(). Copy every value needed by the coroutine
@@ -179,12 +189,12 @@ class channel_request_call_t
     }
 
     template <typename TReply>
-    static task_t<TReply> start_owned (bool release_turn,
-                                       std::string packet_name,
-                                       serializer_registry_t *serializers,
-                                       submit_fn_t submit,
-                                       std::chrono::milliseconds timeout,
-                                       metadata_map_t metadata)
+    static request_task_t<TReply> start_owned (bool release_turn,
+                                               std::string packet_name,
+                                               serializer_registry_t *serializers,
+                                               submit_fn_t submit,
+                                               std::chrono::milliseconds timeout,
+                                               metadata_map_t metadata)
     {
         if (release_turn && !detail::current_serial_turn_allows_yield ()) {
             co_return co_await detail::unsupported_yield_task<TReply> ();
@@ -220,10 +230,10 @@ class channel_request_call_t
             return detail::result_access_t::failure<TReply> (error);
         }
     }
-    task_t<zlink::message_t> async_raw ()
+    request_task_t<zlink::message_t> async_raw ()
     {
         if (!_submit) {
-            return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
+            return request_task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
               framework_error_kind_t::protocol_error,
               "request call is not bound to a channel client"));
         }

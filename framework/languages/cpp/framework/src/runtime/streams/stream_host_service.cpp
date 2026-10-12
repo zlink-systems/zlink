@@ -1773,7 +1773,7 @@ class stream_host_service_t::listener_t
         return state;
     }
 
-    task_t<void> bind_actor_session (
+    request_task_t<void> bind_actor_session (
       runtime::stateful::stream_connection_t transport_connection,
       zlink::routing_id_t session_rid,
       actor_ref_t actor,
@@ -1954,6 +1954,7 @@ class stream_host_service_t::listener_t
             return result_t<void>::success ();
         };
         if (local_node->to_hex () == actor_route->node_rid.to_hex ()) {
+            co_await detail::request_admitted_t{};
             recorded = result_t<void>::success ();
         } else {
             auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
@@ -2222,7 +2223,7 @@ class stream_host_service_t::listener_t
           [this, transport_connection = created->transport_connection, rid, replacement,
            weak = std::weak_ptr<core_session_t> (created)] (
             actor_ref_t actor, std::uint64_t binding_generation,
-            std::uint16_t actor_slot) -> task_t<void> {
+            std::uint16_t actor_slot) -> request_task_t<void> {
               const auto actor_id = std::string (actor.actor_id ().value ());
               return bind_actor_session (transport_connection, rid, actor, replacement,
                                          binding_generation, [this, weak, actor_slot, actor_id] {
@@ -3297,7 +3298,7 @@ class stream_host_service_t::listener_t
               [this, connection = *connection_state->transport_connection, session_rid, replacement,
                weak = std::weak_ptr<stream_connection_state_t> (connection_state)] (
                 actor_ref_t actor, std::uint64_t binding_generation,
-                std::uint16_t actor_slot) -> task_t<void> {
+                std::uint16_t actor_slot) -> request_task_t<void> {
                   const auto actor_id = std::string (actor.actor_id ().value ());
                   return bind_actor_session (
                     connection, session_rid, actor, replacement, binding_generation,

@@ -1224,7 +1224,7 @@ serializer_registry_t *message_bus_t::serializers () const noexcept
     return _state ? _state->serializers : nullptr;
 }
 
-task_t<zlink::message_t>
+request_task_t<zlink::message_t>
 message_bus_t::submit_request_message_async (std::string channel_name,
                                              std::string packet_name,
                                              std::type_index request_type,
@@ -1765,7 +1765,7 @@ task_t<std::uint64_t> route_client_t::submit_spot_request_erased (
     }
 }
 
-task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
+request_task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
   const std::shared_ptr<detail::route_client_state_t> &state_ref,
   std::string router_channel_id,
   zlink::routing_id_t target_node_rid,
@@ -1835,19 +1835,23 @@ task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
         runtime::messaging::envelope_codec_t envelope;
-        auto reply_task = [&] () -> task_t<result_t<runtime::messaging::message_parts_t>> {
+        auto admitted = co_await detail::request_admission_source_t{};
+        auto reply_task = [&] () -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
             if (mesh_requester)
                 return (*mesh_requester) (target_node_rid, std::move (parts), effective_timeout);
-            return detail::offload_route_reply (
-              state->executor,
-              [runtime_state = state->runtime, router_channel_id, target_node_rid,
-               parts = std::move (parts), effective_timeout, ambient_context] () mutable {
-                  const auto worker_context = detail::enter_ambient_context (ambient_context);
-                  detail::channel_runtime_manager_t manager (runtime_state);
-                  auto &runtime = manager.get_route_channel (router_channel_id);
-                  return runtime.request_reply_parts (target_node_rid, std::move (parts),
-                                                      effective_timeout);
-              });
+            return request_task_t<result_t<runtime::messaging::message_parts_t>> (
+              detail::offload_route_reply (
+                state->executor,
+                [runtime_state = state->runtime, router_channel_id, target_node_rid,
+                 parts = std::move (parts), effective_timeout, ambient_context,
+                 admitted] () mutable {
+                    const auto worker_context = detail::enter_ambient_context (ambient_context);
+                    detail::channel_runtime_manager_t manager (runtime_state);
+                    auto &runtime = manager.get_route_channel (router_channel_id);
+                    return runtime.request_reply_parts (target_node_rid, std::move (parts),
+                                                        effective_timeout, admitted);
+                }),
+              admitted);
         }();
         const auto reply = co_await reply_task;
         if (!reply)
@@ -1896,7 +1900,7 @@ task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
     }
 }
 
-task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_erased (
+request_task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_erased (
   const std::shared_ptr<detail::route_client_state_t> &state_ref,
   std::string channel_name,
   std::string packet_name,
@@ -2035,7 +2039,7 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
     }
 }
 
-task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erased (
+request_task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erased (
   const std::shared_ptr<detail::route_client_state_t> &state_ref,
   std::string router_channel_id,
   zlink::routing_id_t target_node_rid,
@@ -2109,24 +2113,28 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
         runtime::messaging::envelope_codec_t envelope;
-        auto reply_task = [&] () -> task_t<result_t<runtime::messaging::message_parts_t>> {
+        auto admitted = co_await detail::request_admission_source_t{};
+        auto reply_task = [&] () -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
             if (mesh_requester)
                 return (*mesh_requester) (target_node_rid, spot_id, target_spot_generation,
                                           std::move (parts), effective_timeout);
-            return detail::offload_route_reply (
-              state->executor,
-              [runtime_state = state->runtime, router_channel_id, target_node_rid,
-               spot_id = std::string (spot_id), packet_name, parts = std::move (parts),
-               effective_timeout, ambient_context] () mutable {
-                  const auto worker_context = detail::enter_ambient_context (ambient_context);
-                  detail::channel_runtime_manager_t manager (runtime_state);
-                  auto &runtime = manager.get_route_channel (router_channel_id);
-                  return detail::is_internal_spot_route_packet (packet_name)
-                           ? runtime.request_reply_parts (target_node_rid, std::move (parts),
-                                                          effective_timeout)
-                           : runtime.request_reply_spot_parts (
-                               target_node_rid, spot_id, std::move (parts), effective_timeout);
-              });
+            return request_task_t<result_t<runtime::messaging::message_parts_t>> (
+              detail::offload_route_reply (
+                state->executor,
+                [runtime_state = state->runtime, router_channel_id, target_node_rid,
+                 spot_id = std::string (spot_id), packet_name, parts = std::move (parts),
+                 effective_timeout, ambient_context, admitted] () mutable {
+                    const auto worker_context = detail::enter_ambient_context (ambient_context);
+                    detail::channel_runtime_manager_t manager (runtime_state);
+                    auto &runtime = manager.get_route_channel (router_channel_id);
+                    return detail::is_internal_spot_route_packet (packet_name)
+                             ? runtime.request_reply_parts (target_node_rid, std::move (parts),
+                                                            effective_timeout, admitted)
+                             : runtime.request_reply_spot_parts (target_node_rid, spot_id,
+                                                                 std::move (parts),
+                                                                 effective_timeout, admitted);
+                }),
+              admitted);
         }();
         const auto reply = co_await reply_task;
         if (!reply) {
@@ -2264,7 +2272,7 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
     co_return submitted;
 }
 
-task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_erased (
+request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_erased (
   const std::shared_ptr<detail::route_client_state_t> &state_ref,
   spot_id_t target,
   detail::spot_activation_intent_t intent,

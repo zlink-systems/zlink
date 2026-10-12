@@ -888,33 +888,6 @@ zlink::framework::result_t<void> one_way_native_submit_result (zlink::submit_res
     }
 }
 
-zlink::framework::task_t<
-  zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>>
-await_mesh_request_completion (zlink::framework::detail::mesh_node_runtime_t &mesh,
-                               const zlink::framework::detail::host::pending_operation_t &operation,
-                               std::string_view operation_name)
-{
-    using namespace zlink::framework;
-    try {
-        auto completion = co_await mesh.await_completion (operation);
-        if (completion.record.terminal_result != static_cast<int> (zlink::request_result_t::ok)) {
-            co_return detail::result_access_t::failure<
-              zlink::framework::runtime::messaging::message_parts_t> (
-              zlink::framework::runtime::messaging::request_failure_mapper_t{}
-                .reply_header_exception (
-                  static_cast<std::uint32_t> (completion.record.terminal_result),
-                  static_cast<std::uint32_t> (completion.record.failure_errno),
-                  std::string (operation_name)));
-        }
-        co_return result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
-          zlink::framework::runtime::messaging::message_parts_t (std::move (completion.parts)));
-    }
-    catch (const framework_exception_t &error) {
-        co_return detail::result_access_t::failure<
-          zlink::framework::runtime::messaging::message_parts_t> (error);
-    }
-}
-
 zlink::framework::task_t<zlink::framework::result_t<void>> send_bound_session_from_app_task (
   std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t> application_mesh,
   zlink::framework::detail::actor_gateway_runtime_t actor_gateway_runtime,
@@ -1941,7 +1914,7 @@ void app_t::_apply_zlink_framework ()
             std::type_index,
             std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
             std::chrono::milliseconds timeout,
-            std::map<std::string, std::string> metadata) -> task_t<zlink::message_t> {
+            std::map<std::string, std::string> metadata) -> request_task_t<zlink::message_t> {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
               const auto flow = runtime::flow_context_t::current ();
@@ -1969,6 +1942,8 @@ void app_t::_apply_zlink_framework ()
               }
               auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
               auto output = completion->task ();
+              auto admitted = co_await detail::request_admission_source_t{};
+              detail::observe_request_failure (output, admitted);
               const auto submitted =
                 co_await selected.value ().source->activate_instance_spot_remote (
                   selected.value ().target.rid, std::move (header),
@@ -2036,6 +2011,8 @@ void app_t::_apply_zlink_framework ()
                     framework_error_kind_t::unavailable,
                     "Instance Spot activation was not admitted"));
               }
+              if (submitted)
+                  co_await detail::request_admitted_t{};
               co_return co_await output;
           });
     }
@@ -2055,17 +2032,20 @@ void app_t::_apply_zlink_framework ()
                                                        std::uint64_t target_spot_generation,
                                                        runtime::messaging::message_parts_t parts,
                                                        std::chrono::milliseconds timeout)
-          -> task_t<result_t<runtime::messaging::message_parts_t>> {
+          -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
             detail::host::pending_operation_t operation;
-            const auto submitted = co_await mesh->request_to_spot (
-              source_spot_id, target_node, target_spot, target_spot_generation, parts.items (),
-              operation, timeout);
+            auto submission =
+              mesh->request_to_spot (source_spot_id, target_node, target_spot,
+                                     target_spot_generation, parts.items (), operation, timeout);
+            auto admitted = co_await detail::request_admission_source_t{};
+            mesh->observe_request_failure (operation, admitted, "MeshNode Spot request");
+            const auto submitted = co_await submission;
             if (submitted != zlink::submit_result_t::ok) {
                 co_return result_t<runtime::messaging::message_parts_t>::failure (
                   framework_error_kind_t::unavailable, "MeshNode Spot request was not submitted");
             }
-            co_return co_await await_mesh_request_completion (*mesh, operation,
-                                                              "MeshNode Spot request");
+            co_await detail::request_admitted_t{};
+            co_return co_await mesh->await_request_reply (operation, "MeshNode Spot request");
         };
         const auto mesh_name = mesh->mesh_name ();
         const auto claimed_as_route_alias =
@@ -2103,10 +2083,12 @@ void app_t::_apply_zlink_framework ()
           },
           [mesh] (const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts,
                   std::chrono::milliseconds timeout)
-            -> task_t<result_t<runtime::messaging::message_parts_t>> {
+            -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
               detail::host::pending_operation_t operation;
-              const auto submitted =
-                co_await mesh->request_to_node (target, parts.items (), operation, timeout);
+              auto submission = mesh->request_to_node (target, parts.items (), operation, timeout);
+              auto admitted = co_await detail::request_admission_source_t{};
+              mesh->observe_request_failure (operation, admitted, "MeshNode request");
+              const auto submitted = co_await submission;
               if (submitted != zlink::submit_result_t::ok) {
                   if (submitted == zlink::submit_result_t::not_found) {
                       co_return result_t<runtime::messaging::message_parts_t>::failure (
@@ -2120,8 +2102,8 @@ void app_t::_apply_zlink_framework ()
                     runtime::messaging::map_submit_result_error_kind (submitted),
                     "MeshNode request was not submitted");
               }
-              co_return co_await await_mesh_request_completion (*mesh, operation,
-                                                                "MeshNode request");
+              co_await detail::request_admitted_t{};
+              co_return co_await mesh->await_request_reply (operation, "MeshNode request");
           });
         for (const auto &channel_name : mesh->channel_names ()) {
             channel_runtime.bind_mesh_channel_transport (
@@ -2134,10 +2116,13 @@ void app_t::_apply_zlink_framework ()
               },
               [mesh, channel_name] (runtime::messaging::message_parts_t parts,
                                     std::chrono::milliseconds timeout)
-                -> task_t<result_t<runtime::messaging::message_parts_t>> {
+                -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
                   detail::host::pending_operation_t operation;
-                  const auto submitted = co_await mesh->request_to_channel (
-                    channel_name, parts.items (), operation, timeout);
+                  auto submission =
+                    mesh->request_to_channel (channel_name, parts.items (), operation, timeout);
+                  auto admitted = co_await detail::request_admission_source_t{};
+                  mesh->observe_request_failure (operation, admitted, "RouteMesh channel request");
+                  const auto submitted = co_await submission;
                   if (submitted != zlink::submit_result_t::ok) {
                       if (submitted == zlink::submit_result_t::terminated) {
                           co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
@@ -2148,8 +2133,9 @@ void app_t::_apply_zlink_framework ()
                         runtime::messaging::map_submit_result_error_kind (submitted),
                         "RouteMesh channel request was not submitted");
                   }
-                  co_return co_await await_mesh_request_completion (*mesh, operation,
-                                                                    "RouteMesh channel request");
+                  co_await detail::request_admitted_t{};
+                  co_return co_await mesh->await_request_reply (operation,
+                                                                "RouteMesh channel request");
               });
         }
     }
@@ -2248,7 +2234,7 @@ void app_t::_apply_zlink_framework ()
             std::optional<runtime::stateful::stream_dispatch_t> dispatch,
             std::chrono::milliseconds request_timeout,
             std::shared_ptr<runtime::host::public_host_runtime_t> session_owner_runtime) mutable
-          -> task_t<std::optional<zlink::message_t>> {
+          -> request_task_t<std::optional<zlink::message_t>> {
             detail::session_ingress_completion_t ingress;
             auto routed_actor = actor;
             runtime::protocol::actor_route_fence_t stale_route;
@@ -2336,11 +2322,12 @@ void app_t::_apply_zlink_framework ()
         };
         actor_gateway_runtime.on_relay (
           [application_mesh, actor_gateway_runtime, deliver_relay,
-           dispatch_options = options.configure_dispatch (), request_timeout] (
-            const actor_ref_t &actor, actor_context_t, const detail::stream_header_t &header,
-            const zlink::message_t &payload,
-            std::optional<detail::bound_session_relay_source_t> source,
-            std::chrono::milliseconds timeout) mutable -> task_t<std::optional<zlink::message_t>> {
+           dispatch_options = options.configure_dispatch (),
+           request_timeout] (const actor_ref_t &actor, actor_context_t,
+                             const detail::stream_header_t &header, const zlink::message_t &payload,
+                             std::optional<detail::bound_session_relay_source_t> source,
+                             std::chrono::milliseconds timeout) mutable
+          -> request_task_t<std::optional<zlink::message_t>> {
               using reply_t = std::optional<zlink::message_t>;
               const auto budget =
                 timeout.count () > 0
@@ -2477,6 +2464,7 @@ void app_t::_apply_zlink_framework ()
                   co_return result_t<reply_t>::failure (framework_error_kind_t::invalid_operation,
                                                         "bound Session ingress was not admitted");
               }
+              co_await detail::request_admitted_t{};
               if (!dispatch) {
                   if (request)
                       co_return co_await completion->task ();
