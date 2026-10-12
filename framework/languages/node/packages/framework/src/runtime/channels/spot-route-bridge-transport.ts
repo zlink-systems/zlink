@@ -37,7 +37,8 @@ export class ZLinkSpotRouteBridgeTransport {
     parts: readonly Message[],
     codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     const bridge = this.requireBridge(target.routerChannelId);
     const operation = appendParts(
@@ -45,7 +46,7 @@ export class ZLinkSpotRouteBridgeTransport {
       parts
     )
       .timeout(timeoutMs ?? 0)
-      .submit();
+      .submit(onAdmitted);
     const replyParts = await awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);
     });
@@ -61,14 +62,15 @@ export class ZLinkSpotRouteBridgeTransport {
     target: ZLinkSpotRouteTarget,
     request: Message,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<readonly Message[]> {
     const bridge = this.requireBridge(target.routerChannelId);
     const operation = bridge
       .request(target.routerChannelId, target.targetNodeRid, target.spotId)
       .message(request)
       .timeout(timeoutMs ?? this.defaultRequestTimeoutMs ?? 0)
-      .submit();
+      .submit(onAdmitted);
     return awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);
     });

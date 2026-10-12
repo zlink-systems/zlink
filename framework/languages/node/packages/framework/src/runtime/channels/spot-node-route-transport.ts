@@ -34,7 +34,8 @@ export class ZLinkSpotNodeRouteTransport {
     parts: readonly Message[],
     codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<TReply> | undefined {
     const router = this.targets.spotNodeRouter(target.routerChannelId);
     if (router === undefined) {
@@ -47,7 +48,8 @@ export class ZLinkSpotNodeRouteTransport {
       target.targetNodeRid,
       target.spotId,
       parts,
-      effectiveTimeoutMs
+      effectiveTimeoutMs,
+      onAdmitted
     );
     return awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);
@@ -65,7 +67,8 @@ export class ZLinkSpotNodeRouteTransport {
     target: ZLinkSpotRouteTarget,
     request: Message,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<readonly Message[]> | undefined {
     const router = this.targets.spotNodeRouter(target.routerChannelId);
     if (router === undefined) {
@@ -78,7 +81,8 @@ export class ZLinkSpotNodeRouteTransport {
       target.targetNodeRid,
       target.spotId,
       request,
-      effectiveTimeoutMs
+      effectiveTimeoutMs,
+      onAdmitted
     );
     return awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);

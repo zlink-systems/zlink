@@ -1326,7 +1326,8 @@ export class ServiceStatefulRuntime {
     sourceSpotId: string,
     requested: ServiceDirectSpotRouteFence,
     payload: ServiceApplicationPayload,
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     const target = this.acceptSpotAuthority(requested);
@@ -1346,7 +1347,9 @@ export class ServiceStatefulRuntime {
       target.targetNodeRid,
       [header, encodeApplicationPayload(payload)],
       timeoutMs,
-      'spotRequest'
+      'spotRequest',
+      undefined,
+      onAdmitted
     );
     return pending;
   }
@@ -1384,7 +1387,8 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     sourceActor?: ServiceActorRef,
-    boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint }
+    boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint },
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     const route = this.tryActorFence(target);
@@ -1413,7 +1417,9 @@ export class ServiceStatefulRuntime {
       target.nodeRid,
       [header, encodeApplicationPayload(payload)],
       timeoutMs,
-      'actorRequest'
+      'actorRequest',
+      undefined,
+      onAdmitted
     );
     return pending;
   }
@@ -1499,7 +1505,8 @@ export class ServiceStatefulRuntime {
     timeoutMs: number,
     sourceSpotId?: string,
     metadataFrame?: Uint8Array,
-    instanceIntent = false
+    instanceIntent = false,
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     this.submitRequest(
@@ -1523,7 +1530,9 @@ export class ServiceStatefulRuntime {
         metadataFrame
       ),
       timeoutMs,
-      'instanceSpotRequest'
+      'instanceSpotRequest',
+      undefined,
+      onAdmitted
     );
     return pending;
   }
@@ -1551,7 +1560,8 @@ export class ServiceStatefulRuntime {
     payloadFrame: Buffer,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
-    metadataFrame?: Uint8Array
+    metadataFrame?: Uint8Array,
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const timeoutMs = remainingDeadlineMs(deadlineUnixMs);
     const pending = this.operations.register(timeoutMs);
@@ -1576,7 +1586,9 @@ export class ServiceStatefulRuntime {
         metadataFrame
       ),
       timeoutMs,
-      'instanceSpotRequest'
+      'instanceSpotRequest',
+      undefined,
+      onAdmitted
     );
     return pending;
   }
@@ -2371,6 +2383,7 @@ export class ServiceStatefulRuntime {
         localReply,
         metadataFrame
       ).finally(() => ownedIngress.applicationJobOwner?.close());
+      ingress.onAdmitted?.();
       return 'infrastructure';
     }
     if (
@@ -2384,6 +2397,7 @@ export class ServiceStatefulRuntime {
         payloadFrame,
         metadataFrame
       ).finally(() => ownedIngress.applicationJobOwner?.close());
+      ingress.onAdmitted?.();
       return 'infrastructure';
     }
     const spot = this.requireInstanceActivation(ingress, record);
@@ -3821,7 +3835,10 @@ export class ServiceStatefulRuntime {
       stateful,
       applicationJob
     });
-    if (accepted) return domain;
+    if (accepted) {
+      ingress.onAdmitted?.();
+      return domain;
+    }
     applicationJob.close();
     if (stateful.reply !== undefined) {
       const result = failure(
@@ -4393,7 +4410,8 @@ export class ServiceStatefulRuntime {
       | 'streamBind'
       | 'streamUnbind'
       | 'instanceSpotRequest',
-    actor?: ServiceActorRef
+    actor?: ServiceActorRef,
+    onAdmitted?: () => void
   ): void {
     if (targetNodeRid === this.nodeRid) {
       const deadlineUnixMs = BigInt(Date.now() + Math.max(0, timeoutMs));
@@ -4411,6 +4429,7 @@ export class ServiceStatefulRuntime {
             flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
             sourceRoutingId: this.nodeRid,
             requestSequence: pending.id,
+            onAdmitted,
             parts,
             applicationJobOwner
           };
@@ -4429,7 +4448,7 @@ export class ServiceStatefulRuntime {
       })().catch((error) => this.operations.reply(pending.id, failure(error)));
       return;
     }
-    void this.raw.requestService(targetNodeRid, parts, timeoutMs).then(
+    void this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted).then(
       (reply) => this.completeRemoteReply(pending, targetNodeRid, operationKind, actor, reply),
       (error) => this.operations.fail(pending.id, error)
     );

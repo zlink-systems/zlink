@@ -84,6 +84,7 @@ type RawServiceChannelTargetSelection =
 type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer;
 
 export interface RawServiceIngressRecord {
+  readonly onAdmitted?: () => void;
   readonly command: number;
   readonly flags: number;
   readonly sourceRoutingId: string;
@@ -517,15 +518,17 @@ export class RawServiceMeshRuntime {
   requestToNode(
     targetNodeRoutingId: string,
     payload: ServiceApplicationPayloadInput,
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): PendingOperation<RawServiceRequestResult> {
-    return this.requestToTarget(targetNodeRoutingId, payload, timeoutMs);
+    return this.requestToTarget(targetNodeRoutingId, payload, timeoutMs, undefined, onAdmitted);
   }
 
   requestToChannel(
     channelName: string,
     payload: ServiceApplicationPayloadInput,
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): PendingOperation<RawServiceRequestResult> {
     const selection = this.selectChannelTarget(channelName);
     if (selection.kind !== 'selected') {
@@ -537,7 +540,8 @@ export class RawServiceMeshRuntime {
       selection.peer.descriptor.nodeRoutingId,
       payload,
       timeoutMs,
-      channelName
+      channelName,
+      onAdmitted
     );
   }
 
@@ -585,14 +589,16 @@ export class RawServiceMeshRuntime {
   requestService(
     targetNodeRoutingId: string,
     parts: readonly Uint8Array[],
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): Promise<readonly Buffer[]> {
     const admission = this.topology.peer(targetNodeRoutingId)?.liveness;
     return this.requireStarted().request(
       targetNodeRoutingId,
       parts,
       timeoutMs,
-      admission?.recordReceived
+      admission?.recordReceived,
+      onAdmitted
     );
   }
 
@@ -1111,7 +1117,8 @@ export class RawServiceMeshRuntime {
     targetNodeRoutingId: string,
     payload: ServiceApplicationPayloadInput,
     timeoutMs: number,
-    channelName?: string
+    channelName?: string,
+    onAdmitted?: () => void
   ): PendingOperation<RawServiceRequestResult> {
     const correlation = this.nextCorrelation++;
     const header =
@@ -1182,6 +1189,8 @@ export class RawServiceMeshRuntime {
               terminalResult: RequestResult.NotConnected,
               failureCode: 0
             });
+          } else {
+            onAdmitted?.();
           }
         } finally {
           applicationJobOwner.close();
@@ -1207,7 +1216,8 @@ export class RawServiceMeshRuntime {
         selectedTargetNodeRoutingId,
         parts,
         timeoutMs,
-        selectedPeer.liveness?.recordReceived
+        selectedPeer.liveness?.recordReceived,
+        onAdmitted
       );
     } catch (error) {
       this.operations.fail(pending.id, error);

@@ -128,11 +128,20 @@ export class ZLinkChannelOutboundOperations {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     return keepChannelRequestAlive(
       runWithOutboundFlow(this.dispatchServices.flowCreationEnabled(), () =>
-        this.requestScoped<TReply>(channelName, packetName, request, timeoutMs, signal, metadata)
+        this.requestScoped<TReply>(
+          channelName,
+          packetName,
+          request,
+          timeoutMs,
+          signal,
+          metadata,
+          onAdmitted
+        )
       )
     );
   }
@@ -143,7 +152,8 @@ export class ZLinkChannelOutboundOperations {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     const deadlineMs = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
     const deadlineUnixMs = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
@@ -213,7 +223,8 @@ export class ZLinkChannelOutboundOperations {
             replyParts = await awaitWithAbort(
               dealer.request(
                 parts,
-                remainingRequestTimeout(`Channel request '${channelName}'`, deadlineMs)
+                remainingRequestTimeout(`Channel request '${channelName}'`, deadlineMs),
+                onAdmitted
               ),
               signal
             );
@@ -397,7 +408,8 @@ export class ZLinkChannelOutboundOperations {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     return runWithOutboundFlow(this.dispatchServices.flowCreationEnabled(), () =>
       this.routeRequestScoped<TReply>(
@@ -407,7 +419,8 @@ export class ZLinkChannelOutboundOperations {
         request,
         timeoutMs,
         signal,
-        metadata
+        metadata,
+        onAdmitted
       )
     );
   }
@@ -419,7 +432,8 @@ export class ZLinkChannelOutboundOperations {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     let correlationId: string | undefined;
     let router: ReturnType<ZLinkChannelSocketRegistry['routeRouter']> | undefined;
@@ -471,7 +485,7 @@ export class ZLinkChannelOutboundOperations {
       });
       const reply = await this.measureRequest(routerChannelId, async () => {
         const replyParts = await awaitWithAbort(
-          router!.request(targetNodeRid, parts, timeoutMs),
+          router!.request(targetNodeRid, parts, timeoutMs, onAdmitted),
           signal
         );
         try {

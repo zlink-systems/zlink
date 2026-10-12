@@ -32,7 +32,8 @@ export class ZLinkLocalSpotRouteTransport {
     packetName: string | undefined,
     request: unknown,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     if (this.dispatcher === undefined) {
       throw new ZLinkConfigurationException(
@@ -41,6 +42,7 @@ export class ZLinkLocalSpotRouteTransport {
     }
     const pending = this.dispatcher.request<TReply>(spotId, packetName, request, {
       channelName: routerChannelId,
+      onAdmitted,
       signal
     });
     const effectiveTimeoutMs = timeoutMs ?? this.defaultRequestTimeoutMs;

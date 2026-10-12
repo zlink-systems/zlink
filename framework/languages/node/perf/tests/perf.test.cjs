@@ -18,6 +18,9 @@ const {
   ActorNoBindSendSendEchoScenario
 } = require('../build/actor-caller-server/actor-no-bind-send-send-echo-scenario.js');
 const {
+  ActorNoBindRequestEchoScenario
+} = require('../build/actor-caller-server/actor-no-bind-request-echo-scenario.js');
+const {
   S2sSpotToChannelSendSendEchoScenario
 } = require('../build/spot-server/s2s-spot-to-channel-send-send-echo-scenario.js');
 const { FanoutReceipts } = require('../build/subscriber-server/fanout-receipts.js');
@@ -93,6 +96,55 @@ test('server-driven config written by the common runner starts requests on every
   );
 
   assert.equal(started, workload.logicalStreams);
+});
+
+test('request streams wait for the previous admission before starting another call', async () => {
+  let started = 0;
+  let release;
+  const admission = new Promise(resolve => { release = resolve; });
+  const running = runRequestStreams(1, () => started < 2, () => {
+    started++;
+    return started === 1 ? admission : Promise.resolve();
+  }, error => { throw error; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started, 1);
+  release();
+  await running;
+  assert.equal(started, 2);
+});
+
+test('request admission failure records one reply outcome without a second diagnostic', async () => {
+  const error = new Error('admission failed');
+  const outcomes = [];
+  const diagnostics = [];
+  const measurement = {
+    canIssue: true,
+    request: () => ({ with() { return this; } }),
+    beginOperation: () => 1n,
+    callTimeout: () => 1000,
+    completeOperation(_started, failure) {
+      outcomes.push(failure);
+      this.canIssue = false;
+    },
+    recordDiagnostic: failure => diagnostics.push(failure)
+  };
+  const actorClient = {
+    requestToActor() {
+      return {
+        timeout() { return this; },
+        submit() {
+          return Object.assign(Promise.reject(error), { admitted: Promise.reject(error) });
+        }
+      };
+    }
+  };
+  const scenario = new ActorNoBindRequestEchoScenario(actorClient, measurement, {
+    actorIds: ['actor'], workload: { logicalStreams: 1 }
+  });
+  scenario.sequences = [0];
+  await scenario.run();
+  assert.deepEqual(outcomes, [error]);
+  assert.deepEqual(diagnostics, []);
 });
 
 test('actor send setup probe uses the one-way send API without a deadline argument', async () => {
