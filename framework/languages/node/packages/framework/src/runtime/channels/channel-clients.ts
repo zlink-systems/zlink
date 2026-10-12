@@ -1,4 +1,6 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
+import { createZLinkRequest } from '../messaging/request-result';
+import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 import type {
   ZLinkChannelClient,
   ZLinkChannelRequestCall,
@@ -494,15 +496,17 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
     return this;
   }
 
-  async submit<TReply>(signal?: AbortSignal): Promise<TReply> {
-    throwIfAborted(signal);
-    this.validate();
-    return this.submitter<TReply>(
-      undefined,
-      this.timeoutMs ?? this.defaultRequestTimeoutMs,
-      new Map(this.selectedMetadata),
-      signal
-    );
+  submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply> {
+    return createZLinkRequest(() => {
+      throwIfAborted(signal);
+      this.validate();
+      return this.submitter<TReply>(
+        undefined,
+        this.timeoutMs ?? this.defaultRequestTimeoutMs,
+        new Map(this.selectedMetadata),
+        signal
+      );
+    });
   }
 
   async yield<TReply>(signal?: AbortSignal): Promise<TReply> {

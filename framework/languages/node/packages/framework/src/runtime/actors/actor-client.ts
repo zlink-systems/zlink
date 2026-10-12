@@ -1,4 +1,6 @@
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { createZLinkRequest } from '../messaging/request-result';
+import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 import {
   type ActorRef,
   type RoutingId,
@@ -728,8 +730,9 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
     return this;
   }
 
-  submit<TReply>(signal?: AbortSignal): Promise<TReply> {
-    return this.execute<TReply>('async', signal);
+  submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply> {
+    this.rejectSelfActorRequest();
+    return createZLinkRequest(() => this.execute<TReply>('async', signal));
   }
 
   yield<TReply>(signal?: AbortSignal): Promise<TReply> {
@@ -741,7 +744,6 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
 
   private execute<TReply>(waitPolicy: 'async' | 'yield', signal?: AbortSignal): Promise<TReply> {
     ensureSingleSubmit(this.executed);
-    this.rejectSelfActorRequest();
     this.executed = true;
     throwIfAborted(signal);
     const submitter = waitPolicy === 'async' ? this.asyncSubmitter : this.yieldSubmitter;

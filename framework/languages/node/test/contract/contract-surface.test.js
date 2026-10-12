@@ -254,6 +254,10 @@ test('channel request yield and Mesh channel roles match the exact contract', ()
   const meshChannelServer = declarationBody(declarations, 'ZLinkMeshChannelServerBuilder');
 
   assert.equal(requestCall.includes('yield'), false);
+  assert.match(requestCall, /submit<TReply>\(signal\?: AbortSignal\): ZLinkRequest<TReply>/);
+  const requestResult = declarationBody(declarations, 'ZLinkRequest');
+  assert.match(requestResult, /extends Promise<TReply>/);
+  assert.match(requestResult, /readonly admitted: Promise<void>/);
   assert.equal(interfaceExtends(channelRequestCall, 'ZLinkRequestCall'), true);
   assert.match(channelRequestCall, /yield<TReply>\(signal\?: AbortSignal\): Promise<TReply>/);
   assert.match(meshNodeBuilder, /channel\(channelName: string\): ZLinkMeshChannelBuilder/);
@@ -835,7 +839,7 @@ test('actor declarations resolve global ActorId calls and expose fluent manager 
   assert.match(actorRequestCall, /metadata\(key: string, value: string\): this/);
   assert.equal(actorRequestCall.includes('packetName('), false);
   assert.match(actorRequestCall, /timeout\(timeoutMs: number\): this/);
-  assert.match(actorRequestCall, /submit<TReply>\(signal\?: AbortSignal\): Promise<TReply>/);
+  assert.match(actorRequestCall, /submit<TReply>\(signal\?: AbortSignal\): ZLinkRequest<TReply>/);
   assert.match(actorRequestCall, /yield<TReply>\(signal\?: AbortSignal\): Promise<TReply>/);
   assert.match(manager, /create\(actorId: ActorId, actorType: string\): ZLinkActorCreateCall/);
   assert.match(manager, /getOrCreate\(actorId: ActorId, actorType: string\): ZLinkActorGetOrCreateCall/);

@@ -2,6 +2,7 @@ import type { ZLinkActor } from '../Actors';
 import type { ZLinkChannelRequestCall, ZLinkPublishCall, ZLinkSendCall } from '../Channels';
 import type { RoutingId, SpotId, Type, ZLinkMessageMetadata } from '../Common';
 import type { ZLinkSpotTimerHandler } from '../Handlers';
+import type { ZLinkRequest } from '../Handlers/Attributes';
 import type { ZLinkTimer, ZLinkTimerOptions } from '../Timers';
 import type {
   ZLinkEntrySpot,
@@ -106,7 +107,7 @@ export interface ZLinkSpotRequestCall {
   instanceSpot(instanceSpotType: string): this;
   inMesh(meshName: string): this;
   timeout(timeoutMs: number): this;
-  submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+  submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply>;
   yield<TReply>(signal?: AbortSignal): Promise<TReply>;
 }
 

@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate } = require('node:timers/promises');
+const framework = require('../../packages/framework/dist/internal');
 const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
@@ -72,6 +73,44 @@ function fixture() {
 }
 
 for (const kind of ['spot', 'actor']) {
+  test(`local ${kind} public admission ends at mailbox acceptance before reply`, async () => {
+    const f = fixture();
+    let operation;
+    const registration = framework.createFrameworkRegistration({
+      spotNodes: { capacity: { router: { bind: 'inproc://local-admission' } } }
+    });
+    const client = new framework.DefaultZLinkRouteClient(registration, {
+      request() {
+        operation = f.request(kind);
+        return operation.promise;
+      }
+    });
+    const occupied = await f.queue.acquire(undefined, 'remote');
+    try {
+      const pending = client.requestToNode('capacity', 'local', {}).submit();
+      assert.ok(pending instanceof Promise);
+      assert.ok(pending.admitted instanceof Promise);
+      let admitted = false;
+      let replied = false;
+      void pending.admitted.then(() => { admitted = true; });
+      void pending.then(() => { replied = true; }, () => undefined);
+      await setImmediate();
+      assert.equal(admitted, false);
+      assert.equal(replied, false);
+      occupied.releaseAfterInternalProcessing();
+      await pending.admitted;
+      assert.equal(replied, false);
+      const terminal = assert.rejects(pending, { name: 'OperationCancelledError' });
+      f.runtime.operations.cancel(operation.id);
+      await terminal;
+      assert.equal(admitted, true);
+    } finally {
+      occupied.releaseAfterInternalProcessing();
+      f.runtime.close();
+      f.raw.close();
+    }
+  });
+
   for (const terminal of ['deadline', 'cancel', 'shutdown']) {
     test(`local ${kind} request removes capacity waiter on ${terminal}`, async () => {
       const f = fixture();

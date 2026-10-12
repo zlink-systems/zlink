@@ -289,9 +289,9 @@ test('detached request continuation re-enters the entry spot serial line', async
         timeout() { return this; },
         submit() {
           events.push('request:submitted');
-          return new Promise((resolve) => {
+          return Object.assign(new Promise((resolve) => {
             resolveReply = resolve;
-          });
+          }), { admitted: Promise.resolve() });
         }
       };
     },
@@ -346,10 +346,12 @@ test('request submit keeps the entry turn until its reply completes', async () =
       return {
         packetName() { return this; },
         timeout() { return this; },
-        async submit() {
+        submit() {
           events.push(`request:${request}`);
-          await delay(10);
-          return `reply:${request}`;
+          return Object.assign((async () => {
+            await delay(10);
+            return `reply:${request}`;
+          })(), { admitted: Promise.resolve() });
         }
       };
     },

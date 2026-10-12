@@ -1,3 +1,4 @@
+import { captureRequestAdmission } from '../messaging/request-result';
 import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
 
 import type { Message } from '../../contracts/Common/Message';
@@ -871,6 +872,7 @@ export class ZLinkActorHandoffCoordinator {
         });
       });
       releaseApplicationJobPermitForDurableHandoff();
+      captureRequestAdmission()?.();
       if (handoff.prefixRelease !== undefined) {
         try {
           this.admitPendingPrefix(actorId, handoff, handoff.prefixRelease);
@@ -1453,6 +1455,7 @@ export class ZLinkActorHandoffCoordinator {
         this.options.onMarker?.('message_follow_rejected', actorId);
         return Promise.reject(actorLocationStale(actorId));
       }
+      captureRequestAdmission()?.();
       return duplicate.result;
     }
     const bytes = packetBytes(packet);
@@ -1474,6 +1477,7 @@ export class ZLinkActorHandoffCoordinator {
       replyRouteId: context.replyRouteId,
       result
     });
+    captureRequestAdmission()?.();
     entry.tail = entry.tail.then(async () => {
       try {
         resolve(await this.relayMessageFollow(actorId, entry, packet));

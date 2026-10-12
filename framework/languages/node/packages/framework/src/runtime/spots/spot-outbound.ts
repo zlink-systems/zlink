@@ -1,4 +1,9 @@
 import {
+  bindRequestAdmission,
+  captureRequestAdmission,
+  createZLinkRequest
+} from '../messaging/request-result';
+import {
   type RoutingId,
   type ZLinkChannelClient,
   type ZLinkChannelRequestCall,
@@ -308,9 +313,7 @@ function createAddressedSpotRequestCall(
   sourceSpotProvider?: () => ZLinkBackendSpot | undefined
 ): ZLinkSpotRequestCall {
   const options = newAddressCallOptions();
-  const begin = <TReply>(waitPolicy: 'async' | 'yield', signal?: AbortSignal) => {
-    markSubmitted(options);
-    rejectSameSpotAsyncRequest(serial, spotId, waitPolicy);
+  const begin = <TReply>(signal?: AbortSignal) => {
     return startRequestOnSerial<TReply>(serial, () => ({
       pending: transport.requestToSpotAddress<TReply>(spotId, request, {
         ...freezeAddressCallOptions(options, sourceSpotProvider?.()),
@@ -356,12 +359,18 @@ function createAddressedSpotRequestCall(
       return this;
     },
     submit<TReply>(signal?: AbortSignal) {
-      const pending = begin<TReply>('async', signal);
-      return serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending);
+      markSubmitted(options);
+      rejectSameSpotAsyncRequest(serial, spotId, 'async');
+      return createZLinkRequest(
+        () => begin<TReply>(signal),
+        (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
+      );
     },
     yield<TReply>(signal?: AbortSignal) {
       const turn = requireZLinkYieldTurn();
-      const pending = begin<TReply>('yield', signal);
+      markSubmitted(options);
+      rejectSameSpotAsyncRequest(serial, spotId, 'yield');
+      const pending = begin<TReply>(signal);
       return turn.yieldPromise(pending);
     }
   };
@@ -476,7 +485,12 @@ function wrapRequestCall(
   inner: ZLinkChannelRequestCall
 ): ZLinkChannelRequestCall {
   const begin = <TReply>(signal?: AbortSignal) =>
-    startRequestOnSerial(serial, () => ({ pending: inner.submit<TReply>(signal) }));
+    startRequestOnSerial(serial, () => {
+      const pending = inner.submit<TReply>(signal);
+      const admitted = captureRequestAdmission();
+      if (admitted !== undefined) void pending.admitted.then(admitted, () => undefined);
+      return { pending };
+    });
   return {
     metadata(key: string | ZLinkMessageMetadata, value?: string) {
       if (typeof key === 'string') inner.metadata(key, value!);
@@ -488,8 +502,10 @@ function wrapRequestCall(
       return this;
     },
     submit<TReply>(signal?: AbortSignal) {
-      const pending = begin<TReply>(signal);
-      return serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending);
+      return createZLinkRequest(
+        () => begin<TReply>(signal),
+        (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
+      );
     },
     yield<TReply>(signal?: AbortSignal) {
       const turn = requireZLinkYieldTurn();
@@ -520,7 +536,8 @@ function runInternalTransportStart<T>(
   serial: ZLinkSpotSerialTurnExecutor,
   begin: () => Promise<T> | T
 ): Promise<T> {
-  return serial.isCurrentTurn ? Promise.resolve().then(begin) : serial.post(begin);
+  const start = bindRequestAdmission(begin);
+  return serial.isCurrentTurn ? Promise.resolve().then(start) : serial.post(start);
 }
 
 function wrapRoutedSpotSendCall(
@@ -571,11 +588,10 @@ function wrapRoutedSpotRequestCall(
 ): ZLinkRequestCall & Pick<ZLinkChannelRequestCall, 'yield'> {
   let selectedTimeoutMs: number | undefined;
   const metadata = new Map<string, string>();
-  const begin = <TReply>(waitPolicy: 'async' | 'yield', signal?: AbortSignal) => {
+  const begin = <TReply>(signal?: AbortSignal) => {
     // A request to the current Spot would wait behind the handler that owns
     // the same Spot claim. Reject it before resolving a route or submitting
     // transport work; one-way self-send remains a valid FIFO admission.
-    rejectSameSpotAsyncRequest(serial, spot.spotId, waitPolicy);
     return startRequestOnSerial<TReply>(serial, () => ({
       pending: requestToSpotHandle<TReply>(transport, spot, request, {
         timeoutMs: selectedTimeoutMs,
@@ -602,12 +618,16 @@ function wrapRoutedSpotRequestCall(
       return this;
     },
     submit<TReply>(signal?: AbortSignal) {
-      const pending = begin<TReply>('async', signal);
-      return serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending);
+      rejectSameSpotAsyncRequest(serial, spot.spotId, 'async');
+      return createZLinkRequest(
+        () => begin<TReply>(signal),
+        (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
+      );
     },
     yield<TReply>(signal?: AbortSignal) {
       const turn = requireZLinkYieldTurn();
-      const pending = begin<TReply>('yield', signal);
+      rejectSameSpotAsyncRequest(serial, spot.spotId, 'yield');
+      const pending = begin<TReply>(signal);
       return turn.yieldPromise(pending);
     }
   };

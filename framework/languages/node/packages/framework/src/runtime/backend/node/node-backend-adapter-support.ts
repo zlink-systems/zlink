@@ -1,3 +1,4 @@
+import { captureRequestAdmission } from '../../messaging/request-result';
 import { constants as osConstants } from 'node:os';
 import { waitRequestReply } from '../../messaging/request-deadline';
 import {
@@ -195,7 +196,12 @@ export async function submitBindingRequest(
     if (timeoutMs !== undefined) {
       current = current.timeout(timeoutMs);
     }
-    return await bindingRequestReply(current.submit(), deadlineMs, recordReceived);
+    return await bindingRequestReply(
+      current.submit(),
+      deadlineMs,
+      recordReceived,
+      captureRequestAdmission()
+    );
   } catch (error) {
     throw translateBindingResultError(error);
   }
@@ -204,13 +210,14 @@ export async function submitBindingRequest(
 export async function bindingRequestReply(
   submission: import('@zlink-systems/zlink').RequestSubmission,
   deadlineMs: number | undefined,
-  recordReceived?: () => void
+  recordReceived?: () => void,
+  onAdmitted?: () => void
 ): Promise<import('@zlink-systems/zlink').Message[]> {
   const reply = submission.reply;
   if (submission.result === SubmitResult.Backpressured) {
     try {
       const [, replies] = await waitRequestReply(
-        Promise.all([submission.admitted, reply]),
+        Promise.all([submission.admitted.then(() => onAdmitted?.()), reply]),
         'Request',
         deadlineMs
       );
@@ -227,6 +234,7 @@ export async function bindingRequestReply(
       throw error;
     }
   }
+  onAdmitted?.();
   const replies = await reply;
   recordReceived?.();
   return replies;

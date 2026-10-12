@@ -1,3 +1,5 @@
+import { captureRequestAdmission } from '../../messaging/request-result';
+import { bindingRequestReply } from './node-backend-adapter-support';
 import type { DealerSocket, Message, PubSocket } from '@zlink-systems/zlink';
 import { ZLinkConfigurationException } from '../../configuration';
 import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../../messaging/submission-result';
@@ -78,7 +80,15 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     );
     if (timeoutMs !== undefined) operation.timeout(timeoutMs);
     const reply = await submitRequestOperation(
-      { submit: () => operation.submit().reply },
+      {
+        submit: () =>
+          bindingRequestReply(
+            operation.submit(),
+            timeoutMs === undefined ? undefined : performance.now() + timeoutMs,
+            undefined,
+            captureRequestAdmission()
+          )
+      },
       'channel request'
     );
     try {

@@ -91,3 +91,72 @@ for (const path of ['adapter', 'router', 'dealer']) {
     });
   }
 }
+
+for (const backpressured of [false, true]) {
+  test(`public binding request observes physical admission before reply (pending=${backpressured})`, async t => {
+    const admitted = deferred();
+    const reply = deferred();
+    const fixture = requestFixture(t, {
+      result: backpressured ? zlink.SubmitResult.Backpressured : zlink.SubmitResult.Ok,
+      admitted: admitted.promise,
+      reply: reply.promise
+    });
+    const registration = framework.createFrameworkRegistration({
+      spotNodes: { mesh: { router: { bind: 'inproc://binding-admission' } } }
+    });
+    const client = new framework.DefaultZLinkRouteClient(registration, { request: fixture.adapter });
+    const pending = client.requestToNode('mesh', 'peer', {}).submit();
+    assert.ok(pending.admitted instanceof Promise);
+    let accepted = false;
+    let replied = false;
+    void pending.admitted.then(() => { accepted = true; });
+    void pending.then(() => { replied = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(accepted, !backpressured);
+    assert.equal(replied, false);
+    admitted.resolve();
+    await pending.admitted;
+    assert.equal(replied, false);
+    reply.resolve([]);
+    assert.deepEqual(await pending, []);
+  });
+}
+
+for (const terminal of ['timeout', 'cancellation']) {
+  test(`public pending binding admission and reply share ${terminal} failure`, async t => {
+    const admitted = deferred();
+    const reply = deferred();
+    const fixture = requestFixture(t, {
+      result: zlink.SubmitResult.Backpressured,
+      admitted: admitted.promise,
+      reply: reply.promise
+    });
+    const { awaitWithAbort } = require('../../packages/framework/dist/runtime/abort');
+    const registration = framework.createFrameworkRegistration({
+      spotNodes: { mesh: { router: { bind: 'inproc://binding-terminal' } } }
+    });
+    const controller = new AbortController();
+    const client = new framework.DefaultZLinkRouteClient(registration, {
+      request(_mesh, _rid, _packet, _request, _timeout, signal) {
+        return awaitWithAbort(fixture.adapter(), signal);
+      }
+    });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const pending = client.requestToNode('mesh', 'peer', {}).submit(controller.signal);
+    assert.ok(pending.admitted instanceof Promise);
+    const results = Promise.allSettled([pending.admitted, pending]);
+    if (terminal === 'timeout') t.mock.timers.tick(REQUEST_BUDGET_MS);
+    else controller.abort(new Error('cancel-before-admission'));
+    const stages = await results;
+    assert.equal(stages[0].status, 'rejected');
+    assert.equal(stages[1].status, 'rejected');
+    assert.equal(stages[0].reason, stages[1].reason);
+    if (terminal === 'timeout') {
+      assert.equal(stages[1].reason.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+    } else {
+      assert.equal(stages[1].reason.name, 'AbortError');
+    }
+    admitted.resolve();
+    reply.resolve([]);
+  });
+}

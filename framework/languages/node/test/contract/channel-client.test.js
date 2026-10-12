@@ -116,9 +116,14 @@ test('two in-process ClientServer nodes deliver a delayed reply to an awaited cl
   try {
     await clientRuntime.start();
     await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'delayed', 1);
-    const reply = await client.requestToChannel('delayed', typedPacket('Ping', { value: 'delayed' }))
+    const pending = client.requestToChannel('delayed', typedPacket('Ping', { value: 'delayed' }))
       .timeout(1_000)
       .submit();
+    let replied = false;
+    void pending.then(() => { replied = true; });
+    await pending.admitted;
+    assert.equal(replied, false);
+    const reply = await pending;
     assert.deepEqual(reply, { value: 'delayed' });
   } finally {
     await clientRuntime.stop();

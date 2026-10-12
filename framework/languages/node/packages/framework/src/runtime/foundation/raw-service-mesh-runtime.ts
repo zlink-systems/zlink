@@ -1,3 +1,4 @@
+import { captureRequestAdmission } from '../messaging/request-result';
 import { constants as osConstants } from 'node:os';
 import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
 import type {
@@ -84,6 +85,7 @@ type RawServiceChannelTargetSelection =
 type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer;
 
 export interface RawServiceIngressRecord {
+  readonly onAdmitted?: () => void;
   readonly command: number;
   readonly flags: number;
   readonly sourceRoutingId: string;
@@ -585,14 +587,16 @@ export class RawServiceMeshRuntime {
   requestService(
     targetNodeRoutingId: string,
     parts: readonly Uint8Array[],
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): Promise<readonly Buffer[]> {
     const admission = this.topology.peer(targetNodeRoutingId)?.liveness;
     return this.requireStarted().request(
       targetNodeRoutingId,
       parts,
       timeoutMs,
-      admission?.recordReceived
+      admission?.recordReceived,
+      onAdmitted
     );
   }
 
@@ -1120,6 +1124,7 @@ export class RawServiceMeshRuntime {
         : encodeChannelRequestHeader(correlation, channelName);
     const encodedPayload = this.applicationFrame(payload);
     const pending = this.operations.register(timeoutMs);
+    const onAdmitted = captureRequestAdmission();
     let selectedTargetNodeRoutingId = targetNodeRoutingId;
     if (
       selectedTargetNodeRoutingId !== this.descriptor.nodeRoutingId &&
@@ -1182,6 +1187,8 @@ export class RawServiceMeshRuntime {
               terminalResult: RequestResult.NotConnected,
               failureCode: 0
             });
+          } else {
+            onAdmitted?.();
           }
         } finally {
           applicationJobOwner.close();
@@ -1207,7 +1214,8 @@ export class RawServiceMeshRuntime {
         selectedTargetNodeRoutingId,
         parts,
         timeoutMs,
-        selectedPeer.liveness?.recordReceived
+        selectedPeer.liveness?.recordReceived,
+        onAdmitted
       );
     } catch (error) {
       this.operations.fail(pending.id, error);
