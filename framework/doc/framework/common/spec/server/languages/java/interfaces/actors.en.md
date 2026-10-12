@@ -286,7 +286,7 @@ public sealed interface systems.zlink.framework.actors.ZLinkActorCreateResult
 public interface systems.zlink.framework.actors.ZLinkActorRequestCall {
  public abstract systems.zlink.framework.actors.ZLinkActorRequestCall metadata(java.lang.String, java.lang.String);
  public abstract systems.zlink.framework.actors.ZLinkActorRequestCall timeout(java.time.Duration);
- public abstract <TReply> java.util.concurrent.CompletionStage<TReply> submit(java.lang.Class<TReply>);
+ public abstract <TReply> systems.zlink.framework.channels.ZLinkRequestStage<TReply> submit(java.lang.Class<TReply>);
  public abstract <TReply> java.util.concurrent.CompletionStage<TReply> yield(java.lang.Class<TReply>);
 }
 public interface systems.zlink.framework.actors.ZLinkActorSendCall {

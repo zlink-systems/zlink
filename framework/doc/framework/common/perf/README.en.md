@@ -160,13 +160,12 @@ that does not pass Core HWM admission.** An in-flight cap measures the concurren
 library's capacity, and keeps load off the Framework and Core backpressure paths ([binding perf policy §7.2][perf-inflight]).
 
 - **A server-driven stream starts the next call without waiting for a request reply or send/send echo.**
-  - A one-way call (send, the first send of send/send, publish) starts the next call after the
-    previous call's admission terminal. A one-way terminal ends at source-local admission
-    ([Submit §4][submit]), so when the HWM is full this wait is the backpressure. Send/send does not
-    wait for the echo.
-  - A request starts the next call without waiting for the reply. When the HWM is full, Framework and
-    Core hold that call at admission ([Submit §5][submit]). If Core rejects without a wait and the call
-    ends with public `Unavailable`, record that failure as is (§13).
+  - Every call starts the next call after the previous call's admission. A one-way call (send, the
+    first send of send/send, publish) has a terminal that ends at source-local admission
+    ([Submit §4][submit]); a request has the `admitted` stage of its terminal result end at admission
+    ([Submit §2][submit-admitted]). When the HWM is full this wait is the backpressure. The request
+    reply and the send/send echo are not awaited. If Core rejects without a wait and the call ends with
+    public `Unavailable`, record that failure as is (§13).
   - The continuous-submission loop runs on the language's public asynchronous execution model and
     does not monopolize the execution context.
 - **A call that does not pass Core HWM admission keeps one outstanding call per connection or
@@ -1888,6 +1887,7 @@ labels according to their [owning metric contract][metrics].
 [common]: ../../../../../framework/doc/framework/common/README.en.md
 [e2e]: ../../../../../framework/doc/framework/common/e2e/README.en.md
 [submit]: ../../../../../framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.en.md
+[submit-admitted]: ../../../../../framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.en.md#request-admitted-stage
 [turn]: ../../../../../framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.en.md
 [queue]: ../../../../../framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.en.md
 [errors]: ../../../../../framework/doc/framework/common/spec/server/00-foundation/07-framework-error-model.en.md
