@@ -225,10 +225,14 @@ void verify_bound_session_bind_retries_until_route_is_admitted ()
 void verify_bound_session_bind_exposes_only_accepted_attempt ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
-    mesh::raw_mesh_node_owner_t source (
-      mesh::raw_mesh_node_options_t{.descriptor = descriptor ("bind-stage-source")});
-    mesh::raw_mesh_node_owner_t target (
-      mesh::raw_mesh_node_options_t{.descriptor = descriptor ("bind-stage-target")});
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bind-stage-source"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bind-stage-target"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
     source.start ();
     target.start ();
     const auto remote = target.topology ().local_descriptor ();

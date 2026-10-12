@@ -943,13 +943,21 @@ class framework_driver_t final : public driver_t
         std::optional<fw::task_t<void>> preceding_admission;
         auto completion_signal = std::make_shared<completion_signal_t> ();
         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
+        const auto can_submit = [&] (clock_t_::time_point now) {
+            const bool admission_ready = [&] {
+                if constexpr (std::is_void_v<T>)
+                    return in_flight == 0;
+                else
+                    return !preceding_admission || preceding_admission->await_ready ();
+            }();
+            return now < deadline && admission_ready
+                   && (_window == unlimited_request_window
+                       || in_flight < static_cast<size_t> (_window));
+        };
         do {
             close_window (deadline);
             // Admission sequences submits; the pattern window bounds replies.
-            if (clock_t_::now () < deadline
-                && (!preceding_admission || preceding_admission->await_ready ())
-                && (_window == unlimited_request_window
-                    || in_flight < static_cast<size_t> (_window))) {
+            if (can_submit (clock_t_::now ())) {
                 const auto sent = now_ns ();
                 auto payload = make_payload (size, phase);
                 counters.enter ();
@@ -963,15 +971,13 @@ class framework_driver_t final : public driver_t
                     free_slots.pop_back ();
                 }
                 auto submission = submit<T> (std::move (payload));
-                if constexpr (std::is_void_v<T>) {
-                    preceding_admission = submission;
-                } else {
-                    preceding_admission = submission.admitted ();
+                if constexpr (!std::is_void_v<T>) {
+                    preceding_admission.emplace (submission.admitted ());
+                    fw::detail::observe_task_completion (
+                      *preceding_admission, [completion_signal] (const auto &) {
+                          completion_signal->notify (admission_notification);
+                      });
                 }
-                fw::detail::observe_task_completion (
-                  *preceding_admission, [completion_signal] (const auto &) {
-                      completion_signal->notify (admission_notification);
-                  });
                 pending[slot].emplace (std::move (submission), sent, _seq - 1);
                 fw::detail::observe_task_completion (
                   pending[slot]->task,
@@ -1018,10 +1024,7 @@ class framework_driver_t final : public driver_t
             const auto now = clock_t_::now ();
             if (now >= hard_stop)
                 break;
-            const bool can_submit =
-              now < deadline && (!preceding_admission || preceding_admission->await_ready ())
-              && (_window == unlimited_request_window || in_flight < static_cast<size_t> (_window));
-            if (in_flight != 0 && !can_submit)
+            if (in_flight != 0 && !can_submit (now))
                 completion_signal->wait_until (now < deadline ? deadline : hard_stop);
         } while (clock_t_::now () < deadline || in_flight != 0);
         close_window (deadline);

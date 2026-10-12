@@ -244,13 +244,14 @@ class infrastructure_request_retry_state_t final
         auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
           _port->request (_target_routing_id, _request_parts, remaining, {}, accepted));
         if (accepted) {
-            detail::observe_task_completion (
-              accepted->task (), [admitted = _admission] (const result_t<void> &result) {
-                  if (result)
-                      admitted->complete (result);
-              });
+            auto admission = accepted->task ();
+            detail::observe_task_terminal (admission,
+                                           [admitted = _admission] (const result_t<void> &result) {
+                                               if (result)
+                                                   admitted->complete (result);
+                                           });
         }
-        detail::observe_task_completion (
+        detail::observe_task_terminal (
           *running, [self = shared_from_this (),
                      running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
               self->settle (settled);
