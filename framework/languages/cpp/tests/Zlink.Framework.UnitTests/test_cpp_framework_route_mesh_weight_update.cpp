@@ -30,6 +30,142 @@ namespace foundation = zlink::framework::runtime::foundation;
 namespace mesh = zlink::framework::runtime::mesh;
 namespace protocol = zlink::framework::runtime::protocol;
 
+// Access the owner's lane only in this white-box test. Closing it makes any
+// additional topology turn fail deterministically, without a timing assertion.
+struct topology_lane_access_t
+{
+    using member_t = zlink::framework::runtime::state_lane_t mesh::service_topology_registry_t::*;
+    friend member_t topology_lane_member (topology_lane_access_t);
+};
+
+template <topology_lane_access_t::member_t Member> struct topology_lane_member_t
+{
+    friend topology_lane_access_t::member_t topology_lane_member (topology_lane_access_t)
+    {
+        return Member;
+    }
+};
+
+template struct topology_lane_member_t<&mesh::service_topology_registry_t::_lane>;
+
+TEST (ServiceTopologyPreparedFacts, ReadsDoNotRequestTopologyTurns)
+{
+    mesh::service_node_descriptor_t local{"prepared-facts",
+                                          {'a'},
+                                          1,
+                                          1,
+                                          "tcp://127.0.0.1:1",
+                                          {{"X", 100}},
+                                          mesh::service_node_state_t::serving};
+    mesh::service_topology_registry_t topology (local);
+    auto remote = local;
+    remote.node_routing_id = {'b'};
+    ASSERT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (remote, {1}));
+    auto &lane = topology.*topology_lane_member (topology_lane_access_t{});
+    lane.close ();
+
+    // These are the facts read by the message receive/send paths (spec 08 §3 E2).
+    EXPECT_NO_THROW (EXPECT_EQ (local, topology.local_descriptor ()));
+    EXPECT_NO_THROW ({
+        const auto peer = topology.peer (remote.node_routing_id);
+        ASSERT_TRUE (peer);
+        EXPECT_EQ (remote, peer->descriptor);
+        EXPECT_EQ (std::vector<std::uint8_t>{1}, peer->connection_id);
+    });
+    EXPECT_NO_THROW (EXPECT_FALSE (topology.peer ({'c'})));
+}
+
+TEST (ServiceTopologyPreparedFacts, PublishesChangesBeforeNotification)
+{
+    mesh::service_node_descriptor_t local{"prepared-facts",
+                                          {'a'},
+                                          1,
+                                          1,
+                                          "tcp://127.0.0.1:1",
+                                          {{"X", 100}},
+                                          mesh::service_node_state_t::serving};
+    mesh::service_topology_registry_t topology (local);
+    auto remote = local;
+    remote.node_routing_id = {'b'};
+    std::optional<mesh::admitted_peer_t> notified_peer;
+    auto notified_local = local;
+    int notifications = 0;
+    topology.set_change_handler ([&] {
+        notified_local = topology.local_descriptor ();
+        notified_peer = topology.peer (remote.node_routing_id);
+        ++notifications;
+    });
+    ASSERT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (remote, {1}));
+    ASSERT_TRUE (notified_peer);
+    EXPECT_EQ (remote, notified_peer->descriptor);
+    const auto retained = notified_peer;
+
+    ++remote.descriptor_revision;
+    remote.channels.front ().weight = 50;
+    ASSERT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (remote, {1}));
+    ASSERT_TRUE (notified_peer);
+    EXPECT_EQ (remote, notified_peer->descriptor);
+    EXPECT_GT (notified_peer->admission_epoch, retained->admission_epoch);
+    EXPECT_EQ (100, retained->descriptor.channels.front ().weight);
+    EXPECT_EQ (mesh::peer_admission_result_t::duplicate_connection, topology.admit (remote, {1}));
+    EXPECT_FALSE (topology.disconnect (remote.node_routing_id, {2}));
+    EXPECT_EQ (2, notifications);
+
+    ++local.descriptor_revision;
+    local.state = mesh::service_node_state_t::draining;
+    topology.publish_local (local);
+    EXPECT_EQ (local, notified_local);
+    ASSERT_TRUE (notified_peer);
+    EXPECT_EQ (remote, notified_peer->descriptor);
+    EXPECT_TRUE (topology.disconnect (remote.node_routing_id, {1}));
+    EXPECT_FALSE (notified_peer);
+    EXPECT_EQ (4, notifications);
+    topology.set_change_handler ({});
+}
+
+TEST (ServiceTopologyPreparedFacts, ConcurrentReadsRetainCompleteDescriptors)
+{
+    mesh::service_node_descriptor_t local{"prepared-facts",
+                                          {'a'},
+                                          1,
+                                          1,
+                                          "tcp://127.0.0.1:1",
+                                          {{"X", 100}},
+                                          mesh::service_node_state_t::serving};
+    mesh::service_topology_registry_t topology (local);
+    auto remote = local;
+    remote.node_routing_id = {'b'};
+    remote.active_capacity_used = static_cast<std::uint32_t> (remote.descriptor_revision);
+    ASSERT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (remote, {1}));
+    const auto remote_routing_id = remote.node_routing_id;
+    std::promise<void> reader_started;
+    std::atomic<bool> writer_done = false;
+    std::atomic<bool> incomplete_descriptor = false;
+    std::jthread reader ([&] {
+        auto retained = topology.peer (remote_routing_id);
+        reader_started.set_value ();
+        do {
+            const auto peer = topology.peer (remote_routing_id);
+            if (!peer
+                || peer->descriptor.active_capacity_used != peer->descriptor.descriptor_revision)
+                incomplete_descriptor.store (true);
+        } while (!writer_done.load ());
+        if (!retained || retained->descriptor.descriptor_revision != 1
+            || retained->descriptor.active_capacity_used != 1)
+            incomplete_descriptor.store (true);
+    });
+    reader_started.get_future ().wait ();
+    constexpr int update_count = 64;
+    for (int update = 0; update < update_count; ++update) {
+        ++remote.descriptor_revision;
+        remote.active_capacity_used = static_cast<std::uint32_t> (remote.descriptor_revision);
+        EXPECT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (remote, {1}));
+    }
+    writer_done.store (true);
+    reader.join ();
+    EXPECT_FALSE (incomplete_descriptor.load ());
+}
+
 template <typename T> T await_task (zlink::framework::task_t<T> task)
 {
     return std::move (task).result ().value ();

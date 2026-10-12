@@ -11,6 +11,8 @@
 #include <opentelemetry/metrics/async_instruments.h>
 #include <opentelemetry/metrics/sync_instruments.h>
 
+#include <atomic>
+#include <memory>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -166,9 +168,16 @@ class service_topology_registry_t
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
-    service_node_descriptor_t _local;
+    struct topology_state_t
+    {
+        service_node_descriptor_t local;
+        std::map<std::vector<std::uint8_t>, admitted_peer_t, byte_vector_less_t> peers;
+    };
+
+    // The registry publishes its sole descriptor/peer state at mutation turns.
+    // Readers retain the immutable publication without entering the state lane.
+    std::atomic<std::shared_ptr<const topology_state_t>> _topology;
     service_liveness_registry_t *const _liveness_owner;
-    std::map<std::vector<std::uint8_t>, admitted_peer_t, byte_vector_less_t> _peers;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, byte_vector_less_t>
       _not_required_peers;
     struct selection_state_t
