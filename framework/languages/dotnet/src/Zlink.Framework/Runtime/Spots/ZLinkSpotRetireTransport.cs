@@ -1158,13 +1158,17 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             await stage.PublishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                _ = await EndUnverifiedTargetAsync(
-                        pair.Key,
-                        stage,
-                        fenceSettled: false,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
+                if (
+                    !await EndUnverifiedTargetAsync(
+                            pair.Key,
+                            stage,
+                            fenceSettled: false,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
+                    await CompleteInboundThenNormalizeCoreAsync(stage, cancellationToken)
+                        .ConfigureAwait(false);
             }
             finally
             {

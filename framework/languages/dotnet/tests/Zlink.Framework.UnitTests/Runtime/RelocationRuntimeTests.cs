@@ -1415,6 +1415,41 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
+    public async Task ShutdownDrainWaitsForPublishedTargetReplay()
+    {
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var target = new ZLinkSpotRetireTargetRuntime(
+            services,
+            null!,
+            new ZLinkFrameworkRegistration()
+        );
+        var stage = CreateTargetStageForHeldJournal();
+        Volatile.Write(ref stage.AuthorityPublished, 1);
+        var replay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        stage.AdmissionDrainTask = replay.Task;
+        var fence = new ZLinkAggregateFence(
+            stage.Envelope.AggregateId,
+            stage.Envelope.AggregateGeneration
+        );
+        Assert.True(target.TryTrackStage(fence, stage));
+
+        // Host relocation §14: accepted cutover must settle before Spot teardown.
+        var drain = target.DrainTargetAttemptsAsync(CancellationToken.None).AsTask();
+        try
+        {
+            Assert.False(drain.IsCompleted);
+            var failure = new IOException("Published target replay failed.");
+            replay.SetException(failure);
+            Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => drain));
+            Assert.Equal(1, target.ActiveStageCount);
+        }
+        finally
+        {
+            replay.TrySetResult();
+        }
+    }
+
+    [Fact]
     public async Task PublishAckLossRejectsAbortAndKeepsSourceSealedUntilTargetCompletion()
     {
         using var services = new ServiceCollection().BuildServiceProvider();
