@@ -156,12 +156,11 @@ Core의 backpressure 경로를 지나지 않게 하기 때문이다
 ([binding perf 정책 §7.2][perf-inflight]).
 
 - **Server-driven stream은 request reply나 send/send echo를 기다리지 않고 다음 call을 시작한다.**
-  - One-way call(send, send/send의 첫 send, publish)은 이전 call의 admission terminal 뒤에 다음
-    call을 시작한다. One-way terminal은 source-local admission에서 끝나므로([Submit §4][submit])
-    HWM이 차면 이 대기가 backpressure다. Send/send의 echo는 기다리지 않는다.
-  - Request는 reply를 기다리지 않고 다음 call을 시작한다. HWM이 차면 Framework와 Core가 그
-    call을 admission에서 기다리게 한다([Submit §5][submit]). Core가 대기 없이 거절해 call이
-    public `Unavailable`로 끝나면 그 실패를 그대로 기록한다(§13).
+  - 모든 call은 이전 call의 admission 뒤에 다음 call을 시작한다. One-way call(send, send/send의 첫
+    send, publish)은 terminal이 source-local admission에서 끝나고([Submit §4][submit]), request는
+    terminal 결과의 `admitted` 단계가 admission에서 끝난다([Submit §2][submit-admitted]). HWM이 차면
+    이 대기가 backpressure다. Request reply와 send/send의 echo는 기다리지 않는다. Core가 대기 없이
+    거절해 call이 public `Unavailable`로 끝나면 그 실패를 그대로 기록한다(§13).
   - 연속 제출 루프는 언어의 public 비동기 실행 모델로 실행하며 실행 문맥을 독점하지 않는다.
 - **Core HWM admission을 지나지 않는 call은 연결·stream마다 미완료 call을 하나만 둔다.** 이런 call은
   backpressure 경계가 없어 연속 제출하면 대기열만 상한 없이 늘어나기 때문이다. 해당하는 call은 둘이다.
@@ -1851,6 +1850,7 @@ counter를 함께 보존한다. 내부 permit leak·source handoff 검증을 per
 [common]: ../../../../../framework/doc/framework/common/README.ko.md
 [e2e]: ../../../../../framework/doc/framework/common/e2e/README.ko.md
 [submit]: ../../../../../framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md
+[submit-admitted]: ../../../../../framework/doc/framework/common/spec/server/01-execution/01-submit-and-completion.ko.md#request-admitted-stage
 [turn]: ../../../../../framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md
 [queue]: ../../../../../framework/doc/framework/common/spec/server/01-execution/04-application-job-queue-and-backpressure.ko.md
 [errors]: ../../../../../framework/doc/framework/common/spec/server/00-foundation/07-framework-error-model.ko.md

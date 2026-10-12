@@ -5,10 +5,11 @@
 ChannelName은 process 안의 송신 경로를 선택한다. RouteMesh·ClientServer·fanout builder와 typed handler,
 client call의 정확한 payload type은 공통 계약의 역할 구분을 Java generic으로 투영한다. One-way operation은
 비동기 `submit()`과 동기 blocking `submit_sync()`를 제공하고, request operation의 `submit(...)`은 terminal
-reply까지 기다리며 동기 `submit_sync(...)`도 제공한다. 동기 `submit_sync` 계열은 application thread 전용이며,
+reply를 기다리는 `ZLinkRequestStage`를 돌려주고 그 `admitted()`가 admission 단계다([Submit과 완료 §2](../../../01-execution/01-submit-and-completion.ko.md#request-admitted-stage)).
+동기 `submit_sync(...)`도 제공한다. 동기 `submit_sync` 계열은 application thread 전용이며,
 handler turn·Spot turn·state lane 등 runtime 실행 문맥에서 부르면 `InvalidOperation`으로 즉시 실패한다
 ([Submit과 완료 §4 F2-a](../../../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)). framework
-공개 종결자는 backpressure를 노출하지 않는다(F1).
+공개 종결자는 `Backpressured` 상태를 노출하지 않는다(F1).
 
 **`submit_sync`는 interface의 `default` 메서드다.** 구현이 모든 call type에서 같다 — 문맥을 검사한 뒤
 같은 비동기 종결자를 기다린다. call type마다 다시 사용하면 같은 규칙이 여러 곳에 흩어지고 새 call type이
@@ -227,11 +228,14 @@ public interface systems.zlink.framework.channels.ZLinkPublishMessageContext ext
 public interface systems.zlink.framework.channels.ZLinkFanoutHandler<TMessage> {
  public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TMessage, systems.zlink.framework.channels.ZLinkPublishMessageContext);
 }
+public interface systems.zlink.framework.channels.ZLinkRequestStage<TReply> extends java.util.concurrent.CompletionStage<TReply> {
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> admitted();
+}
 public interface systems.zlink.framework.channels.ZLinkRequestCall {
  public default systems.zlink.framework.channels.ZLinkRequestCall metadata(java.lang.String, java.lang.String);
  public default systems.zlink.framework.channels.ZLinkRequestCall metadata(java.util.Map<java.lang.String, java.lang.String>);
  public abstract systems.zlink.framework.channels.ZLinkRequestCall timeout(java.time.Duration);
- public abstract <TReply> java.util.concurrent.CompletionStage<TReply> submit(java.lang.Class<TReply>);
+ public abstract <TReply> systems.zlink.framework.channels.ZLinkRequestStage<TReply> submit(java.lang.Class<TReply>);
  public default <TReply> TReply submit_sync(java.lang.Class<TReply>);   // blocking; runtime 문맥에서 InvalidOperation
  public abstract <TReply> java.util.concurrent.CompletionStage<TReply> yield(java.lang.Class<TReply>);
 }

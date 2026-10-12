@@ -178,7 +178,7 @@ public interface IZLinkActorSendCall : IZLinkMetadataCall<IZLinkActorSendCall>
 public interface IZLinkActorRequestCall : IZLinkMetadataCall<IZLinkActorRequestCall>
 {
  IZLinkActorRequestCall Timeout(TimeSpan timeout);
- ValueTask<TReply> Async<TReply>(
+ ZLinkRequest<TReply> Async<TReply>(
  CancellationToken cancellationToken = default);
  ValueTask<TReply> Yield<TReply>(
  CancellationToken cancellationToken = default);

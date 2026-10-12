@@ -478,7 +478,7 @@ public interface IZLinkSpotRequestCall : IZLinkMetadataCall<IZLinkSpotRequestCal
  IZLinkSpotRequestCall InstanceSpot(string instanceSpotType);
  IZLinkSpotRequestCall InMesh(string meshName);
  IZLinkSpotRequestCall Timeout(TimeSpan timeout);
- ValueTask<TReply> Async<TReply>(
+ ZLinkRequest<TReply> Async<TReply>(
  CancellationToken cancellationToken = default);
  ValueTask<TReply> Yield<TReply>(
  CancellationToken cancellationToken = default);
