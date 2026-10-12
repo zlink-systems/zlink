@@ -119,7 +119,7 @@ export type ZLinkActorCreateResult =
 export interface ZLinkActorRequestCall {
  metadata(key: string, value: string): this;
  timeout(timeoutMs: number): this;
- submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+ submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply>;
  yield<TReply>(signal?: AbortSignal): Promise<TReply>;
 }
 

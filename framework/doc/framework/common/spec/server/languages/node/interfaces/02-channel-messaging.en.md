@@ -254,18 +254,22 @@ provider interprets.
 ```ts
 export declare function ZLinkRequest(packetName?: string): MethodDecorator;
 
+export interface ZLinkRequest<TReply> extends Promise<TReply> {
+ readonly admitted: Promise<void>;
+}
+
 export interface ZLinkRequestCall {
  metadata(key: string, value: string): this;
  metadata(metadata: ZLinkMessageMetadata): this;
  timeout(timeoutMs: number): this;
- submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+ submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply>;
 }
 
 export interface ZLinkChannelRequestCall {
  metadata(key: string, value: string): this;
  metadata(metadata: ZLinkMessageMetadata): this;
  timeout(timeoutMs: number): this;
- submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+ submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply>;
  yield<TReply>(signal?: AbortSignal): Promise<TReply>;
 }
 
