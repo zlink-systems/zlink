@@ -2158,6 +2158,8 @@ public sealed partial class StatefulServiceRuntimeTests
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var caller = NewNode(context, "reply-terminal-caller");
+        // Drive the receive management owner that processes operation deadlines.
+        caller.Start();
         var requestSource = new ZLinkServiceWireCodec.RequestSourceFence(
             "reply-terminal-owner",
             1,

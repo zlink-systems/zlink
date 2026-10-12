@@ -16,6 +16,108 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     private const string EphemeralTcpEndpoint = "tcp://127.0.0.1:0";
 
     [Fact]
+    public void OperationDeadline_DoesNotAllocateARequestTimer()
+    {
+        var source = ManagedMeshSourcePath();
+        var implementation = File.ReadAllText(source);
+        Assert.DoesNotContain("Task.Delay(timeout, pending.Token)", implementation);
+    }
+
+    [Fact]
+    public async Task OperationDeadline_ExpiresInDeadlineOrderAtTheMonotonicBoundary()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var begin = typeof(ZLinkManagedMeshNode)
+            .GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        var expire = typeof(ZLinkManagedMeshNode).GetMethod("ExpireOperations", flags)!;
+        var operations = typeof(ZLinkManagedMeshNode)
+            .GetField("_operations", flags)!
+            .GetValue(node)!;
+        var count = operations.GetType().GetProperty("Count")!;
+        Assert.True(
+            (bool)begin.Invoke(node, [MeshOperationKind.NodeRequest, TimeSpan.FromTicks(20), null])!
+        );
+        Assert.True(
+            (bool)begin.Invoke(node, [MeshOperationKind.NodeRequest, TimeSpan.FromTicks(10), null])!
+        );
+
+        clock.Timestamp = 9;
+        expire.Invoke(node, null);
+        Assert.Equal(2, count.GetValue(operations));
+        clock.Timestamp = 10;
+        expire.Invoke(node, null);
+        Assert.Equal(1, count.GetValue(operations));
+        clock.Timestamp = 20;
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+    }
+
+    private sealed class OperationDeadlineClock : TimeProvider
+    {
+        internal long Timestamp;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Timestamp;
+
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch;
+    }
+
+    [Fact]
+    public async Task OperationTerminal_OnlyTheAtomicTakeOwnerCancelsItsLifetime()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkManagedMeshNode);
+        var begin = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        object?[] registration = [MeshOperationKind.NodeRequest, TimeSpan.FromHours(1), null];
+        Assert.True((bool)begin.Invoke(node, registration)!);
+        var pending = registration[2]!;
+        var pendingType = pending.GetType();
+        var identity = (MeshOperationId)
+            pendingType.GetProperty("OperationId", flags)!.GetValue(pending)!;
+        var take = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryRemoveOperation"
+                && method.GetParameters()[0].ParameterType == typeof(ulong)
+            );
+        object?[] terminal = [identity.Low, null, false];
+        Assert.True((bool)take.Invoke(node, terminal)!);
+        type.GetMethod("RemoveManagedOperation", flags)!.Invoke(node, [pending]);
+        var token = (CancellationToken)pendingType.GetProperty("Token", flags)!.GetValue(pending)!;
+        Assert.False(token.IsCancellationRequested);
+        pendingType.GetMethod("Complete", flags)!.Invoke(pending, null);
+        Assert.True(token.IsCancellationRequested);
+    }
+
+    private static string ManagedMeshSourcePath(
+        [System.Runtime.CompilerServices.CallerFilePath] string testFile = ""
+    ) =>
+        Path.GetFullPath(
+            Path.Combine(
+                Path.GetDirectoryName(testFile)!,
+                "../../../src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs"
+            )
+        );
+
+    [Fact]
     public void DrainGate_SealedForShutdown_OnlyByTheShutdownOwner()
     {
         var gate = new ZLinkDrainAdmissionGate();
