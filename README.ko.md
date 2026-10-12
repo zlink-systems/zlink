@@ -187,6 +187,9 @@ Framework 샘플은 개별 API 호출이 아니라 완결된 애플리케이션 
 | `framework/` | [Functional Source License 1.1, ALv2 Future License](./framework/LICENSE) |
 | 언어별 Framework `http-client` 패키지 | Apache License 2.0 |
 
+**1.0.0부터 `framework/`는 zlink License로 바뀝니다.** 서버 한 대는 계속 무료이고, 추가 머신마다 유료 라이선스가 필요합니다.
+1.0.0 전 릴리스는 지금 라이선스를 그대로 유지하며 머신 수와 관계없이 무료입니다.
+
 상세 조건, 2년 후 Apache License 2.0 전환 정책, 재배포 고지는
 [라이선스 가이드](./doc/license/README.ko.md)와
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)를 참고하세요.
