@@ -3285,7 +3285,10 @@ void verify_liveness_physical_close (bool receive, bool replacement)
 {
     auto context = std::make_shared<zlink::context_t> ();
     context->options ().auto_hwm_enabled (false);
-    mesh::raw_mesh_node_owner_t source ({descriptor ("liveness-source")}, context);
+    mesh::raw_mesh_node_owner_t source (
+      zlink::framework::test::runtime_failure_options (
+        mesh::raw_mesh_node_options_t{descriptor ("liveness-source")}),
+      context);
     zlink::dealer_socket_t target (*context);
     const auto remote = descriptor ("liveness-target");
     target.set_routing_id (zlink::routing_id_t::from (remote.node_routing_id));
@@ -3358,7 +3361,8 @@ void verify_liveness_physical_close (bool receive, bool replacement)
 
 void verify_liveness_without_selected_route ()
 {
-    mesh::raw_mesh_node_owner_t source ({descriptor ("liveness-missing-source")});
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("liveness-missing-source")}));
     source.start ();
     const auto remote = descriptor ("liveness-missing-target");
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
