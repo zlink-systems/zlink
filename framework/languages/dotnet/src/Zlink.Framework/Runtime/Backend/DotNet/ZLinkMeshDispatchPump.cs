@@ -387,61 +387,53 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         // session-relayed actor sends), so it cannot address the local consumer.
         var readyRecord = readyBatch[index];
         ZLinkApplicationJobQueueLease?[] admissions = [];
+        ZLinkApplicationJobQueueLease? first = null;
+        ZLinkApplicationJobQueueReservation? reservation = null;
         var admissionCount = 0;
-        if (
-            readyRecord.Domain == MeshReadyDomains.Application
-            && !readyRecord.ApplicationAdmissionReserved
-            && _applicationJobQueue is not null
-        )
-        {
-            var first = await TryTakeApplicationAdmissionAsync(cancellationToken)
-                .ConfigureAwait(false);
-            if (first is null)
-                return;
-            var admissionBudget = Math.Min(
-                readyRecord.AvailableRecords,
-                ZLinkReceiveBatchBudget.MaximumRecords
-            );
-            admissions = new ZLinkApplicationJobQueueLease?[admissionBudget];
-            admissions[0] = first;
-            admissionCount =
-                1
-                + await _applicationJobQueue
-                    .TryAcquireBatchAsync(
-                        admissions,
-                        1,
-                        admissionBudget - 1,
-                        ZLinkApplicationJobOrigin.Remote
-                    )
-                    .ConfigureAwait(false);
-        }
-        var ownerSpotId = readyRecord.SpotId;
-        if (
-            string.IsNullOrEmpty(ownerSpotId)
-            && readyRecord.OwnerKind == MeshOwnerKind.Actor
-            && readyRecord.Actor.ActorId is { Length: > 0 } ownerActorId
-        )
-            try
-            {
-                if (_node.ActorLookup(ownerActorId, out var ownerLocation))
-                    ownerSpotId = ownerLocation.SpotId;
-            }
-            catch (ZlinkException) { }
-        MeshClaim claim;
-        try
-        {
-            claim = readyBatch.TakeClaim(index);
-        }
-        catch (ZlinkException)
-        {
-            DisposeAdmissions(admissions);
-            return;
-        }
-
-        List<ZLinkBackendRouteReceived>? nodeRoutes = new(ZLinkReceiveBatchBudget.MaximumRecords);
+        MeshClaim? claim = null;
+        List<ZLinkBackendRouteReceived>? nodeRoutes = null;
         SpotDispatchState? routeDispatch = null;
         try
         {
+            if (
+                readyRecord.Domain == MeshReadyDomains.Application
+                && !readyRecord.ApplicationAdmissionReserved
+                && _applicationJobQueue is not null
+            )
+            {
+                first = await TryTakeApplicationAdmissionAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (first is null)
+                    return;
+                var admissionBudget = Math.Min(
+                    readyRecord.AvailableRecords,
+                    ZLinkReceiveBatchBudget.MaximumRecords
+                );
+                reservation = await _applicationJobQueue
+                    .TryReserveBatchAsync(admissionBudget - 1, ZLinkApplicationJobOrigin.Remote)
+                    .ConfigureAwait(false);
+                admissionCount = 1 + reservation.Count;
+            }
+            var ownerSpotId = readyRecord.SpotId;
+            if (
+                string.IsNullOrEmpty(ownerSpotId)
+                && readyRecord.OwnerKind == MeshOwnerKind.Actor
+                && readyRecord.Actor.ActorId is { Length: > 0 } ownerActorId
+            )
+                try
+                {
+                    if (_node.ActorLookup(ownerActorId, out var ownerLocation))
+                        ownerSpotId = ownerLocation.SpotId;
+                }
+                catch (ZlinkException) { }
+            try
+            {
+                claim = readyBatch.TakeClaim(index);
+            }
+            catch (ZlinkException)
+            {
+                return;
+            }
             receiveBatch.Reset();
             // Release every claim after one bounded turn. Application-domain
             // claims reserve only the number of records this turn can publish;
@@ -455,6 +447,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 return;
 
             var count = receiveBatch.Count;
+            nodeRoutes = new(count);
             var externalAdmissions = 0;
             if (admissionCount != 0)
             {
@@ -464,11 +457,16 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                         && receiveBatch.GetApplicationJobAdmission(record) is null
                     )
                         externalAdmissions++;
+                admissions = new ZLinkApplicationJobQueueLease?[externalAdmissions];
+                for (var record = 0; record < externalAdmissions; record++)
+                {
+                    admissions[record] = first ?? reservation!.Take();
+                    first = null;
+                }
                 _applicationJobQueue!.MarkQueuedBatch(admissions, externalAdmissions);
             }
             // Reservations have no record identity. Assign the required prefix
-            // to application records; unused and embedded-owner duplicates stay
-            // in this same array for one ReleaseBatch below.
+            // to application records. Unused budget remains in the turn reservation.
             var externalIndex = 0;
             try
             {
@@ -546,7 +544,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 foreach (var received in nodeRoutes)
                     received.Dispose();
             DisposeAdmissions(admissions);
-            claim.Dispose();
+            first?.Dispose();
+            reservation?.Dispose();
+            claim?.Dispose();
         }
     }
 

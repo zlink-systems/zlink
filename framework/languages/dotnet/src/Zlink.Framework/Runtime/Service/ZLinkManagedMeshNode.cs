@@ -38,6 +38,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         | PollEventFlags.PollCompletion
         | PollEventFlags.PollRoute;
     private const nuint RawSocketPollerSlot = 1;
+    private static readonly MeshReadyDomains[] ReadyDomainOrder =
+    [
+        MeshReadyDomains.Infrastructure,
+        MeshReadyDomains.Application,
+    ];
     private static readonly TimeSpan TransportShutdownGrace = PollInterval + PollInterval;
     private static readonly TimeSpan RelocationAckRetryInterval = TimeSpan.FromMilliseconds(100);
 
@@ -2160,48 +2165,50 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return false;
 
         Volatile.Write(ref _readyPosted, 0);
-        foreach (
-            var entry in _ownedMailboxes
-                .Where(entry => (entry.Key.Domain & domains) != 0)
-                .OrderBy(static entry =>
-                    entry.Key.Domain == MeshReadyDomains.Infrastructure ? 0 : 1
-                )
-                .ThenBy(static entry => entry.Key.OwnerKind)
-                .ThenBy(static entry => entry.Key.Identity, StringComparer.Ordinal)
-        )
+        using var entries = _ownedMailboxes.GetEnumerator();
+        foreach (var domain in ReadyDomainOrder)
         {
-            var mailbox = entry.Value;
-            var canClaim = batch.Count < batch.MaximumRecords;
-            var claim = await mailbox
-                .TryClaimAsync(
-                    batch.RequireReservedApplicationAdmission
-                        && entry.Key.Domain == MeshReadyDomains.Application,
-                    canClaim
-                )
-                .ConfigureAwait(false);
-            if (!claim.Ready)
+            if ((domain & domains) == 0)
                 continue;
-            if (!canClaim)
-                return true;
-            batch.Add(
-                new MeshReadyRecord(
-                    entry.Key.OwnerKind,
-                    entry.Key.Domain,
-                    entry.Key.SpotId,
-                    entry.Key.Actor,
-                    Math.Min(claim.Count, ReceiveBatchSize),
-                    entry.Key.Domain == MeshReadyDomains.Application && claim.Admitted
-                ),
-                new MeshClaim
-                {
-                    Receiver = (receiveBatch, receiveFlags) =>
-                        mailbox.DrainAsync(
-                            receiveBatch,
-                            Math.Min(ReceiveBatchSize, receiveBatch.MaximumRecords)
-                        ),
-                    Releaser = () => mailbox.Release(SignalReadyIfNeeded),
-                }
-            );
+            while (entries.MoveNext())
+            {
+                var entry = entries.Current;
+                if (entry.Key.Domain != domain)
+                    continue;
+                var mailbox = entry.Value;
+                var canClaim = batch.Count < batch.MaximumRecords;
+                var claim = await mailbox
+                    .TryClaimAsync(
+                        batch.RequireReservedApplicationAdmission
+                            && entry.Key.Domain == MeshReadyDomains.Application,
+                        canClaim
+                    )
+                    .ConfigureAwait(false);
+                if (!claim.Ready)
+                    continue;
+                if (!canClaim)
+                    return true;
+                batch.Add(
+                    new MeshReadyRecord(
+                        entry.Key.OwnerKind,
+                        entry.Key.Domain,
+                        entry.Key.SpotId,
+                        entry.Key.Actor,
+                        Math.Min(claim.Count, ReceiveBatchSize),
+                        entry.Key.Domain == MeshReadyDomains.Application && claim.Admitted
+                    ),
+                    new MeshClaim
+                    {
+                        Receiver = (receiveBatch, receiveFlags) =>
+                            mailbox.DrainAsync(
+                                receiveBatch,
+                                Math.Min(ReceiveBatchSize, receiveBatch.MaximumRecords)
+                            ),
+                        Releaser = () => mailbox.Release(SignalReadyIfNeeded),
+                    }
+                );
+            }
+            entries.Reset();
         }
         return false;
     }
@@ -5242,7 +5249,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void ReceiveLoop(CancellationToken cancellationToken)
     {
         var events = new PollEvent[1];
-        var admissions = new ZLinkApplicationJobQueueLease?[ReceiveBatchSize];
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -5258,7 +5264,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (count > 0 && (events[0].Revents & PollEventFlags.PollRoute) != 0)
                     ObserveSelectedRoutes();
                 if (count > 0 && (events[0].Revents & PollEventFlags.PollIn) != 0)
-                    DrainRawSocket(cancellationToken, admissions);
+                    DrainRawSocket(cancellationToken);
                 ProcessInfrastructure(now);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -5281,47 +5287,43 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void DrainRawSocket(
-        CancellationToken cancellationToken,
-        ZLinkApplicationJobQueueLease?[] admissions
-    )
+    private void DrainRawSocket(CancellationToken cancellationToken)
     {
         var count = ReceiveBatchSize;
         var queue = _applicationJobQueue;
-        if (queue is not null)
-        {
-            var reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
-            count = reserved is null ? 0 : 1;
-            admissions[0] = reserved;
-            count += queue.TryAcquireBatch(
-                admissions,
-                count,
-                ReceiveBatchSize - count,
-                ZLinkApplicationJobOrigin.Remote
-            );
-            if (count == 0)
-            {
-                // A full host leaves arrived records in Core. Keep this socket's
-                // completion and route observer active while its existing waiter
-                // obtains the next receive permit.
-                _poller!.Modify(_socket!, InfrastructurePollEvents);
-                using (ExecutionContext.SuppressFlow())
-                    _ = WaitForRawApplicationAdmissionAsync(queue, cancellationToken);
-                return;
-            }
-        }
-
-        var startedAt = Stopwatch.GetTimestamp();
-        long bytes = 0;
+        ZLinkApplicationJobQueueLease? first = null;
+        ZLinkApplicationJobQueueReservation? reservation = null;
         try
         {
+            if (queue is not null)
+            {
+                first = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
+                count = first is null ? 0 : 1;
+                reservation = queue.TryReserveBatch(
+                    ReceiveBatchSize - count,
+                    ZLinkApplicationJobOrigin.Remote
+                );
+                count += reservation.Count;
+                if (count == 0)
+                {
+                    // A full host leaves arrived records in Core. Keep this socket's
+                    // completion and route observer active while its existing waiter
+                    // obtains the next receive permit.
+                    _poller!.Modify(_socket!, InfrastructurePollEvents);
+                    using (ExecutionContext.SuppressFlow())
+                        _ = WaitForRawApplicationAdmissionAsync(queue, cancellationToken);
+                    return;
+                }
+            }
+
+            var startedAt = Stopwatch.GetTimestamp();
+            long bytes = 0;
             for (var index = 0; index < count; index++)
             {
                 if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
                     return;
                 Received? received = Received.Create();
-                var admission = admissions[index];
-                admissions[index] = null;
+                ZLinkApplicationJobQueueLease? admission = null;
                 try
                 {
                     bool available;
@@ -5329,6 +5331,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         available = _socket!.Recv(received, RecvFlags.DontWait);
                     if (!available)
                         return;
+                    admission = first ?? reservation?.Take();
+                    first = null;
                     bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
                     using var ownership = new RawIngressOwnership(received, admission);
                     received = null;
@@ -5344,8 +5348,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         finally
         {
-            queue?.ReleaseBatch(admissions);
-            Array.Clear(admissions);
+            first?.Dispose();
+            reservation?.Dispose();
         }
     }
 
@@ -9074,98 +9078,102 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ProcessInfrastructure(long now)
     {
-        var (intents, peers) = RunState(() =>
-            (_peersByIntent.Values.ToArray(), _peersByRid.Values.ToArray())
-        );
-        bool? admissionSealed = null;
-
-        foreach (var intent in intents)
+        // Membership, admission and liveness belong to this lane. Prepare only
+        // actual effects; transport submission and publication stay outside it.
+        var (controls, closed) = RunState(() =>
         {
-            var knownRid = intent.ResolvedRid.IsEmpty
-                ? intent.ExpectedRid ?? default
-                : intent.ResolvedRid;
-            if (
-                !knownRid.IsEmpty
-                && peers.Any(peer =>
-                    intent.IsAdmitted(peer)
-                    || peer.State == MeshPeerState.NotRequired && intent.IsBoundTo(peer)
-                )
-            )
-                continue;
-            admissionSealed ??= _peerAdmissionSealed?.Invoke() == true;
-            if (admissionSealed.Value)
-                continue;
-            var (target, routeGeneration, unboundRoutes) = RunState(() =>
+            List<(
+                RoutingId Target,
+                ulong Generation,
+                ServiceWireConstants.Command Command,
+                ulong ProbeId
+            )>? controls = null;
+            List<RoutingId>? closed = null;
+            foreach (var intent in _peersByIntent.Values)
             {
+                var knownRid = intent.ResolvedRid.IsEmpty
+                    ? intent.ExpectedRid ?? default
+                    : intent.ResolvedRid;
                 if (
-                    !_peersByIntent.TryGetValue(intent.Id, out var current)
-                    || !ReferenceEquals(current, intent)
+                    !knownRid.IsEmpty
+                    && _peersByRid.Values.Any(peer =>
+                        intent.IsAdmitted(peer)
+                        || peer.State == MeshPeerState.NotRequired && intent.IsBoundTo(peer)
+                    )
                 )
-                    return (default(RoutingId), 0UL, Array.Empty<RoutingId>());
-                var rid =
-                    current.ExpectedRid
-                    ?? (NeedsUnboundHelloRouteUnderLock(current) ? default : current.ResolvedRid);
-                if (!rid.IsEmpty)
+                    continue;
+                var target =
+                    intent.ExpectedRid
+                    ?? (NeedsUnboundHelloRouteUnderLock(intent) ? default : intent.ResolvedRid);
+                if (!target.IsEmpty)
                 {
-                    return (rid, _selectedRoutes.GenerationOf(rid), Array.Empty<RoutingId>());
+                    var generation = _selectedRoutes.GenerationOf(target);
+                    if (generation != 0)
+                        (controls ??= []).Add(
+                            (target, generation, ServiceWireConstants.Command.Hello, 0)
+                        );
                 }
-                return (default(RoutingId), 0UL, UnboundSelectedRoutesUnderLock(current));
-            });
-            if (!target.IsEmpty && routeGeneration != 0)
-                SendControl(target, routeGeneration, ServiceWireConstants.Command.Hello, null);
-            foreach (var routingId in unboundRoutes)
-                SendControl(
-                    routingId,
-                    RunState(() => _selectedRoutes.GenerationOf(routingId)),
-                    ServiceWireConstants.Command.Hello,
-                    null
-                );
-        }
-
-        foreach (var peer in peers)
-        {
-            var activity = RunState(() =>
+                else
+                    foreach (var rid in UnboundSelectedRoutesUnderLock(intent))
+                        (controls ??= []).Add(
+                            (
+                                rid,
+                                _selectedRoutes.GenerationOf(rid),
+                                ServiceWireConstants.Command.Hello,
+                                0
+                            )
+                        );
+            }
+            foreach (var peer in _peersByRid.Values)
             {
-                (RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId) result =
-                    default;
-                if (
-                    !_peersByRid.TryGetValue(peer.RoutingId, out var current)
-                    || !ReferenceEquals(current, peer)
-                    || !current.Admitted
-                    || current.Liveness is not { } liveness
-                )
-                    return result;
+                if (!peer.Admitted || peer.Liveness is not { } liveness)
+                    continue;
                 if (liveness.IsExpired(now))
                 {
-                    var physicalRid = current.PhysicalRoutingId;
-                    result.Closed = EndRouteAdmissionUnderLock(
-                        new RouterRoute(peer.RoutingId, peer.RouteGeneration)
-                    );
-                    DisconnectTransport(current, physicalRid);
+                    var physicalRid = peer.PhysicalRoutingId;
+                    if (
+                        EndRouteAdmissionUnderLock(
+                            new RouterRoute(peer.RoutingId, peer.RouteGeneration)
+                        ) is
+                        { } closedRid
+                    )
+                        (closed ??= []).Add(closedRid);
+                    DisconnectTransport(peer, physicalRid);
                 }
                 else if (liveness.TryGetProbe(now, out var probeId))
-                {
-                    result.Target = current.PhysicalRoutingId;
-                    result.Generation = current.RouteGeneration;
-                    result.ProbeId = probeId;
-                }
-                return result;
-            });
-            if (activity.Closed is { } closedRid)
-                Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
-            if (activity.ProbeId != 0)
+                    (controls ??= []).Add(
+                        (
+                            peer.PhysicalRoutingId,
+                            peer.RouteGeneration,
+                            ServiceWireConstants.Command.LivenessProbe,
+                            probeId
+                        )
+                    );
+            }
+            return (controls, closed);
+        });
+        bool? admissionSealed = null;
+        if (controls is not null)
+            foreach (var control in controls)
             {
+                if (control.Command == ServiceWireConstants.Command.Hello)
+                {
+                    admissionSealed ??= _peerAdmissionSealed?.Invoke() == true;
+                    if (admissionSealed.Value)
+                        continue;
+                }
                 SendControl(
-                    activity.Target,
-                    activity.Generation,
-                    ServiceWireConstants.Command.LivenessProbe,
-                    ZLinkServiceWireCodec.EncodeLiveness(
-                        ServiceWireConstants.Command.LivenessProbe,
-                        activity.ProbeId
-                    )
+                    control.Target,
+                    control.Generation,
+                    control.Command,
+                    control.Command == ServiceWireConstants.Command.Hello
+                        ? null
+                        : ZLinkServiceWireCodec.EncodeLiveness(control.Command, control.ProbeId)
                 );
             }
-        }
+        if (closed is not null)
+            foreach (var rid in closed)
+                Publish(MeshMonitorEventKind.PeerClosed, peerRid: rid);
     }
 
     // Monitor events are transport observations, not the selected route

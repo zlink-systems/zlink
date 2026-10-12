@@ -201,10 +201,7 @@ public sealed class MeshPermitHandoffTests
     private static void Drain(ZLinkManagedMeshNode node, CancellationToken stop) =>
         node.GetType()
             .GetMethod("DrainRawSocket", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(
-                node,
-                [stop, new ZLinkApplicationJobQueueLease?[ZLinkReceiveBatchBudget.MaximumRecords]]
-            );
+            .Invoke(node, [stop]);
 
     private static void SetField(object instance, string name, object? value) =>
         instance

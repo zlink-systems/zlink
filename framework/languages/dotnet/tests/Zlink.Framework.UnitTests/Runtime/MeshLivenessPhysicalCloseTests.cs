@@ -6,6 +6,35 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshLivenessPhysicalCloseTests
 {
+    [Fact]
+    public async Task ManagementTurnDoesNotRebuildPeerSnapshotsOrReenterEachPeerLane()
+    {
+        const int MeasuredTurns = 8;
+        const int BytesPerTurn = 512;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "management-storage");
+        var peers = Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid");
+        for (
+            var index = 0;
+            index < Zlink.Framework.Runtime.Dispatch.ZLinkReceiveBatchBudget.MaximumRecords;
+            index++
+        )
+        {
+            var rid = RoutingId.From($"unadmitted-{index}");
+            peers.Add(rid, new ZLinkMeshPeer((ulong)index + 1) { RoutingId = rid });
+        }
+        Tick(node, 0);
+        Tick(node, 0);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < MeasuredTurns; index++)
+            Tick(node, 0);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(
+            allocated <= MeasuredTurns * BytesPerTurn,
+            $"Management without due work allocated {allocated} bytes."
+        );
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

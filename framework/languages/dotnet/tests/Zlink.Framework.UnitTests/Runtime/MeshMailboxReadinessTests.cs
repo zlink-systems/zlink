@@ -8,6 +8,27 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshMailboxReadinessTests
 {
     [Fact]
+    public async Task EmptyReadinessDoesNotRebuildMailboxSnapshots()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "empty-readiness");
+        using var batch = new MeshReadyBatch();
+        for (var index = 0; index < 16; index++)
+            Assert.False(
+                await node.DrainReadyAsync(MeshReadyDomains.All, batch, RecvFlags.DontWait)
+            );
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 64; index++)
+            node.DrainReadyAsync(MeshReadyDomains.All, batch, RecvFlags.DontWait)
+                .GetAwaiter()
+                .GetResult();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // Empty registry enumeration needs no record, ordering buffer or claim storage.
+        Assert.True(allocated <= 64 * 128, $"Empty readiness allocated {allocated} bytes.");
+    }
+
+    [Fact]
     public void AdmittedClaimKeepsItsOriginalPrefixWhenUnadmittedRecordsArrive()
     {
         using var queue = new ZLinkApplicationJobQueue(

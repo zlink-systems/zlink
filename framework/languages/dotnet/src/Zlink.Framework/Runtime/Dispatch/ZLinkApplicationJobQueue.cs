@@ -336,32 +336,23 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         return acquired.Count == 0 ? null : new ZLinkApplicationJobQueueLease(this, origin);
     }
 
-    internal int TryAcquireBatch(
-        ZLinkApplicationJobQueueLease?[] destination,
-        int offset,
+    internal ZLinkApplicationJobQueueReservation TryReserveBatch(
         int maximum,
         ZLinkApplicationJobOrigin origin
-    ) => AwaitStateLane(TryAcquireBatchAsync(destination, offset, maximum, origin));
+    ) => AwaitStateLane(TryReserveBatchAsync(maximum, origin));
 
-    internal async ValueTask<int> TryAcquireBatchAsync(
-        ZLinkApplicationJobQueueLease?[] destination,
-        int offset,
+    internal async ValueTask<ZLinkApplicationJobQueueReservation> TryReserveBatchAsync(
         int maximum,
         ZLinkApplicationJobOrigin origin
     )
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfNegative(maximum);
-        if (offset > destination.Length - maximum)
-            throw new ArgumentOutOfRangeException(nameof(maximum));
         var acquired = await _lane
             .RunAsync(() => ReserveAvailableOnLane(maximum))
             .ConfigureAwait(false);
-        for (var index = 0; index < acquired.Count; index++)
-            destination[offset + index] = new ZLinkApplicationJobQueueLease(this, origin);
         if (acquired.PressureChanged)
             _receiveFlowController.ApplyPending();
-        return acquired.Count;
+        return new ZLinkApplicationJobQueueReservation(this, acquired.Count, origin);
     }
 
     private (int Count, bool PressureChanged) ReserveAvailableOnLane(int maximum)
@@ -499,15 +490,32 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             _ = ReleaseBatchAsync(owned);
     }
 
-    private async Task ReleaseBatchAsync(List<ZLinkApplicationJobQueueLease> leases)
+    internal void ReleaseReservedBatch(int count)
+    {
+        if (count != 0)
+            _ = ReleaseBatchAsync(null, count);
+    }
+
+    private async Task ReleaseBatchAsync(
+        List<ZLinkApplicationJobQueueLease>? leases,
+        int reservedCount = 0
+    )
     {
         var released = await _lane
             .RunAsync(() =>
             {
                 List<ReleaseResult>? results = null;
-                foreach (var lease in leases)
+                var count = leases?.Count ?? reservedCount;
+                for (var index = 0; index < count; index++)
                 {
-                    var result = ReleaseOnLane(lease);
+                    ReleaseResult result;
+                    if (leases is not null)
+                        result = ReleaseOnLane(leases[index]);
+                    else
+                    {
+                        _reservedSupplyPermits = checked(_reservedSupplyPermits - 1);
+                        result = TransferReleasedPermitOnLane();
+                    }
                     if (result.AdmittedWaiter is not null || result.PressureChanged)
                         (results ??= []).Add(result);
                 }
@@ -529,6 +537,11 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         else
             _queuedApplicationJobs = checked(_queuedApplicationJobs - 1);
 
+        return TransferReleasedPermitOnLane();
+    }
+
+    private ReleaseResult TransferReleasedPermitOnLane()
+    {
         while (_waiters.First is { } node)
         {
             var candidate = node.Value;
@@ -1112,6 +1125,33 @@ internal sealed class ZLinkReceiveFlowController
         public ValueTask DisposeAsync() =>
             Interlocked.Exchange(ref _owner, null)?.UnregisterAsync(_entry)
             ?? ValueTask.CompletedTask;
+    }
+}
+
+// A receive turn owns a count until actual records consume it. The turn is
+// single-owner; only materialized record leases cross execution resources.
+internal sealed class ZLinkApplicationJobQueueReservation(
+    ZLinkApplicationJobQueue owner,
+    int count,
+    ZLinkApplicationJobOrigin origin
+) : IDisposable
+{
+    internal int Count { get; private set; } = count;
+
+    internal ZLinkApplicationJobQueueLease Take()
+    {
+        if (Count == 0)
+            throw new InvalidOperationException("Receive reservation is exhausted.");
+        var lease = new ZLinkApplicationJobQueueLease(owner, origin);
+        Count--;
+        return lease;
+    }
+
+    public void Dispose()
+    {
+        var remaining = Count;
+        Count = 0;
+        owner.ReleaseReservedBatch(remaining);
     }
 }
 
