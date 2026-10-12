@@ -8,6 +8,7 @@ import {
 } from './service-topology-registry';
 import {
   SERVICE_WIRE_PREFIX_SIZE,
+  SERVICE_WIRE_TEXT8_MAX_BYTES,
   decodeCanonicalServiceWireText,
   encodeCanonicalServiceWireText
 } from './service-wire-binary-primitives';
@@ -165,24 +166,12 @@ export function decodeReplyHeader(frame: Uint8Array): ServiceReplyHeader {
 }
 
 export function encodeApplicationPayload(payload: ServiceApplicationPayload): Buffer {
-  const packetName = encodeText8(payload.packetName, 'packetName');
-  const contentType = encodeText8(payload.contentType, 'contentType');
-  if (payload.payload.byteLength > MAX_U32) fail('Application payload exceeds u32.');
-  const bodyLength =
-    packetName.byteLength + contentType.byteLength + 4 + payload.payload.byteLength;
-  if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
-  const result = Buffer.alloc(5 + bodyLength);
-  result[0] = APPLICATION_PAYLOAD_VERSION;
-  result.writeUInt32BE(bodyLength, 1);
-  let offset = 5;
-  offset += packetName.copy(result, offset);
-  offset += contentType.copy(result, offset);
-  result.writeUInt32BE(payload.payload.byteLength, offset);
-  offset += 4;
-  Buffer.from(payload.payload.buffer, payload.payload.byteOffset, payload.payload.byteLength).copy(
-    result,
-    offset
+  const result = allocateApplicationPayload(
+    payload.packetName,
+    payload.contentType,
+    payload.payload.byteLength
   );
+  result.set(payload.payload, result.byteLength - payload.payload.byteLength);
   return result;
 }
 
@@ -198,32 +187,62 @@ export function encodeMultipartApplicationPayload(
 ): Buffer {
   if (parts.length === 0) fail('Multipart payload must contain at least one part.');
   if (parts.length > MAX_U32) fail('Multipart part count exceeds u32.');
-  const packetNameBytes = encodeText8(packetName, 'packetName');
-  const contentTypeBytes = encodeText8(contentType, 'contentType');
   let multipartLength = 4;
   for (const part of parts) {
     if (part.byteLength > MAX_U32) fail('Multipart part exceeds u32.');
     multipartLength += 4 + part.byteLength;
     if (multipartLength > MAX_U32) fail('Multipart payload exceeds u32.');
   }
-  const bodyLength = packetNameBytes.byteLength + contentTypeBytes.byteLength + 4 + multipartLength;
-  if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
-  const result = Buffer.alloc(5 + bodyLength);
-  result[0] = APPLICATION_PAYLOAD_VERSION;
-  result.writeUInt32BE(bodyLength, 1);
-  let offset = 5;
-  offset += packetNameBytes.copy(result, offset);
-  offset += contentTypeBytes.copy(result, offset);
-  result.writeUInt32BE(multipartLength, offset);
-  offset += 4;
+  const result = allocateApplicationPayload(packetName, contentType, multipartLength);
+  let offset = result.byteLength - multipartLength;
   result.writeUInt32BE(parts.length, offset);
   offset += 4;
   for (const part of parts) {
     result.writeUInt32BE(part.byteLength, offset);
     offset += 4;
-    Buffer.from(part.buffer, part.byteOffset, part.byteLength).copy(result, offset);
+    result.set(part, offset);
     offset += part.byteLength;
   }
+  return result;
+}
+
+function allocateApplicationPayload(
+  packetName: string,
+  contentType: string,
+  payloadLength: number
+): Buffer {
+  const packetNameBytes = encodeCanonicalServiceWireText(
+    packetName,
+    'packetName',
+    SERVICE_WIRE_TEXT8_MAX_BYTES,
+    fail
+  );
+  const contentTypeBytes = encodeCanonicalServiceWireText(
+    contentType,
+    'contentType',
+    SERVICE_WIRE_TEXT8_MAX_BYTES,
+    fail
+  );
+  if (payloadLength > MAX_U32) fail('Application payload exceeds u32.');
+  const frameLength =
+    APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES +
+    packetNameBytes.byteLength +
+    contentTypeBytes.byteLength +
+    payloadLength;
+  const prefixLength = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
+  const bodyLength = frameLength - prefixLength;
+  if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
+  const result = Buffer.alloc(frameLength);
+  result[0] = APPLICATION_PAYLOAD_VERSION;
+  result.writeUInt32BE(bodyLength, 1);
+  let offset = prefixLength;
+  result[offset++] = packetNameBytes.byteLength;
+  result.set(packetNameBytes, offset);
+  offset += packetNameBytes.byteLength;
+  result[offset++] = contentTypeBytes.byteLength;
+  result.set(contentTypeBytes, offset);
+  offset += contentTypeBytes.byteLength;
+  result.writeUInt32BE(payloadLength, offset);
   return result;
 }
 
@@ -487,7 +506,7 @@ function encodeU64(value: bigint): Buffer {
 }
 
 function encodeText8(value: string, field: string): Buffer {
-  const bytes = encodeCanonicalServiceWireText(value, field, 0xff, fail);
+  const bytes = encodeCanonicalServiceWireText(value, field, SERVICE_WIRE_TEXT8_MAX_BYTES, fail);
   return concat(Buffer.of(bytes.byteLength), bytes);
 }
 
@@ -501,7 +520,7 @@ function tlv(id: number, value: Buffer): Buffer {
 }
 
 function concat(...parts: readonly Uint8Array[]): Buffer {
-  return Buffer.concat(parts.map((part) => Buffer.from(part)));
+  return Buffer.concat(parts);
 }
 
 function readNonZeroU64(bytes: Buffer, offset: number, field: string): bigint {
