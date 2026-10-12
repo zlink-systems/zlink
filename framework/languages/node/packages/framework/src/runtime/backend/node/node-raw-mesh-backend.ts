@@ -172,7 +172,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     }
   >();
   private completionHandler?: ZLinkMeshCompletionHandler;
-  private readonly routingId: string;
+  readonly routingId: string;
   private readonly lifecycleGeneration: bigint;
   private bindEndpoint?: string;
   private advertiseHost?: string;

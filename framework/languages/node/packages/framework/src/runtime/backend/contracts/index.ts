@@ -62,6 +62,7 @@ export type ZLinkBackendObjectPlacement =
   | { readonly kind: 'unavailable' };
 
 export interface ZLinkBackendMeshNode {
+  readonly routingId?: RoutingId;
   completeClosedInstance?(spotId: string, objectGeneration: bigint): void;
   setDispatchErrorReporter?(
     reporter: import('../../channels/dispatch-error-reporter').ZLinkDispatchErrorReporter,

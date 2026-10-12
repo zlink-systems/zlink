@@ -279,7 +279,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     private readonly meshRuntime:
       | (() =>
           | {
-              readonly meshNode: (meshName: string) => ZLinkBackendMeshNode | undefined;
+              readonly meshNode?: (meshName: string) => ZLinkBackendMeshNode | undefined;
               readonly meshCompletionTable: (
                 meshName: string
               ) => ZLinkMeshCompletionTable | undefined;
@@ -376,12 +376,14 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       metadata
     );
     const operation = `MeshNode '${meshName}' send to node '${targetNodeRid}'`;
-    if (this.isSelfNode(node, targetNodeRid)) {
-      return this.submitLocalNode(meshName, String(node.status().routingId), parts);
+    const sourceNodeRid =
+      node.routingId ?? (node.status().routingId as unknown as import('../../contracts').RoutingId);
+    if (routingIdsEqual(sourceNodeRid, targetNodeRid)) {
+      return this.submitLocalNode(meshName, String(sourceNodeRid), parts);
     }
     if (
-      !this.isKnownBackendPeer(node, targetNodeRid) &&
-      this.manualNodeTarget?.(meshName, targetNodeRid) === false
+      this.manualNodeTarget?.(meshName, targetNodeRid) === false &&
+      !this.isKnownBackendPeer(node, targetNodeRid)
     ) {
       return { status: ZLinkSubmitStatus.TargetNotFound };
     }
@@ -980,21 +982,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
   }
 
   private meshNode(meshName: string): ZLinkBackendMeshNode | undefined {
-    const runtime = this.meshRuntime?.();
-    return (
-      runtime as unknown as
-        | {
-            meshNode?: (meshName: string) => ZLinkBackendMeshNode | undefined;
-          }
-        | undefined
-    )?.meshNode?.(meshName);
-  }
-
-  private isSelfNode(node: ZLinkBackendMeshNode, targetNodeRid: string): boolean {
-    return routingIdsEqual(
-      node.status().routingId as unknown as import('../../contracts').RoutingId,
-      targetNodeRid
-    );
+    return this.meshRuntime?.()?.meshNode?.(meshName);
   }
 
   private isKnownBackendPeer(node: ZLinkBackendMeshNode, targetNodeRid: string): boolean {
