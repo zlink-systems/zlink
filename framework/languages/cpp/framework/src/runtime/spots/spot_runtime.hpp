@@ -365,7 +365,7 @@ class spot_node_builder_state_t
     std::map<std::string, std::uint64_t> core_actor_membership_epochs;
     std::map<std::string, std::shared_ptr<service::spot_t>> native_spots_by_id;
     std::shared_ptr<service::spot_t> routed_control_spot;
-    std::atomic<std::shared_ptr<const route_client_t>> route_client;
+    std::shared_ptr<const route_client_t> route_client;
     struct queued_actor_packet_t
     {
         service::receive_record_t record;

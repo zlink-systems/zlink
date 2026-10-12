@@ -176,7 +176,7 @@ class service_topology_registry_t
 
     // The registry publishes its sole descriptor/peer state at mutation turns.
     // Readers retain the immutable publication without entering the state lane.
-    std::atomic<std::shared_ptr<const topology_state_t>> _topology;
+    std::shared_ptr<const topology_state_t> _topology;
     service_liveness_registry_t *const _liveness_owner;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, byte_vector_less_t>
       _not_required_peers;
