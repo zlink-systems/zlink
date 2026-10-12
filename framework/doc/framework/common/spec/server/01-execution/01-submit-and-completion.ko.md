@@ -528,7 +528,7 @@ sendCall.async();                      // 결과 없이 operation만 시작한�
 auto reply = co_await requestCall.async(); // 비동기 application reply를 기다린다.
 ```
 
-반환형만 다른 overload는 만들지 않는다. C++ Messaging call wrapper는 비동기 `task_t<T> async()`와
+반환형만 다른 overload는 만들지 않는다. C++ Messaging call wrapper는 비동기 `async()`와
 동기 blocking `submit()`을 함께 제공한다(두 종결자는 이름이 다르므로 overload가 아니다). `submit()`은
 application thread 전용이며 runtime 실행 문맥에서는 `InvalidOperation`으로 실패한다(§4 F2-a).
 Callback overload는 parameter list가 다르므로 `submit(callback)`으로 제공할 수 있다.
