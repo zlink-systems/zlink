@@ -9,8 +9,8 @@ entry lib/net8.0/Systems.Zlink.Stream.Connector.xml
 entry lib/netstandard2.1/Systems.Zlink.Stream.Connector.dll
 entry lib/netstandard2.1/Systems.Zlink.Stream.Connector.xml
 entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
-content-sha256 lib/net8.0/Systems.Zlink.Stream.Connector.xml=af28880dd09ab404a750637e59b82bd3a54f248363c82352daafa257ac8d148c
-content-sha256 lib/netstandard2.1/Systems.Zlink.Stream.Connector.xml=af28880dd09ab404a750637e59b82bd3a54f248363c82352daafa257ac8d148c
+content-sha256 lib/net8.0/Systems.Zlink.Stream.Connector.xml=30d4d5f8ddb67f138982e17afefceab4030f85fb68da148890c546491188e9a0
+content-sha256 lib/netstandard2.1/Systems.Zlink.Stream.Connector.xml=30d4d5f8ddb67f138982e17afefceab4030f85fb68da148890c546491188e9a0
 metadata authors=zlink
 metadata description=ZLink STREAM client connector for .NET.
 metadata id=Zlink.Stream.Connector
