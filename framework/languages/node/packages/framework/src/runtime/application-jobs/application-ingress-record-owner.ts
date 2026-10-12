@@ -56,7 +56,13 @@ export class ApplicationIngressRecordOwner {
 
     const waitSignal =
       signal === undefined ? this.stop.signal : AbortSignal.any([this.stop.signal, signal]);
-    const permit = await this.shared.acquirePermit(waitSignal);
+    let permit: ApplicationJobPermitPort;
+    try {
+      permit = await this.shared.acquirePermit(waitSignal);
+    } catch (error) {
+      if (error === ownerClosedError) throw ownerClosedError();
+      throw error;
+    }
     if (this.closed) {
       permit.releaseAfterInternalProcessing();
       throw ownerClosedError();
@@ -67,7 +73,8 @@ export class ApplicationIngressRecordOwner {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.stop.abort(ownerClosedError());
+    // The queue forwards this reason; only a rejected acquisition constructs the error.
+    this.stop.abort(ownerClosedError);
     this.shared.releaseOwner();
   }
 
