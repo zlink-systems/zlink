@@ -166,38 +166,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            List<Message> parts,
-            Duration timeout) {
-        return owner.requestToSpot(
-                this, targetNodeRid, spotId, spotGeneration, new byte[0], parts, timeout);
-    }
-
-    @Override
-    public CompletionStage<ZLinkBackendReceived> requestToSpot(
-            RoutingId targetNodeRid,
-            String spotId,
-            long spotGeneration,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout,
-            ZLinkServiceOperationRegistry operations,
-            UUID operationId) {
-        return requestToSpot(
-                targetNodeRid,
-                spotId,
-                spotGeneration,
-                metadata,
-                parts,
-                timeout,
-                operations,
-                operationId,
-                null);
-    }
-
-    public CompletionStage<ZLinkBackendReceived> requestToSpot(
-            RoutingId targetNodeRid,
-            String spotId,
-            long spotGeneration,
             byte[] metadata,
             List<Message> parts,
             Duration timeout,
@@ -218,16 +186,6 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
     }
 
     @Override
-    public CompletionStage<ZLinkBackendReceived> requestToSpot(
-            RoutingId targetNodeRid,
-            String spotId,
-            long spotGeneration,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout) {
-        return requestToSpot(targetNodeRid, spotId, spotGeneration, metadata, parts, timeout, null);
-    }
-
     public CompletionStage<ZLinkBackendReceived> requestToSpot(
             RoutingId targetNodeRid,
             String spotId,
@@ -268,18 +226,11 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
         return topics.contains(topic);
     }
 
-    CompletionStage<Void> enqueueRoute(ZLinkBackendReceived received) {
-        return enqueueRoute(received, null);
-    }
-
     CompletionStage<Void> enqueueRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
         if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
-            CompletionStage<Void> direct =
-                    admission == null
-                            ? async.handleRoute(received)
-                            : async.handleRoute(received, admission);
+            CompletionStage<Void> direct = async.handleRoute(received, admission);
             if (direct != null) {
                 return direct;
             }
@@ -320,18 +271,11 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
         return true;
     }
 
-    CompletionStage<Void> enqueueActor(List<ZLinkBackendActorReceived> messages) {
-        return enqueueActor(messages, null);
-    }
-
     CompletionStage<Void> enqueueActor(
             List<ZLinkBackendActorReceived> messages, CompletableFuture<Void> requestAdmission) {
         ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
         if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
-            CompletionStage<Void> direct =
-                    requestAdmission == null
-                            ? async.handleActor(messages)
-                            : async.handleActor(messages, requestAdmission);
+            CompletionStage<Void> direct = async.handleActor(messages, requestAdmission);
             if (direct != null) {
                 return direct;
             }

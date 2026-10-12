@@ -206,31 +206,6 @@ final class ZLinkSpotRoutedOutbound {
             String contentType,
             ZLinkApplicationMetadata metadata,
             Duration timeout,
-            Class<TReply> replyType) {
-        return submitRequest(
-                routerChannelId,
-                targetNodeRid,
-                spotId,
-                spotGeneration,
-                payload,
-                packetName,
-                contentType,
-                metadata,
-                timeout,
-                replyType,
-                null);
-    }
-
-    <TReply> CompletionStage<TReply> submitRequest(
-            String routerChannelId,
-            RoutingId targetNodeRid,
-            String spotId,
-            long spotGeneration,
-            Message payload,
-            Optional<String> packetName,
-            String contentType,
-            ZLinkApplicationMetadata metadata,
-            Duration timeout,
             Class<TReply> replyType,
             CompletableFuture<Void> requestAdmission) {
         trace(

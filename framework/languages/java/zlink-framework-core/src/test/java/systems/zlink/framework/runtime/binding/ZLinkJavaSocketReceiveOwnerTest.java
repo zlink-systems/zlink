@@ -56,7 +56,7 @@ final class ZLinkJavaSocketReceiveOwnerTest {
 
                 List<Message> parts = List.of(Message.from("ping"));
                 CompletionStage<ZLinkBackendReceived> reply =
-                        dealer.request(parts, OPERATION_TIMEOUT);
+                        dealer.request(parts, OPERATION_TIMEOUT, null, null);
                 assertTrue(nativeRouter.recv(request, RecvFlags.NONE));
                 request.reply().message(Message.from("pong")).submit();
                 dealer.waitForReadable(OPERATION_TIMEOUT);

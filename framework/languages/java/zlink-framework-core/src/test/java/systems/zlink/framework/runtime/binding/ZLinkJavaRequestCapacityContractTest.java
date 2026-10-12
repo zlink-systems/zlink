@@ -62,7 +62,8 @@ final class ZLinkJavaRequestCapacityContractTest {
                                     caller,
                                     systems.zlink.contracts.core.RoutingId.from("target"),
                                     List.of(new byte[] {1}),
-                                    Duration.ofMillis(100))
+                                    Duration.ofMillis(100),
+                                    null)
                             .toCompletableFuture();
             if (admitBeforeDeadline) request.admitted.complete(null);
             var failure =
@@ -95,7 +96,7 @@ final class ZLinkJavaRequestCapacityContractTest {
         try (var message = Message.from(new byte[] {1})) {
             var completion =
                     ZLinkJavaSocketSupport.submitRequest(
-                                    request, List.of(message), Duration.ofMillis(100))
+                                    request, List.of(message), Duration.ofMillis(100), null, null)
                             .toCompletableFuture();
             if (admitBeforeDeadline) request.admitted.complete(null);
             var failure =
@@ -122,7 +123,7 @@ final class ZLinkJavaRequestCapacityContractTest {
         try (var message = Message.from(new byte[] {1})) {
             var completion =
                     ZLinkJavaSocketSupport.submitRequest(
-                                    request, List.of(message), Duration.ofMillis(30))
+                                    request, List.of(message), Duration.ofMillis(30), null, null)
                             .toCompletableFuture();
             assertThrows(TimeoutException.class, () -> completion.get(150, TimeUnit.MILLISECONDS));
             assertFalse(request.reply.isCancelled());
@@ -340,7 +341,11 @@ final class ZLinkJavaRequestCapacityContractTest {
             try (var message = Message.from(new byte[] {1})) {
                 var completion =
                         ZLinkJavaSocketSupport.submitRequest(
-                                        request, List.of(message), Duration.ofSeconds(1))
+                                        request,
+                                        List.of(message),
+                                        Duration.ofSeconds(1),
+                                        null,
+                                        null)
                                 .toCompletableFuture();
                 if (!initial) reply.completeExceptionally(failure);
                 var terminal =
@@ -364,7 +369,7 @@ final class ZLinkJavaRequestCapacityContractTest {
         try (var message = Message.from(new byte[] {1})) {
             var completion =
                     ZLinkJavaSocketSupport.submitRequest(
-                                    request, List.of(message), Duration.ofSeconds(1))
+                                    request, List.of(message), Duration.ofSeconds(1), null, null)
                             .toCompletableFuture();
             if (!initialSubmission) {
                 assertFalse(completion.isDone());
@@ -421,7 +426,7 @@ final class ZLinkJavaRequestCapacityContractTest {
         try (var message = Message.from(new byte[] {1})) {
             var completion =
                     ZLinkJavaSocketSupport.submitRequest(
-                                    request, List.of(message), Duration.ofSeconds(1))
+                                    request, List.of(message), Duration.ofSeconds(1), null, null)
                             .toCompletableFuture();
             if (!initialSubmission) reply.completeExceptionally(failure);
             var terminal = assertThrows(CompletionException.class, completion::join);

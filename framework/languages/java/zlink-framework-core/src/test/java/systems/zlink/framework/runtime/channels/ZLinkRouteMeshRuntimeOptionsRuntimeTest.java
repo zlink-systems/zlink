@@ -60,6 +60,26 @@ final class ZLinkRouteMeshRuntimeOptionsRuntimeTest {
 
     private static final class TestMeshNode implements ZLinkInternalMeshNode {
         @Override
+        public java.util.concurrent.CompletionStage<
+                        java.util.List<systems.zlink.contracts.messaging.Message>>
+                requestInstanceSpot(
+                        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                                        .InstanceRoute
+                                route,
+                        String stableType,
+                        String sourceSpotId,
+                        byte[] metadata,
+                        java.util.List<systems.zlink.contracts.messaging.Message> parts,
+                        java.time.Duration timeout,
+                        java.util.concurrent.CompletableFuture<Void> requestAdmission) {
+            return systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory.acceptedRequest(
+                    java.util.concurrent.CompletableFuture.failedFuture(
+                            new UnsupportedOperationException(
+                                    "Remote Instance Spot request is unavailable")),
+                    requestAdmission);
+        }
+
+        @Override
         public String advertisedEndpoint() {
             return status().localEndpoint();
         }

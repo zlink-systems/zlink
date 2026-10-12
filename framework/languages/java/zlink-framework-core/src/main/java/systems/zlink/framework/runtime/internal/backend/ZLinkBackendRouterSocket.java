@@ -35,9 +35,6 @@ public interface ZLinkBackendRouterSocket
 
     CompletionStage<Void> send(RoutingId routingId, List<Message> parts);
 
-    CompletionStage<ZLinkBackendReceived> request(
-            RoutingId routingId, List<Message> parts, Duration timeout);
-
     void reply(RoutingId routingId, long requestSeq, List<Message> parts);
 
     default void disconnectPeer(RoutingId routingId) {
@@ -50,12 +47,9 @@ public interface ZLinkBackendRouterSocket
                 "paired router receive-flow control is not available");
     }
 
-    default CompletionStage<ZLinkBackendReceived> request(
+    CompletionStage<ZLinkBackendReceived> request(
             RoutingId routingId,
             List<Message> parts,
             Duration timeout,
-            CompletableFuture<Void> requestAdmission) {
-        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
-        return request(routingId, parts, timeout);
-    }
+            CompletableFuture<Void> requestAdmission);
 }

@@ -63,33 +63,6 @@ final class ZLinkSpotRouterNodeDispatcher {
             List<Message> spotParts,
             Duration timeout,
             ZLinkServiceOperationRegistry operations,
-            UUID operationId) {
-        return request(
-                routerChannelId,
-                node,
-                targetNodeRid,
-                targetSpotId,
-                targetSpotGeneration,
-                authorityOwnerGeneration,
-                ownerLeaseGeneration,
-                spotParts,
-                timeout,
-                operations,
-                operationId,
-                null);
-    }
-
-    static CompletionStage<List<Message>> request(
-            String routerChannelId,
-            ZLinkInternalSpotNode node,
-            RoutingId targetNodeRid,
-            String targetSpotId,
-            long targetSpotGeneration,
-            long authorityOwnerGeneration,
-            long ownerLeaseGeneration,
-            List<Message> spotParts,
-            Duration timeout,
-            ZLinkServiceOperationRegistry operations,
             UUID operationId,
             CompletableFuture<Void> requestAdmission) {
         CompletableFuture<List<Message>> result = new CompletableFuture<>();

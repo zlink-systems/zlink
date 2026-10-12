@@ -242,7 +242,8 @@ final class ZLinkJavaSubmissionTest {
             BindingProbe binding, Adapter adapter, List<Message> parts) {
         return adapter == Adapter.SERVICE
                 ? binding.request(adapter, parts).toCompletableFuture()
-                : ZLinkJavaSocketSupport.submitRequest(binding.requestOperation(), parts, TIMEOUT)
+                : ZLinkJavaSocketSupport.submitRequest(
+                                binding.requestOperation(), parts, TIMEOUT, null, null)
                         .toCompletableFuture();
     }
 
@@ -293,7 +294,9 @@ final class ZLinkJavaSubmissionTest {
                                                 Optional.empty(),
                                                 List.of(decoded));
                                     },
-                                    ZLinkBackendReceived::close)
+                                    ZLinkBackendReceived::close,
+                                    null,
+                                    null)
                             .toCompletableFuture();
             var delivery =
                     CompletableFuture.runAsync(
@@ -428,9 +431,12 @@ final class ZLinkJavaSubmissionTest {
                         messages,
                         TIMEOUT,
                         reply -> reply.getFirst().toByteArray(),
-                        ignored -> {});
+                        ignored -> {},
+                        null,
+                        null);
             }
-            return ZLinkJavaSocketSupport.submitRequest(requestOperation(), messages, TIMEOUT)
+            return ZLinkJavaSocketSupport.submitRequest(
+                            requestOperation(), messages, TIMEOUT, null, null)
                     .thenApply(
                             reply -> {
                                 try (reply) {

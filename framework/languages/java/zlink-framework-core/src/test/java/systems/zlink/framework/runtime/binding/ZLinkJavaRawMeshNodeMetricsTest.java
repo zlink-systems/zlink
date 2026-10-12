@@ -152,7 +152,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                     null,
                                     new byte[0],
                                     List.of(packet, body),
-                                    Duration.ofSeconds(2)));
+                                    Duration.ofSeconds(2),
+                                    null));
             var failure =
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
@@ -202,7 +203,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                 null,
                                                 new byte[0],
                                                 List.of(packet, body),
-                                                Duration.ofSeconds(2))
+                                                Duration.ofSeconds(2),
+                                                null)
                                         : caller.submitInstanceSpotSend(
                                                 route,
                                                 "absent",
@@ -316,7 +318,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                         null,
                                                         new byte[0],
                                                         List.of(packet, body),
-                                                        Duration.ofSeconds(5))
+                                                        Duration.ofSeconds(5),
+                                                        null)
                                                 .toCompletableFuture()
                                                 .get(2, TimeUnit.SECONDS));
                 var coldFailure =
@@ -330,7 +333,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                         null,
                                                         new byte[0],
                                                         List.of(packet, body),
-                                                        Duration.ofSeconds(5))
+                                                        Duration.ofSeconds(5),
+                                                        null)
                                                 .toCompletableFuture()
                                                 .get(2, TimeUnit.SECONDS));
                 assertEquals(
@@ -366,7 +370,9 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                             public CompletionStage<Void> handleRoute(
                                                     systems.zlink.framework.runtime.internal.backend
                                                                     .ZLinkBackendReceived
-                                                            received) {
+                                                            received,
+                                                    java.util.concurrent.CompletableFuture<Void>
+                                                            requestAdmission) {
                                                 assertTrue(received.isRequest());
                                                 try (Message reply = Message.from("recovered")) {
                                                     received.reply().accept(List.of(reply));
@@ -441,7 +447,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                         null,
                                                         new byte[0],
                                                         List.of(packet, body),
-                                                        Duration.ofSeconds(2))
+                                                        Duration.ofSeconds(2),
+                                                        null)
                                                 .toCompletableFuture()
                                                 .get(2, TimeUnit.SECONDS));
                 assertEquals(
@@ -540,7 +547,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                     pair.router(),
                                     pair.target.routingId(),
                                     List.of(wire.encodeNodeRequestHeader(41, 0), new byte[] {0}),
-                                    Duration.ofSeconds(2))
+                                    Duration.ofSeconds(2),
+                                    null)
                             .toCompletableFuture()
                             .get(2, TimeUnit.SECONDS);
             assertEquals(104, wire.decodeReplyHeader(reply.getFirst()).terminalResult());
@@ -555,7 +563,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                             pair.router(),
                             pair.target.routingId(),
                             List.of(wire.encodeNodeRequestHeader(42, 0), new byte[] {0}),
-                            Duration.ofSeconds(2))
+                            Duration.ofSeconds(2),
+                            null)
                     .toCompletableFuture()
                     .get(2, TimeUnit.SECONDS);
             assertTrue(sink.events.isEmpty());
@@ -729,7 +738,10 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                     "orders",
                                                     new byte[0],
                                                     List.of(packet, body),
-                                                    Duration.ofSeconds(2))
+                                                    Duration.ofSeconds(2),
+                                                    null,
+                                                    null,
+                                                    null)
                                             .toCompletableFuture()
                                             .get());
                     sink.expectSelection(reason);

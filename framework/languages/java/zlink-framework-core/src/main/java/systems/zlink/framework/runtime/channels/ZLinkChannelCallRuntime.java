@@ -129,11 +129,6 @@ final class ZLinkChannelCallRuntime {
     }
 
     CompletionStage<ZLinkBackendReceived> requestClient(
-            ZLinkBackendDealerSocket client, List<Message> requestParts, Duration timeout) {
-        return requestClient(client, requestParts, timeout, null);
-    }
-
-    CompletionStage<ZLinkBackendReceived> requestClient(
             ZLinkBackendDealerSocket client,
             List<Message> requestParts,
             Duration timeout,
@@ -156,15 +151,6 @@ final class ZLinkChannelCallRuntime {
             ZLinkBackendRouterSocket router,
             RoutingId target,
             List<Message> requestParts,
-            Duration timeout) {
-        return requestRoute(operationId, router, target, requestParts, timeout, null);
-    }
-
-    CompletionStage<ZLinkBackendReceived> requestRoute(
-            UUID operationId,
-            ZLinkBackendRouterSocket router,
-            RoutingId target,
-            List<Message> requestParts,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         return preserveCurrentFlow(
@@ -173,17 +159,6 @@ final class ZLinkChannelCallRuntime {
                         timeout,
                         () -> router.request(target, requestParts, timeout, requestAdmission),
                         ZLinkBackendReceived::close));
-    }
-
-    CompletionStage<ZLinkBackendReceived> requestChannel(
-            UUID operationId,
-            ZLinkInternalSpotNode node,
-            String channelName,
-            byte[] metadata,
-            List<Message> requestParts,
-            Duration timeout) {
-        return requestChannel(
-                operationId, node, channelName, metadata, requestParts, timeout, null);
     }
 
     CompletionStage<ZLinkBackendReceived> requestChannel(
@@ -210,16 +185,6 @@ final class ZLinkChannelCallRuntime {
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
-    }
-
-    CompletionStage<ZLinkBackendReceived> requestNode(
-            UUID operationId,
-            ZLinkInternalSpotNode node,
-            RoutingId target,
-            byte[] metadata,
-            List<Message> requestParts,
-            Duration timeout) {
-        return requestNode(operationId, node, target, metadata, requestParts, timeout, null);
     }
 
     CompletionStage<ZLinkBackendReceived> requestNode(
@@ -347,27 +312,6 @@ final class ZLinkChannelCallRuntime {
             long authorityOwnerGeneration,
             long ownerLeaseGeneration,
             List<Message> parts,
-            Duration timeout) {
-        return requestToSpot(
-                channelName,
-                targetNode,
-                targetSpot,
-                targetSpotGeneration,
-                authorityOwnerGeneration,
-                ownerLeaseGeneration,
-                parts,
-                timeout,
-                (CompletableFuture<Void>) null);
-    }
-
-    CompletionStage<List<Message>> requestToSpot(
-            String channelName,
-            RoutingId targetNode,
-            String targetSpot,
-            long targetSpotGeneration,
-            long authorityOwnerGeneration,
-            long ownerLeaseGeneration,
-            List<Message> parts,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         return requestToSpot(
@@ -381,29 +325,6 @@ final class ZLinkChannelCallRuntime {
                 timeout,
                 ZLinkServiceOperationIds.next(),
                 requestAdmission);
-    }
-
-    CompletionStage<List<Message>> requestToSpot(
-            String channelName,
-            RoutingId targetNode,
-            String targetSpot,
-            long targetSpotGeneration,
-            long authorityOwnerGeneration,
-            long ownerLeaseGeneration,
-            List<Message> parts,
-            Duration timeout,
-            UUID operationId) {
-        return requestToSpot(
-                channelName,
-                targetNode,
-                targetSpot,
-                targetSpotGeneration,
-                authorityOwnerGeneration,
-                ownerLeaseGeneration,
-                parts,
-                timeout,
-                operationId,
-                null);
     }
 
     CompletionStage<List<Message>> requestToSpot(

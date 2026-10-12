@@ -28,31 +28,6 @@ public interface ZLinkInstanceSpotCallRuntime {
             long activationDeadline,
             SpotTransportAddress readyRoute);
 
-    default CompletionStage<List<Message>> request(
-            String spotId,
-            String stableType,
-            String meshName,
-            Message payload,
-            Optional<String> packetName,
-            String contentType,
-            Map<String, String> metadata,
-            Duration timeout,
-            SpotTransportAddress readyRoute,
-            SpotTransportAddressResolver resolver) {
-        return request(
-                spotId,
-                stableType,
-                meshName,
-                payload,
-                packetName,
-                contentType,
-                metadata,
-                timeout,
-                readyRoute,
-                resolver,
-                null);
-    }
-
     CompletionStage<List<Message>> request(
             String spotId,
             String stableType,

@@ -565,7 +565,11 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         try (Message message = Message.from(hello)) {
             connection
                     .dealer()
-                    .request(List.of(message), adapterOptions.defaultRequestTimeout())
+                    .request(
+                            List.of(message),
+                            adapterOptions.defaultRequestTimeout(),
+                            connection.dealer().receiveAdmission(),
+                            null)
                     .whenComplete(
                             (reply, failure) -> {
                                 if (failure == null) {

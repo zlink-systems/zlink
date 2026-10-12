@@ -192,11 +192,6 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     CompletionStage<List<byte[]>> request(
-            RouterSocket router, RoutingId target, List<byte[]> frames, Duration timeout) {
-        return request(router, target, frames, timeout, (CompletableFuture<Void>) null);
-    }
-
-    CompletionStage<List<byte[]>> request(
             RouterSocket router,
             RoutingId target,
             List<byte[]> frames,
@@ -209,15 +204,6 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 timeout,
                 reply -> reply.stream().map(Message::toByteArray).toList(),
                 requestAdmission);
-    }
-
-    <T> CompletionStage<T> request(
-            RouterSocket router,
-            RoutingId target,
-            List<byte[]> frames,
-            Duration timeout,
-            Function<List<Message>, T> decodeReply) {
-        return request(router, target, frames, timeout, decodeReply, null);
     }
 
     <T> CompletionStage<T> request(
@@ -239,36 +225,6 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     /** Consumes request messages and discards a decoded reply if cancellation wins. */
-    <T> CompletionStage<T> requestMessages(
-            RouterSocket router,
-            RoutingId target,
-            List<Message> messages,
-            Duration timeout,
-            Function<List<Message>, T> decodeReply,
-            Consumer<T> discardReply) {
-        return requestMessages(router, target, messages, timeout, decodeReply, discardReply, null);
-    }
-
-    <T> CompletionStage<T> requestMessages(
-            RouterSocket router,
-            RoutingId target,
-            List<Message> messages,
-            Duration timeout,
-            Function<List<Message>, T> decodeReply,
-            Consumer<T> discardReply,
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
-                    receivedAdmission) {
-        return requestMessages(
-                router,
-                target,
-                messages,
-                timeout,
-                decodeReply,
-                discardReply,
-                receivedAdmission,
-                null);
-    }
-
     <T> CompletionStage<T> requestMessages(
             RouterSocket router,
             RoutingId target,

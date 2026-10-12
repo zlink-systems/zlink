@@ -68,15 +68,6 @@ final class ZLinkJavaSocketSupport {
         return admission(submission.result(), submission::admitted);
     }
 
-    static CompletionStage<List<Message>> reply(RequestSubmission submission, long deadlineNanos) {
-        return reply(submission, deadlineNanos, null);
-    }
-
-    static CompletionStage<List<Message>> reply(
-            RequestSubmission submission, long deadlineNanos, Runnable admission) {
-        return reply(submission, deadlineNanos, admission, null);
-    }
-
     static CompletionStage<List<Message>> reply(
             RequestSubmission submission,
             long deadlineNanos,
@@ -148,16 +139,6 @@ final class ZLinkJavaSocketSupport {
             submit.message(parts.get(i));
         }
         submit.submit();
-    }
-
-    static CompletionStage<ZLinkBackendReceived> submitRequest(
-            RequestOperation operation, List<Message> parts, Duration timeout) {
-        return submitRequest(operation, parts, timeout, null);
-    }
-
-    static CompletionStage<ZLinkBackendReceived> submitRequest(
-            RequestOperation operation, List<Message> parts, Duration timeout, Runnable admission) {
-        return submitRequest(operation, parts, timeout, admission, null);
     }
 
     static CompletionStage<ZLinkBackendReceived> submitRequest(

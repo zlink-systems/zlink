@@ -71,9 +71,12 @@ final class ZLinkChannelCallRuntimeTest {
                                         router,
                                         RoutingId.from("completion-cap-target"),
                                         List.of(),
-                                        timeout)
+                                        timeout,
+                                        null)
                                 .toCompletableFuture());
-                replies.add(calls.requestClient(dealer, List.of(), timeout).toCompletableFuture());
+                replies.add(
+                        calls.requestClient(dealer, List.of(), timeout, null)
+                                .toCompletableFuture());
             }
             CompletableFuture.allOf(replies.toArray(CompletableFuture[]::new))
                     .get(10, TimeUnit.SECONDS);
@@ -136,12 +139,13 @@ final class ZLinkChannelCallRuntimeTest {
             var timeout = Duration.ofSeconds(1);
             var requests =
                     List.of(
-                            calls.requestNode(identity, node, target, null, List.of(), timeout),
+                            calls.requestNode(
+                                    identity, node, target, null, List.of(), timeout, null),
                             calls.requestChannel(
-                                    identity, node, "missing", null, List.of(), timeout),
+                                    identity, node, "missing", null, List.of(), timeout, null),
                             calls.requestToSpot(
                                     "missing", target, "spot", 1, 1, 1, List.of(), timeout,
-                                    identity));
+                                    identity, null));
             for (var request : requests) {
                 CompletionException failure =
                         assertThrows(
@@ -247,7 +251,7 @@ final class ZLinkChannelCallRuntimeTest {
                                     });
             try {
                 var operation =
-                        calls.requestClient(dealer, List.of(), timeout).toCompletableFuture();
+                        calls.requestClient(dealer, List.of(), timeout, null).toCompletableFuture();
                 assertFalse(operation.isDone());
                 calls.beginClose();
                 CompletionException completion =
@@ -270,7 +274,7 @@ final class ZLinkChannelCallRuntimeTest {
                 assertEquals(1, attempts.get());
 
                 var rejected =
-                        calls.requestClient(dealer, List.of(), timeout).toCompletableFuture();
+                        calls.requestClient(dealer, List.of(), timeout, null).toCompletableFuture();
                 CompletionException closed =
                         assertThrows(CompletionException.class, rejected::join);
                 assertEquals(

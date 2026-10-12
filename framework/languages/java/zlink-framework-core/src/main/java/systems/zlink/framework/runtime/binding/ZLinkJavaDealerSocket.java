@@ -77,17 +77,6 @@ final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJava
     }
 
     @Override
-    public CompletionStage<ZLinkBackendReceived> request(List<Message> parts, Duration timeout) {
-        return request(parts, timeout, receiveAdmission);
-    }
-
-    @Override
-    public CompletionStage<ZLinkBackendReceived> request(
-            List<Message> parts, Duration timeout, Runnable admission) {
-        return request(parts, timeout, admission, null);
-    }
-
-    @Override
     public synchronized CompletionStage<ZLinkBackendReceived> request(
             List<Message> parts,
             Duration timeout,

@@ -185,6 +185,7 @@ final class ZLinkNodeSubmitTurnTest {
                                                             TARGET,
                                                             "target-spot",
                                                             List.of(part),
+                                                            null,
                                                             null)
                                                     .toCompletableFuture()
                                                     .join())
@@ -329,7 +330,8 @@ final class ZLinkNodeSubmitTurnTest {
                                                 TARGET,
                                                 "target-spot",
                                                 List.of(requestPart),
-                                                Duration.ofSeconds(3)));
+                                                Duration.ofSeconds(3),
+                                                null));
                 assertTerminal(spotReply);
 
                 CompletionStage<Void> spotAdmission =
@@ -470,7 +472,8 @@ final class ZLinkNodeSubmitTurnTest {
                                                                 TARGET,
                                                                 "target-spot",
                                                                 List.of(requestPart),
-                                                                Duration.ofSeconds(3)))
+                                                                Duration.ofSeconds(3),
+                                                                null))
                                         .toCompletableFuture()
                                         .join()
                                 : f.runtime.requestToSpotViaRouterChannel(
@@ -478,7 +481,8 @@ final class ZLinkNodeSubmitTurnTest {
                                         TARGET,
                                         "target-spot",
                                         List.of(requestPart),
-                                        Duration.ofSeconds(3));
+                                        Duration.ofSeconds(3),
+                                        null);
                 CompletionStage<Void> admission =
                         alreadyOnLane
                                 ? f.lane.runAsync(
@@ -529,7 +533,8 @@ final class ZLinkNodeSubmitTurnTest {
                                                         TARGET,
                                                         "target-spot",
                                                         List.of(part),
-                                                        Duration.ofSeconds(3))
+                                                        Duration.ofSeconds(3),
+                                                        null)
                                                 : f.runtime.sendToSpotViaRouterChannel(
                                                         CHANNEL,
                                                         TARGET,

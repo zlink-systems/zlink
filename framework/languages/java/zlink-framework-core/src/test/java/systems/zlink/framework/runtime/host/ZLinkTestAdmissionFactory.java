@@ -45,14 +45,15 @@ public final class ZLinkTestAdmissionFactory {
                 };
     }
 
-    /**
-     * These request test adapters accept pending replies synchronously; failed futures refuse
-     * admission.
-     */
-    public static <T> java.util.concurrent.CompletionStage<T> acceptedRequest(
-            java.util.concurrent.CompletionStage<T> reply, CompletableFuture<Void> admission) {
-        if (admission != null && !reply.toCompletableFuture().isCompletedExceptionally())
-            admission.complete(null);
+    /** Completes a fake request's admission when its reply is sent. */
+    public static <T> CompletionStage<T> acceptedRequest(
+            CompletionStage<T> reply, CompletableFuture<Void> admission) {
+        if (admission != null)
+            reply.whenComplete(
+                    (ignored, failure) -> {
+                        if (failure == null) admission.complete(null);
+                        else admission.completeExceptionally(failure);
+                    });
         return reply;
     }
 }

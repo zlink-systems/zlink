@@ -118,8 +118,10 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                                             probe.address.targetNodeRid(),
                                             probe.address.spotId(),
                                             probe.address.spotGeneration(),
+                                            null,
                                             java.util.List.of(payload),
-                                            timeout)
+                                            timeout,
+                                            null)
                                     .thenApply(received -> received.parts())
                                     .whenComplete((ignored, failure) -> payload.close());
             java.util.concurrent.CompletionStage<?> result;

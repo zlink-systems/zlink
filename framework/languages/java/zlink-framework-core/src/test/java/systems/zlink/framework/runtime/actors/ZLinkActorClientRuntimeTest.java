@@ -540,14 +540,6 @@ final class ZLinkActorClientRuntimeTest {
                     new ZLinkActorClientRuntime(
                             () ->
                                     new RecordingSpotNode() {
-                                        @Override
-                                        public CompletionStage<List<Message>> requestToActor(
-                                                ZLinkBackendActorRef actor,
-                                                List<Message> parts,
-                                                SendFlags flags,
-                                                Duration timeout) {
-                                            return CompletableFuture.failedFuture(failure);
-                                        }
 
                                         public CompletionStage<List<Message>> requestToActor(
                                                 ZLinkBackendActorRef actor,
@@ -556,7 +548,7 @@ final class ZLinkActorClientRuntimeTest {
                                                 Duration timeout,
                                                 CompletableFuture<Void> requestAdmission) {
                                             return ZLinkTestAdmissionFactory.acceptedRequest(
-                                                    requestToActor(actor, parts, flags, timeout),
+                                                    CompletableFuture.failedFuture(failure),
                                                     requestAdmission);
                                         }
                                     },
@@ -803,6 +795,46 @@ final class ZLinkActorClientRuntimeTest {
 
     private static class RecordingSpotNode
             implements ZLinkInternalSpotNode, ZLinkTestAdmissionFactory.Backend {
+        @Override
+        public java.util.concurrent.CompletionStage<
+                        systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived>
+                requestToNode(
+                        systems.zlink.contracts.core.RoutingId targetNodeRid,
+                        byte[] metadata,
+                        java.util.List<systems.zlink.contracts.messaging.Message> parts,
+                        java.time.Duration timeout,
+                        systems.zlink.framework.runtime.internal.service
+                                        .ZLinkServiceOperationRegistry
+                                operations,
+                        java.util.UUID operationId,
+                        java.util.concurrent.CompletableFuture<Void> requestAdmission) {
+            return systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory.acceptedRequest(
+                    java.util.concurrent.CompletableFuture.failedFuture(
+                            new UnsupportedOperationException(
+                                    "MeshNode node request is unavailable")),
+                    requestAdmission);
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<
+                        systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived>
+                requestToChannel(
+                        String channelName,
+                        byte[] metadata,
+                        java.util.List<systems.zlink.contracts.messaging.Message> parts,
+                        java.time.Duration timeout,
+                        systems.zlink.framework.runtime.internal.service
+                                        .ZLinkServiceOperationRegistry
+                                operations,
+                        java.util.UUID operationId,
+                        java.util.concurrent.CompletableFuture<Void> requestAdmission) {
+            return systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory.acceptedRequest(
+                    java.util.concurrent.CompletableFuture.failedFuture(
+                            new UnsupportedOperationException(
+                                    "MeshNode channel request is unavailable")),
+                    requestAdmission);
+        }
+
         private final List<Message> reply;
         ZLinkBackendActorRef sentActor;
         ZLinkBackendActorRef requestedActor;
@@ -978,26 +1010,18 @@ final class ZLinkActorClientRuntimeTest {
             return true;
         }
 
-        @Override
-        public CompletionStage<List<Message>> requestToActor(
-                ZLinkBackendActorRef actor,
-                List<Message> parts,
-                SendFlags flags,
-                Duration timeout) {
-            requestedActor = actor;
-            requestedMetadata =
-                    ZLinkStreamHeaderCodec.decodeOrPlain(parts.get(0).data()).metadata();
-            return CompletableFuture.completedFuture(reply.stream().map(Message::from).toList());
-        }
-
         public CompletionStage<List<Message>> requestToActor(
                 ZLinkBackendActorRef actor,
                 List<Message> parts,
                 SendFlags flags,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
+            requestedActor = actor;
+            requestedMetadata =
+                    ZLinkStreamHeaderCodec.decodeOrPlain(parts.get(0).data()).metadata();
             return ZLinkTestAdmissionFactory.acceptedRequest(
-                    requestToActor(actor, parts, flags, timeout), requestAdmission);
+                    CompletableFuture.completedFuture(reply.stream().map(Message::from).toList()),
+                    requestAdmission);
         }
 
         @Override
@@ -1052,24 +1076,16 @@ final class ZLinkActorClientRuntimeTest {
             this.result = result;
         }
 
-        @Override
-        public CompletionStage<List<Message>> requestToActor(
-                ZLinkBackendActorRef actor,
-                List<Message> parts,
-                SendFlags flags,
-                Duration timeout) {
-            requestAttempts++;
-            return CompletableFuture.failedFuture(new ZlinkRequestException(result));
-        }
-
         public CompletionStage<List<Message>> requestToActor(
                 ZLinkBackendActorRef actor,
                 List<Message> parts,
                 SendFlags flags,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
+            requestAttempts++;
             return ZLinkTestAdmissionFactory.acceptedRequest(
-                    requestToActor(actor, parts, flags, timeout), requestAdmission);
+                    CompletableFuture.failedFuture(new ZlinkRequestException(result)),
+                    requestAdmission);
         }
     }
 }

@@ -1,11 +1,17 @@
 package systems.zlink.framework.runtime.internal.calls;
 
 import systems.zlink.framework.channels.ZLinkRequestStage;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /** Connects observations to the existing request and admission owners. */
 public final class ZLinkRequestStages {
@@ -24,13 +30,11 @@ public final class ZLinkRequestStages {
             CompletionStage<T> reply, CompletableFuture<Void> admission) {
         reply.whenComplete(
                 (ignored, failure) -> {
-                    if (failure != null) admission.completeExceptionally(unwrap(failure));
+                    if (failure == null) admission.complete(null);
+                    else admission.completeExceptionally(unwrap(failure));
                 });
         ZLinkCompletionBridge.forwardCancellation(admission, reply);
-        return new RequestStage<>(
-                reply,
-                systems.zlink.framework.execution.ZLinkSerialExecutionQueue.manageCurrent(
-                        admission));
+        return new RequestStage<>(reply, ZLinkSerialExecutionQueue.manageCurrent(admission));
     }
 
     private static Throwable unwrap(Throwable failure) {
@@ -54,255 +58,218 @@ public final class ZLinkRequestStages {
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> thenApply(
-                java.util.function.Function<? super T, ? extends U> arg0) {
-            return reply.thenApply(arg0);
+        public <U> CompletionStage<U> thenApply(Function<? super T, ? extends U> fn) {
+            return reply.thenApply(fn);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> thenApplyAsync(
-                java.util.function.Function<? super T, ? extends U> arg0) {
-            return reply.thenApplyAsync(arg0);
+        public <U> CompletionStage<U> thenApplyAsync(Function<? super T, ? extends U> fn) {
+            return reply.thenApplyAsync(fn);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> thenApplyAsync(
-                java.util.function.Function<? super T, ? extends U> arg0,
-                java.util.concurrent.Executor arg1) {
-            return reply.thenApplyAsync(arg0, arg1);
+        public <U> CompletionStage<U> thenApplyAsync(
+                Function<? super T, ? extends U> fn, Executor executor) {
+            return reply.thenApplyAsync(fn, executor);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> thenAccept(
-                java.util.function.Consumer<? super T> arg0) {
-            return reply.thenAccept(arg0);
+        public CompletionStage<Void> thenAccept(Consumer<? super T> action) {
+            return reply.thenAccept(action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> thenAcceptAsync(
-                java.util.function.Consumer<? super T> arg0) {
-            return reply.thenAcceptAsync(arg0);
+        public CompletionStage<Void> thenAcceptAsync(Consumer<? super T> action) {
+            return reply.thenAcceptAsync(action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> thenAcceptAsync(
-                java.util.function.Consumer<? super T> arg0, java.util.concurrent.Executor arg1) {
-            return reply.thenAcceptAsync(arg0, arg1);
+        public CompletionStage<Void> thenAcceptAsync(
+                Consumer<? super T> action, Executor executor) {
+            return reply.thenAcceptAsync(action, executor);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> thenRun(
-                java.lang.Runnable arg0) {
-            return reply.thenRun(arg0);
+        public CompletionStage<Void> thenRun(Runnable action) {
+            return reply.thenRun(action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> thenRunAsync(
-                java.lang.Runnable arg0) {
-            return reply.thenRunAsync(arg0);
+        public CompletionStage<Void> thenRunAsync(Runnable action) {
+            return reply.thenRunAsync(action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> thenRunAsync(
-                java.lang.Runnable arg0, java.util.concurrent.Executor arg1) {
-            return reply.thenRunAsync(arg0, arg1);
+        public CompletionStage<Void> thenRunAsync(Runnable action, Executor executor) {
+            return reply.thenRunAsync(action, executor);
         }
 
         @Override
-        public <U, V> java.util.concurrent.CompletionStage<V> thenCombine(
-                java.util.concurrent.CompletionStage<? extends U> arg0,
-                java.util.function.BiFunction<? super T, ? super U, ? extends V> arg1) {
-            return reply.thenCombine(arg0, arg1);
+        public <U, V> CompletionStage<V> thenCombine(
+                CompletionStage<? extends U> other,
+                BiFunction<? super T, ? super U, ? extends V> fn) {
+            return reply.thenCombine(other, fn);
         }
 
         @Override
-        public <U, V> java.util.concurrent.CompletionStage<V> thenCombineAsync(
-                java.util.concurrent.CompletionStage<? extends U> arg0,
-                java.util.function.BiFunction<? super T, ? super U, ? extends V> arg1) {
-            return reply.thenCombineAsync(arg0, arg1);
+        public <U, V> CompletionStage<V> thenCombineAsync(
+                CompletionStage<? extends U> other,
+                BiFunction<? super T, ? super U, ? extends V> fn) {
+            return reply.thenCombineAsync(other, fn);
         }
 
         @Override
-        public <U, V> java.util.concurrent.CompletionStage<V> thenCombineAsync(
-                java.util.concurrent.CompletionStage<? extends U> arg0,
-                java.util.function.BiFunction<? super T, ? super U, ? extends V> arg1,
-                java.util.concurrent.Executor arg2) {
-            return reply.thenCombineAsync(arg0, arg1, arg2);
+        public <U, V> CompletionStage<V> thenCombineAsync(
+                CompletionStage<? extends U> other,
+                BiFunction<? super T, ? super U, ? extends V> fn,
+                Executor executor) {
+            return reply.thenCombineAsync(other, fn, executor);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<java.lang.Void> thenAcceptBoth(
-                java.util.concurrent.CompletionStage<? extends U> arg0,
-                java.util.function.BiConsumer<? super T, ? super U> arg1) {
-            return reply.thenAcceptBoth(arg0, arg1);
+        public <U> CompletionStage<Void> thenAcceptBoth(
+                CompletionStage<? extends U> other, BiConsumer<? super T, ? super U> action) {
+            return reply.thenAcceptBoth(other, action);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<java.lang.Void> thenAcceptBothAsync(
-                java.util.concurrent.CompletionStage<? extends U> arg0,
-                java.util.function.BiConsumer<? super T, ? super U> arg1) {
-            return reply.thenAcceptBothAsync(arg0, arg1);
+        public <U> CompletionStage<Void> thenAcceptBothAsync(
+                CompletionStage<? extends U> other, BiConsumer<? super T, ? super U> action) {
+            return reply.thenAcceptBothAsync(other, action);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<java.lang.Void> thenAcceptBothAsync(
-                java.util.concurrent.CompletionStage<? extends U> arg0,
-                java.util.function.BiConsumer<? super T, ? super U> arg1,
-                java.util.concurrent.Executor arg2) {
-            return reply.thenAcceptBothAsync(arg0, arg1, arg2);
+        public <U> CompletionStage<Void> thenAcceptBothAsync(
+                CompletionStage<? extends U> other,
+                BiConsumer<? super T, ? super U> action,
+                Executor executor) {
+            return reply.thenAcceptBothAsync(other, action, executor);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> runAfterBoth(
-                java.util.concurrent.CompletionStage<?> arg0, java.lang.Runnable arg1) {
-            return reply.runAfterBoth(arg0, arg1);
+        public CompletionStage<Void> runAfterBoth(CompletionStage<?> other, Runnable action) {
+            return reply.runAfterBoth(other, action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> runAfterBothAsync(
-                java.util.concurrent.CompletionStage<?> arg0, java.lang.Runnable arg1) {
-            return reply.runAfterBothAsync(arg0, arg1);
+        public CompletionStage<Void> runAfterBothAsync(CompletionStage<?> other, Runnable action) {
+            return reply.runAfterBothAsync(other, action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> runAfterBothAsync(
-                java.util.concurrent.CompletionStage<?> arg0,
-                java.lang.Runnable arg1,
-                java.util.concurrent.Executor arg2) {
-            return reply.runAfterBothAsync(arg0, arg1, arg2);
+        public CompletionStage<Void> runAfterBothAsync(
+                CompletionStage<?> other, Runnable action, Executor executor) {
+            return reply.runAfterBothAsync(other, action, executor);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> applyToEither(
-                java.util.concurrent.CompletionStage<? extends T> arg0,
-                java.util.function.Function<? super T, U> arg1) {
-            return reply.applyToEither(arg0, arg1);
+        public <U> CompletionStage<U> applyToEither(
+                CompletionStage<? extends T> other, Function<? super T, U> fn) {
+            return reply.applyToEither(other, fn);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> applyToEitherAsync(
-                java.util.concurrent.CompletionStage<? extends T> arg0,
-                java.util.function.Function<? super T, U> arg1) {
-            return reply.applyToEitherAsync(arg0, arg1);
+        public <U> CompletionStage<U> applyToEitherAsync(
+                CompletionStage<? extends T> other, Function<? super T, U> fn) {
+            return reply.applyToEitherAsync(other, fn);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> applyToEitherAsync(
-                java.util.concurrent.CompletionStage<? extends T> arg0,
-                java.util.function.Function<? super T, U> arg1,
-                java.util.concurrent.Executor arg2) {
-            return reply.applyToEitherAsync(arg0, arg1, arg2);
+        public <U> CompletionStage<U> applyToEitherAsync(
+                CompletionStage<? extends T> other, Function<? super T, U> fn, Executor executor) {
+            return reply.applyToEitherAsync(other, fn, executor);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> acceptEither(
-                java.util.concurrent.CompletionStage<? extends T> arg0,
-                java.util.function.Consumer<? super T> arg1) {
-            return reply.acceptEither(arg0, arg1);
+        public CompletionStage<Void> acceptEither(
+                CompletionStage<? extends T> other, Consumer<? super T> action) {
+            return reply.acceptEither(other, action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> acceptEitherAsync(
-                java.util.concurrent.CompletionStage<? extends T> arg0,
-                java.util.function.Consumer<? super T> arg1) {
-            return reply.acceptEitherAsync(arg0, arg1);
+        public CompletionStage<Void> acceptEitherAsync(
+                CompletionStage<? extends T> other, Consumer<? super T> action) {
+            return reply.acceptEitherAsync(other, action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> acceptEitherAsync(
-                java.util.concurrent.CompletionStage<? extends T> arg0,
-                java.util.function.Consumer<? super T> arg1,
-                java.util.concurrent.Executor arg2) {
-            return reply.acceptEitherAsync(arg0, arg1, arg2);
+        public CompletionStage<Void> acceptEitherAsync(
+                CompletionStage<? extends T> other, Consumer<? super T> action, Executor executor) {
+            return reply.acceptEitherAsync(other, action, executor);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> runAfterEither(
-                java.util.concurrent.CompletionStage<?> arg0, java.lang.Runnable arg1) {
-            return reply.runAfterEither(arg0, arg1);
+        public CompletionStage<Void> runAfterEither(CompletionStage<?> other, Runnable action) {
+            return reply.runAfterEither(other, action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> runAfterEitherAsync(
-                java.util.concurrent.CompletionStage<?> arg0, java.lang.Runnable arg1) {
-            return reply.runAfterEitherAsync(arg0, arg1);
+        public CompletionStage<Void> runAfterEitherAsync(
+                CompletionStage<?> other, Runnable action) {
+            return reply.runAfterEitherAsync(other, action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<java.lang.Void> runAfterEitherAsync(
-                java.util.concurrent.CompletionStage<?> arg0,
-                java.lang.Runnable arg1,
-                java.util.concurrent.Executor arg2) {
-            return reply.runAfterEitherAsync(arg0, arg1, arg2);
+        public CompletionStage<Void> runAfterEitherAsync(
+                CompletionStage<?> other, Runnable action, Executor executor) {
+            return reply.runAfterEitherAsync(other, action, executor);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> thenCompose(
-                java.util.function.Function<
-                                ? super T, ? extends java.util.concurrent.CompletionStage<U>>
-                        arg0) {
-            return reply.thenCompose(arg0);
+        public <U> CompletionStage<U> thenCompose(
+                Function<? super T, ? extends CompletionStage<U>> other) {
+            return reply.thenCompose(other);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> thenComposeAsync(
-                java.util.function.Function<
-                                ? super T, ? extends java.util.concurrent.CompletionStage<U>>
-                        arg0) {
-            return reply.thenComposeAsync(arg0);
+        public <U> CompletionStage<U> thenComposeAsync(
+                Function<? super T, ? extends CompletionStage<U>> other) {
+            return reply.thenComposeAsync(other);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> thenComposeAsync(
-                java.util.function.Function<
-                                ? super T, ? extends java.util.concurrent.CompletionStage<U>>
-                        arg0,
-                java.util.concurrent.Executor arg1) {
-            return reply.thenComposeAsync(arg0, arg1);
+        public <U> CompletionStage<U> thenComposeAsync(
+                Function<? super T, ? extends CompletionStage<U>> other, Executor executor) {
+            return reply.thenComposeAsync(other, executor);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> handle(
-                java.util.function.BiFunction<? super T, java.lang.Throwable, ? extends U> arg0) {
-            return reply.handle(arg0);
+        public <U> CompletionStage<U> handle(BiFunction<? super T, Throwable, ? extends U> fn) {
+            return reply.handle(fn);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> handleAsync(
-                java.util.function.BiFunction<? super T, java.lang.Throwable, ? extends U> arg0) {
-            return reply.handleAsync(arg0);
+        public <U> CompletionStage<U> handleAsync(
+                BiFunction<? super T, Throwable, ? extends U> fn) {
+            return reply.handleAsync(fn);
         }
 
         @Override
-        public <U> java.util.concurrent.CompletionStage<U> handleAsync(
-                java.util.function.BiFunction<? super T, java.lang.Throwable, ? extends U> arg0,
-                java.util.concurrent.Executor arg1) {
-            return reply.handleAsync(arg0, arg1);
+        public <U> CompletionStage<U> handleAsync(
+                BiFunction<? super T, Throwable, ? extends U> fn, Executor executor) {
+            return reply.handleAsync(fn, executor);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<T> whenComplete(
-                java.util.function.BiConsumer<? super T, ? super java.lang.Throwable> arg0) {
-            return reply.whenComplete(arg0);
+        public CompletionStage<T> whenComplete(BiConsumer<? super T, ? super Throwable> action) {
+            return reply.whenComplete(action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<T> whenCompleteAsync(
-                java.util.function.BiConsumer<? super T, ? super java.lang.Throwable> arg0) {
-            return reply.whenCompleteAsync(arg0);
+        public CompletionStage<T> whenCompleteAsync(
+                BiConsumer<? super T, ? super Throwable> action) {
+            return reply.whenCompleteAsync(action);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<T> whenCompleteAsync(
-                java.util.function.BiConsumer<? super T, ? super java.lang.Throwable> arg0,
-                java.util.concurrent.Executor arg1) {
-            return reply.whenCompleteAsync(arg0, arg1);
+        public CompletionStage<T> whenCompleteAsync(
+                BiConsumer<? super T, ? super Throwable> action, Executor executor) {
+            return reply.whenCompleteAsync(action, executor);
         }
 
         @Override
-        public java.util.concurrent.CompletionStage<T> exceptionally(
-                java.util.function.Function<java.lang.Throwable, ? extends T> arg0) {
-            return reply.exceptionally(arg0);
+        public CompletionStage<T> exceptionally(Function<Throwable, ? extends T> fn) {
+            return reply.exceptionally(fn);
         }
 
         @Override

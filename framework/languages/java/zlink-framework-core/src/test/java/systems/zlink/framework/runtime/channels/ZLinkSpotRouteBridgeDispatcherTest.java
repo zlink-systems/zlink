@@ -146,17 +146,6 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
             return sendAdmission;
         }
 
-        @Override
-        public CompletionStage<List<Message>> request(
-                String channelName,
-                RoutingId targetNodeRid,
-                String targetSpotId,
-                List<Message> parts,
-                Duration timeout) {
-            requestAttempts.incrementAndGet();
-            return requestReply;
-        }
-
         public CompletionStage<List<Message>> request(
                 String channelName,
                 RoutingId targetNodeRid,
@@ -164,9 +153,8 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
                 List<Message> parts,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
-            return ZLinkTestAdmissionFactory.acceptedRequest(
-                    request(channelName, targetNodeRid, targetSpotId, parts, timeout),
-                    requestAdmission);
+            requestAttempts.incrementAndGet();
+            return ZLinkTestAdmissionFactory.acceptedRequest(requestReply, requestAdmission);
         }
 
         @Override

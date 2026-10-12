@@ -54,16 +54,6 @@ final class ZLinkSpotRouteBridgeDrainerTest {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override
-        public CompletionStage<List<Message>> request(
-                String channelName,
-                RoutingId targetNodeRid,
-                String targetSpotId,
-                List<Message> parts,
-                Duration timeout) {
-            return CompletableFuture.completedFuture(List.of());
-        }
-
         public CompletionStage<List<Message>> request(
                 String channelName,
                 RoutingId targetNodeRid,
@@ -72,8 +62,7 @@ final class ZLinkSpotRouteBridgeDrainerTest {
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
             return ZLinkTestAdmissionFactory.acceptedRequest(
-                    request(channelName, targetNodeRid, targetSpotId, parts, timeout),
-                    requestAdmission);
+                    CompletableFuture.completedFuture(List.of()), requestAdmission);
         }
 
         @Override

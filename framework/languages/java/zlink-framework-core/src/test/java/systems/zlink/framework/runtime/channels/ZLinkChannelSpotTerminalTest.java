@@ -159,7 +159,8 @@ final class ZLinkChannelSpotTerminalTest {
                                 probe.address.authorityOwnerGeneration(),
                                 probe.address.ownerLeaseGeneration(),
                                 java.util.List.of(payload),
-                                timeout);
+                                timeout,
+                                null);
         try (Message payload = Message.from(new byte[] {1})) {
             java.util.concurrent.CompletionStage<?> result;
             if (request) {

@@ -388,19 +388,14 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override
-        public CompletionStage<ZLinkBackendReceived> request(
-                RoutingId routingId, List<Message> parts, Duration timeout) {
-            return CompletableFuture.failedFuture(new UnsupportedOperationException());
-        }
-
         public CompletionStage<ZLinkBackendReceived> request(
                 RoutingId routingId,
                 List<Message> parts,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
             return ZLinkTestAdmissionFactory.acceptedRequest(
-                    request(routingId, parts, timeout), requestAdmission);
+                    CompletableFuture.failedFuture(new UnsupportedOperationException()),
+                    requestAdmission);
         }
 
         @Override
@@ -490,19 +485,14 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override
-        public CompletionStage<ZLinkBackendReceived> request(
-                RoutingId routingId, List<Message> parts, Duration timeout) {
-            return CompletableFuture.failedFuture(new UnsupportedOperationException());
-        }
-
         public CompletionStage<ZLinkBackendReceived> request(
                 RoutingId routingId,
                 List<Message> parts,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
             return ZLinkTestAdmissionFactory.acceptedRequest(
-                    request(routingId, parts, timeout), requestAdmission);
+                    CompletableFuture.failedFuture(new UnsupportedOperationException()),
+                    requestAdmission);
         }
 
         @Override

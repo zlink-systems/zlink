@@ -150,34 +150,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         throw new UnsupportedOperationException("MeshNode node metadata is unavailable");
     }
 
-    default CompletionStage<ZLinkBackendReceived> requestToNode(
-            RoutingId targetNodeRid, List<Message> parts, Duration timeout) {
-        throw new UnsupportedOperationException("MeshNode node request is unavailable");
-    }
-
-    default CompletionStage<ZLinkBackendReceived> requestToNode(
-            RoutingId targetNodeRid, byte[] metadata, List<Message> parts, Duration timeout) {
-        if (metadata == null || metadata.length == 0) {
-            return requestToNode(targetNodeRid, parts, timeout);
-        }
-        throw new UnsupportedOperationException("MeshNode node request metadata is unavailable");
-    }
-
     /** Uses the caller's operation lifetime for registration and submission. */
-    default CompletionStage<ZLinkBackendReceived> requestToNode(
-            RoutingId targetNodeRid,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout,
-            ZLinkServiceOperationRegistry operations,
-            UUID operationId) {
-        return operations.submit(
-                operationId,
-                timeout,
-                () -> requestToNode(targetNodeRid, metadata, parts, timeout),
-                ZLinkBackendReceived::close);
-    }
-
     default CompletionStage<Void> sendToChannel(String channelName, List<Message> parts) {
         throw new UnsupportedOperationException("MeshNode channel send is unavailable");
     }
@@ -190,34 +163,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         throw new UnsupportedOperationException("MeshNode channel metadata is unavailable");
     }
 
-    default CompletionStage<ZLinkBackendReceived> requestToChannel(
-            String channelName, List<Message> parts, Duration timeout) {
-        throw new UnsupportedOperationException("MeshNode channel request is unavailable");
-    }
-
-    default CompletionStage<ZLinkBackendReceived> requestToChannel(
-            String channelName, byte[] metadata, List<Message> parts, Duration timeout) {
-        if (metadata == null || metadata.length == 0) {
-            return requestToChannel(channelName, parts, timeout);
-        }
-        throw new UnsupportedOperationException("MeshNode channel request metadata is unavailable");
-    }
-
     /** Uses the caller's operation lifetime; selector implementations select before this turn. */
-    default CompletionStage<ZLinkBackendReceived> requestToChannel(
-            String channelName,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout,
-            ZLinkServiceOperationRegistry operations,
-            UUID operationId) {
-        return operations.submit(
-                operationId,
-                timeout,
-                () -> requestToChannel(channelName, metadata, parts, timeout),
-                ZLinkBackendReceived::close);
-    }
-
     default void publish(String channelName, String topic, List<Message> parts, SendFlags flags) {
         throw new UnsupportedOperationException("MeshNode publish is unavailable");
     }
@@ -419,9 +365,6 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         }
     }
 
-    CompletionStage<List<Message>> requestToActor(
-            ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags, Duration timeout);
-
     boolean forwardActorBoundSession(
             ZLinkBackendActorRef actor,
             RoutingId sourceNodeRid,
@@ -508,37 +451,28 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                 Consumer<Throwable> failure);
     }
 
-    default CompletionStage<ZLinkBackendReceived> requestToNode(
+    CompletionStage<ZLinkBackendReceived> requestToNode(
             RoutingId targetNodeRid,
             byte[] metadata,
             List<Message> parts,
             Duration timeout,
             ZLinkServiceOperationRegistry operations,
             UUID operationId,
-            CompletableFuture<Void> requestAdmission) {
-        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
-        return requestToNode(targetNodeRid, metadata, parts, timeout, operations, operationId);
-    }
+            CompletableFuture<Void> requestAdmission);
 
-    default CompletionStage<ZLinkBackendReceived> requestToChannel(
+    CompletionStage<ZLinkBackendReceived> requestToChannel(
             String channelName,
             byte[] metadata,
             List<Message> parts,
             Duration timeout,
             ZLinkServiceOperationRegistry operations,
             UUID operationId,
-            CompletableFuture<Void> requestAdmission) {
-        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
-        return requestToChannel(channelName, metadata, parts, timeout, operations, operationId);
-    }
+            CompletableFuture<Void> requestAdmission);
 
-    default CompletionStage<List<Message>> requestToActor(
+    CompletionStage<List<Message>> requestToActor(
             ZLinkBackendActorRef actor,
             List<Message> parts,
             SendFlags flags,
             Duration timeout,
-            CompletableFuture<Void> requestAdmission) {
-        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
-        return requestToActor(actor, parts, flags, timeout);
-    }
+            CompletableFuture<Void> requestAdmission);
 }

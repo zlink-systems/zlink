@@ -65,7 +65,13 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
                 completed =
                         source.spotNode()
                                 .requestToNode(
-                                        targetRid, List.of(packet, payload), Duration.ofSeconds(5))
+                                        targetRid,
+                                        null,
+                                        List.of(packet, payload),
+                                        Duration.ofSeconds(5),
+                                        null,
+                                        null,
+                                        null)
                                 .toCompletableFuture();
             }
 

@@ -13,29 +13,15 @@ public interface ZLinkBackendDealerSocket
 
     CompletionStage<Void> send(List<Message> parts);
 
-    CompletionStage<ZLinkBackendReceived> request(List<Message> parts, Duration timeout);
-
     Runnable receiveAdmission();
 
     void setReceiveAdmission(Runnable admission);
 
-    default CompletionStage<ZLinkBackendReceived> request(
-            List<Message> parts, Duration timeout, Runnable admission) {
-        return request(parts, timeout)
-                .whenComplete(
-                        (reply, failure) -> {
-                            if (failure == null && admission != null) admission.run();
-                        });
-    }
-
     ZLinkBackendReceived recv(ZLinkBackendRecvMode mode);
 
-    default CompletionStage<ZLinkBackendReceived> request(
+    CompletionStage<ZLinkBackendReceived> request(
             List<Message> parts,
             Duration timeout,
             Runnable receiveAdmission,
-            CompletableFuture<Void> requestAdmission) {
-        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
-        return request(parts, timeout, receiveAdmission);
-    }
+            CompletableFuture<Void> requestAdmission);
 }

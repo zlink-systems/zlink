@@ -90,44 +90,6 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
         throw new UnsupportedOperationException("Spot send metadata is unavailable");
     }
 
-    CompletionStage<ZLinkBackendReceived> requestToSpot(
-            RoutingId targetNodeRid,
-            String spotId,
-            long spotGeneration,
-            List<Message> parts,
-            Duration timeout);
-
-    default CompletionStage<ZLinkBackendReceived> requestToSpot(
-            RoutingId targetNodeRid,
-            String spotId,
-            long spotGeneration,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout) {
-        if (metadata == null || metadata.length == 0) {
-            return requestToSpot(targetNodeRid, spotId, spotGeneration, parts, timeout);
-        }
-        throw new UnsupportedOperationException("Spot request metadata is unavailable");
-    }
-
-    default CompletionStage<ZLinkBackendReceived> requestToSpot(
-            RoutingId targetNodeRid,
-            String spotId,
-            long spotGeneration,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout,
-            ZLinkServiceOperationRegistry operations,
-            UUID operationId) {
-        return operations.submit(
-                operationId,
-                timeout,
-                () ->
-                        requestToSpot(
-                                targetNodeRid, spotId, spotGeneration, metadata, parts, timeout),
-                ZLinkBackendReceived::close);
-    }
-
     void onDispatchEvent(ZLinkBackendSpotDispatchHandler handler);
 
     ZLinkBackendActorJoinRequest recvActorJoin(ZLinkBackendRecvMode mode);
@@ -135,7 +97,7 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
     void replyActorJoin(
             ZLinkBackendActorJoinRequest request, int joinResultCode, List<Message> parts);
 
-    default CompletionStage<ZLinkBackendReceived> requestToSpot(
+    CompletionStage<ZLinkBackendReceived> requestToSpot(
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
@@ -144,28 +106,14 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
             Duration timeout,
             ZLinkServiceOperationRegistry operations,
             UUID operationId,
-            CompletableFuture<Void> requestAdmission) {
-        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
-        return requestToSpot(
-                targetNodeRid,
-                spotId,
-                spotGeneration,
-                metadata,
-                parts,
-                timeout,
-                operations,
-                operationId);
-    }
+            CompletableFuture<Void> requestAdmission);
 
-    default CompletionStage<ZLinkBackendReceived> requestToSpot(
+    CompletionStage<ZLinkBackendReceived> requestToSpot(
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
             byte[] metadata,
             List<Message> parts,
             Duration timeout,
-            CompletableFuture<Void> requestAdmission) {
-        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
-        return requestToSpot(targetNodeRid, spotId, spotGeneration, metadata, parts, timeout);
-    }
+            CompletableFuture<Void> requestAdmission);
 }

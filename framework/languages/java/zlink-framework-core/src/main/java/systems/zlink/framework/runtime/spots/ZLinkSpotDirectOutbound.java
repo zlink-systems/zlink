@@ -181,31 +181,6 @@ final class ZLinkSpotDirectOutbound {
             String contentType,
             ZLinkApplicationMetadata metadata,
             Duration timeout,
-            Class<TReply> replyType) {
-        return submitRequest(
-                spot,
-                targetNodeRid,
-                spotId,
-                spotGeneration,
-                payload,
-                packetName,
-                contentType,
-                metadata,
-                timeout,
-                replyType,
-                null);
-    }
-
-    <TReply> CompletionStage<TReply> submitRequest(
-            ZLinkBackendSpot spot,
-            RoutingId targetNodeRid,
-            String spotId,
-            long spotGeneration,
-            Message payload,
-            Optional<String> packetName,
-            String contentType,
-            ZLinkApplicationMetadata metadata,
-            Duration timeout,
             Class<TReply> replyType,
             CompletableFuture<Void> requestAdmission) {
         CompletableFuture<TReply> result = new CompletableFuture<>();

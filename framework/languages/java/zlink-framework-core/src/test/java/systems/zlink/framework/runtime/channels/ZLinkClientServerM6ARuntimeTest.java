@@ -1288,20 +1288,22 @@ final class ZLinkClientServerM6ARuntimeTest {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override
-        public CompletionStage<ZLinkBackendReceived> request(
-                List<Message> parts, Duration timeout) {
-            requests.add(parts.get(0).toByteArray());
-            return new CompletableFuture<>();
-        }
-
         public CompletionStage<ZLinkBackendReceived> request(
                 List<Message> parts,
                 Duration timeout,
                 Runnable receiveAdmission,
                 CompletableFuture<Void> requestAdmission) {
+            requests.add(parts.get(0).toByteArray());
             return ZLinkTestAdmissionFactory.acceptedRequest(
-                    request(parts, timeout, receiveAdmission), requestAdmission);
+                    new CompletableFuture<
+                                    systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendReceived>()
+                            .whenComplete(
+                                    (received, failure) -> {
+                                        if (failure == null && receiveAdmission != null)
+                                            receiveAdmission.run();
+                                    }),
+                    requestAdmission);
         }
 
         @Override
@@ -1416,19 +1418,21 @@ final class ZLinkClientServerM6ARuntimeTest {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override
-        public CompletionStage<ZLinkBackendReceived> request(
-                List<Message> parts, Duration timeout) {
-            return new CompletableFuture<>();
-        }
-
         public CompletionStage<ZLinkBackendReceived> request(
                 List<Message> parts,
                 Duration timeout,
                 Runnable receiveAdmission,
                 CompletableFuture<Void> requestAdmission) {
             return ZLinkTestAdmissionFactory.acceptedRequest(
-                    request(parts, timeout, receiveAdmission), requestAdmission);
+                    new CompletableFuture<
+                                    systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendReceived>()
+                            .whenComplete(
+                                    (received, failure) -> {
+                                        if (failure == null && receiveAdmission != null)
+                                            receiveAdmission.run();
+                                    }),
+                    requestAdmission);
         }
 
         @Override
@@ -1510,19 +1514,13 @@ final class ZLinkClientServerM6ARuntimeTest {
                             new ZlinkSubmitException(SubmitResult.NOT_ADMITTED));
         }
 
-        @Override
-        public CompletionStage<ZLinkBackendReceived> request(
-                RoutingId routingId, List<Message> parts, Duration timeout) {
-            return new CompletableFuture<>();
-        }
-
         public CompletionStage<ZLinkBackendReceived> request(
                 RoutingId routingId,
                 List<Message> parts,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
             return ZLinkTestAdmissionFactory.acceptedRequest(
-                    request(routingId, parts, timeout), requestAdmission);
+                    new CompletableFuture<>(), requestAdmission);
         }
 
         @Override

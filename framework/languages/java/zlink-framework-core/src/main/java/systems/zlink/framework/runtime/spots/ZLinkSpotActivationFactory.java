@@ -394,23 +394,9 @@ final class ZLinkSpotActivationFactory {
                     }
 
                     @Override
-                    public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
-                        return routeHandler.apply(received, null);
-                    }
-
-                    @Override
                     public CompletionStage<Void> handleRoute(
                             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
                         return routeHandler.apply(received, admission);
-                    }
-
-                    @Override
-                    public CompletionStage<Void> handleActor(
-                            java.util.List<
-                                            systems.zlink.framework.runtime.internal.backend
-                                                    .ZLinkBackendActorReceived>
-                                    messages) {
-                        return actorHandler.apply(messages, null);
                     }
 
                     @Override
@@ -435,11 +421,6 @@ final class ZLinkSpotActivationFactory {
                     }
 
                     @Override
-                    public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
-                        return activation.admitRoute(received);
-                    }
-
-                    @Override
                     public CompletionStage<Void> handleRoute(
                             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
                         return activation.admitRoute(received, admission);
@@ -451,15 +432,6 @@ final class ZLinkSpotActivationFactory {
                                             .ZLinkBackendTopicMessage
                                     message) {
                         return activation.admitTopic(message);
-                    }
-
-                    @Override
-                    public CompletionStage<Void> handleActor(
-                            java.util.List<
-                                            systems.zlink.framework.runtime.internal.backend
-                                                    .ZLinkBackendActorReceived>
-                                    messages) {
-                        return activation.admitActor(messages);
                     }
 
                     @Override

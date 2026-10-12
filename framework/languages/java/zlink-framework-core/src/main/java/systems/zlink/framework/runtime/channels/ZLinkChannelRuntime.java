@@ -928,7 +928,11 @@ public final class ZLinkChannelRuntime
                                 ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
                                 Integer.MAX_VALUE));
         try (Message message = Message.from(hello)) {
-            dealer.request(List.of(message), defaultRequestTimeout(channelName))
+            dealer.request(
+                            List.of(message),
+                            defaultRequestTimeout(channelName),
+                            dealer.receiveAdmission(),
+                            null)
                     .whenComplete(
                             (reply, failure) -> {
                                 if (failure != null) {
@@ -1275,7 +1279,8 @@ public final class ZLinkChannelRuntime
                         requireRouteRouter(channelName),
                         target,
                         requestParts,
-                        effectiveTimeout)
+                        effectiveTimeout,
+                        null)
                 .whenComplete(
                         (reply, failure) -> {
                             requestParts.forEach(Message::close);
@@ -1398,26 +1403,16 @@ public final class ZLinkChannelRuntime
             RoutingId targetNodeRid,
             String targetSpotId,
             List<Message> spotParts,
-            Duration timeout) {
-        return requestToSpotViaRouterChannel(
-                routerChannelId, targetNodeRid, targetSpotId, 0L, spotParts, timeout);
-    }
-
-    public CompletionStage<List<Message>> requestToSpotViaRouterChannel(
-            String routerChannelId,
-            RoutingId targetNodeRid,
-            String targetSpotId,
-            long targetSpotGeneration,
-            List<Message> spotParts,
-            Duration timeout) {
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         return requestToSpotViaRouterChannel(
                 routerChannelId,
                 targetNodeRid,
                 targetSpotId,
-                targetSpotGeneration,
+                0L,
                 spotParts,
                 timeout,
-                null);
+                requestAdmission);
     }
 
     public CompletionStage<List<Message>> requestToSpotViaRouterChannel(

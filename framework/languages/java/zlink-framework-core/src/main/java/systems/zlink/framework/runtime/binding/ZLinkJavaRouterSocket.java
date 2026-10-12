@@ -131,12 +131,6 @@ final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJava
     }
 
     @Override
-    public CompletionStage<ZLinkBackendReceived> request(
-            RoutingId routingId, List<Message> parts, Duration timeout) {
-        return request(routingId, parts, timeout, null);
-    }
-
-    @Override
     public synchronized CompletionStage<ZLinkBackendReceived> request(
             RoutingId routingId,
             List<Message> parts,

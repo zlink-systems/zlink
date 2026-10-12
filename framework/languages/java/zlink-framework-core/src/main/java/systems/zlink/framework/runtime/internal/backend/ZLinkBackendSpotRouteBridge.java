@@ -14,13 +14,6 @@ public interface ZLinkBackendSpotRouteBridge extends ZLinkBackendObject {
     CompletionStage<Void> send(
             String channelName, RoutingId targetNodeRid, String targetSpotId, List<Message> parts);
 
-    CompletionStage<List<Message>> request(
-            String channelName,
-            RoutingId targetNodeRid,
-            String targetSpotId,
-            List<Message> parts,
-            Duration timeout);
-
     boolean handleRouterReceived(
             String channelName, RoutingId sourceNodeRid, long requestSeq, List<Message> parts);
 
@@ -28,14 +21,11 @@ public interface ZLinkBackendSpotRouteBridge extends ZLinkBackendObject {
 
     void close();
 
-    default CompletionStage<List<Message>> request(
+    CompletionStage<List<Message>> request(
             String channelName,
             RoutingId targetNodeRid,
             String targetSpotId,
             List<Message> parts,
             Duration timeout,
-            CompletableFuture<Void> requestAdmission) {
-        ZLinkBackendRequestAdmission.requireUnobserved(requestAdmission);
-        return request(channelName, targetNodeRid, targetSpotId, parts, timeout);
-    }
+            CompletableFuture<Void> requestAdmission);
 }

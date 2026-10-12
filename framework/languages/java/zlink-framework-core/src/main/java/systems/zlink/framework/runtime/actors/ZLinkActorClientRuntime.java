@@ -157,19 +157,6 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             Duration timeout,
             Class<TReply> replyType,
             ZLinkRequestMetrics.Series metric,
-            long started) {
-        return requestAsync(
-                actorId, packetName, request, metadata, timeout, replyType, metric, started, null);
-    }
-
-    private <TReply> CompletionStage<TReply> requestAsync(
-            String actorId,
-            String packetName,
-            Object request,
-            Map<String, String> metadata,
-            Duration timeout,
-            Class<TReply> replyType,
-            ZLinkRequestMetrics.Series metric,
             long started,
             CompletableFuture<Void> requestAdmission) {
         ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
@@ -312,18 +299,6 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                             });
         }
         return result;
-    }
-
-    private <TReply> CompletionStage<TReply> submitRequest(
-            ZLinkBackendActorRef actor,
-            String packetName,
-            Object request,
-            Map<String, String> metadata,
-            Duration timeout,
-            long requestStarted,
-            Class<TReply> replyType) {
-        return submitRequest(
-                actor, packetName, request, metadata, timeout, requestStarted, replyType, null);
     }
 
     private <TReply> CompletionStage<TReply> submitRequest(

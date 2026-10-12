@@ -93,7 +93,9 @@ final class ZLinkJavaRawServicePortContractTest {
                             ignored -> {
                                 throw new AssertionError("capacity refusal has no reply");
                             },
-                            ignored -> {});
+                            ignored -> {},
+                            null,
+                            null);
             var sourceError =
                     assertThrows(
                                     ExecutionException.class,
@@ -288,7 +290,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                         assertTrue(view.isDirect());
                                         assertEquals(3, view.remaining());
                                         return view.get(0) + view.get(1) + view.get(2);
-                                    })
+                                    },
+                                    null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
             try (var incoming = port.receiveNow(target).orElseThrow()) {
@@ -325,7 +328,12 @@ final class ZLinkJavaRawServicePortContractTest {
             target.bind(endpoint);
             caller.connect(endpoint);
             var reply =
-                    port.request(caller, targetId, List.of(new byte[] {1}), Duration.ofSeconds(2))
+                    port.request(
+                                    caller,
+                                    targetId,
+                                    List.of(new byte[] {1}),
+                                    Duration.ofSeconds(2),
+                                    null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
             try (var incoming = port.receiveNow(target).orElseThrow()) {
@@ -436,7 +444,9 @@ final class ZLinkJavaRawServicePortContractTest {
                                     List.of(successful),
                                     Duration.ofSeconds(2),
                                     parts -> parts.getFirst().readByte(0),
-                                    ignored -> {})
+                                    ignored -> {},
+                                    null,
+                                    null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
             try (var inbound = port.receiveNow(target).orElseThrow()) {
@@ -458,7 +468,9 @@ final class ZLinkJavaRawServicePortContractTest {
                                     List.of(timedOut),
                                     Duration.ofMillis(25),
                                     parts -> parts.getFirst().readByte(0),
-                                    ignored -> {})
+                                    ignored -> {},
+                                    null,
+                                    null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
             try (var ignored = port.receiveNow(target).orElseThrow()) {
@@ -476,7 +488,9 @@ final class ZLinkJavaRawServicePortContractTest {
                                     List.of(routeRejected),
                                     Duration.ofSeconds(2),
                                     parts -> parts.getFirst().readByte(0),
-                                    ignored -> {})
+                                    ignored -> {},
+                                    null,
+                                    null)
                             .toCompletableFuture();
             var rejected =
                     assertThrows(
