@@ -215,7 +215,10 @@ export class ZLinkSpotActivationLifecycle {
     );
     const serialExecutor = new ZLinkSpotSerialExecutor(serial, executionMode, spotId);
     const actorHandlers = new ZLinkSpotActorHandlerRegistryRuntime();
-    const handlers = new DefaultZLinkSpotHandlerRegistry(actorHandlers);
+    const handlers = new DefaultZLinkSpotHandlerRegistry(
+      actorHandlers,
+      this.options.providerResolver
+    );
     applySpotHandlerRegistrations(
       handlers,
       implementation as unknown as Type<ZLinkSpot>,
@@ -381,7 +384,10 @@ export class ZLinkSpotActivationLifecycle {
       spotId
     );
     const actorHandlers = new ZLinkSpotActorHandlerRegistryRuntime();
-    const handlers = new DefaultZLinkSpotHandlerRegistry(actorHandlers);
+    const handlers = new DefaultZLinkSpotHandlerRegistry(
+      actorHandlers,
+      this.options.providerResolver
+    );
     const instanceHandlers = new DefaultZLinkInstanceSpotHandlerRegistry(handlers);
     applySpotHandlerRegistrations(handlers, implementation as unknown as Type<ZLinkSpot>, {
       packetHandlers: this.options.spotPacketHandlers
@@ -533,7 +539,10 @@ export class ZLinkSpotActivationLifecycle {
     );
     const serialExecutor = new ZLinkSpotSerialExecutor(serial, executionMode, spotId);
     const actorHandlers = new ZLinkSpotActorHandlerRegistryRuntime();
-    const handlers = new DefaultZLinkSpotHandlerRegistry(actorHandlers);
+    const handlers = new DefaultZLinkSpotHandlerRegistry(
+      actorHandlers,
+      this.options.providerResolver
+    );
     applySpotHandlerRegistrations(handlers, spotType, {
       actorSendHandlers: this.options.spotActorSendHandlers,
       actorRequestHandlers: this.options.spotActorRequestHandlers,

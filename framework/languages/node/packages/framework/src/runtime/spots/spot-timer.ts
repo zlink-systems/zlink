@@ -19,7 +19,10 @@ import { ZLinkTimerOverrunPolicy } from '../../contracts';
 import { validateTimerRegistration } from '../../contracts/Configuration/TimerRegistrationValidator';
 import { throwIfAborted } from '../abort';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
-import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
+import {
+  prepareHandlerInstance,
+  resolveLifecycleHandler
+} from '../handlers/handler-instance-scope';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkExecutionBarrier } from '../execution';
 import { ZLinkStateLane } from '../execution/state-lane';
@@ -135,6 +138,7 @@ export class ZLinkSpotTimerRegistry {
   ): Promise<ZLinkTimer> {
     validateTimerRegistration(name, periodMs, options);
     throwIfAborted(signal);
+    prepareHandlerInstance(providerResolver, handlerType);
     const handler = await resolveLifecycleHandler(spot, handlerType, providerResolver);
     const prepared = await this.lane.run(() => this.prepareAddCore(name));
     if (prepared.previous !== undefined) await prepared.previous.timer.cancel(signal);

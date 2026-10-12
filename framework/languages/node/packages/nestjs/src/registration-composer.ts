@@ -31,12 +31,27 @@ import {
   createManualSendHandlers
 } from './handler-adapters';
 import { framework } from './framework-loader';
+import { nestHandlerFactories, type NestHandlerFactories } from './providers';
 import { SpotNodeHandlerRegistry } from './spot-node-handler-registry';
+
+export function createDiscoveredRegistration(
+  options: ZLinkNestModuleRegistrationOptions,
+  discovery: DiscoveryService,
+  moduleRef: ModuleRef
+) {
+  const factories: NestHandlerFactories = new Map();
+  const registration = framework.createFrameworkRegistration(
+    createDiscoveredOptions(options, discovery, moduleRef, factories)
+  );
+  nestHandlerFactories(registration, factories);
+  return registration;
+}
 
 export function createDiscoveredOptions(
   options: ZLinkNestModuleRegistrationOptions,
   discovery: DiscoveryService,
-  moduleRef: ModuleRef
+  moduleRef: ModuleRef,
+  factories: NestHandlerFactories = new Map()
 ): ZLinkFrameworkRegistrationOptions {
   const registrationOptions = createRegistrationOptions(options);
   const channels: Record<string, ZLinkChannelOptions> = { ...(registrationOptions.channels ?? {}) };
@@ -62,7 +77,8 @@ export function createDiscoveredOptions(
       spotTimerProviderRefs
     ),
     providerRefs,
-    moduleRef
+    moduleRef,
+    factories
   );
 
   for (const [channelName, channel] of Object.entries(options.fanoutChannels ?? {})) {
@@ -70,11 +86,13 @@ export function createDiscoveredOptions(
     const publishHandlers = createDiscoveredPublishHandlers(
       providerRefs,
       channel.handlerGroups,
-      moduleRef
+      moduleRef,
+      factories
     );
     const manualPublishHandlers = createManualPublishHandlers(
       channel.publishHandlerTypes,
-      moduleRef
+      moduleRef,
+      factories
     );
     channels[channelName] = {
       ...existingChannel,
@@ -92,13 +110,23 @@ export function createDiscoveredOptions(
       ...existingChannel,
       requestHandlers: [
         ...(existingChannel.requestHandlers ?? []),
-        ...createManualRequestHandlers(channel.requestHandlerTypes, moduleRef),
-        ...createDiscoveredRequestHandlers(providerRefs, channel.handlerGroups, moduleRef)
+        ...createManualRequestHandlers(channel.requestHandlerTypes, moduleRef, factories),
+        ...createDiscoveredRequestHandlers(
+          providerRefs,
+          channel.handlerGroups,
+          moduleRef,
+          factories
+        )
       ],
       sendHandlers: [
         ...(existingChannel.sendHandlers ?? []),
-        ...createManualSendHandlers(channel.sendHandlerTypes, moduleRef),
-        ...createDiscoveredChannelSendHandlers(providerRefs, channel.handlerGroups, moduleRef)
+        ...createManualSendHandlers(channel.sendHandlerTypes, moduleRef, factories),
+        ...createDiscoveredChannelSendHandlers(
+          providerRefs,
+          channel.handlerGroups,
+          moduleRef,
+          factories
+        )
       ]
     };
   }
@@ -135,7 +163,8 @@ function attachDiscoveredSessionHandlers(
 function createDiscoveredMeshChannelOptions(
   value: ZLinkFrameworkRegistrationOptions['spotNodes'],
   providerRefs: ReturnType<typeof discoverProviderRefs>,
-  moduleRef: ModuleRef
+  moduleRef: ModuleRef,
+  factories: NestHandlerFactories
 ): ZLinkFrameworkRegistrationOptions['spotNodes'] {
   if (value === undefined || Array.isArray(value)) {
     return value;
@@ -155,19 +184,25 @@ function createDiscoveredMeshChannelOptions(
                     {
                       ...channel,
                       requestHandlers: [
-                        ...createManualRequestHandlers(channel.requestHandlers, moduleRef),
+                        ...createManualRequestHandlers(
+                          channel.requestHandlers,
+                          moduleRef,
+                          factories
+                        ),
                         ...(createDiscoveredRequestHandlers(
                           providerRefs,
                           channel.handlerGroups,
-                          moduleRef
+                          moduleRef,
+                          factories
                         ) as never)
                       ],
                       sendHandlers: [
-                        ...createManualSendHandlers(channel.sendHandlers, moduleRef),
+                        ...createManualSendHandlers(channel.sendHandlers, moduleRef, factories),
                         ...(createDiscoveredSendHandlers(
                           providerRefs,
                           channel.handlerGroups,
-                          moduleRef
+                          moduleRef,
+                          factories
                         ) as never)
                       ]
                     }

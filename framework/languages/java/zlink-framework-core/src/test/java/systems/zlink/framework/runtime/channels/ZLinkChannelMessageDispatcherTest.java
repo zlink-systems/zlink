@@ -96,7 +96,8 @@ final class ZLinkChannelMessageDispatcherTest {
                                             ProbeRouteRequestHandler.class,
                                             String.class,
                                             String.class,
-                                            "Request")));
+                                            "Request",
+                                            java.util.List.of())));
                 } else {
                     registry.registerClientServer(
                             "orders",
@@ -107,7 +108,8 @@ final class ZLinkChannelMessageDispatcherTest {
                                             ProbeRequestHandler.class,
                                             String.class,
                                             String.class,
-                                            "Request")));
+                                            "Request",
+                                            java.util.List.of())));
                 }
                 registry.sealClosingAdmission();
                 ZLinkChannelDispatchReporter reporter = new ZLinkChannelDispatchReporter(errors);
@@ -165,28 +167,36 @@ final class ZLinkChannelMessageDispatcherTest {
                             Map.of(
                                     "Send",
                                     new ChannelRouteSendHandlerRegistration(
-                                            ProbeRouteSendHandler.class, String.class, "Send")),
+                                            ProbeRouteSendHandler.class,
+                                            String.class,
+                                            "Send",
+                                            java.util.List.of())),
                             Map.of(
                                     "Request",
                                     new ChannelRouteRequestHandlerRegistration(
                                             ProbeRouteRequestHandler.class,
                                             String.class,
                                             String.class,
-                                            "Request")));
+                                            "Request",
+                                            java.util.List.of())));
                 } else {
                     registry.registerClientServer(
                             channel,
                             Map.of(
                                     "Send",
                                     new ChannelSendHandlerRegistration(
-                                            ProbeSendHandler.class, String.class, "Send")),
+                                            ProbeSendHandler.class,
+                                            String.class,
+                                            "Send",
+                                            java.util.List.of())),
                             Map.of(
                                     "Request",
                                     new ChannelRequestHandlerRegistration(
                                             ProbeRequestHandler.class,
                                             String.class,
                                             String.class,
-                                            "Request")));
+                                            "Request",
+                                            java.util.List.of())));
                 }
             }
             ZLinkChannelDispatchReporter reporter = new ZLinkChannelDispatchReporter(errors);
@@ -345,7 +355,8 @@ final class ZLinkChannelMessageDispatcherTest {
                                     SuccessfulRequestHandler.class,
                                     String.class,
                                     String.class,
-                                    "Request")));
+                                    "Request",
+                                    java.util.List.of())));
             ZLinkChannelHandlerInvoker invoker = invoker();
             ZLinkChannelMessageDispatcher dispatcher =
                     new ZLinkChannelMessageDispatcher(
@@ -389,7 +400,8 @@ final class ZLinkChannelMessageDispatcherTest {
                                     SuccessfulRouteRequestHandler.class,
                                     String.class,
                                     String.class,
-                                    "Request")));
+                                    "Request",
+                                    java.util.List.of())));
             ZLinkChannelHandlerInvoker invoker = invoker();
             ZLinkChannelRouteDispatcher dispatcher =
                     new ZLinkChannelRouteDispatcher(
@@ -458,7 +470,6 @@ final class ZLinkChannelMessageDispatcherTest {
                 new ZLinkCodecRegistration(),
                 ZLinkHandlerActivator.reflection(),
                 Runnable::run,
-                List.of(),
                 List.of());
     }
 

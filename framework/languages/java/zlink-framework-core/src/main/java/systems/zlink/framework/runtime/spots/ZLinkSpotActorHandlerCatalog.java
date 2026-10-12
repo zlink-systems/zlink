@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
@@ -33,12 +34,21 @@ import java.util.concurrent.CompletionStage;
 
 final class ZLinkSpotActorHandlerCatalog {
     private final ZLinkMessageSerializer serializer;
+    private final List<ZLinkSuspendInvocationAdapter> suspendInvokers;
     private final Map<String, List<SpotActorPacketHandlerRegistration>> handlersByPacket =
             new HashMap<>();
 
     ZLinkSpotActorHandlerCatalog(
             ZLinkScannedHandlerCatalog scannedHandlers, ZLinkMessageSerializer serializer) {
+        this(scannedHandlers, serializer, List.of());
+    }
+
+    ZLinkSpotActorHandlerCatalog(
+            ZLinkScannedHandlerCatalog scannedHandlers,
+            ZLinkMessageSerializer serializer,
+            List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
         this.serializer = serializer;
+        this.suspendInvokers = suspendInvokers;
         for (ZLinkScannedHandler handler : scannedHandlers.handlers()) {
             if (handler.surface() != ZLinkScannedHandlerSurface.SPOT
                     || (handler.kind() != ZLinkScannedHandlerKind.ACTOR_SEND
@@ -107,7 +117,8 @@ final class ZLinkSpotActorHandlerCatalog {
                         shape.messageType(),
                         replyType,
                         ZLinkPacketNames.resolve(shape.messageType(), explicitPacketName),
-                        kind));
+                        kind,
+                        suspendInvokers));
     }
 
     private void registerInterfaceHandler(Class<?> handlerType) {
@@ -155,7 +166,8 @@ final class ZLinkSpotActorHandlerCatalog {
                                 ? requireClassArgument(handlerType, arguments[3])
                                 : Void.class,
                         ZLinkPacketNames.resolve(messageType),
-                        kind));
+                        kind,
+                        suspendInvokers));
     }
 
     private void add(SpotActorPacketHandlerRegistration registration) {
@@ -178,16 +190,14 @@ final class ZLinkSpotActorHandlerCatalog {
         serializer.prepare(registration.replyType());
     }
 
-    private static SpotActorPacketHandlerRegistration createScannedRegistration(
+    private SpotActorPacketHandlerRegistration createScannedRegistration(
             ZLinkScannedHandler handler) {
         if (handler.handlerMethod() != null) {
             ActorMessageShape shape =
                     actorPacketHandlerShape(
                             handler.handlerType(),
                             handler.handlerMethod(),
-                            handler.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST
-                                    ? ZLinkMessageContext.class
-                                    : ZLinkMessageContext.class);
+                            ZLinkMessageContext.class);
             return new SpotActorPacketHandlerRegistration(
                     handler.handlerType(),
                     handler.handlerMethod(),
@@ -196,7 +206,8 @@ final class ZLinkSpotActorHandlerCatalog {
                     handler.messageType(),
                     handler.replyType(),
                     handler.packetName(),
-                    handler.kind());
+                    handler.kind(),
+                    suspendInvokers);
         }
         ParameterizedType matched = findActorPacketInterface(handler.handlerType(), handler.kind());
         if (matched == null) {
@@ -213,7 +224,8 @@ final class ZLinkSpotActorHandlerCatalog {
                 handler.messageType(),
                 handler.replyType(),
                 handler.packetName(),
-                handler.kind());
+                handler.kind(),
+                suspendInvokers);
     }
 
     private static ParameterizedType findActorPacketInterface(

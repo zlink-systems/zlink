@@ -474,9 +474,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         registration.workers().idleTimeout());
         ZLinkScannedHandlerCatalog scannedHandlers =
                 ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
-        this.actorHandlers = new ZLinkSpotActorHandlerCatalog(scannedHandlers, serializer);
+        this.actorHandlers =
+                new ZLinkSpotActorHandlerCatalog(
+                        scannedHandlers, serializer, suspendHandlerInvokers);
         this.handlerLoader =
-                new ZLinkSpotHandlerLoader(scannedHandlers, actorHandlers, handlerFactory);
+                new ZLinkSpotHandlerLoader(
+                        scannedHandlers,
+                        actorHandlers,
+                        handlerFactory,
+                        spotHandlerInvoker.suspendHandlerInvokers());
         ZLinkChannelBackendAdapter channelAdapter =
                 backendFactory.createChannelAdapter(adapterOptions);
         ZLinkSpotBackendAdapter spotAdapter =
@@ -1465,14 +1471,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .thenApply(
                         nodes -> {
                             ZLinkInternalMeshNode source = routeMeshNodesByName.get(meshName);
-                            List<ZLinkMeshNodeDescriptor> candidates =
-                                    userSpotPlacementCandidates(
+                            UserSpotPlacement placement =
+                                    classifyUserSpotPlacement(
                                             nodes, stableType, source, excludedTargets);
+                            List<ZLinkMeshNodeDescriptor> candidates = placement.candidates();
                             if (candidates.isEmpty()) {
-                                UserSpotPlacementVerdict verdict =
-                                        userSpotPlacementVerdict(
-                                                nodes, stableType, source, excludedTargets);
-                                if (verdict == UserSpotPlacementVerdict.TERMINAL) {
+                                if (placement.verdict() == UserSpotPlacementVerdict.TERMINAL) {
                                     throw new ZLinkFrameworkException(
                                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                                             "User Spot placement is unavailable");
@@ -1554,23 +1558,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return 1L << Math.min(Math.max(refreshAttempt, 0), 6);
     }
 
+    private record UserSpotPlacement(
+            List<ZLinkMeshNodeDescriptor> candidates, UserSpotPlacementVerdict verdict) {}
+
     static List<ZLinkMeshNodeDescriptor> userSpotPlacementCandidates(
             List<ZLinkMeshNodeDescriptor> nodes,
             String stableType,
             ZLinkInternalMeshNode source,
             Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        return nodes.stream()
-                .filter(
-                        node ->
-                                node.state()
-                                                == systems.zlink.framework.runtime.host
-                                                        .ZLinkFrameworkRuntimeState.SERVING
-                                        && node.objectRole() == ZLinkMeshNodeObjectRole.SERVER
-                                        && node.placementWeight() > 0
-                                        && isExactReadyUserSpotTarget(node, source)
-                                        && !excludedTargets.contains(descriptorKey(node))
-                                        && servesUserSpotTypeWithRoom(node, stableType))
-                .toList();
+        return classifyUserSpotPlacement(nodes, stableType, source, excludedTargets).candidates();
     }
 
     static UserSpotPlacementVerdict userSpotPlacementVerdict(
@@ -1578,53 +1574,52 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             String stableType,
             ZLinkInternalMeshNode source,
             Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        if (!userSpotPlacementCandidates(nodes, stableType, source, excludedTargets).isEmpty()) {
-            return UserSpotPlacementVerdict.SELECT;
+        return classifyUserSpotPlacement(nodes, stableType, source, excludedTargets).verdict();
+    }
+
+    private static UserSpotPlacement classifyUserSpotPlacement(
+            List<ZLinkMeshNodeDescriptor> nodes,
+            String stableType,
+            ZLinkInternalMeshNode source,
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+        List<ZLinkMeshNodeDescriptor> candidates = new ArrayList<>();
+        boolean capacityKnown = false;
+        boolean converging = false;
+        for (var node : nodes) {
+            if (node.objectRole() != ZLinkMeshNodeObjectRole.SERVER
+                    || !servesUserSpotType(node, stableType)) {
+                continue;
+            }
+            boolean excluded = excludedTargets.contains(descriptorKey(node));
+            boolean hasRoom = servesUserSpotTypeWithRoom(node, stableType);
+            if (node.state()
+                    == systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState.PREPARING) {
+                converging |= !excluded && hasRoom;
+                continue;
+            }
+            if (node.state()
+                            != systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState
+                                    .SERVING
+                    || node.placementWeight() <= 0) {
+                continue;
+            }
+            // One readiness observation supplies both route selection and capacity classification.
+            if (isExactReadyUserSpotTarget(node, source)) {
+                capacityKnown = true;
+                if (!excluded && hasRoom) {
+                    candidates.add(node);
+                }
+            } else {
+                converging |= !excluded && hasRoom;
+            }
         }
-        boolean capacityKnown =
-                nodes.stream()
-                        .filter(
-                                node ->
-                                        node.state()
-                                                        == systems.zlink.framework.runtime.host
-                                                                .ZLinkFrameworkRuntimeState.SERVING
-                                                && node.objectRole()
-                                                        == ZLinkMeshNodeObjectRole.SERVER
-                                                && node.placementWeight() > 0
-                                                && isExactReadyUserSpotTarget(node, source))
-                        .anyMatch(node -> servesUserSpotType(node, stableType));
-        if (!capacityKnown) {
-            return UserSpotPlacementVerdict.RETRY;
-        }
-        // A node that has published its descriptor but not yet `Serving`
-        // advertises weight 0 and has no admitted route, so it can never be
-        // selected — yet it is a target that is still becoming one, not a node
-        // without room ([13-mesh-node] §6 publishes the descriptor at step 4
-        // and `Serving` only at step 5). The same holds for a `Serving` node
-        // whose peer admission hasn't completed on this source. Neither is a
-        // capacity verdict, so both keep re-listing until the deadline.
-        boolean converging =
-                nodes.stream()
-                        .filter(
-                                node ->
-                                        node.objectRole() == ZLinkMeshNodeObjectRole.SERVER
-                                                && !excludedTargets.contains(descriptorKey(node))
-                                                && servesUserSpotTypeWithRoom(node, stableType))
-                        .anyMatch(
-                                node ->
-                                        node.state()
-                                                        == systems.zlink.framework.runtime.host
-                                                                .ZLinkFrameworkRuntimeState
-                                                                .PREPARING
-                                                || (node.state()
-                                                                == systems.zlink.framework.runtime
-                                                                        .host
-                                                                        .ZLinkFrameworkRuntimeState
-                                                                        .SERVING
-                                                        && node.placementWeight() > 0
-                                                        && !isExactReadyUserSpotTarget(
-                                                                node, source)));
-        return converging ? UserSpotPlacementVerdict.RETRY : UserSpotPlacementVerdict.TERMINAL;
+        UserSpotPlacementVerdict verdict =
+                !candidates.isEmpty()
+                        ? UserSpotPlacementVerdict.SELECT
+                        : !capacityKnown || converging
+                                ? UserSpotPlacementVerdict.RETRY
+                                : UserSpotPlacementVerdict.TERMINAL;
+        return new UserSpotPlacement(List.copyOf(candidates), verdict);
     }
 
     private static boolean servesUserSpotType(ZLinkMeshNodeDescriptor node, String stableType) {

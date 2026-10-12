@@ -50,6 +50,37 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
 
     @Test
+    void q1647ReadinessTransitionMustNotBecomeCapacityExhaustion() {
+        var node = new RecordingMeshNode();
+        node.localReadinessTransitions = true;
+        var descriptor = zoneNode(LOCAL, ZLinkFrameworkRuntimeState.SERVING, 1);
+        var verdict =
+                ZLinkSpotRuntime.userSpotPlacementVerdict(
+                        List.of(descriptor), ZONE_TYPE, node, Set.of());
+        assertEquals(
+                ZLinkSpotRuntime.UserSpotPlacementVerdict.RETRY,
+                verdict,
+                "descriptor has room, route becomes Ready during verdict; statusReads="
+                        + node.statusReads);
+        assertEquals(1, node.statusReads);
+    }
+
+    @Test
+    void q1647RemoteAdmissionTransitionMustNotBecomeCapacityExhaustion() {
+        var node = new RecordingMeshNode();
+        node.remoteAdmissionTransitions = true;
+        var descriptor = zoneNode(REPLACEMENT, ZLinkFrameworkRuntimeState.SERVING, 1);
+        var verdict =
+                ZLinkSpotRuntime.userSpotPlacementVerdict(
+                        List.of(descriptor), ZONE_TYPE, node, Set.of());
+        assertEquals(
+                ZLinkSpotRuntime.UserSpotPlacementVerdict.RETRY,
+                verdict,
+                "descriptor has room, CONNECTING becomes ADMITTED; peerReads=" + node.peerReads);
+        assertEquals(1, node.peerReads);
+    }
+
+    @Test
     void connectedCandidatesArePreferredWhenTheLocationStoreListsBoth() {
         ZLinkMeshNodeDescriptor disconnected = descriptor(DISCONNECTED, 100);
         ZLinkMeshNodeDescriptor connected = descriptor(CONNECTED, 1);
@@ -302,6 +333,11 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
     }
 
     private static final class RecordingMeshNode implements ZLinkInternalMeshNode {
+        boolean localReadinessTransitions;
+        int statusReads;
+        boolean remoteAdmissionTransitions;
+        int peerReads;
+
         @Override
         public String advertisedEndpoint() {
             return status().localEndpoint();
@@ -348,7 +384,9 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
         @Override
         public MeshNodeStatus status() {
             return new MeshNodeStatus(
-                    MeshNodeState.READY,
+                    localReadinessTransitions && statusReads++ == 0
+                            ? MeshNodeState.STARTED
+                            : MeshNodeState.READY,
                     localRid,
                     "mesh",
                     "inproc://source",
@@ -367,6 +405,27 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
 
         @Override
         public List<MeshPeerEntry> peers() {
+            if (remoteAdmissionTransitions) {
+                var state =
+                        peerReads++ == 0
+                                ? systems.zlink.framework.runtime.internal.binding.spot
+                                        .MeshPeerState.CONNECTING
+                                : systems.zlink.framework.runtime.internal.binding.spot
+                                        .MeshPeerState.ADMITTED;
+                return List.of(
+                        new MeshPeerEntry(
+                                REPLACEMENT,
+                                "tcp://127.0.0.1:1",
+                                1L,
+                                systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource
+                                        .MANUAL,
+                                state,
+                                1L,
+                                1L,
+                                0,
+                                0,
+                                0L));
+            }
             return List.of();
         }
 

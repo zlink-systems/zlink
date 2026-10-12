@@ -16,6 +16,8 @@ import type {
   ZLinkSpotPacketHandlerRegistration,
   ZLinkSpotSubscriptionHandlerRegistration
 } from '../../contracts/Configuration/RegistrationTypes';
+import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
+import { prepareHandlerInstance } from '../handlers/handler-instance-scope';
 import { ZLinkConfigurationException } from '../configuration';
 import { ZLinkActorPacketKind, ZLinkSpotActorHandlerRegistryRuntime } from '../actors';
 import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes';
@@ -34,7 +36,10 @@ export class DefaultZLinkSpotHandlerRegistry<
 > implements ZLinkSpotHandlerRegistry {
   private readonly entries: ZLinkSpotHandlerRegistration[] = [];
 
-  constructor(private readonly actorHandlers?: ZLinkSpotActorHandlerRegistryRuntime) {}
+  constructor(
+    private readonly actorHandlers?: ZLinkSpotActorHandlerRegistryRuntime,
+    private readonly providerResolver?: ZLinkProviderResolver
+  ) {}
 
   addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this {
     const metadata = readZLinkDecoratorMetadata(handlerType).find(
@@ -78,6 +83,7 @@ export class DefaultZLinkSpotHandlerRegistry<
     const declared = readZLinkDecoratorMetadata(handlerType).find(
       (entry) => entry.kind === 'packet'
     )?.packetName;
+    prepareHandlerInstance(this.providerResolver, handlerType);
     this.entries.push({
       kind: 'packet',
       handlerType,
@@ -96,6 +102,7 @@ export class DefaultZLinkSpotHandlerRegistry<
     actorType: Type<TActor>,
     packetName: string
   ): this {
+    prepareHandlerInstance(this.providerResolver, handlerType);
     this.entries.push({
       kind: kind === ZLinkActorPacketKind.Send ? 'actorSend' : 'actorRequest',
       handlerType,
@@ -155,6 +162,7 @@ export class DefaultZLinkSpotHandlerRegistry<
     ) {
       return this;
     }
+    prepareHandlerInstance(this.providerResolver, handlerType);
     this.entries.push({ kind: 'subscribe', handlerType, channelName, topic });
     return this;
   }
@@ -164,6 +172,7 @@ export class DefaultZLinkSpotHandlerRegistry<
   }
 
   addSpotHandler(handlerType: Type): this {
+    prepareHandlerInstance(this.providerResolver, handlerType);
     this.entries.push({ kind: 'spotHandler', handlerType });
     return this;
   }

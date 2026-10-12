@@ -77,6 +77,7 @@ export {
   type ZLinkHandlerFilterScopeRunner
 } from './runtime/channels/handler-filter-scope';
 export {
+  registerHandlerInstanceScopeFactory as registerIntegrationHandlerInstanceScopeFactory,
   disposeOwnedInstance as disposeIntegrationHandler,
   disposeOwnedInstances as disposeIntegrationHandlers
 } from './runtime/handlers/handler-instance-scope';

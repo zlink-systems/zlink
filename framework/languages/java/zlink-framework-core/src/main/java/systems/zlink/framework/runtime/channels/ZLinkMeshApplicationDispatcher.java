@@ -37,6 +37,7 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobCont
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
@@ -139,13 +140,16 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                         framework.codecs(),
                         Objects.requireNonNull(handlerFactory, "handlerFactory"),
                         framework.handlerExecutor(),
-                        framework.suspendHandlerInvokers(),
                         framework.filters(),
                         meshName);
         ZLinkScannedHandlerCatalog scannedHandlers =
                 ZLinkHandlerScanner.scan(framework.handlerPackageMarkers());
         namespaces.put(
-                NODE_NAMESPACE, routeNamespace(mesh.nodeHandlers(), framework.handlerExecutor()));
+                NODE_NAMESPACE,
+                routeNamespace(
+                        mesh.nodeHandlers(),
+                        framework.handlerExecutor(),
+                        framework.suspendHandlerInvokers()));
         mesh.channelHandlers()
                 .forEach(
                         (name, handlers) ->
@@ -157,7 +161,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                 mesh.channelHandlerGroups()
                                                         .getOrDefault(name, List.of()),
                                                 scannedHandlers,
-                                                framework.handlerExecutor())));
+                                                framework.handlerExecutor(),
+                                                framework.suspendHandlerInvokers())));
     }
 
     @Override
@@ -848,7 +853,9 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
     }
 
     private static Namespace routeNamespace(
-            List<MeshNodeRegistration.DispatchHandler> handlers, Executor executor) {
+            List<MeshNodeRegistration.DispatchHandler> handlers,
+            Executor executor,
+            List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
         Namespace namespace = new Namespace(executor);
         for (MeshNodeRegistration.DispatchHandler handler : handlers) {
             String packetName = ZLinkPacketNames.resolve(handler.messageType());
@@ -860,13 +867,17 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                 handler.handlerType(),
                                 handler.messageType(),
                                 handler.replyType(),
-                                packetName));
+                                packetName,
+                                suspendInvokers));
             } else {
                 putUnique(
                         namespace.routeSends,
                         packetName,
                         new ChannelRouteSendHandlerRegistration(
-                                handler.handlerType(), handler.messageType(), packetName));
+                                handler.handlerType(),
+                                handler.messageType(),
+                                packetName,
+                                suspendInvokers));
             }
         }
         return namespace;
@@ -878,7 +889,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             List<MeshNodeRegistration.DispatchHandler> handlers,
             List<String> handlerGroups,
             ZLinkScannedHandlerCatalog scannedHandlers,
-            Executor executor) {
+            Executor executor,
+            List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
         Namespace namespace = new Namespace(executor);
         Set<String> groups =
                 handlerGroups.isEmpty() ? Set.of(channelName) : Set.copyOf(handlerGroups);
@@ -895,7 +907,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                             handler.handlerMethod(),
                             handler.messageType(),
                             handler.replyType(),
-                            handler.packetName()));
+                            handler.packetName(),
+                            suspendInvokers));
         }
         for (ZLinkScannedHandler handler :
                 scannedHandlers.matching(
@@ -907,7 +920,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                             handler.handlerType(),
                             handler.handlerMethod(),
                             handler.messageType(),
-                            handler.packetName()));
+                            handler.packetName(),
+                            suspendInvokers));
         }
         for (ZLinkScannedHandler handler :
                 scannedHandlers.matching(
@@ -919,7 +933,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                             handler.handlerType(),
                             handler.handlerMethod(),
                             handler.messageType(),
-                            handler.packetName()));
+                            handler.packetName(),
+                            suspendInvokers));
         }
         for (MeshNodeRegistration.DispatchHandler handler : handlers) {
             String packetName = ZLinkPacketNames.resolve(handler.messageType());
@@ -931,19 +946,26 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                 handler.handlerType(),
                                 handler.messageType(),
                                 handler.replyType(),
-                                packetName));
+                                packetName,
+                                suspendInvokers));
             } else if (handler.routeContext()) {
                 putUnique(
                         namespace.routeSends,
                         packetName,
                         new ChannelRouteSendHandlerRegistration(
-                                handler.handlerType(), handler.messageType(), packetName));
+                                handler.handlerType(),
+                                handler.messageType(),
+                                packetName,
+                                suspendInvokers));
             } else {
                 putUnique(
                         namespace.channelSends,
                         packetName,
                         new ChannelSendHandlerRegistration(
-                                handler.handlerType(), handler.messageType(), packetName));
+                                handler.handlerType(),
+                                handler.messageType(),
+                                packetName,
+                                suspendInvokers));
             }
         }
         return namespace;

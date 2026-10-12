@@ -183,14 +183,12 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
                 queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
         permit.queued();
         FirstInstructionHandler handler = new FirstInstructionHandler(queue);
+        var invocation =
+                ZLinkHandlerMethodInvoker.prepare(
+                        FirstInstructionHandler.class.getMethod("handle"), java.util.List.of());
 
         try (var ignored = ZLinkApplicationJobContext.enterQueued(permit)) {
-            CompletableFuture<?> continuation =
-                    ZLinkHandlerMethodInvoker.invoke(
-                                    handler,
-                                    FirstInstructionHandler.class.getMethod("handle"),
-                                    new Object[0])
-                            .toCompletableFuture();
+            CompletableFuture<?> continuation = invocation.invoke(handler).toCompletableFuture();
             assertFalse(continuation.isDone());
         }
 

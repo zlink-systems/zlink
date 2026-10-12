@@ -106,7 +106,7 @@ export class ZLinkEntrySpotActivation {
   private readonly spotSerialExecutor: ZLinkSpotSerialExecutor;
   private readonly timers: ZLinkSpotTimerRegistry;
   private readonly actorHandlers = new ZLinkSpotActorHandlerRegistryRuntime();
-  private readonly handlers = new DefaultZLinkSpotHandlerRegistry(this.actorHandlers);
+  private readonly handlers: DefaultZLinkSpotHandlerRegistry;
   private readonly outbound: DefaultZLinkSpotOutbound;
   private readonly workerRuntime: ZLinkWorkerRuntime;
   private readonly lifecycleMetrics: ZLinkSpotLifecycleMetrics;
@@ -125,6 +125,10 @@ export class ZLinkEntrySpotActivation {
         'Entry Spot activation requires a detached task runner.'
       );
     }
+    this.handlers = new DefaultZLinkSpotHandlerRegistry(
+      this.actorHandlers,
+      options.providerResolver
+    );
     this.serial = new ZLinkSpotSerialTurnExecutor(false, options.nativeSpot.routingId);
     this.spotSerialExecutor = new ZLinkSpotSerialExecutor(
       this.serial,

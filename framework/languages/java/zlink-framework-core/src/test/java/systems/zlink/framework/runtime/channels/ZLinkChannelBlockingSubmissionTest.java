@@ -243,11 +243,18 @@ final class ZLinkChannelBlockingSubmissionTest {
                             .toCompletableFuture()
                             .join();
             CompletionStage<Void> turn;
+            var invocation =
+                    ZLinkHandlerMethodInvoker.prepare(
+                            ZLinkHandlerMethodInvoker.requireHandlerMethodForTypes(
+                                    BlockingHandler.class,
+                                    ZLinkHandlerMethodInvoker.HANDLER_METHOD_NAME),
+                            List.of());
             try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
                 turn =
                         serial.enqueue(
                                 () ->
-                                        ZLinkHandlerMethodInvoker.invokeHandler(
+                                        invocation
+                                                .invoke(
                                                         new BlockingHandler(
                                                                 () -> {
                                                                     assertTrue(
@@ -262,9 +269,7 @@ final class ZLinkChannelBlockingSubmissionTest {
                                                                                     .current());
                                                                     f.assertRejected();
                                                                 }),
-                                                        "handle",
-                                                        new Object[0],
-                                                        List.of())
+                                                        new Object[0])
                                                 .thenApply(ignoredReply -> null),
                                 null);
             } finally {

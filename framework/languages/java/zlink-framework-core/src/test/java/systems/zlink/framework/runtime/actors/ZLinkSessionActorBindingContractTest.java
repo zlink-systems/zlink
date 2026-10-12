@@ -337,7 +337,8 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @Test
-    void rebindCompletesAfterInstallingCurrentBindingWithoutWaitingForRetiredCleanup() {
+    void rebindCompletesAfterInstallingCurrentBindingWithoutWaitingForRetiredCleanup()
+            throws Exception {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime = runtime(stream);
         runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
@@ -347,15 +348,16 @@ final class ZLinkSessionActorBindingContractTest {
         CompletionStage<ZLinkSessionActor> replacement =
                 runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_B));
 
-        assertTrue(replacement.toCompletableFuture().isDone());
+        ZLinkSessionActor installed = replacement.toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertFalse(previousCallback.isDone());
         assertEquals(0, stream.disconnectNotifications);
         assertEquals(
                 2,
                 stream.binds.size(),
                 "the new exact identity is installed before retired cleanup");
+        assertEquals(new ActorRef("actor-1", 7, MESH, NODE_B), installed.ref());
+        assertEquals(List.of(installed), runtime.bound());
         previousCallback.complete(List.of(Message.from(new byte[0])));
-        assertEquals(NODE_B, replacement.toCompletableFuture().join().ref().nodeRid());
-        assertEquals(1, runtime.bound().size());
     }
 
     @Test

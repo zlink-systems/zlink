@@ -26,7 +26,7 @@ import { framework } from './framework-loader';
 import { createZLinkNestFrameworkOptionsBuilder } from './options-builder';
 import {
   assertBuiltModuleOptions,
-  createDiscoveredOptions,
+  createDiscoveredRegistration,
   createRegistrationOptions
 } from './registration-composer';
 import {
@@ -155,9 +155,7 @@ export class ZLinkModule {
         const moduleRef = args[args.length - 1] as ModuleRef;
         const factoryArgs = args.slice(0, -2) as TArgs;
         const resolvedOptions = assertBuiltModuleOptions(await options.useFactory(...factoryArgs));
-        return framework.createFrameworkRegistration(
-          createDiscoveredOptions(resolvedOptions, discovery, moduleRef)
-        );
+        return createDiscoveredRegistration(resolvedOptions, discovery, moduleRef);
       }
     };
 
@@ -218,7 +216,7 @@ function createDiscoveringZLinkDynamicModule(
     provide: ZLINK_FRAMEWORK_REGISTRATION,
     inject: [DiscoveryService, ModuleRef],
     useFactory: (discovery: DiscoveryService, moduleRef: ModuleRef) =>
-      framework.createFrameworkRegistration(createDiscoveredOptions(options, discovery, moduleRef))
+      createDiscoveredRegistration(options, discovery, moduleRef)
   };
 
   return {
