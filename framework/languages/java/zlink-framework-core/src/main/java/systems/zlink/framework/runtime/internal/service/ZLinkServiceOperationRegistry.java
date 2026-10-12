@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -27,6 +28,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final Object gate = new Object();
     private final Map<UUID, Entry<?>> entries = new HashMap<>();
     private final Throwable closeFailure;
+    private DeadlineNode deadlineRoot;
     private Entry<?> activeHead;
     private Entry<?> activeTail;
     private volatile boolean closed;
@@ -185,6 +187,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             entries.clear();
             activeHead = null;
             activeTail = null;
+            deadlineRoot = null;
         }
         try {
             maintenance.cancel(false);
@@ -202,6 +205,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private Entry<?> takeLocked(UUID id) {
         Entry<?> entry = entries.remove(id);
         if (entry != null) {
+            unindexDeadline(entry);
             unlinkActive(entry);
         }
         return entry;
@@ -212,8 +216,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             if (entries.get(id) != expected || expected.completion.isDone()) {
                 return false;
             }
-            entries.remove(id);
-            unlinkActive(expected);
+            takeLocked(id);
         }
         expected.completeWithCancellation();
         completions.post(expected);
@@ -247,30 +250,118 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         entry.activeNext = null;
     }
 
+    private static final int DEADLINE_KEY_BITS = 3 * Long.SIZE;
+
+    private static int keyBit(Entry<?> entry, int bit) {
+        long word =
+                bit < Long.SIZE
+                        ? entry.prefix ^ Long.MIN_VALUE
+                        : bit < 2 * Long.SIZE
+                                ? entry.id.getMostSignificantBits()
+                                : entry.id.getLeastSignificantBits();
+        return (int) ((word >>> (Long.SIZE - 1 - bit % Long.SIZE)) & 1);
+    }
+
+    private static DeadlineNode child(DeadlineNode node, int side) {
+        DeadlineBranch branch = (DeadlineBranch) node;
+        return side == 0 ? branch.left : branch.right;
+    }
+
+    private void indexDeadline(Entry<?> entry) {
+        if (deadlineRoot == null) {
+            deadlineRoot = entry;
+            return;
+        }
+        DeadlineNode other = deadlineRoot;
+        while (other.bit() < DEADLINE_KEY_BITS) other = child(other, keyBit(entry, other.bit()));
+        int differing = 0;
+        while (keyBit(entry, differing) == keyBit((Entry<?>) other, differing)) differing++;
+        DeadlineNode parent = null;
+        DeadlineNode current = deadlineRoot;
+        while (current.bit() < differing) {
+            parent = current;
+            current = child(current, keyBit(entry, current.bit()));
+        }
+        DeadlineBranch branch =
+                new DeadlineBranch(
+                        differing,
+                        entry.prefix,
+                        keyBit(entry, differing) == 0 ? entry : current,
+                        keyBit(entry, differing) == 0 ? current : entry);
+        if (parent == null) deadlineRoot = branch;
+        else if (keyBit(entry, parent.bit()) == 0) ((DeadlineBranch) parent).left = branch;
+        else ((DeadlineBranch) parent).right = branch;
+    }
+
+    private void unindexDeadline(Entry<?> entry) {
+        DeadlineNode parent = null;
+        DeadlineNode grandparent = null;
+        DeadlineNode current = deadlineRoot;
+        while (current.bit() < DEADLINE_KEY_BITS) {
+            grandparent = parent;
+            parent = current;
+            current = child(current, keyBit(entry, current.bit()));
+        }
+        if (parent == null) deadlineRoot = null;
+        else {
+            DeadlineNode sibling =
+                    ((DeadlineBranch) parent).left == entry
+                            ? ((DeadlineBranch) parent).right
+                            : ((DeadlineBranch) parent).left;
+            if (grandparent == null) deadlineRoot = sibling;
+            else if (((DeadlineBranch) grandparent).left == parent)
+                ((DeadlineBranch) grandparent).left = sibling;
+            else ((DeadlineBranch) grandparent).right = sibling;
+        }
+    }
+
+    private static Entry<?> firstDeadline(DeadlineNode node) {
+        if (node == null) return null;
+        while (node.bit() < DEADLINE_KEY_BITS) node = ((DeadlineBranch) node).left;
+        return (Entry<?>) node;
+    }
+
+    private static Entry<?> deadlineAtOrAfter(DeadlineNode node, long lowerBound) {
+        if (node == null) return null;
+        long key = node.prefix() ^ Long.MIN_VALUE;
+        if (node.bit() >= Long.SIZE)
+            return Long.compareUnsigned(key, lowerBound) >= 0 ? firstDeadline(node) : null;
+        long lowerBits = -1L >>> node.bit();
+        long minimum = key & ~lowerBits;
+        if (Long.compareUnsigned(minimum, lowerBound) >= 0) return firstDeadline(node);
+        if (Long.compareUnsigned(minimum | lowerBits, lowerBound) < 0) return null;
+        Entry<?> first = deadlineAtOrAfter(((DeadlineBranch) node).left, lowerBound);
+        return first != null ? first : deadlineAtOrAfter(((DeadlineBranch) node).right, lowerBound);
+    }
+
+    private Entry<?> firstExpired(long nowNanos) {
+        // nanoTime is circular: inspect the elapsed half of its fixed-width domain.
+        long oldest = nowNanos - Long.MAX_VALUE;
+        Entry<?> first = deadlineAtOrAfter(deadlineRoot, oldest ^ Long.MIN_VALUE);
+        if (first == null && oldest > nowNanos) first = firstDeadline(deadlineRoot);
+        return first != null && deadlineReached(nowNanos, first.prefix) ? first : null;
+    }
+
     int expire(long nowNanos) {
         Entry<?> expiredHead = null;
         Entry<?> expiredTail = null;
         int expired = 0;
-        synchronized (gate) {
-            Entry<?> current = activeHead;
-            while (current != null) {
-                Entry<?> next = current.activeNext;
-                if (deadlineReached(nowNanos, current.deadlineNanos)) {
-                    entries.remove(current.id, current);
-                    unlinkActive(current);
-                    current.completeWithFailure(
-                            Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
-                    current.dispatchNext(null);
-                    if (expiredTail == null) {
-                        expiredHead = current;
-                    } else {
-                        expiredTail.dispatchNext(current);
-                    }
-                    expiredTail = current;
-                    expired++;
-                }
-                current = next;
+        long startedNanos = nanoTime.getAsLong();
+        while (nanoTime.getAsLong() - startedNanos
+                < ZLinkReceiveBatchBudget.DEFAULT_MAX_ELAPSED_NANOS) {
+            Entry<?> current;
+            synchronized (gate) {
+                current = firstExpired(nowNanos);
+                if (current == null) break;
+                takeLocked(current.id);
             }
+            current.completeWithFailure(
+                    Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
+            current.dispatchNext(null);
+            if (expiredTail == null) expiredHead = current;
+            else expiredTail.dispatchNext(current);
+            expiredTail = current;
+            expired++;
         }
         completions.postChain(expiredHead, expiredTail);
         return expired;
@@ -296,9 +387,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         Entry<T> entry = new Entry<>();
         completions.register(entry);
         entry.id = id;
-        entry.deadlineNanos = nanoTime.getAsLong() + timeoutNanos;
+        entry.prefix = nanoTime.getAsLong() + timeoutNanos;
         entry.completion.cancellation(() -> cancel(entry.id, entry));
         entries.put(id, entry);
+        indexDeadline(entry);
         linkActive(entry);
         return new Operation<>(id, entry.completion);
     }
@@ -326,14 +418,56 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
     }
 
-    private static final class Entry<T> extends ZLinkServiceCompletionDispatcher.WorkItem {
+    private sealed interface DeadlineNode permits DeadlineBranch, Entry {
+        int bit();
+
+        long prefix();
+    }
+
+    private static final class DeadlineBranch implements DeadlineNode {
+        private final int bit;
+        private final long prefix;
+        private DeadlineNode left;
+        private DeadlineNode right;
+
+        private DeadlineBranch(int bit, long prefix, DeadlineNode left, DeadlineNode right) {
+            this.bit = bit;
+            this.prefix = prefix;
+            this.left = left;
+            this.right = right;
+        }
+
+        @Override
+        public int bit() {
+            return bit;
+        }
+
+        @Override
+        public long prefix() {
+            return prefix;
+        }
+    }
+
+    private static final class Entry<T> extends ZLinkServiceCompletionDispatcher.WorkItem
+            implements DeadlineNode {
+        private long prefix;
+
+        @Override
+        public int bit() {
+            return DEADLINE_KEY_BITS;
+        }
+
+        @Override
+        public long prefix() {
+            return prefix;
+        }
+
         private static final int VALUE = 1;
         private static final int FAILURE = 2;
         private static final int CANCELLATION = 3;
 
         private final OperationFuture<T> completion = new OperationFuture<>();
         private UUID id;
-        private long deadlineNanos;
         private Entry<?> activePrevious;
         private Entry<?> activeNext;
         private int terminalKind;

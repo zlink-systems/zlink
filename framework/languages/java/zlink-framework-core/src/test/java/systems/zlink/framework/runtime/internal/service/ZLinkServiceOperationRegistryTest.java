@@ -34,6 +34,64 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkServiceOperationRegistryTest {
     @Test
+    void deadlineIndexHandlesMixedDeadlinesAndIdentitiesAcrossNanoTimeWraparound() {
+        AtomicLong clock = new AtomicLong(Long.MAX_VALUE - 50);
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler, new IllegalStateException("closed"), clock::get)) {
+            scheduler.shutdownNow();
+            List<ZLinkServiceOperationRegistry.Operation<Object>> operations = new ArrayList<>();
+            for (int index = 0; index < 100; index++) {
+                int timeout = (index * 37 % 100) + 1;
+                operations.add(
+                        registry.register(
+                                new UUID(index % 2, index + 1), Duration.ofNanos(timeout)));
+            }
+            assertEquals(50, registry.expire(Long.MAX_VALUE));
+            for (int index = 0; index < operations.size(); index++) {
+                int timeout = (index * 37 % 100) + 1;
+                if (timeout <= 50)
+                    assertThrows(
+                            CompletionException.class, operations.get(index).completion()::join);
+                else assertFalse(operations.get(index).completion().isDone());
+            }
+            assertEquals(50, registry.expire(Long.MIN_VALUE + 49));
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void expirationYieldsAtTheManagementBudgetAndResumesAfterTerminalRemoval() {
+        AtomicLong clock = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler,
+                                new IllegalStateException("closed"),
+                                () -> {
+                                    clock.addAndGet(
+                                            systems.zlink.framework.runtime.internal.dispatch
+                                                    .ZLinkReceiveBatchBudget
+                                                    .DEFAULT_MAX_ELAPSED_NANOS);
+                                    return new TimeoutException("expired");
+                                },
+                                clock::get)) {
+            scheduler.shutdownNow();
+            var first = registry.register(Duration.ofNanos(1));
+            var removed = registry.register(Duration.ofNanos(1));
+            var last = registry.register(Duration.ofNanos(1));
+
+            assertEquals(1, registry.expire(1));
+            assertTrue(registry.discard(removed.id()));
+            assertEquals(1, registry.expire(clock.get()));
+            assertEquals(0, registry.pendingCount());
+            assertThrows(CompletionException.class, first.completion()::join);
+            assertThrows(CompletionException.class, last.completion()::join);
+        }
+    }
+
+    @Test
     void oneMaintenanceTaskServesEveryPendingDeadlineAndExpiresAtTheBoundary() {
         AtomicLong clock = new AtomicLong(100);
         try (var scheduler = new CountingScheduler();
