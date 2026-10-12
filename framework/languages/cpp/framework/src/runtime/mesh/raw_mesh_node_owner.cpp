@@ -238,19 +238,20 @@ class infrastructure_request_retry_state_t final
             exhaust ();
             return;
         }
-        // Route eligibility failures belong to this pending admission, not to
-        // the public Core admission stage. Only the accepted attempt forwards it.
-        auto accepted = _admission ? std::make_shared<task_completion_source_t<void>> () : nullptr;
+        // Durable lifecycle attempts share one deadline and admission fact.
+        // Consume the binding's admission here; publish only its first success.
+        auto accepted = std::make_shared<task_completion_source_t<void>> ();
         auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
           _port->request (_target_routing_id, _request_parts, remaining, {}, accepted));
-        if (accepted) {
-            auto admission = accepted->task ();
-            detail::observe_task_terminal (admission,
-                                           [admitted = _admission] (const result_t<void> &result) {
-                                               if (result)
-                                                   admitted->complete (result);
-                                           });
-        }
+        auto admission = accepted->task ();
+        detail::observe_task_terminal (admission,
+                                       [self = shared_from_this ()] (const result_t<void> &result) {
+                                           if (result && !self->_admitted) {
+                                               self->_admitted = true;
+                                               if (self->_admission)
+                                                   self->_admission->complete (result);
+                                           }
+                                       });
         detail::observe_task_terminal (
           *running, [self = shared_from_this (),
                      running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
@@ -269,9 +270,8 @@ class infrastructure_request_retry_state_t final
         const auto &completion = settled.value ();
         trace_mesh ("infrastructure-request-result correlation=" + std::to_string (_correlation)
                     + " result=" + std::to_string (static_cast<int> (completion.terminal)));
-        if (completion.terminal == zlink::request_result_t::not_connected && completion.failure
-            && completion.failure->phase
-                 == detail::backend::raw_request_failure_phase_t::initial_admission) {
+        if (completion.terminal == zlink::request_result_t::not_connected
+            || completion.terminal == zlink::request_result_t::timed_out) {
             schedule_retry ();
             return;
         }
@@ -291,8 +291,7 @@ class infrastructure_request_retry_state_t final
             if (parts.empty ()) {
                 throw protocol::service_wire_error_t ("infrastructure reply has no header");
             }
-            const auto prefix = protocol::decode_reply_header (std::span<const std::uint8_t> (
-              parts.front ().data (), std::min<std::size_t> (parts.front ().size (), 21)));
+            const auto prefix = protocol::decode_reply_header (parts.front ());
             if (prefix.correlation != _correlation) {
                 throw protocol::service_wire_error_t (
                   "infrastructure reply correlation does not match");
@@ -331,7 +330,11 @@ class infrastructure_request_retry_state_t final
         (void) _operations->fail (_operation, terminal);
     }
 
-    void exhaust () { fail (foundation::operation_terminal_t::route_unavailable); }
+    void exhaust ()
+    {
+        fail (_admitted ? foundation::operation_terminal_t::timed_out
+                        : foundation::operation_terminal_t::route_unavailable);
+    }
 
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
     std::shared_ptr<foundation::operation_registry_t> _operations;
@@ -341,6 +344,7 @@ class infrastructure_request_retry_state_t final
     detail::backend::raw_message_t _request_parts;
     std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> _decode_reply;
     clock_t::time_point _deadline;
+    bool _admitted = false;
     std::shared_ptr<task_completion_source_t<void>> _admission;
     boost::asio::steady_timer _retry_timer;
 };
@@ -427,8 +431,7 @@ task_t<bool> submit_registered_infrastructure_request (
               if (parts.empty ()) {
                   throw protocol::service_wire_error_t ("infrastructure reply has no header");
               }
-              const auto prefix = protocol::decode_reply_header (std::span<const std::uint8_t> (
-                parts.front ().data (), std::min<std::size_t> (parts.front ().size (), 21)));
+              const auto prefix = protocol::decode_reply_header (parts.front ());
               if (prefix.correlation != correlation) {
                   throw protocol::service_wire_error_t (
                     "infrastructure reply correlation does not match");

@@ -4,6 +4,7 @@
 #include "metric_test_reader.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include <zlink/framework/contracts/dispatch/request_task.hpp>
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
@@ -260,6 +261,117 @@ void verify_bound_session_bind_exposes_only_accepted_attempt ()
     complete_bound_session_bind (source, target, completion, "stage-bind-actor");
     source.close ();
     target.close ();
+}
+
+using bound_session_completion_t =
+  std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
+
+zlink::framework::request_task_t<bound_session_completion_t>
+bound_session_request (mesh::raw_mesh_node_owner_t &source,
+                       const mesh::service_node_descriptor_t &target,
+                       std::chrono::milliseconds timeout)
+{
+    using namespace zlink::framework;
+    auto reply = std::make_shared<task_completion_source_t<bound_session_completion_t>> ();
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
+    request_task_t<bound_session_completion_t> result (reply->task (), admitted);
+    assert (await_task (source.request_bound_session_bind (
+      target.node_routing_id, bound_session_bind_request (target, "durable-bind-actor"), timeout,
+      [reply] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) {
+          if (terminal == foundation::operation_terminal_t::completed) {
+              reply->complete (
+                result_t<bound_session_completion_t>::success ({terminal, std::move (payload)}));
+          } else {
+              const auto kind = terminal == foundation::operation_terminal_t::timed_out
+                                  ? framework_error_kind_t::deadline_exceeded
+                                  : framework_error_kind_t::unavailable;
+              reply->complete (result_t<bound_session_completion_t>::failure (
+                kind, "Bound Session request did not complete"));
+          }
+      },
+      admitted)));
+    return result;
+}
+
+void verify_bound_session_bind_replay_preserves_first_admission ()
+{
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("Z-bind-replay-source")}));
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("A-bind-replay-target")}));
+    source.start ();
+    target.start ();
+    const auto local = source.topology ().local_descriptor ();
+    const auto remote = target.topology ().local_descriptor ();
+    admit_pair (source, target, remote);
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    auto request = bound_session_request (source, remote, 200ms);
+    auto admitted = request.admitted ();
+    std::atomic<int> admission_completions = 0;
+    zlink::framework::detail::observe_task_completion (
+      admitted, [&] (const auto &) { ++admission_completions; });
+    const auto pump = [&] {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
+        (void) await_task (source.pump_one (now));
+        (void) await_task (target.pump_one (now));
+    };
+    const auto receive = [&] {
+        std::optional<mesh::service_mailbox_claim_t> claim;
+        while (!claim && std::chrono::steady_clock::now () < deadline) {
+            pump ();
+            claim =
+              target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        }
+        assert (claim && claim->records.size () == 1);
+        return *claim;
+    };
+    auto first = receive ();
+    const auto header = protocol::decode_bound_session_bind (
+      protocol::message_bytes (first.records.front ().parts.front ()));
+    assert (admitted.await_ready () && admitted.result ());
+    const auto *first_admission = &admitted.result ();
+    assert (admission_completions == 1 && !request.await_ready ());
+    assert (target.mailbox ().release (first));
+    assert (target.connect_peer (source.endpoint (), local));
+    auto replay = receive ();
+    assert (protocol::decode_bound_session_bind (
+              protocol::message_bytes (replay.records.front ().parts.front ()))
+            == header);
+    assert (admitted.await_ready () && admitted.result ());
+    assert (&admitted.result () == first_admission && admission_completions == 1);
+    assert (!request.await_ready ());
+    assert (target.mailbox ().release (replay));
+    // Withhold every reply: admission remains successful when the durable deadline expires.
+    while (!request.await_ready () && std::chrono::steady_clock::now () < deadline)
+        pump ();
+    assert (request.await_ready ());
+    assert (!request.result ());
+    assert (request.result ().error ()->kind ()
+            == zlink::framework::framework_error_kind_t::deadline_exceeded);
+    assert (admitted.result () && admission_completions == 1);
+    source.close ();
+    target.close ();
+}
+
+void verify_bound_session_bind_unadmitted_deadline_fails_both_stages ()
+{
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("bind-no-admission-source")}));
+    source.start ();
+    auto remote = descriptor ("bind-no-admission-target", "tcp://127.0.0.1:1");
+    remote.state = mesh::service_node_state_t::serving;
+    auto request = bound_session_request (source, remote, 50ms);
+    auto admitted = request.admitted ();
+    assert (!admitted.await_ready () && !request.await_ready ());
+    const auto &reply = request.result ();
+    const auto &admission = admitted.result ();
+    assert (!reply && !admission);
+    assert (reply.error ()->kind () == zlink::framework::framework_error_kind_t::unavailable);
+    assert (admission.error ()->kind () == zlink::framework::framework_error_kind_t::unavailable);
+    assert (reply.exception () == admission.exception ());
+    source.close ();
 }
 
 void verify_bound_session_bind_permanent_absence_is_bounded ()
@@ -3497,6 +3609,8 @@ int main (int argc, char **argv)
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_exposes_only_accepted_attempt ();
+    verify_bound_session_bind_unadmitted_deadline_fails_both_stages ();
+    verify_bound_session_bind_replay_preserves_first_admission ();
     verify_bound_session_bind_permanent_absence_is_bounded ();
     verify_bound_session_bind_reply_completes_registered_operation ();
     verify_actor_create_retries_until_route_is_admitted ();
