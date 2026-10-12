@@ -1,5 +1,5 @@
 site_name: ZLink
-site_url: https://zlink.systems/
+site_url: https://docs.zlink.systems/
 # 기본 로케일(en)과 같은 값을 적는다. 로케일별 값은 아래 i18n languages의
 # site_description으로 덮어쓴다 — theme.language와 같은 규칙이다.
 site_description: ZLink is a real-time messaging framework for game servers. Inside your ASP.NET Core, Spring Boot, NestJS or C++ application it takes on the game server engine's job — rooms, sessions and player state spread across servers and delivered in real time — so no separate game server engine is needed.
