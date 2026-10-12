@@ -1189,7 +1189,8 @@ class spot_context_t
                         "spot request has no serializer registry");
                   }
                   try {
-                      auto reply = co_await submit (packet_name, timeout, metadata);
+                      auto reply = co_await detail::request_submission (
+                        submit (packet_name, timeout, metadata));
                       co_return serializers->get<TReply> ().deserialize (
                         detail::encoded_payload_from_raw (reply));
                   }

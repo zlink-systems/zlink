@@ -1844,10 +1844,10 @@ class stream_host_service_t::listener_t
                       detail::application_actor_session_bind_outcome_t::actor_not_ready)
                     && remaining > std::chrono::milliseconds::zero ()) {
                     co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
-                    co_await bind_actor_session (
+                    co_await detail::request_submission (bind_actor_session (
                       transport_connection, session_rid, actor, replacement, binding_generation,
                       publish_client_binding,
-                      detail::application_actor_session_bind_attempt_t::retry, binding_deadline);
+                      detail::application_actor_session_bind_attempt_t::retry, binding_deadline));
                     co_return;
                 }
                 throw framework_exception_t (
@@ -1964,8 +1964,9 @@ class stream_host_service_t::listener_t
                   result_t<void>::failure (framework_error_kind_t::deadline_exceeded,
                                            "Remote Actor session binding deadline elapsed");
             } else {
-                const auto remote_binding = co_await _mesh_node->bind_application_actor_session (
-                  actor, session_rid, binding.binding_generation, *actor_route, remaining);
+                const auto remote_binding =
+                  co_await detail::request_submission (_mesh_node->bind_application_actor_session (
+                    actor, session_rid, binding.binding_generation, *actor_route, remaining));
                 if (remote_binding
                     == detail::application_actor_session_bind_outcome_t::stale_route) {
                     retryable_outcome = remote_binding;
@@ -2028,10 +2029,10 @@ class stream_host_service_t::listener_t
                 (void) co_await _mesh_node->refresh_application_actor_route (actor, *actor_route);
                 co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
             }
-            co_await bind_actor_session (transport_connection, session_rid, actor, replacement,
-                                         binding_generation, publish_client_binding,
-                                         detail::application_actor_session_bind_attempt_t::retry,
-                                         binding_deadline);
+            co_await detail::request_submission (bind_actor_session (
+              transport_connection, session_rid, actor, replacement, binding_generation,
+              publish_client_binding, detail::application_actor_session_bind_attempt_t::retry,
+              binding_deadline));
             co_return;
         }
         throw recorded.error () ? *recorded.error ()

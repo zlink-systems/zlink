@@ -306,7 +306,7 @@ class actor_request_call_t
     static request_task_t<TReply> decode_reply (request_task_t<message_t> pending,
                                                 serializer_registry_t *serializers)
     {
-        auto reply = co_await pending;
+        auto reply = co_await detail::request_submission (std::move (pending));
         co_return reply.template decode<TReply> (*serializers);
     }
 

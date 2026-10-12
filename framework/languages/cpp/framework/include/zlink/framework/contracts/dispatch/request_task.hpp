@@ -17,6 +17,14 @@ struct request_admission_source_t
 {
 };
 
+// This signal connects only the selected submission of the same operation.
+// Ordinary nested request awaits do not publish admission to their caller.
+template <typename T> struct request_submission_t
+{
+    task_t<T> reply;
+    task_t<void> admitted;
+};
+
 template <typename T> std::exception_ptr request_failure (const result_t<T> &result)
 {
     return result.exception ();
@@ -67,41 +75,32 @@ template <typename TReply> class request_task_t : public task_t<TReply>
             return source_awaiter_t{_admitted};
         }
 
-        template <typename T> task_t<T> await_transform (request_task_t<T> &pending)
-        {
-            forward_admission (pending);
-            return pending.physical_reply ();
-        }
-
-        template <typename T> task_t<T> await_transform (request_task_t<T> &&pending)
-        {
-            forward_admission (pending);
-            return pending.physical_reply ();
-        }
-
         template <typename T> decltype (auto) await_transform (T &&pending)
         {
             return std::forward<T> (pending);
         }
 
-      private:
-        template <typename T> void forward_admission (request_task_t<T> &pending)
+        template <typename T> task_t<T> await_transform (detail::request_submission_t<T> submission)
         {
-            auto admitted = pending.admitted ();
             detail::observe_task_terminal (
-              admitted, [source = _admitted] (const auto &result) { source->complete (result); });
+              submission.admitted,
+              [source = _admitted] (const result_t<void> &result) { source->complete (result); });
+            return std::move (submission.reply);
         }
 
+      private:
         std::shared_ptr<task_completion_source_t<void>> _admitted =
           std::make_shared<task_completion_source_t<void>> ();
     };
 
     request_task_t (result_t<TReply> result) :
-        request_task_t (task_t<TReply> (result),
-                        std::make_shared<task_completion_source_t<void>> ())
+        task_t<TReply> (result),
+        _physical_reply (this->_state),
+        _admitted (std::make_shared<task_completion_source_t<void>> ())
     {
-        if (result)
-            _admitted->complete (result_t<void>::success ());
+        const auto failure = detail::request_failure (result);
+        _admitted->complete (failure ? detail::result_access_t::failure<void> (failure)
+                                     : result_t<void>::success ());
     }
 
     request_task_t (task_t<TReply> reply,
@@ -118,6 +117,8 @@ template <typename TReply> class request_task_t : public task_t<TReply>
           _physical_reply, [reply = this->_state, admitted = _admitted] (const auto &result) {
               if (auto failure = detail::request_failure (result))
                   admitted->complete (detail::result_access_t::failure<void> (std::move (failure)));
+              else
+                  admitted->complete (result_t<void>::success ());
               reply->complete (result);
           });
         auto stage = _admitted->task ();
@@ -180,6 +181,14 @@ struct request_task_access_t
         return task;
     }
 };
+
+// The selected child represents this same submitted call; infrastructure
+// lookups are awaited directly instead of using this explicit connection.
+template <typename T> request_submission_t<T> request_submission (request_task_t<T> pending)
+{
+    auto admitted = pending.admitted ();
+    return {request_task_access_t::physical_reply (pending), std::move (admitted)};
+}
 
 template <typename T>
 request_task_t<T> reschedule_task (request_task_t<T> pending, task_scheduler_t scheduler)

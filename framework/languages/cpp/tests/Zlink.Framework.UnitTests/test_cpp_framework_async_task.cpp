@@ -42,7 +42,7 @@ namespace
 zlink::framework::request_task_t<int>
 retain_request_owner (std::shared_ptr<int> owner, zlink::framework::request_task_t<int> child)
 {
-    const auto reply = co_await child;
+    const auto reply = co_await zlink::framework::detail::request_submission (std::move (child));
     co_return reply + *owner;
 }
 
@@ -120,6 +120,79 @@ bool verify_request_admission_stages ()
         return false;
     late_reply.complete (result_t<int>::success (99));
     return retained.expired () && parent.result ().exception () == cause;
+}
+
+// A configured request terminal can perform an infrastructure lookup before
+// submitting its application request. These are distinct admission facts.
+zlink::framework::request_task_t<int>
+request_after_lookup (zlink::framework::request_task_t<int> lookup,
+                      zlink::framework::task_t<void> application_acceptance,
+                      zlink::framework::task_t<int> application_reply)
+{
+    (void) co_await lookup;
+    co_await application_acceptance;
+    co_await zlink::framework::detail::request_admitted_t{};
+    co_return co_await application_reply;
+}
+
+bool verify_lookup_admission_isolation ()
+{
+    using namespace zlink::framework;
+    task_completion_source_t<void> lookup_acceptance, acceptance;
+    task_completion_source_t<int> lookup_reply, reply;
+    request_call_t<int> call ("lookup.then.request", [&] (const auto &, auto, const auto &) {
+        return request_after_lookup (
+          staged_request (lookup_acceptance.task (), lookup_reply.task ()), acceptance.task (),
+          reply.task ());
+    });
+    auto pending = call.async ();
+    auto admitted = pending.admitted ();
+    lookup_acceptance.complete (result_t<void>::success ());
+    const bool isolated_at_lookup_admission = !admitted.await_ready () && !pending.await_ready ();
+    lookup_reply.complete (result_t<int>::success (1));
+    const bool isolated_at_lookup_reply = !admitted.await_ready () && !pending.await_ready ();
+    acceptance.complete (result_t<void>::success ());
+    const bool accepted_before_reply =
+      admitted.await_ready () && admitted.result () && !pending.await_ready ();
+    reply.complete (result_t<int>::success (42));
+    if (!isolated_at_lookup_admission || !isolated_at_lookup_reply)
+        std::cerr << "infrastructure request completed application admitted before submission\n";
+    return isolated_at_lookup_admission && isolated_at_lookup_reply && accepted_before_reply
+           && pending.result ().value () == 42;
+}
+
+bool verify_reply_success_completes_admission ()
+{
+    using namespace zlink::framework;
+    task_completion_source_t<int> physical;
+    auto source = std::make_shared<task_completion_source_t<void>> ();
+    request_task_t<int> pending (physical.task (), source);
+    auto admitted = pending.admitted ();
+    physical.complete (result_t<int>::success (42));
+    if (!admitted.await_ready ()) {
+        std::cerr << "successful reply left request admitted pending\n";
+        return false;
+    }
+    const auto first = admitted.result ().exception ();
+    task_completion_source_t<int> late_reply;
+    auto rejected = std::make_shared<task_completion_source_t<void>> ();
+    request_task_t<int> failed (late_reply.task (), rejected);
+    auto failed_admission = failed.admitted ();
+    const auto cancellation = detail::make_cancellation_exception ("admission already failed");
+    rejected->complete (detail::result_access_t::failure<void> (cancellation));
+    late_reply.complete (result_t<int>::success (99));
+    if (failed.result ().exception () != cancellation
+        || failed_admission.result ().exception () != cancellation)
+        return false;
+    request_task_t<int> immediate (result_t<int>::success (7));
+    auto immediate_admission = immediate.admitted ();
+    if (!immediate_admission.await_ready () || !immediate_admission.result ()
+        || immediate.result ().value () != 7)
+        return false;
+    source->complete (detail::result_access_t::failure<void> (
+      detail::make_cancellation_exception ("late admission failure")));
+    return admitted.result () && admitted.result ().exception () == first
+           && pending.result ().value () == 42;
 }
 
 thread_local int native_await_ambient_value = 0;
@@ -1134,6 +1207,10 @@ bool verify_yield_continuation_owned_by_spot_queue (bool close_before_reply)
 
 int main (int argc, char **argv)
 {
+    const bool lookup_isolated = verify_lookup_admission_isolation ();
+    const bool reply_admits = verify_reply_success_completes_admission ();
+    if (!lookup_isolated || !reply_admits)
+        return 34;
     if (!verify_request_admission_stages ())
         return 33;
     if (!verify_cancellation_contract ())

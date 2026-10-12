@@ -2151,8 +2151,8 @@ request_spot_mesh_parts (std::shared_ptr<detail::spot_context_state_t> state,
               framework_error_kind_t::not_found,
               "SPOT mesh request target generation is unavailable");
         }
-        co_return co_await request_spot_parts_async (
-          *native, target_node_rid, spot_id, *target_generation, std::move (parts), timeout);
+        co_return co_await detail::request_submission (request_spot_parts_async (
+          *native, target_node_rid, spot_id, *target_generation, std::move (parts), timeout));
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<runtime::messaging::message_parts_t> (error);

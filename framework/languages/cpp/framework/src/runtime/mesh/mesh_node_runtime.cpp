@@ -3524,10 +3524,10 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
     if (const auto flow = header.flow_id ())
         envelope.flow_id = std::string (*flow);
     envelope.flow_origin = header.flow_origin ();
-    co_return co_await relay_application_actor (
+    co_return co_await detail::request_submission (relay_application_actor (
       actor, envelope, payload, timeout, zlink::routing_id_t::from (std::uint32_t{0}),
       std::move (stale_route), 0, runtime::protocol::wire_operation_id_t{}, 0,
-      await_remote_admission, std::move (bound_session_source));
+      await_remote_admission, std::move (bound_session_source)));
 }
 
 request_task_t<std::optional<zlink::message_t>>
@@ -3536,9 +3536,9 @@ mesh_node_runtime_t::relay_application_actor (const actor_ref_t &actor,
                                               const zlink::message_t &payload,
                                               std::chrono::milliseconds timeout)
 {
-    co_return co_await relay_application_actor (
+    co_return co_await detail::request_submission (relay_application_actor (
       actor, header, payload, timeout, zlink::routing_id_t::from (std::uint32_t{0}),
-      runtime::protocol::actor_route_fence_t{}, 0, runtime::protocol::wire_operation_id_t{}, 0);
+      runtime::protocol::actor_route_fence_t{}, 0, runtime::protocol::wire_operation_id_t{}, 0));
 }
 
 request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_actor (
@@ -3719,9 +3719,9 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
               "bound Session Actor route fence is inconsistent");
         }
         if (targets_local_node && !replays_handoff_packet)
-            co_return co_await spot_runtime.relay_local_actor_packet (
+            co_return co_await detail::request_submission (spot_runtime.relay_local_actor_packet (
               actor, header, payload, source_node, stale_route, incoming_hop_count,
-              original_operation, original_reply_route_id, timeout);
+              original_operation, original_reply_route_id, timeout));
         std::uint64_t authority_owner_generation = 0;
         std::uint64_t owner_lease_generation = 0;
         if (targets_local_node && !spot_runtime.actor_route (target_actor)) {

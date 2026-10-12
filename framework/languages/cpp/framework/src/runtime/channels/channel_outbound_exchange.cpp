@@ -1011,9 +1011,9 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                 }
                 const auto effective_timeout = std::chrono::ceil<std::chrono::milliseconds> (
                   deadline - std::chrono::steady_clock::now ());
-                auto reply =
-                  co_await (*requester) (call_packet_name, std::move (serialized.content_type),
-                                         std::move (payload), effective_timeout, metadata);
+                auto reply = co_await detail::request_submission (
+                  (*requester) (call_packet_name, std::move (serialized.content_type),
+                                std::move (payload), effective_timeout, metadata));
                 auto completion = runtime.complete_outbound_reply (reservation.value ());
                 if (!completion) {
                     co_return completion.error () != nullptr
@@ -1104,10 +1104,10 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             }
             auto native_client = native_selection.value ();
             auto endpoints = make_client_endpoint_provider (state, channel_name);
-            auto native_reply =
-              co_await native_client->request (parts, endpoints,
-                                               std::chrono::ceil<std::chrono::milliseconds> (
-                                                 deadline - std::chrono::steady_clock::now ()));
+            auto native_reply = co_await detail::request_submission (
+              native_client->request (parts, endpoints,
+                                      std::chrono::ceil<std::chrono::milliseconds> (
+                                        deadline - std::chrono::steady_clock::now ())));
             auto validation = validate_channel_native_reply (native_reply);
             if (!validation) {
                 co_return validation.error () != nullptr

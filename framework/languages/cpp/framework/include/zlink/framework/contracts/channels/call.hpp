@@ -126,7 +126,7 @@ template <typename TReply> class request_call_t
                                                 std::chrono::milliseconds timeout,
                                                 metadata_map_t metadata)
     {
-        co_return co_await submit (packet_name, timeout, metadata);
+        co_return co_await detail::request_submission (submit (packet_name, timeout, metadata));
     }
 
     std::optional<result_t<TReply>> _immediate;
@@ -210,7 +210,7 @@ class channel_request_call_t
             pending =
               detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
         }
-        reply = co_await pending;
+        reply = co_await detail::request_submission (std::move (pending));
         co_return decode<TReply> (serializers, reply);
     }
 

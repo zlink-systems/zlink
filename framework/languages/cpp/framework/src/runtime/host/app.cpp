@@ -2284,9 +2284,10 @@ void app_t::_apply_zlink_framework ()
                     && request_timeout <= std::chrono::milliseconds::zero ())
                     throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
                                                  "bound Session request original deadline elapsed");
-                relayed = co_await application_mesh->relay_application_actor (
-                  routed_actor, header, payload, request_timeout, true,
-                  std::move (bound_session_source), std::move (stale_route));
+                relayed =
+                  co_await detail::request_submission (application_mesh->relay_application_actor (
+                    routed_actor, header, payload, request_timeout, true,
+                    std::move (bound_session_source), std::move (stale_route)));
             }
             catch (...) {
                 relay_failure = std::current_exception ();
@@ -2335,7 +2336,8 @@ void app_t::_apply_zlink_framework ()
                   : std::chrono::duration_cast<std::chrono::milliseconds> (request_timeout);
               const auto deadline = std::chrono::steady_clock::now () + budget;
               if (!source)
-                  co_return co_await deliver_relay (actor, header, payload, source, {}, budget, {});
+                  co_return co_await detail::request_submission (
+                    deliver_relay (actor, header, payload, source, {}, budget, {}));
               std::shared_ptr<task_completion_source_t<reply_t>> completion;
               std::optional<runtime::foundation::call_id_t> operation;
               auto session_owner_runtime = application_mesh->native_node ().shared_from_this ();
@@ -2470,11 +2472,11 @@ void app_t::_apply_zlink_framework ()
                       co_return co_await completion->task ();
                   co_return std::nullopt;
               }
-              co_return co_await deliver_relay (
-                actor, header, payload, source, dispatch,
-                std::chrono::duration_cast<std::chrono::milliseconds> (
-                  deadline - std::chrono::steady_clock::now ()),
-                session_owner_runtime);
+              co_return co_await detail::request_submission (
+                deliver_relay (actor, header, payload, source, dispatch,
+                               std::chrono::duration_cast<std::chrono::milliseconds> (
+                                 deadline - std::chrono::steady_clock::now ()),
+                               session_owner_runtime));
           });
         actor_gateway_runtime.offload_session_relay ();
         actor_gateway_runtime.on_disconnect (

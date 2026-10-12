@@ -1945,10 +1945,10 @@ request_task_t<zlink::message_t> route_client_t::submit_channel_request_reply_me
                                               .channel_name = channel_name,
                                               .channel_route_kind = std::string ("client_server")};
               });
-            co_return co_await (*client_server) (
-              packet_name, std::move (serialized.content_type),
-              detail::encoded_payload_to_raw (serialized.payload), effective_timeout,
-              std::move (metadata));
+            co_return co_await detail::request_submission (
+              (*client_server) (packet_name, std::move (serialized.content_type),
+                                detail::encoded_payload_to_raw (serialized.payload),
+                                effective_timeout, std::move (metadata)));
         }
         catch (const framework_exception_t &error) {
             co_return detail::result_access_t::failure<zlink::message_t> (error);
@@ -1989,7 +1989,8 @@ request_task_t<zlink::message_t> route_client_t::submit_channel_request_reply_me
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
         runtime::messaging::envelope_codec_t envelope;
-        auto reply = co_await requester (std::move (parts), effective_timeout);
+        auto reply =
+          co_await detail::request_submission (requester (std::move (parts), effective_timeout));
         if (!reply) {
             co_return detail::propagate_failure<zlink::message_t> (
               reply, "RouteMesh channel request failed");
@@ -2315,8 +2316,9 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
             const auto deadline = std::chrono::steady_clock::now () + effective_timeout;
             std::optional<framework_exception_t> refused;
             try {
-                co_return co_await activate (target, intent, address, packet_name, request_type,
-                                             encode_payload, effective_timeout, metadata);
+                co_return co_await detail::request_submission (
+                  activate (target, intent, address, packet_name, request_type, encode_payload,
+                            effective_timeout, metadata));
             }
             catch (const framework_exception_t &error) {
                 /* spotMoving is the owner's refusal of a stale Ready owner fence,
@@ -2342,18 +2344,18 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
             if (remaining <= std::chrono::milliseconds::zero ())
                 throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
                                              "Instance Spot request deadline elapsed");
-            co_return co_await activate (target, intent, std::nullopt, std::move (packet_name),
-                                         request_type, std::move (encode_payload), remaining,
-                                         std::move (metadata));
+            co_return co_await detail::request_submission (
+              activate (target, intent, std::nullopt, std::move (packet_name), request_type,
+                        std::move (encode_payload), remaining, std::move (metadata)));
         }
         if (!address) {
             throw framework_exception_t (framework_error_kind_t::not_found,
                                          "Spot route was not found");
         }
-        co_return co_await submit_spot_request_reply_message_erased (
+        co_return co_await detail::request_submission (submit_spot_request_reply_message_erased (
           state, address->mesh_name, address->node_rid, spot_id_t (address->spot_id),
           address->spot_generation, std::move (packet_name), request_type,
-          std::move (encode_payload), timeout, std::move (metadata));
+          std::move (encode_payload), timeout, std::move (metadata)));
     }
     catch (const framework_exception_t &error) {
         /* Framework의 NotFound/Unavailable/ShuttingDown terminal은 기존 주소를 무효화한다.

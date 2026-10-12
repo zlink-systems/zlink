@@ -421,7 +421,7 @@ task_t<void> enqueue_session_relay (const std::shared_ptr<detail::actor_gateway_
 
 request_task_t<zlink::message_t> complete_session_actor_relay_request (
   std::shared_ptr<detail::actor_gateway_state_t> state,
-  detail::actor_gateway_state_t::relay_dispatcher_t dispatcher,
+  detail::actor_gateway_state_t::relay_dispatcher_t submit,
   actor_ref_t actor,
   actor_context_t actor_context,
   detail::stream_header_t relay_header,
@@ -436,6 +436,11 @@ request_task_t<zlink::message_t> complete_session_actor_relay_request (
         detail::observe_task_terminal (
           stage, [admitted] (const auto &result) { admitted->complete (result); });
     }
+    // This dispatcher submits this relay operation. Its explicit connection
+    // excludes any infrastructure request awaited inside the submission.
+    auto dispatcher = [submit = std::move (submit)] (auto &&...args) mutable {
+        return detail::request_submission (submit (std::forward<decltype (args)> (args)...));
+    };
     const auto dispatched = co_await dispatcher (actor, std::move (actor_context), relay_header,
                                                  payload, std::move (relay_source), timeout);
     if (!dispatched) {
@@ -1810,7 +1815,7 @@ session_actor_manager_t::bind_current_session (actor_ref_t actor_ref, bool reuse
         auto native_binder = binding_context->native_binder;
         binding_lock.unlock ();
         if (native_binder) {
-            co_await native_binder (actor_ref, token, actor_slot);
+            co_await detail::request_submission (native_binder (actor_ref, token, actor_slot));
         } else {
             const auto payload =
               detail::stream_runtime_t::encode_actor_bound_payload (actor_slot, actor_id);

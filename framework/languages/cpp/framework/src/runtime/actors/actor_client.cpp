@@ -555,8 +555,8 @@ class actor_client_impl_t final : public actor_client_t
                 }
                 const auto remaining =
                   std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
-                last = co_await submit_request (actor.value (), packet_name, request, remaining,
-                                                request_id, metadata_frame);
+                last = co_await detail::request_submission (submit_request (
+                  actor.value (), packet_name, request, remaining, request_id, metadata_frame));
                 if (!is_moving_stale (last)) {
                     /* A destructive lifecycle operation can remove the
                      * authority while this client still has a positive route
@@ -813,9 +813,9 @@ class actor_client_impl_t final : public actor_client_t
             co_return result_t<message_t>::failure (framework_error_kind_t::unavailable,
                                                     "actor request requires a running MeshNode");
         }
-        auto relayed = co_await relay_actor_packet (
+        auto relayed = co_await detail::request_submission (relay_actor_packet (
           *runtime, actor, runtime::messaging::message_kind_t::request, std::move (packet_name),
-          std::move (request), timeout, request_id, metadata);
+          std::move (request), timeout, request_id, metadata));
         if (!relayed) {
             invalidate_cached_route_on_stale (actor, relayed.error_kind ());
             co_return detail::propagate_failure<message_t> (relayed, "actor request failed");
