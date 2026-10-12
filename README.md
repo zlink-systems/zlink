@@ -11,8 +11,8 @@
 | | |
 |---|---|
 | **Website** | [zlink.systems](https://zlink.systems/) |
-| **Guides and API reference** | [zlink.systems](https://zlink.systems/) |
-| **Installation** | [zlink.systems/install](https://zlink.systems/install/) |
+| **Guides and API reference** | [docs.zlink.systems](https://docs.zlink.systems/) |
+| **Installation** | [docs.zlink.systems/install](https://docs.zlink.systems/install/) |
 
 The website owns the product documentation — guides, tutorials, and the API
 reference. This page describes the repository: what it contains, how it is
@@ -101,7 +101,7 @@ public sealed class HelloHandler : IZLinkRequestHandler<Hello, Greeting>
 A client calls `greeting` without naming a node — which process handles it is
 resolved at runtime. The same registration and handler shape exists in C++,
 Java, Kotlin, and TypeScript; see
-[Installation and first run](https://zlink.systems/dotnet/guide/server/02-getting-started/)
+[Installation and first run](https://docs.zlink.systems/dotnet/guide/server/02-getting-started/)
 and switch language at the top of the chapter.
 
 ## Language support
@@ -136,10 +136,10 @@ C is the public Core API rather than a separate Binding. Each Binding carries
 samples for PAIR, PUB/SUB, DEALER/ROUTER, request/reply, STREAM, and monitoring.
 
 Installation procedures and each language's five-minute example are on the
-[Installation](https://zlink.systems/install/) page and in the
-[Bindings guide](https://zlink.systems/bindings/guide/). The formal contracts are
-the [Core specification](https://zlink.systems/spec/) and the
-[common Framework specification](https://zlink.systems/common/spec/server/).
+[Installation](https://docs.zlink.systems/install/) page and in the
+[Bindings guide](https://docs.zlink.systems/bindings/guide/). The formal contracts are
+the [Core specification](https://docs.zlink.systems/spec/) and the
+[common Framework specification](https://docs.zlink.systems/common/spec/server/).
 
 ## Building from source
 

@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://zlink.systems/sitemap.xml
+Sitemap: https://docs.zlink.systems/sitemap.xml

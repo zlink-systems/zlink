@@ -10,9 +10,9 @@
 
 | | |
 |---|---|
-| **공식 사이트** | [zlink.systems](https://zlink.systems/ko/) |
-| **가이드와 API 레퍼런스** | [zlink.systems](https://zlink.systems/ko/) |
-| **설치** | [zlink.systems/ko/install](https://zlink.systems/ko/install/) |
+| **공식 사이트** | [zlink.systems](https://zlink.systems/ko) |
+| **가이드와 API 레퍼런스** | [docs.zlink.systems](https://docs.zlink.systems/ko/) |
+| **설치** | [docs.zlink.systems/ko/install](https://docs.zlink.systems/ko/install/) |
 
 제품 문서 — 가이드, 튜토리얼, API 레퍼런스 — 는 공식 사이트가 소유합니다. 이
 페이지는 저장소를 설명합니다. 무엇이 들어 있고, 어떻게 계층화되어 있으며, 소스에서
@@ -94,7 +94,7 @@ public sealed class HelloHandler : IZLinkRequestHandler<Hello, Greeting>
 
 client는 노드를 지정하지 않고 `greeting`을 호출하며, 어느 프로세스가 처리할지는
 런타임에 결정됩니다. 같은 등록·handler 구조가 C++, Java, Kotlin, TypeScript에도
-있습니다. [설치와 첫 실행](https://zlink.systems/ko/dotnet/guide/server/02-getting-started/)에서
+있습니다. [설치와 첫 실행](https://docs.zlink.systems/ko/dotnet/guide/server/02-getting-started/)에서
 장 상단의 언어 탭을 바꿔 확인하세요.
 
 ## 언어 지원
@@ -128,10 +128,10 @@ service runtime도, service C ABI도 공유하지 않습니다. 공유하는 것
 C는 별도 Binding이 아니라 공개 Core API입니다. 각 Binding은 PAIR, PUB/SUB,
 DEALER/ROUTER, request/reply, STREAM, monitoring 샘플을 함께 제공합니다.
 
-설치 절차와 언어별 5분 예제는 [설치](https://zlink.systems/ko/install/) 페이지와
-[Bindings 가이드](https://zlink.systems/ko/bindings/guide/)에 있습니다. 정식 계약은
-[Core 스펙](https://zlink.systems/ko/spec/)과
-[Framework 공통 스펙](https://zlink.systems/ko/common/spec/server/)입니다.
+설치 절차와 언어별 5분 예제는 [설치](https://docs.zlink.systems/ko/install/) 페이지와
+[Bindings 가이드](https://docs.zlink.systems/ko/bindings/guide/)에 있습니다. 정식 계약은
+[Core 스펙](https://docs.zlink.systems/ko/spec/)과
+[Framework 공통 스펙](https://docs.zlink.systems/ko/common/spec/server/)입니다.
 
 ## 소스에서 빌드
 
