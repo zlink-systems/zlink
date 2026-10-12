@@ -199,7 +199,9 @@ const CONDITIONAL_CLIENT_PROVIDER_SPECS: readonly ConditionalClientProviderSpec[
       return framework.createIntegrationActorManager(
         registration,
         host,
-        moduleRef === undefined ? undefined : createProviderResolver(moduleRef, discovery)
+        moduleRef === undefined
+          ? undefined
+          : createProviderResolver(moduleRef, discovery, registration)
       );
     }
   },
@@ -353,33 +355,9 @@ export function createRuntimeHost(
   moduleRef: ModuleRef,
   discovery: DiscoveryService
 ): RuntimeHostWithNestLifecycle {
-  const types = new Set<Type>([...registration.spotFactories, ...registration.filterTypes]);
-  for (const node of registration.spotNodes.values()) {
-    if (node.entrySpotType !== undefined) types.add(node.entrySpotType);
-    for (const type of node.spotFactories ?? []) types.add(type);
-    for (const type of Object.values(node.instanceSpotFactories ?? {})) types.add(type);
-    for (const value of Object.values(node.spotFactoryRegistrations ?? {}))
-      types.add(value.implementation);
-    for (const value of Object.values(node.instanceSpotFactoryRegistrations ?? {}))
-      types.add(value.implementation);
-    for (const handler of [
-      ...(node.entrySpotTimerHandlers ?? []),
-      ...(node.entrySpotPacketHandlers ?? []),
-      ...(node.entrySpotSubscriptionHandlers ?? []),
-      ...(node.entrySpotActorSendHandlers ?? []),
-      ...(node.entrySpotActorRequestHandlers ?? []),
-      ...(node.spotTimerHandlers ?? []),
-      ...(node.spotPacketHandlers ?? []),
-      ...(node.spotSubscriptionHandlers ?? []),
-      ...(node.spotActorSendHandlers ?? []),
-      ...(node.spotActorRequestHandlers ?? [])
-    ])
-      types.add(handler.handlerType);
-  }
-  for (const type of types) validateNestConstructorDependencies(moduleRef, type);
   const runtime = framework.createIntegrationRuntimeHost(
     registration,
-    createProviderResolver(moduleRef, discovery)
+    createProviderResolver(moduleRef, discovery, registration)
   ) as RuntimeHostWithNestLifecycle;
   runtime.onModuleInit = async () => {
     await runtime.start();
@@ -393,8 +371,57 @@ export function createRuntimeHost(
 
 function createProviderResolver(
   moduleRef: ModuleRef,
-  discovery?: DiscoveryService
+  discovery: DiscoveryService | undefined,
+  registration: ZLinkFrameworkRegistration
 ): ZLinkProviderResolver {
+  const factories = new Map<Type, NestHandlerFactory>();
+  const types = new Set<Type>([...registration.spotFactories, ...registration.filterTypes]);
+  for (const node of registration.spotNodes.values()) {
+    if (node.entrySpotType !== undefined) types.add(node.entrySpotType);
+    for (const type of node.spotFactories ?? []) types.add(type);
+    for (const type of Object.values(node.instanceSpotFactories ?? {})) types.add(type);
+    for (const value of Object.values(node.spotFactoryRegistrations ?? {}))
+      types.add(value.implementation);
+    for (const value of Object.values(node.instanceSpotFactoryRegistrations ?? {}))
+      types.add(value.implementation);
+    for (const handler of [
+      ...(node.routeSendHandlers ?? []),
+      ...(node.routeRequestHandlers ?? []),
+      ...(node.entrySpotTimerHandlers ?? []),
+      ...(node.entrySpotPacketHandlers ?? []),
+      ...(node.entrySpotSubscriptionHandlers ?? []),
+      ...(node.entrySpotActorSendHandlers ?? []),
+      ...(node.entrySpotActorRequestHandlers ?? []),
+      ...(node.spotTimerHandlers ?? []),
+      ...(node.spotPacketHandlers ?? []),
+      ...(node.spotSubscriptionHandlers ?? []),
+      ...(node.spotActorSendHandlers ?? []),
+      ...(node.spotActorRequestHandlers ?? [])
+    ]) {
+      const handlerType = (handler as { readonly handlerType?: Type }).handlerType;
+      if (handlerType !== undefined) types.add(handlerType);
+    }
+    for (const channel of Object.values(node.meshChannels ?? {})) {
+      for (const handler of [...(channel.sendHandlers ?? []), ...(channel.requestHandlers ?? [])]) {
+        const handlerType = (handler as { readonly handlerType?: Type }).handlerType;
+        if (handlerType !== undefined) types.add(handlerType);
+      }
+    }
+  }
+  function prepareHandler(type: Type): void {
+    if (factories.has(type)) return;
+    factories.set(type, prepareNestHandlerFactory(type, moduleRef));
+  }
+  for (const type of types) prepareHandler(type);
+  function createHandler<T>(
+    contextId: import('@nestjs/core').ContextId,
+    dependencies: Map<unknown, Promise<unknown>>,
+    type: Type<T>
+  ): T | Promise<T> {
+    const factory = factories.get(type);
+    if (factory === undefined) throw new Error(`Handler creation was not prepared: ${type.name}`);
+    return factory(moduleRef, contextId, dependencies) as T | Promise<T>;
+  }
   const resolver: ZLinkProviderResolver = {
     get<T>(type: Type<T>): T | undefined {
       if (discovery !== undefined) {
@@ -412,61 +439,55 @@ function createProviderResolver(
       return await creationModuleRef.create(type as unknown as import('@nestjs/common').Type<T>);
     }
   };
-  Object.defineProperty(
-    resolver,
-    Symbol.for('@zlink-systems/framework.handler-instance-scope-factory'),
-    {
-      value: {
-        create(context?: import('@zlink-systems/framework').ZLinkMessageContext) {
-          const currentContextId = currentNestDispatchContext();
-          const contextId = currentContextId ?? ContextIdFactory.create();
-          if (context !== undefined && currentContextId === undefined) {
-            moduleRef.registerRequestByContextId({ zlinkContext: context }, contextId);
+  framework.registerIntegrationHandlerInstanceScopeFactory(resolver, {
+    prepare: prepareHandler,
+    create(context?: import('@zlink-systems/framework').ZLinkMessageContext) {
+      const currentContextId = currentNestDispatchContext();
+      const contextId = currentContextId ?? ContextIdFactory.create();
+      if (context !== undefined && currentContextId === undefined) {
+        moduleRef.registerRequestByContextId({ zlinkContext: context }, contextId);
+      }
+      const instances = new Map<Type, Promise<unknown>>();
+      const dependencies = new Map<unknown, Promise<unknown>>();
+      const owned: unknown[] = [];
+      let disposed = false;
+      return {
+        async resolve<T>(type: Type<T>): Promise<T> {
+          if (disposed) {
+            throw new Error('Handler instance scope is already disposed.');
           }
-          const instances = new Map<Type, Promise<unknown>>();
-          const dependencies = new Map<unknown, Promise<unknown>>();
-          const owned: unknown[] = [];
-          let disposed = false;
-          return {
-            async resolve<T>(type: Type<T>): Promise<T> {
-              if (disposed) {
-                throw new Error('Handler instance scope is already disposed.');
+          let instance = instances.get(type);
+          if (instance === undefined) {
+            instance = Promise.resolve(createHandler(contextId, dependencies, type)).then(
+              async (created) => {
+                if (disposed) {
+                  await framework.disposeIntegrationHandler(created);
+                  throw new Error('Handler instance scope was disposed during activation.');
+                }
+                owned.push(created);
+                return created;
               }
-              let instance = instances.get(type);
-              if (instance === undefined) {
-                instance = createNestHandlerInstance(moduleRef, contextId, dependencies, type).then(
-                  async (created) => {
-                    if (disposed) {
-                      await framework.disposeIntegrationHandler(created);
-                      throw new Error('Handler instance scope was disposed during activation.');
-                    }
-                    owned.push(created);
-                    return created;
-                  }
-                );
-                instances.set(type, instance);
-              }
-              return (await instance) as T;
-            },
-            async dispose(): Promise<void> {
-              if (disposed) return;
-              disposed = true;
-              const pending = [...instances.values()];
-              await Promise.allSettled(pending);
-              try {
-                await framework.disposeIntegrationHandlers(owned);
-              } finally {
-                owned.length = 0;
-                instances.clear();
-                dependencies.clear();
-              }
-            }
-          };
+            );
+            instances.set(type, instance);
+          }
+          return (await instance) as T;
+        },
+        async dispose(): Promise<void> {
+          if (disposed) return;
+          disposed = true;
+          const pending = [...instances.values()];
+          await Promise.allSettled(pending);
+          try {
+            await framework.disposeIntegrationHandlers(owned);
+          } finally {
+            owned.length = 0;
+            instances.clear();
+            dependencies.clear();
+          }
         }
-      },
-      enumerable: false
+      };
     }
-  );
+  });
   framework.registerIntegrationHandlerFilterScope(resolver, (context, callback) =>
     runInNestDispatchScope(moduleRef, context, async () => {
       const contextId = currentNestDispatchContext()!;
@@ -475,12 +496,7 @@ function createProviderResolver(
       try {
         return await callback({
           async resolve<T>(type: Type<T>): Promise<T> {
-            const instance = await createNestHandlerInstance(
-              moduleRef,
-              contextId,
-              dependencies,
-              type
-            );
+            const instance = await createHandler(contextId, dependencies, type);
             owned.push(instance);
             return instance;
           }
@@ -493,38 +509,72 @@ function createProviderResolver(
   return resolver;
 }
 
-export async function createNestHandlerInstance<T>(
+export type NestHandlerFactory<T = unknown> = (
   moduleRef: ModuleRef,
   contextId: import('@nestjs/core').ContextId,
-  dependencies: Map<unknown, Promise<unknown>>,
-  type: Type<T>
-): Promise<T> {
+  dependencies: Map<unknown, Promise<unknown>>
+) => T | Promise<T>;
+
+export function prepareNestHandlerFactory<T>(
+  type: Type<T>,
+  moduleRef?: ModuleRef
+): NestHandlerFactory<T> {
   const { reflected, optional } = nestConstructorDependencies(type);
-  const parameters = await Promise.all(
-    reflected.map((token, index) =>
-      resolveNestHandlerDependency(moduleRef, contextId, dependencies, token, optional.has(index))
-    )
-  );
-  const instance = new (type as unknown as new (...args: unknown[]) => T)(...parameters);
-  const properties = Reflect.getMetadata(PROPERTY_DEPS_METADATA, type) as
-    readonly { readonly key: string | symbol; readonly type: InjectionToken }[] | undefined;
+  const parameters = reflected.map((token, index) => ({
+    token: nestDependencyToken(token),
+    optional: optional.has(index)
+  }));
+  if (moduleRef !== undefined) {
+    for (const parameter of parameters) {
+      try {
+        moduleRef.introspect(parameter.token as Parameters<ModuleRef['introspect']>[0]);
+      } catch (error) {
+        if (!(error instanceof UnknownElementException) || !parameter.optional) throw error;
+      }
+    }
+  }
   const optionalProperties = new Set<string | symbol>(
     (Reflect.getMetadata(OPTIONAL_PROPERTY_DEPS_METADATA, type) as
       readonly (string | symbol)[] | undefined) ?? []
   );
-  for (const property of properties ?? []) {
-    const dependency = await resolveNestHandlerDependency(
-      moduleRef,
-      contextId,
-      dependencies,
-      property.type,
-      optionalProperties.has(property.key)
-    );
-    if (dependency !== undefined) {
-      (instance as Record<string | symbol, unknown>)[property.key] = dependency;
-    }
+  const properties = (
+    (Reflect.getMetadata(PROPERTY_DEPS_METADATA, type) as
+      readonly { readonly key: string | symbol; readonly type: InjectionToken }[] | undefined) ?? []
+  ).map((property) => ({
+    key: property.key,
+    token: nestDependencyToken(property.type),
+    optional: optionalProperties.has(property.key)
+  }));
+  const Constructor = type as unknown as new (...args: unknown[]) => T;
+  if (parameters.length === 0 && properties.length === 0) {
+    return () => new Constructor();
   }
-  return instance;
+  return async (moduleRef, contextId, dependencies) => {
+    const arguments_ = await Promise.all(
+      parameters.map((parameter) =>
+        resolveNestHandlerDependency(
+          moduleRef,
+          contextId,
+          dependencies,
+          parameter.token,
+          parameter.optional
+        )
+      )
+    );
+    const instance = new Constructor(...arguments_);
+    for (const property of properties) {
+      const dependency = await resolveNestHandlerDependency(
+        moduleRef,
+        contextId,
+        dependencies,
+        property.token,
+        property.optional
+      );
+      if (dependency !== undefined)
+        (instance as Record<string | symbol, unknown>)[property.key] = dependency;
+    }
+    return instance;
+  };
 }
 
 function nestConstructorDependencies(type: Type) {
@@ -541,17 +591,6 @@ function nestConstructorDependencies(type: Type) {
     (Reflect.getMetadata(OPTIONAL_DEPS_METADATA, type) as readonly number[] | undefined) ?? []
   );
   return { reflected, optional };
-}
-
-export function validateNestConstructorDependencies(moduleRef: ModuleRef, type: Type): void {
-  const { reflected, optional } = nestConstructorDependencies(type);
-  for (const [index, token] of reflected.entries()) {
-    try {
-      moduleRef.introspect(nestDependencyToken(token) as Parameters<ModuleRef['introspect']>[0]);
-    } catch (error) {
-      if (!(error instanceof UnknownElementException) || !optional.has(index)) throw error;
-    }
-  }
 }
 
 function nestDependencyToken(token: unknown): unknown {
@@ -571,18 +610,17 @@ async function resolveNestHandlerDependency(
   token: unknown,
   optional: boolean
 ): Promise<unknown> {
-  const resolvedToken = nestDependencyToken(token);
-  let dependency = dependencies.get(resolvedToken);
+  let dependency = dependencies.get(token);
   if (dependency === undefined) {
-    dependency = moduleRef.resolve(resolvedToken as Parameters<ModuleRef['get']>[0], contextId, {
+    dependency = moduleRef.resolve(token as Parameters<ModuleRef['get']>[0], contextId, {
       strict: false
     });
-    dependencies.set(resolvedToken, dependency);
+    dependencies.set(token, dependency);
   }
   try {
     return await dependency;
   } catch (error) {
-    dependencies.delete(resolvedToken);
+    dependencies.delete(token);
     if (optional) return undefined;
     throw error;
   }
@@ -614,7 +652,7 @@ async function createSpotManager(
   return framework.createIntegrationSpotManager(
     registration,
     runtime,
-    moduleRef === undefined ? undefined : createProviderResolver(moduleRef, discovery)
+    moduleRef === undefined ? undefined : createProviderResolver(moduleRef, discovery, registration)
   );
 }
 

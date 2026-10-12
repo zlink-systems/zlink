@@ -12,7 +12,7 @@ import type { ZLinkNestManualHandlerOptions } from './contracts';
 import type { ZLinkNestHandlerMetadata } from './handler-metadata';
 import type { DiscoveredNestProvider } from './provider-discovery';
 import { currentNestDispatchContext } from './dispatch-scope';
-import { createNestHandlerInstance, validateNestConstructorDependencies } from './providers';
+import { prepareNestHandlerFactory, type NestHandlerFactory } from './providers';
 
 export function createDiscoveredRequestHandlers(
   providerRefs: readonly DiscoveredNestProvider[],
@@ -24,9 +24,16 @@ export function createDiscoveredRequestHandlers(
     handlerGroups,
     'request',
     moduleRef,
-    (ref, metadata) => ({
+    (ref, metadata, factory) => ({
       async handle(payload: Buffer, context: ZLinkMessageContext) {
-        const result = await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
+        const result = await invokeDiscoveredHandler(
+          moduleRef,
+          ref,
+          metadata,
+          factory,
+          payload,
+          context
+        );
         return metadata.encodeResult === undefined
           ? result
           : metadata.encodeResult(result, context);
@@ -45,9 +52,9 @@ export function createDiscoveredSendHandlers(
     handlerGroups,
     'send',
     moduleRef,
-    (ref, metadata) => ({
+    (ref, metadata, factory) => ({
       async handle(payload: Buffer, context: ZLinkRouteMessageContext) {
-        await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
+        await invokeDiscoveredHandler(moduleRef, ref, metadata, factory, payload, context);
       }
     })
   );
@@ -63,9 +70,9 @@ export function createDiscoveredChannelSendHandlers(
     handlerGroups,
     'send',
     moduleRef,
-    (ref, metadata) => ({
+    (ref, metadata, factory) => ({
       async handle(payload: Buffer, context: ZLinkMessageContext) {
-        await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
+        await invokeDiscoveredHandler(moduleRef, ref, metadata, factory, payload, context);
       }
     })
   );
@@ -81,9 +88,9 @@ export function createDiscoveredPublishHandlers(
     handlerGroups,
     'publish',
     moduleRef,
-    (ref, metadata) => ({
+    (ref, metadata, factory) => ({
       async handle(payload: Buffer, context: ZLinkPublishMessageContext) {
-        await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
+        await invokeDiscoveredHandler(moduleRef, ref, metadata, factory, payload, context);
       }
     })
   );
@@ -136,13 +143,19 @@ function createManualHandlerRegistrations<TContext extends ManualHandlerContext,
   };
 }> {
   return (handlerTypes ?? []).map((registration) => {
-    validateNestConstructorDependencies(moduleRef, registration.handlerType);
+    const factory = prepareNestHandlerFactory(registration.handlerType, moduleRef);
     return {
       packetName: registration.packetName,
       handler: {
         async handle(payload: Buffer, context: TContext): Promise<TResult> {
           return result(
-            await invokeManualHandler(moduleRef, registration.handlerType, payload, context)
+            await invokeManualHandler(
+              moduleRef,
+              registration.handlerType,
+              factory,
+              payload,
+              context
+            )
           );
         }
       }
@@ -155,14 +168,21 @@ function createDiscoveredHandlerRegistrations<THandler>(
   handlerGroups: readonly string[] | undefined,
   kind: string,
   moduleRef: ModuleRef,
-  createHandler: (ref: DiscoveredNestProvider, metadata: ZLinkNestHandlerMetadata) => THandler
+  createHandler: (
+    ref: DiscoveredNestProvider,
+    metadata: ZLinkNestHandlerMetadata,
+    factory: NestHandlerFactory
+  ) => THandler
 ): Array<{ readonly packetName: string; readonly handler: THandler }> {
   const descriptors = createDiscoveredHandlerDescriptors(providerRefs, handlerGroups, kind);
   return descriptors.map(({ ref, metadata }) => {
-    validateNestConstructorDependencies(moduleRef, ref.handlerKey as Type);
     return {
       packetName: metadata.packetName,
-      handler: createHandler(ref, metadata)
+      handler: createHandler(
+        ref,
+        metadata,
+        prepareNestHandlerFactory(ref.handlerKey as Type, moduleRef)
+      )
     };
   });
 }
@@ -206,10 +226,11 @@ async function invokeDiscoveredHandler(
   moduleRef: ModuleRef,
   ref: DiscoveredNestProvider,
   metadata: ZLinkNestHandlerMetadata,
+  factory: NestHandlerFactory,
   payload: Buffer,
   context: ManualHandlerContext
 ): Promise<unknown> {
-  const instance = await resolveHandlerInstance(moduleRef, ref.handlerKey as Type, context);
+  const instance = await resolveHandlerInstance(moduleRef, factory, context);
   try {
     const method = instance[metadata.methodName];
     if (typeof method !== 'function') {
@@ -226,10 +247,11 @@ async function invokeDiscoveredHandler(
 async function invokeManualHandler(
   moduleRef: ModuleRef,
   handlerType: Type,
+  factory: NestHandlerFactory,
   payload: Buffer,
   context: ManualHandlerContext
 ): Promise<unknown> {
-  const instance = await resolveHandlerInstance(moduleRef, handlerType, context);
+  const instance = await resolveHandlerInstance(moduleRef, factory, context);
   try {
     const method = instance.handle;
     if (typeof method !== 'function') {
@@ -245,7 +267,7 @@ async function invokeManualHandler(
 
 async function resolveHandlerInstance(
   moduleRef: ModuleRef,
-  handlerType: Type,
+  factory: NestHandlerFactory,
   context: ManualHandlerContext
 ): Promise<Record<string, unknown>> {
   const currentContextId = currentNestDispatchContext();
@@ -253,10 +275,7 @@ async function resolveHandlerInstance(
   if (currentContextId === undefined) {
     moduleRef.registerRequestByContextId({ zlinkContext: context }, contextId);
   }
-  return (await createNestHandlerInstance(moduleRef, contextId, new Map(), handlerType)) as Record<
-    string,
-    unknown
-  >;
+  return (await factory(moduleRef, contextId, new Map())) as Record<string, unknown>;
 }
 
 function decodePayload(

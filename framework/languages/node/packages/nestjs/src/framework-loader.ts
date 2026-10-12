@@ -12,6 +12,7 @@ import type {
   ZLinkInboundDispatchOptions,
   ZLinkLocationOptionValues,
   ZLinkLocationOptions,
+  ZLinkMessageContext,
   ZLinkEntrySpot,
   ZLinkFanoutClient,
   ZLinkHandlerFilterContext,
@@ -35,11 +36,22 @@ import type {
 
 export type FrameworkRuntimeHost = ZLinkNestIntegrationRuntimeHost;
 
+interface HandlerResolver {
+  resolve<T>(type: Type<T>): Promise<T>;
+}
+
 interface FrameworkIntegrationModule {
   ZLinkSpotActorSend(packetName?: string): MethodDecorator;
   ZLinkSpotActorRequest(packetName?: string): MethodDecorator;
   disposeIntegrationHandler(instance: unknown): Promise<void>;
   disposeIntegrationHandlers(instances: readonly unknown[]): Promise<void>;
+  registerIntegrationHandlerInstanceScopeFactory(
+    resolver: ZLinkProviderResolver,
+    factory: {
+      prepare?(type: Type): void;
+      create(context?: ZLinkMessageContext): HandlerResolver & { dispose(): Promise<void> };
+    }
+  ): void;
   readonly MAX_LISTENER_PORT: number;
   readonly ZLINK_MAX_PUBLIC_WEIGHT: number;
   readonly ZLINK_MAX_CAPACITY: number;
@@ -137,7 +149,7 @@ interface FrameworkIntegrationModule {
     resolver: ZLinkProviderResolver,
     runner: (
       context: ZLinkHandlerFilterContext,
-      callback: (scope: { resolve<T>(type: Type<T>): Promise<T> }) => Promise<unknown>
+      callback: (scope: HandlerResolver) => Promise<unknown>
     ) => Promise<unknown>
   ): void;
 }

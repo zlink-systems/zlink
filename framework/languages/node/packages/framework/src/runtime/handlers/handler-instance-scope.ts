@@ -9,6 +9,7 @@ export interface ZLinkHandlerInstanceScope {
 }
 
 interface ZLinkHandlerInstanceScopeFactory {
+  prepare?(type: Type): void;
   create(context?: ZLinkMessageContext): ZLinkHandlerInstanceScope;
 }
 
@@ -34,6 +35,27 @@ const activeLifecycleScope = new AsyncLocalStorage<LifecycleHandlerInstanceScope
 const detachedLifecycleResource = new AsyncResource('zlink:handler-instance-scope');
 const dispatchScopes = new WeakMap<object, ZLinkHandlerInstanceScope>();
 const lifecycleScopes = new WeakMap<object, LifecycleHandlerInstanceScope>();
+
+export function registerHandlerInstanceScopeFactory(
+  providerResolver: ZLinkProviderResolver,
+  factory: ZLinkHandlerInstanceScopeFactory
+): void {
+  Object.defineProperty(providerResolver, HANDLER_SCOPE_FACTORY, {
+    value: factory,
+    enumerable: false
+  });
+}
+
+export function prepareHandlerInstance(
+  providerResolver: ZLinkProviderResolver | undefined,
+  type: Type
+): void {
+  const factory =
+    providerResolver === undefined
+      ? undefined
+      : (providerResolver as unknown as Record<PropertyKey, unknown>)[HANDLER_SCOPE_FACTORY];
+  if (isHandlerInstanceScopeFactory(factory)) factory.prepare?.(type);
+}
 
 export async function runInHandlerInstanceScope<T>(
   providerResolver: ZLinkProviderResolver | undefined,
