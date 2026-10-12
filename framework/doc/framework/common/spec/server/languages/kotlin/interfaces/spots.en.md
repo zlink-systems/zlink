@@ -209,6 +209,7 @@ interface ZLinkKotlinSpotRequestCall<TReply : Any> {
  fun instanceSpot(stableType: String): ZLinkKotlinSpotRequestCall<TReply>
  fun inMesh(meshName: String): ZLinkKotlinSpotRequestCall<TReply>
  fun timeout(timeout: Duration): ZLinkKotlinSpotRequestCall<TReply>
+ fun submit(): systems.zlink.framework.channels.ZLinkRequestStage<TReply>
  suspend fun await(): TReply
  suspend fun yield(): TReply
 }
@@ -377,6 +378,7 @@ public interface systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TRepl
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> instanceSpot(java.lang.String);
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> inMesh(java.lang.String);
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSpotRequestCall<TReply> timeout(java.time.Duration);
+ public abstract systems.zlink.framework.channels.ZLinkRequestStage<TReply> submit();
  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super TReply>);
  public abstract java.lang.Object yield(kotlin.coroutines.Continuation<? super TReply>);
 }

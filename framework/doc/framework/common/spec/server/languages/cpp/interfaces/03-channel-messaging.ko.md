@@ -600,13 +600,10 @@ public:
 };
 
 template <typename TReply>
-class request_task_t {
+class request_task_t : public task_t<TReply> {
 public:
-    // co_await하면 reply를 얻는다. admitted()는 Submit §2의 admission 단계다.
+    // task_t<TReply>로 co_await하면 reply를 얻는다. admitted()는 Submit §2의 admission 단계다.
     task_t<void> admitted();
-    bool await_ready() const noexcept;
-    void await_suspend(std::coroutine_handle<> caller);
-    TReply await_resume();
 };
 
 template <typename TReply>

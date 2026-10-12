@@ -45,6 +45,9 @@ public readonly struct ZLinkRequest<TReply>
  public ValueTask Admitted { get; }
  public ValueTask<TReply> Reply { get; }
  public ValueTaskAwaiter<TReply> GetAwaiter();
+ public ConfiguredValueTaskAwaitable<TReply> ConfigureAwait(bool continueOnCapturedContext);
+ public Task<TReply> AsTask();
+ public static implicit operator ValueTask<TReply>(ZLinkRequest<TReply> request);
 }
 
 public interface IZLinkRequestCall : IZLinkMetadataCall<IZLinkRequestCall>
