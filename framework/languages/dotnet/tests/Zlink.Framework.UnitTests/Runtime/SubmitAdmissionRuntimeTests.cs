@@ -673,6 +673,56 @@ public sealed class SubmitAdmissionRuntimeTests
         ZLinkMessageParts.DisposeAll(await compatibleReply);
     }
 
+    [Fact]
+    public async Task NativeInfrastructureAdmission_DoesNotCompleteEnclosingUserStage()
+    {
+        using var pair = new AdmissionPair();
+        using var payload = Message.From("authority lookup");
+        var infrastructureDone = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var admitUser = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var userReply = new TaskCompletionSource<int>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var user = ZLinkRequestAdmission.Run<int>(async admission =>
+        {
+            var reply = await ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                pair.Client.Request().Message(payload),
+                TimeSpan.FromSeconds(5)
+            );
+            ZLinkMessageParts.DisposeAll(reply);
+            infrastructureDone.SetResult();
+            await admitUser.Task;
+            admission.Complete();
+            return await userReply.Task;
+        });
+        using var received = Received.Create();
+        Assert.True(pair.Server.Recv(received));
+        Assert.False(user.Admitted.IsCompleted);
+        using var response = Message.From("authority reply");
+        received.Reply().Message(response).Submit();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    pair.DrainCompletions();
+                    return infrastructureDone.Task.IsCompleted;
+                },
+                TimeSpan.FromSeconds(2)
+            )
+        );
+        Assert.False(user.Admitted.IsCompleted);
+        Assert.False(user.Reply.IsCompleted);
+        admitUser.SetResult();
+        await user.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(user.Reply.IsCompleted);
+        userReply.SetResult(42);
+        Assert.Equal(42, await user);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

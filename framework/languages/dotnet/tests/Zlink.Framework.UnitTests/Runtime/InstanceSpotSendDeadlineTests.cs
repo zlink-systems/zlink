@@ -14,6 +14,70 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Fact]
+    public async Task InfrastructureRequest_DoesNotAdmitUserRequestWaitingForAuthority()
+    {
+        const string spotId = "held-user-authority";
+        HeldInstanceResolveStore? store = null;
+        var node = new CapturingSpotNode
+        {
+            NodeRequestHandler = (_, _) =>
+                ValueTask.FromResult(
+                    new ZLinkBackendRouteReceived(
+                        [Message.From("authority reply")],
+                        null,
+                        null,
+                        null,
+                        null
+                    )
+                ),
+        };
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            locationStoreWrapper: inner => store = new(inner, spotId)
+        );
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var request = new ZLinkSpotClient(runtime)
+                .RequestToSpot(spotId, new ProbeRouteMessage("request"))
+                .InstanceSpot("Tests.InstanceSpot")
+                .InMesh("entry")
+                .Async<ProbeReply>(cancellation.Token);
+            await store!.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using var payload = Message.From("authority lookup");
+            using var infrastructure = await runtime
+                .GetSpotNodeRuntime("entry")
+                .RequestToNodeAsync(
+                    node.RoutingId,
+                    [payload],
+                    TimeSpan.FromSeconds(5),
+                    CancellationToken.None
+                );
+            Assert.Equal(1, node.NodeRequestAttempts);
+            Assert.False(request.Admitted.IsCompleted);
+            Assert.False(request.Reply.IsCompleted);
+            cancellation.Cancel();
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                request.AsTask()
+            );
+            Assert.Same(
+                failure,
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    request.Admitted.AsTask()
+                )
+            );
+        }
+        finally
+        {
+            cancellation.Cancel();
+            store!.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task LocalInstanceActivation_PublicRequest_AdmitsBeforeReply()
     {
         var probe = new ColdSendProbe();
