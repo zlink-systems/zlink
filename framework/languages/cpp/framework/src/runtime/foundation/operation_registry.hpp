@@ -23,6 +23,8 @@ class operation_completion_dispatcher_t;
 struct operation_completion_item_t;
 struct operation_registry_drain_state_t;
 
+bool is_on_completion_dispatcher () noexcept;
+
 class operation_registry_t
 {
   public:

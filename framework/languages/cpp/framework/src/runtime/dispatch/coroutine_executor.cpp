@@ -2,6 +2,8 @@
 
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
+#include "runtime/execution/state_lane.hpp"
+#include "runtime/foundation/operation_registry.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -94,6 +96,11 @@ void coroutine_executor_t::post_native_continuation (std::function<void ()> work
     });
 }
 
+bool coroutine_executor_t::is_current () noexcept
+{
+    return _pool.get_executor ().running_in_this_thread ();
+}
+
 coroutine_executor_t &handler_coroutine_executor ()
 {
     auto *ready = executor_fast_path ().load (std::memory_order_acquire);
@@ -160,7 +167,7 @@ void shutdown_handler_coroutine_executor () noexcept
 namespace zlink::framework::detail
 {
 
-task_scheduler_t capture_host_continuation_scheduler ()
+task_scheduler_t capture_host_continuation_scheduler (bool scope_exit_only)
 {
     // Execution gate §13: a Store chain awaited by an infrastructure wait
     // resumes on the thread that completes each Store step, not behind
@@ -173,22 +180,36 @@ task_scheduler_t capture_host_continuation_scheduler ()
             return {};
         }
     }
-    return [] (std::function<void ()> work) {
-        std::lock_guard lock (runtime::executor_mutex ());
-        if (runtime::executor_shutdown_requested () || runtime::executor_owner_count () == 0) {
-            throw framework_exception_t (
-              framework_error_kind_t::shutting_down,
-              "handler coroutine executor is not accepting continuations");
+    const auto *caller_job = application_job_context_t::current ();
+    return [scope_exit_only, caller_job] (std::function<void ()> work) {
+        {
+            std::lock_guard lock (runtime::executor_mutex ());
+            if (runtime::executor_shutdown_requested () || runtime::executor_owner_count () == 0) {
+                throw framework_exception_t (
+                  framework_error_kind_t::shutting_down,
+                  "handler coroutine executor is not accepting continuations");
+            }
+            auto &configured = runtime::executor_instance ();
+            const auto *current_job = application_job_context_t::current ();
+            const bool same_context = current_job == nullptr || current_job == caller_job;
+            const bool completion_turn = runtime::foundation::is_on_completion_dispatcher ()
+                                         || (configured && configured->is_current ());
+            if (runtime::state_lane_t::current () != nullptr
+                || (!scope_exit_only && !(completion_turn && same_context))) {
+                if (!configured) {
+                    const auto workers = runtime::configured_worker_count () == 0
+                                           ? runtime::default_worker_count ()
+                                           : runtime::configured_worker_count ();
+                    configured = std::make_unique<runtime::coroutine_executor_t> (workers);
+                    runtime::executor_fast_path ().store (configured.get (),
+                                                          std::memory_order_release);
+                }
+                configured->post_native_continuation (std::move (work));
+                return;
+            }
         }
-        auto &configured = runtime::executor_instance ();
-        if (!configured) {
-            const auto workers = runtime::configured_worker_count () == 0
-                                   ? runtime::default_worker_count ()
-                                   : runtime::configured_worker_count ();
-            configured = std::make_unique<runtime::coroutine_executor_t> (workers);
-            runtime::executor_fast_path ().store (configured.get (), std::memory_order_release);
-        }
-        configured->post_native_continuation (std::move (work));
+        if (work)
+            work ();
     };
 }
 
@@ -196,8 +217,18 @@ void check_blocking_submit_context ();
 
 namespace
 {
-constexpr runtime_execution_hooks_t host_execution_hooks{&capture_host_continuation_scheduler,
-                                                         &check_blocking_submit_context};
+task_scheduler_t capture_native_scheduler ()
+{
+    return capture_host_continuation_scheduler (false);
+}
+
+task_scheduler_t capture_scope_exit_scheduler ()
+{
+    return capture_host_continuation_scheduler (true);
+}
+
+constexpr runtime_execution_hooks_t host_execution_hooks{
+  &capture_native_scheduler, &capture_scope_exit_scheduler, &check_blocking_submit_context};
 } // namespace
 
 } // namespace zlink::framework::detail

@@ -26,6 +26,12 @@ task_scheduler_t capture_runtime_native_continuation_scheduler ()
     return hooks != nullptr ? hooks->capture_scheduler () : task_scheduler_t{};
 }
 
+task_scheduler_t capture_runtime_scope_exit_scheduler ()
+{
+    const auto *hooks = runtime_execution_hooks.load (std::memory_order_acquire);
+    return hooks != nullptr ? hooks->capture_scope_exit_scheduler () : task_scheduler_t{};
+}
+
 std::stop_token current_wait_owner ()
 {
     return current_wait_owner_token;
