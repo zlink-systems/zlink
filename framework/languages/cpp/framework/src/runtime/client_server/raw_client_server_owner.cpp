@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/application_job_receive_flow.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
@@ -49,9 +50,10 @@ constexpr std::chrono::milliseconds client_server_probe_request_timeout{5000};
 // update/liveness) use the binary service-wire framing on a ClientServer
 // connection. Application records ride the cross-language JSON channel
 // envelope, whose first frame is a JSON object — never the 'ZM' magic.
-bool is_service_control_frame (const detail::backend::raw_bytes_t &frame) noexcept
+bool is_service_control_frame (std::span<const std::uint8_t> frame) noexcept
 {
-    return frame.size () >= 5 && frame[0] == 0x5A && frame[1] == 0x4D;
+    return frame.size () >= protocol::prefix_size && frame[0] == protocol::magic[0]
+           && frame[1] == protocol::magic[1];
 }
 
 detail::backend::raw_message_t envelope_wire_parts (runtime::messaging::message_parts_t parts)
@@ -385,7 +387,8 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
   mesh::service_liveness_registry_t::clock_t::time_point now,
   std::shared_ptr<application_job_queue_t::permit_t> application_permit,
   receive_batch_budget_t *budget,
-  std::vector<received_application_record_t> *application_records)
+  std::vector<received_application_record_t> *application_records,
+  const dispatch_options_t *dispatch_options)
 {
     // start() publishes these before receive; updates preserve channel_name,
     // and close() retains _port while in-flight receives finish.
@@ -405,12 +408,15 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
         budget->account (bytes);
     }
     const bool is_control =
-      !received->parts.empty () && is_service_control_frame (received->parts.front ());
+      !received->parts.empty ()
+      && is_service_control_frame (protocol::message_bytes (received->parts.front ()));
     std::optional<result_t<messaging::envelope_header_t>> application_header;
     std::optional<messaging::envelope_header_t> rejection_context;
     if (!is_control && received->parts.size () == 2) {
         application_header.emplace (messaging::envelope_codec_t{}.decode_header (
-          zlink::message_t::from (received->parts.front ()), false, &rejection_context));
+          received->parts.front (),
+          dispatch_options && detail::message_flow_tracer_t (*dispatch_options).capture_enabled (),
+          &rejection_context));
         if (*application_header) {
             const auto &envelope = application_header->value ();
             if (envelope.channel_name == channel_name
@@ -446,7 +452,8 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
         co_return client_server_pump_result_t::protocol_error;
     }
     try {
-        const auto header = protocol::decode_header (received->parts.front ());
+        const auto header =
+          protocol::decode_header (protocol::message_bytes (received->parts.front ()));
         if (header.kind == protocol::command::hello) {
             //  Spec 51 §4 (ClientServer direction): the server sends only
             //  reply, liveness, update, and reject. Admission therefore
@@ -457,7 +464,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                 co_return client_server_pump_result_t::protocol_error;
             }
             const auto client = protocol::decode_client_server_client_admission (
-              received->parts.front (), protocol::command::hello);
+              protocol::message_bytes (received->parts.front ()), protocol::command::hello);
             trace_client_server_lazy ("server-hello", [&] {
                 return "channel=" + client.channel_name
                        + " client=" + routing_id_label (received->source_routing_id)
@@ -509,7 +516,8 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
             if (received->parts.size () != 1) {
                 co_return client_server_pump_result_t::protocol_error;
             }
-            const auto liveness = protocol::decode_liveness (received->parts.front ());
+            const auto liveness =
+              protocol::decode_liveness (protocol::message_bytes (received->parts.front ()));
             if (liveness.kind == protocol::command::livenessProbe) {
                 const auto acknowledged =
                   co_await _lane.run_task ([this, &received, &connection, &liveness] {
@@ -577,6 +585,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                                               permit->release_for_handler_entry ();
                                               permit.reset ();
                                           }};
+    record.envelope_header.emplace (std::move (envelope));
     received_application_record_t received_record{
       std::move (record), std::move (application_permit), received_at, received.route_generation};
     if (application_records) {
@@ -687,26 +696,29 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
     if (request.parts.empty ()) {
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
-    const auto request_header = messaging::envelope_codec_t{}.decode_header (
-      zlink::message_t::from (request.parts.front ()), false);
+    std::optional<result_t<messaging::envelope_header_t>> decoded;
+    const auto *request_header = request.envelope_header ? &*request.envelope_header : nullptr;
     if (!request_header) {
-        throw std::invalid_argument ("ClientServer reply requires a decodable request envelope");
+        decoded.emplace (
+          messaging::envelope_codec_t{}.decode_header (request.parts.front (), false));
+        if (!*decoded)
+            throw std::invalid_argument (
+              "ClientServer reply requires a decodable request envelope");
+        request_header = &decoded->value ();
     }
     const auto port = _port;
     if (!port)
         co_return false;
     zlink::framework::detail::channel_reply_writer_t writer;
-    auto header =
-      writer.create_reply_header (messaging::message_kind_t::response,
-                                  request_header.value ().channel_name, request_header.value ());
+    auto header = writer.create_reply_header (messaging::message_kind_t::response,
+                                              request_header->channel_name, *request_header);
     header.content_type = payload.content_type;
     auto parts = envelope_wire_parts (
       writer.reply_raw_envelope (header, zlink::message_t::from (payload.payload_bytes ())));
     const auto delivered =
       port->reply ({request.source_routing_id, request.reply_token, {}}, parts);
     trace_client_server_lazy ("server-reply", [&] {
-        return "channel=" + request_header.value ().channel_name
-               + " packet=" + request_header.value ().message_name
+        return "channel=" + request_header->channel_name + " packet=" + request_header->message_name
                + " client=" + routing_id_label (request.source_routing_id) + " reply_token="
                + (request.reply_token ? std::string ("present") : std::string ("-"))
                + " delivered=" + (delivered ? "true" : "false");
@@ -725,9 +737,10 @@ task_t<bool> raw_client_server_server_t::reply (
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
     std::optional<messaging::envelope_header_t> owned_header;
+    if (!decoded_context && request.envelope_header)
+        decoded_context = &request.envelope_header;
     if (!decoded_context) {
-        auto decoded = messaging::envelope_codec_t{}.decode_header (
-          zlink::message_t::from (request.parts.front ()), false);
+        auto decoded = messaging::envelope_codec_t{}.decode_header (request.parts.front (), false);
         if (decoded)
             owned_header = std::move (decoded.value ());
         decoded_context = &owned_header;

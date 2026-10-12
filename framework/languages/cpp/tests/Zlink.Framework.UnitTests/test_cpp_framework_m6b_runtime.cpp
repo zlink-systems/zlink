@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 
 #include "metric_test_reader.hpp"
 #include "test_completion_poller_driver.hpp"
@@ -488,7 +489,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
             while (auto claim = target.native_node ().transport ().mailbox ().try_claim (
                      mesh::service_mailbox_domain_t::application, 16, 1024 * 1024)) {
                 for (const auto &record : claim->records) {
-                    if (protocol::decode_header (record.parts.front ()).kind
+                    if (protocol::decode_header (protocol::message_bytes (record.parts.front ()))
+                          .kind
                         == protocol::command::actorSend) {
                         ++count;
                     }
@@ -861,8 +863,9 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
           mesh::service_mailbox_domain_t::application, 16, 1024 * 1024);
         if (claim) {
             for (const auto &record : claim->records) {
-                request_admitted |= protocol::decode_header (record.parts.front ()).kind
-                                    == protocol::command::actorRequest;
+                request_admitted |=
+                  protocol::decode_header (protocol::message_bytes (record.parts.front ())).kind
+                  == protocol::command::actorRequest;
             }
             assert (old_target->native_node ().transport ().mailbox ().release (*claim));
         }
@@ -1198,7 +1201,9 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
                 auto claim = target.native_node ().transport ().mailbox ().try_claim (
                   mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
                 if (claim && claim->records.size () == 1) {
-                    assert (protocol::decode_header (claim->records.front ().parts.front ()).kind
+                    assert (protocol::decode_header (
+                              protocol::message_bytes (claim->records.front ().parts.front ()))
+                              .kind
                             == protocol::command::boundSessionBind);
                     assert (target.native_node ().transport ().reply_bound_session_bind (
                       claim->records.front (), static_cast<std::uint32_t> (terminal),
@@ -1285,7 +1290,9 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
             auto claim = target.native_node ().transport ().mailbox ().try_claim (
               mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
             if (claim && claim->records.size () == 1) {
-                assert (protocol::decode_header (claim->records.front ().parts.front ()).kind
+                assert (protocol::decode_header (
+                          protocol::message_bytes (claim->records.front ().parts.front ()))
+                          .kind
                         == protocol::command::boundSessionBind);
                 assert (target.native_node ().transport ().mailbox ().release (*claim));
                 admitted_without_reply = true;
@@ -1496,15 +1503,12 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
       std::string (protocol::framework_multipart_packet_name),
       std::string (protocol::framework_multipart_content_type),
       {0, 0, 0, 1, 0, 0, 0, 2, 0x7b, 0x7d}};
-    assert (session_owner->transport ().mailbox ().try_enqueue (
-      mesh::service_mailbox_record_t{"bound-session:" + target.key,
-                                     mesh::service_mailbox_domain_t::application,
-                                     {protocol::encode_bound_session_send (send),
-                                      protocol::encode_application_payload (application)},
-                                     source_node.to_bytes (),
-                                     std::nullopt,
-                                     std::nullopt,
-                                     19}));
+    assert (session_owner->transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t{
+      "bound-session:" + target.key, mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts (
+        {protocol::encode_bound_session_send (send),
+         protocol::encode_application_payload (application)}),
+      source_node.to_bytes (), std::nullopt, std::nullopt, 19}));
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
     assert (session_owner->dispatch_ready (noop_dispatch).result ().value () == 1);
@@ -1570,15 +1574,12 @@ void verify_bound_session_push_admission_uses_only_session_owned_fields ()
           protocol::actor_route_fence_t{actor.key, actor.object_generation, actor_node.to_bytes (),
                                         13, authority_owner_generation, owner_lease_generation},
           binding_generation};
-        assert (session_owner->transport ().mailbox ().try_enqueue (
-          mesh::service_mailbox_record_t{"bound-session:" + actor.key,
-                                         mesh::service_mailbox_domain_t::application,
-                                         {protocol::encode_bound_session_send (send),
-                                          protocol::encode_application_payload (application)},
-                                         actor_node.to_bytes (),
-                                         std::nullopt,
-                                         std::nullopt,
-                                         13}));
+        assert (session_owner->transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t{
+          "bound-session:" + actor.key, mesh::service_mailbox_domain_t::application,
+          zlink::framework::detail::backend::materialize_binding_parts (
+            {protocol::encode_bound_session_send (send),
+             protocol::encode_application_payload (application)}),
+          actor_node.to_bytes (), std::nullopt, std::nullopt, 13}));
         (void) session_owner->dispatch_ready (noop_dispatch).result ();
     };
 
@@ -2387,8 +2388,8 @@ void verify_actor_create_replays_after_reciprocal_handover ()
         return *claim;
     };
     auto losing = receive ();
-    const auto first =
-      protocol::decode_actor_create_header (losing.records.front ().parts.front ());
+    const auto first = protocol::decode_actor_create_header (
+      protocol::message_bytes (losing.records.front ().parts.front ()));
     assert (first.operation == request.operation);
     assert (first.correlation != 0);
     assert (losing.records.front ().reply_token);
@@ -2400,8 +2401,8 @@ void verify_actor_create_replays_after_reciprocal_handover ()
     const auto handover_started = std::chrono::steady_clock::now ();
     assert (target.connect_peer (source.endpoint (), source_descriptor));
     auto survivor = receive ();
-    const auto replay =
-      protocol::decode_actor_create_header (survivor.records.front ().parts.front ());
+    const auto replay = protocol::decode_actor_create_header (
+      protocol::message_bytes (survivor.records.front ().parts.front ()));
     assert (replay == first);
     assert (survivor.records.front ().correlation == losing.records.front ().correlation);
     assert (completion.wait_for (0ms) == std::future_status::timeout);
@@ -3718,7 +3719,7 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
     assert (record.source_routing_id == target_status.routing_id ().to_bytes ());
     assert (record.parts.size () == 2);
     const auto marker_parts = protocol::decode_application_parts (
-      protocol::decode_application_payload (record.parts.back ()));
+      protocol::decode_application_payload (protocol::message_bytes (record.parts.back ())));
     assert (marker_parts.size () == 1);
     assert (marker_parts.front ().to_string () == "after-probe-ack");
     assert (source->transport ().mailbox ().release (*marker));
@@ -3927,13 +3928,15 @@ void verify_failed_relay_persistence_rearms_dispatch_wait ()
         const protocol::reply_relay_ack_t ack{
           relay.relocation,     coordinator, relay.operation,
           relay.reply_route_id, source,      protocol::reply_relay_ack_status_t::terminal_received};
-        const mesh::service_mailbox_record_t record{"relay",
-                                                    mesh::service_mailbox_domain_t::infrastructure,
-                                                    {protocol::encode_reply_relay_ack (ack)},
-                                                    source.node_routing_id,
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    source.node_generation};
+        const mesh::service_mailbox_record_t record{
+          "relay",
+          mesh::service_mailbox_domain_t::infrastructure,
+          zlink::framework::detail::backend::materialize_binding_parts (
+            {protocol::encode_reply_relay_ack (ack)}),
+          source.node_routing_id,
+          std::nullopt,
+          std::nullopt,
+          source.node_generation};
         auto persisting = std::async (std::launch::async, [&] {
             if (source_lease_expiry)
                 return host->relocation_wire ().confirm_terminal_source_lease_expired (
@@ -4428,9 +4431,11 @@ void verify_raw_spot_and_actor_routing ()
         if (!claim)
             continue;
         for (const auto &record : claim->records) {
-            if (protocol::decode_header (record.parts.front ()).kind
+            if (protocol::decode_header (protocol::message_bytes (record.parts.front ())).kind
                 == protocol::command::messageFollow) {
-                assert (protocol::decode_message_follow (record.parts.front ()) == follow_notice);
+                assert (
+                  protocol::decode_message_follow (protocol::message_bytes (record.parts.front ()))
+                  == follow_notice);
                 follow_received = true;
             }
         }
@@ -4525,15 +4530,13 @@ void verify_raw_spot_and_actor_routing ()
 
     const protocol::wire_operation_id_t relocated_one_way_operation{0x91, 0x92};
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
-      "spot:spot-1",
-      mesh::service_mailbox_domain_t::application,
-      {protocol::encode_spot_message_header (protocol::command::spotSend, "source-spot", spot_fence,
-                                             relocated_one_way_operation),
-       protocol::encode_application_payload (
-         {"SpotPacket", "application/json", bytes ("relocated")})},
-      source_descriptor.node_routing_id,
-      std::nullopt,
-      std::nullopt,
+      "spot:spot-1", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts (
+        {protocol::encode_spot_message_header (protocol::command::spotSend, "source-spot",
+                                               spot_fence, relocated_one_way_operation),
+         protocol::encode_application_payload (
+           {"SpotPacket", "application/json", bytes ("relocated")})}),
+      source_descriptor.node_routing_id, std::nullopt, std::nullopt,
       source_descriptor.lifecycle_generation,
       std::make_pair (relocated_one_way_operation.high, relocated_one_way_operation.low)}));
     assert (dispatch.ingest (spot) == stateful::stateful_error_t::none);
@@ -4692,16 +4695,13 @@ void verify_raw_spot_and_actor_routing ()
     // the frame under a fallback node/actor identity.
     const protocol::wire_operation_id_t unfenced_operation{0xb1, 0xb2};
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
-      "actor:actor-1",
-      mesh::service_mailbox_domain_t::application,
-      {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
-                                              actor_fence, unfenced_operation, 92, 0),
-       protocol::encode_application_payload (
-         {"ActorPacket", "application/json", bytes ("unfenced")})},
-      source_descriptor.node_routing_id,
-      std::nullopt,
-      92,
-      source_descriptor.lifecycle_generation,
+      "actor:actor-1", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts (
+        {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
+                                                actor_fence, unfenced_operation, 92, 0),
+         protocol::encode_application_payload (
+           {"ActorPacket", "application/json", bytes ("unfenced")})}),
+      source_descriptor.node_routing_id, std::nullopt, 92, source_descriptor.lifecycle_generation,
       std::make_pair (unfenced_operation.high, unfenced_operation.low),
       mesh::service_bound_session_source_t{bound_session_tail.session_routing_id, 0, 0}}));
     assert (dispatch.ingest (actor) == stateful::stateful_error_t::moving);
@@ -4715,16 +4715,13 @@ void verify_raw_spot_and_actor_routing ()
     // bound-session tail at all is the same pre-Captured condition.
     const protocol::wire_operation_id_t tailless_operation{0xb3, 0xb4};
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
-      "actor:actor-1",
-      mesh::service_mailbox_domain_t::application,
-      {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
-                                              actor_fence, tailless_operation, 93, 0),
-       protocol::encode_application_payload (
-         {"ActorPacket", "application/json", bytes ("tailless")})},
-      source_descriptor.node_routing_id,
-      std::nullopt,
-      93,
-      source_descriptor.lifecycle_generation,
+      "actor:actor-1", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts (
+        {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
+                                                actor_fence, tailless_operation, 93, 0),
+         protocol::encode_application_payload (
+           {"ActorPacket", "application/json", bytes ("tailless")})}),
+      source_descriptor.node_routing_id, std::nullopt, 93, source_descriptor.lifecycle_generation,
       std::make_pair (tailless_operation.high, tailless_operation.low),
       mesh::service_bound_session_source_t{bound_session_tail.session_routing_id,
                                            bound_session_tail.binding_generation,
@@ -4861,17 +4858,13 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
     const protocol::wire_operation_id_t operation{79, 90};
     const auto unreachable_source = bytes ("unreachable-source");
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
-      "actor:relocated-reply-actor",
-      mesh::service_mailbox_domain_t::application,
-      {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
-                                              actor_fence, operation, 99),
-       protocol::encode_application_payload (
-         {"ActorPacket", "application/json", bytes ("request")})},
-      unreachable_source,
-      std::nullopt,
-      99,
-      1,
-      std::make_pair (operation.high, operation.low)}));
+      "actor:relocated-reply-actor", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts (
+        {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
+                                                actor_fence, operation, 99),
+         protocol::encode_application_payload (
+           {"ActorPacket", "application/json", bytes ("request")})}),
+      unreachable_source, std::nullopt, 99, 1, std::make_pair (operation.high, operation.low)}));
     assert (dispatch.ingest (actor) == stateful::stateful_error_t::none);
 
     const protocol::reply_relay_t relay{operation,
@@ -4939,16 +4932,13 @@ void verify_atomic_raw_stateful_ingress_commit ()
     const auto enqueue = [&] (std::uint64_t operation_low, std::string payload) {
         const protocol::wire_operation_id_t operation{41, operation_low};
         assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
-          "actor:atomic-actor",
-          mesh::service_mailbox_domain_t::application,
-          {protocol::encode_actor_message_header (protocol::command::actorSend, std::nullopt, fence,
-                                                  operation),
-           protocol::encode_application_payload (
-             {"ActorPacket", "application/json", bytes (std::move (payload))})},
-          source_routing_id,
-          std::nullopt,
-          std::nullopt,
-          source_generation,
+          "actor:atomic-actor", mesh::service_mailbox_domain_t::application,
+          zlink::framework::detail::backend::materialize_binding_parts (
+            {protocol::encode_actor_message_header (protocol::command::actorSend, std::nullopt,
+                                                    fence, operation),
+             protocol::encode_application_payload (
+               {"ActorPacket", "application/json", bytes (std::move (payload))})}),
+          source_routing_id, std::nullopt, std::nullopt, source_generation,
           std::make_pair (operation.high, operation.low)}));
     };
     const auto assert_no_queued_reservation = [&] {
@@ -5093,10 +5083,11 @@ void verify_node_request_requires_remote_admission ()
     }
     assert (claim && claim->records.size () == 1);
     const auto &request = claim->records.front ();
-    assert (protocol::decode_header (request.parts.front ()).kind
+    assert (protocol::decode_header (protocol::message_bytes (request.parts.front ())).kind
             == protocol::command::nodeRequest);
     assert (request.correlation && *request.correlation == 4242);
-    assert (protocol::decode_application_payload (request.parts.at (1)).payload_bytes ()
+    assert (protocol::decode_application_payload (protocol::message_bytes (request.parts.at (1)))
+              .payload_bytes ()
             == bytes ("request"));
     assert (target.reply (request, {"DeferredReply", "application/json", bytes ("reply")}));
     assert (target.mailbox ().release (*claim));
@@ -5353,11 +5344,14 @@ void verify_raw_terminal_reply_relay ()
         if (!claim)
             continue;
         for (const auto &record : claim->records) {
-            if (protocol::decode_header (record.parts.front ()).kind
+            if (protocol::decode_header (protocol::message_bytes (record.parts.front ())).kind
                 != protocol::command::replyRelay)
                 continue;
-            assert (protocol::decode_reply_relay (record.parts.front ()) == relay);
-            assert (protocol::decode_application_payload (record.parts.back ()) == payload);
+            assert (protocol::decode_reply_relay (protocol::message_bytes (record.parts.front ()))
+                    == relay);
+            assert (
+              protocol::decode_application_payload (protocol::message_bytes (record.parts.back ()))
+              == payload);
             received = true;
         }
         assert (source.mailbox ().release (*claim));
@@ -5398,13 +5392,14 @@ void verify_relocation_data_duplicates_are_distinct_arrivals ()
     const protocol::relocation_data_t data{
       relocation, 31, coordinator, protocol::relocation_role_t::source, wire_object, frozen};
     const auto encoded_data = protocol::encode_relocation_control (data);
-    const mesh::service_mailbox_record_t wire_record{"duplicate-data-target",
-                                                     mesh::service_mailbox_domain_t::infrastructure,
-                                                     {encoded_data},
-                                                     source_routing_id,
-                                                     std::nullopt,
-                                                     std::nullopt,
-                                                     source_generation};
+    const mesh::service_mailbox_record_t wire_record{
+      "duplicate-data-target",
+      mesh::service_mailbox_domain_t::infrastructure,
+      zlink::framework::detail::backend::materialize_binding_parts ({encoded_data}),
+      source_routing_id,
+      std::nullopt,
+      std::nullopt,
+      source_generation};
 
     std::vector<protocol::wire_operation_id_t> target_queue;
     stateful::raw_relocation_replay_coordinator_t replay (target);
@@ -5562,13 +5557,15 @@ void verify_durable_reply_relay_single_winner ()
     const protocol::reply_relay_ack_t stale_ack{
       relocation,           coordinator,    operation,
       relay.reply_route_id, request_source, protocol::reply_relay_ack_status_t::terminal_received};
-    mesh::service_mailbox_record_t stale_ack_record{"target",
-                                                    mesh::service_mailbox_domain_t::infrastructure,
-                                                    {protocol::encode_reply_relay_ack (stale_ack)},
-                                                    source_descriptor.node_routing_id,
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    source_descriptor.lifecycle_generation + 1};
+    mesh::service_mailbox_record_t stale_ack_record{
+      "target",
+      mesh::service_mailbox_domain_t::infrastructure,
+      zlink::framework::detail::backend::materialize_binding_parts (
+        {protocol::encode_reply_relay_ack (stale_ack)}),
+      source_descriptor.node_routing_id,
+      std::nullopt,
+      std::nullopt,
+      source_descriptor.lifecycle_generation + 1};
     assert (await_task (target_coordinator.process (stale_ack_record))
             == stateful::raw_relocation_replay_result_t::stale_fence);
     auto wrong_route_ack = stale_ack;
@@ -5576,7 +5573,8 @@ void verify_durable_reply_relay_single_winner ()
     mesh::service_mailbox_record_t wrong_route_ack_record{
       "target",
       mesh::service_mailbox_domain_t::infrastructure,
-      {protocol::encode_reply_relay_ack (wrong_route_ack)},
+      zlink::framework::detail::backend::materialize_binding_parts (
+        {protocol::encode_reply_relay_ack (wrong_route_ack)}),
       source_descriptor.node_routing_id,
       std::nullopt,
       std::nullopt,
@@ -5617,10 +5615,12 @@ void verify_durable_reply_relay_single_winner ()
         if (!claim)
             continue;
         for (const auto &record : claim->records) {
-            if (protocol::decode_header (record.parts.front ()).kind
+            if (protocol::decode_header (protocol::message_bytes (record.parts.front ())).kind
                 == protocol::command::replyRelayAck) {
-                assert (protocol::decode_reply_relay_ack (record.parts.front ()).status
-                        == protocol::reply_relay_ack_status_t::terminal_received);
+                assert (
+                  protocol::decode_reply_relay_ack (protocol::message_bytes (record.parts.front ()))
+                    .status
+                  == protocol::reply_relay_ack_status_t::terminal_received);
                 first_ack_dropped = true;
             }
         }
@@ -5793,8 +5793,10 @@ void verify_public_host_dispatches_durable_reply_relay ()
           mesh::service_mailbox_domain_t::infrastructure, 1, 64 * 1024);
         if (!claim)
             continue;
-        dropped = protocol::decode_header (claim->records.front ().parts.front ()).kind
-                  == protocol::command::replyRelayAck;
+        dropped =
+          protocol::decode_header (protocol::message_bytes (claim->records.front ().parts.front ()))
+            .kind
+          == protocol::command::replyRelayAck;
         assert (target->transport ().mailbox ().release (*claim));
     }
     assert (target->relocation_wire ().pending_terminal_relays () == 1);

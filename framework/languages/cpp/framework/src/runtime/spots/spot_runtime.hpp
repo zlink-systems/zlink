@@ -1725,14 +1725,16 @@ class spot_node_runtime_t
                                               const std::vector<zlink::message_t> &parts,
                                               service_provider_t &services,
                                               serializer_registry_t &serializers) const;
-    bool dispatch_mesh_record (const service::ready_record_t &owner,
-                               const service::receive_record_t &record,
-                               std::vector<zlink::message_t> &parts,
-                               service_provider_t &services,
-                               serializer_registry_t &serializers,
-                               std::function<void ()> deferred_terminal = {},
-                               bool *terminal_deferred = nullptr,
-                               std::function<void ()> before_application_handler = {});
+    bool dispatch_mesh_record (
+      const service::ready_record_t &owner,
+      const service::receive_record_t &record,
+      std::vector<zlink::message_t> &parts,
+      service_provider_t &services,
+      serializer_registry_t &serializers,
+      std::function<void ()> deferred_terminal = {},
+      bool *terminal_deferred = nullptr,
+      std::function<void ()> before_application_handler = {},
+      std::optional<result_t<runtime::messaging::envelope_header_t>> *decoded_header = nullptr);
     void set_route_client (route_client_t route_client);
     void on_destroy_actor (std::function<result_t<void> (const actor_ref_t &)> destroy_actor);
     void on_actor_ref_updated (std::function<result_t<void> (const actor_ref_t &)> update_actor);

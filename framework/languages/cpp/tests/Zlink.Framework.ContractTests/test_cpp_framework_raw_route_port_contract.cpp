@@ -3,6 +3,7 @@
 #include "runtime/backend/raw_dealer_port.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/backend/raw_route_port.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -528,7 +529,9 @@ void verify_completion_only_wait_keeps_ordinary_record_unclaimed ()
     assert (target_port.poll (20ms, false) == zlink::poll_event_flag_t::none);
     assert (std::chrono::steady_clock::now () - started >= 15ms);
     const auto received = target_port.receive_if_ready (target_port.poll (0ms));
-    assert (received && received->parts == request_parts ());
+    assert (received
+            && zlink::framework::detail::backend::copy_binding_parts (received->parts)
+                 == request_parts ());
     source_port.close ();
     target_port.close ();
     monitor.close ();

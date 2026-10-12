@@ -759,7 +759,7 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
     assert (claim && claim->records.size () == records);
     for (std::size_t index = 0; index < records; ++index) {
         const auto &payload = claim->records[index].parts[1];
-        assert (std::string (payload.begin (), payload.end ()) == std::to_string (index));
+        assert (payload.to_string () == std::to_string (index));
         claim->records[index].before_application_handler ();
     }
     assert (jobs->snapshot ().permits_in_use == 0);

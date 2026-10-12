@@ -277,18 +277,6 @@ bool valid_routing_id_prefix (std::string_view value) noexcept
     return true;
 }
 
-bool framework_owned_node_message (const std::vector<zlink::message_t> &parts)
-{
-    try {
-        runtime::messaging::message_parts_t encoded (parts);
-        const auto header = runtime::messaging::envelope_codec_t{}.decode_header (encoded, false);
-        return header && header.value ().message_name.starts_with ("__zlink.");
-    }
-    catch (...) {
-        return false;
-    }
-}
-
 std::size_t message_follow_payload_bytes (const runtime::messaging::envelope_header_t &header,
                                           const zlink::message_t &payload)
 {
@@ -4092,9 +4080,9 @@ task_t<void> mesh_node_runtime_t::notify_application_actor_disconnected (
         auto encoded = codec.encode_envelope_parts (
           envelope, make_spot_actor_disconnect_route_request (actor), *_serializers);
         host::pending_operation_t operation;
-        const auto submitted =
-          co_await request_to_node (zlink::routing_id_t::from (std::string (target_node.value ())),
-                                    encoded.items (), operation, timeout);
+        const auto submitted = co_await native_node ().request_to_node (
+          zlink::routing_id_t::from (std::string (target_node.value ())), encoded.items (),
+          operation, timeout);
         if (submitted != zlink::submit_result_t::ok) {
             throw framework_exception_t (framework_error_kind_t::internal_failure,
                                          "Actor disconnect notification was not submitted");
@@ -4241,10 +4229,8 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (!framework_owned_node_message (parts)) {
-        if (const auto classified = co_await classify_node_direct_target (target))
-            co_return *classified;
-    }
+    if (const auto classified = co_await classify_node_direct_target (target))
+        co_return *classified;
     (void) metadata;
     co_return co_await _node->send_to_node (target, parts);
 }
@@ -4257,10 +4243,8 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (!framework_owned_node_message (parts)) {
-        if (const auto classified = co_await classify_node_direct_target (target))
-            co_return *classified;
-    }
+    if (const auto classified = co_await classify_node_direct_target (target))
+        co_return *classified;
     (void) metadata;
     co_return co_await _node->send_to_node (target, std::move (parts));
 }
@@ -4284,10 +4268,8 @@ mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (!framework_owned_node_message (parts)) {
-        if (const auto classified = co_await classify_node_direct_target (target))
-            co_return *classified;
-    }
+    if (const auto classified = co_await classify_node_direct_target (target))
+        co_return *classified;
     (void) metadata;
     co_return co_await _node->request_to_node (target, parts, operation_id, timeout);
 }

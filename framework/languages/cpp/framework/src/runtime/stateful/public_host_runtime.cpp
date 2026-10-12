@@ -5,6 +5,7 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include <zlink/framework/contracts/detail/handler_invocation.hpp>
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -4082,7 +4083,8 @@ void public_host_runtime_t::complete_relocation_assembly (const relocation_attem
     for (std::size_t part = 1; part < pending.request.parts.size (); ++part) {
         protocol::session_relocation_route_t route;
         try {
-            route = protocol::decode_session_relocation_route (pending.request.parts[part]);
+            route = protocol::decode_session_relocation_route (
+              protocol::message_bytes (pending.request.parts[part]));
         }
         catch (...) {
             reply_failure ();
@@ -4962,13 +4964,14 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
             infrastructure_budget.account (record_bytes);
             ++count;
             try {
-                const auto wire = protocol::decode_header (mailbox_record.parts.front ());
+                const auto wire =
+                  protocol::decode_header (protocol::message_bytes (mailbox_record.parts.front ()));
                 if (wire.kind == protocol::command::messageFollow) {
                     if (mailbox_record.parts.size () != 1
                         || mailbox_record.source_node_generation == 0)
                         continue;
-                    const auto notice =
-                      protocol::decode_message_follow (mailbox_record.parts.front ());
+                    const auto notice = protocol::decode_message_follow (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     if (message_follow_handler) {
                         try {
                             message_follow_handler (notice);
@@ -4979,8 +4982,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     continue;
                 }
                 if (wire.kind == protocol::command::boundSessionBind) {
-                    const auto bind =
-                      protocol::decode_bound_session_bind (mailbox_record.parts.front ());
+                    const auto bind = protocol::decode_bound_session_bind (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     const auto local = status ();
                     const auto actor =
                       _objects.find (stateful::object_kind_t::actor, bind.actor.actor_id);
@@ -5042,8 +5045,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     continue;
                 }
                 if (wire.kind == protocol::command::boundSessionReplaced) {
-                    const auto replacement =
-                      protocol::decode_bound_session_replaced (mailbox_record.parts.front ());
+                    const auto replacement = protocol::decode_bound_session_replaced (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     trace_mesh_host ("bound-session-replacement-received",
                                      "actor=" + replacement.actor_authority.actor_id);
                     if (bound_session_operations.replaced)
@@ -5054,8 +5057,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     if (mailbox_record.parts.empty () || !mailbox_record.reply_token
                         || !session_route_owner_resolver)
                         continue;
-                    const auto control =
-                      protocol::decode_relocation_control (mailbox_record.parts.front ());
+                    const auto control = protocol::decode_relocation_control (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     const auto *prepare = std::get_if<protocol::relocation_prepare_t> (&control);
                     const auto local = status ();
                     const auto owner = session_route_owner_resolver ();
@@ -5165,8 +5168,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 if (wire.kind == protocol::command::relocationState) {
                     if (mailbox_record.parts.size () != 1)
                         continue;
-                    const auto control =
-                      protocol::decode_relocation_control (mailbox_record.parts.front ());
+                    const auto control = protocol::decode_relocation_control (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     const auto *state = std::get_if<protocol::relocation_state_t> (&control);
                     if (!state || state->sender_role != protocol::relocation_role_t::source
                         || state->chunk_data.empty ())
@@ -5221,8 +5224,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 if (wire.kind == protocol::command::relocationCutover) {
                     if (mailbox_record.parts.size () != 1)
                         continue;
-                    const auto control =
-                      protocol::decode_relocation_control (mailbox_record.parts.front ());
+                    const auto control = protocol::decode_relocation_control (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     const auto *cutover = std::get_if<protocol::relocation_cutover_t> (&control);
                     if (!cutover || cutover->sender_role != protocol::relocation_role_t::source)
                         continue;
@@ -5330,8 +5333,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 if (wire.kind == protocol::command::sessionRelocationSeal) {
                     if (mailbox_record.parts.size () != 1 || !session_route_owner_resolver)
                         continue;
-                    const auto seal =
-                      protocol::decode_session_relocation_seal (mailbox_record.parts.front ());
+                    const auto seal = protocol::decode_session_relocation_seal (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     const auto owner = session_route_owner_resolver ();
                     if (!owner)
                         continue;
@@ -5349,8 +5352,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     if (mailbox_record.parts.size () != 1 || !session_route_owner_resolver) {
                         continue;
                     }
-                    const auto route =
-                      protocol::decode_session_relocation_route (mailbox_record.parts.front ());
+                    const auto route = protocol::decode_session_relocation_route (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     const auto authenticated_sender =
                       route.route.action == protocol::session_relocation_route_action_t::commit
                         ? route.sender_role == protocol::relocation_role_t::target
@@ -5484,8 +5487,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 }
 
                 if (wire.kind == protocol::command::actorCreate) {
-                    const auto request =
-                      protocol::decode_actor_create_header (mailbox_record.parts.front ());
+                    const auto request = protocol::decode_actor_create_header (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     if (!actor_create_target
                         || request.deadline_unix_ms <= unix_milliseconds_now ()) {
                         actor_create_operation_result_t result;
@@ -5534,7 +5537,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     if (mailbox_record.parts.empty () || mailbox_record.parts.size () > 2)
                         throw protocol::service_wire_error_t (
                           "Actor join has an invalid part count");
-                    const auto canonical = try_decode_canonical_actor_join (mailbox_record.parts);
+                    const auto canonical = try_decode_canonical_actor_join (
+                      ::zlink::framework::detail::backend::copy_binding_parts (
+                        mailbox_record.parts));
                     if (!canonical)
                         throw protocol::service_wire_error_t (
                           "Actor join is not a canonical command-28 record");
@@ -5575,16 +5580,17 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
 
                 if (wire.kind == protocol::command::instanceSpot) {
                     const auto request = protocol::decode_instance_spot_activation_header (
-                      mailbox_record.parts.front ());
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     const auto expected_parts = request.has_metadata ? 3u : 2u;
                     if (mailbox_record.parts.size () != expected_parts)
                         throw protocol::service_wire_error_t (
                           "Instance Spot activation has an invalid part count");
                     std::optional<std::vector<std::uint8_t>> metadata;
                     if (request.has_metadata)
-                        metadata = mailbox_record.parts[1];
+                        metadata = mailbox_record.parts[1].to_bytes ();
                     auto application = protocol::decode_application_payload (
-                      mailbox_record.parts[request.has_metadata ? 2 : 1], capture_flow ());
+                      protocol::message_bytes (mailbox_record.parts[request.has_metadata ? 2 : 1]),
+                      capture_flow ());
                     auto reply_record =
                       std::make_shared<const mesh::service_mailbox_record_t> (mailbox_record);
                     auto running =
@@ -5609,8 +5615,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     continue;
                 }
                 if (wire.kind == protocol::command::userSpotCreate) {
-                    const auto request =
-                      protocol::decode_user_spot_create_header (mailbox_record.parts.front ());
+                    const auto request = protocol::decode_user_spot_create_header (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
                     auto fingerprint_request = request;
                     fingerprint_request.correlation = 1;
                     const auto request_fingerprint =
@@ -5883,8 +5889,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     continue;
                 }
 
-                const auto request =
-                  protocol::decode_user_spot_close_header (mailbox_record.parts.front ());
+                const auto request = protocol::decode_user_spot_close_header (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
                 auto fingerprint_request = request;
                 fingerprint_request.correlation = 1;
                 const auto request_fingerprint =
@@ -6048,7 +6054,8 @@ bool public_host_runtime_t::dispatch_bound_session_send (
 {
     if (mailbox_record.parts.size () != 2)
         return false;
-    const auto record = protocol::decode_bound_session_send (mailbox_record.parts.front ());
+    const auto record =
+      protocol::decode_bound_session_send (protocol::message_bytes (mailbox_record.parts.front ()));
     if (mailbox_record.source_routing_id != record.actor.target_node_routing_id
         || mailbox_record.source_node_generation == 0
         || mailbox_record.source_node_generation != record.actor.target_node_generation)
@@ -6057,8 +6064,8 @@ bool public_host_runtime_t::dispatch_bound_session_send (
     _lifecycle_configuration_lane.run ([&] { operations = _bound_session_operations; }).get ();
     if (!operations.capture_send && !operations.send)
         return false;
-    const auto application =
-      protocol::decode_application_payload (mailbox_record.parts.back (), capture_flow ());
+    const auto application = protocol::decode_application_payload (
+      protocol::message_bytes (mailbox_record.parts.back ()), capture_flow ());
     auto parts = protocol::decode_application_parts (application);
     std::function<stateful::stateful_error_t (std::vector<zlink::message_t>)> delivery;
     const auto admitted = _sessions.capture_outbound (
@@ -6345,7 +6352,8 @@ std::size_t public_host_runtime_t::dispatch_application_claim (
                     release_mailbox_reservation ();
                 continue;
             }
-            const auto wire = protocol::decode_header (mailbox_record.parts.front ());
+            const auto wire =
+              protocol::decode_header (protocol::message_bytes (mailbox_record.parts.front ()));
             if (wire.kind == protocol::command::boundSessionSend) {
                 // The outbound stream delivery is a transport handoff, not an application handler.
                 mailbox_record.before_application_handler = {};
@@ -6378,22 +6386,23 @@ std::size_t public_host_runtime_t::dispatch_application_claim (
             }
             if (kind == record_kind_t::channel_send || kind == record_kind_t::channel_request) {
                 owner.owner_kind = owner_kind_t::channel;
-                owner.channel_name =
-                  kind == record_kind_t::channel_send
-                    ? protocol::decode_channel_send_header (mailbox_record.parts.front ())
-                    : protocol::decode_channel_request_header (mailbox_record.parts.front ())
-                        .channel_name;
+                owner.channel_name = kind == record_kind_t::channel_send
+                                       ? protocol::decode_channel_send_header (
+                                           protocol::message_bytes (mailbox_record.parts.front ()))
+                                       : protocol::decode_channel_request_header (
+                                           protocol::message_bytes (mailbox_record.parts.front ()))
+                                           .channel_name;
                 record.channel_name = owner.channel_name;
             } else if (kind == record_kind_t::spot_send || kind == record_kind_t::spot_request) {
                 owner.owner_kind = owner_kind_t::spot;
-                const auto spot =
-                  protocol::decode_spot_message_header (mailbox_record.parts.front (), wire.kind);
+                const auto spot = protocol::decode_spot_message_header (
+                  protocol::message_bytes (mailbox_record.parts.front ()), wire.kind);
                 owner.spot_id = spot.target.spot_id;
                 record.spot_route = spot.target;
             } else if (kind == record_kind_t::actor_send || kind == record_kind_t::actor_request) {
                 owner.owner_kind = owner_kind_t::actor;
-                const auto actor =
-                  protocol::decode_actor_message_header (mailbox_record.parts.front (), wire.kind);
+                const auto actor = protocol::decode_actor_message_header (
+                  protocol::message_bytes (mailbox_record.parts.front ()), wire.kind);
                 record.actor_route = actor.target;
                 record.message_follow_hop_count = actor.message_follow_hop_count;
                 record.reply_route_id = actor.correlation.value_or (0);
@@ -6422,8 +6431,8 @@ std::size_t public_host_runtime_t::dispatch_application_claim (
             } else {
                 owner.owner_kind = owner_kind_t::node;
             }
-            const auto payload =
-              protocol::decode_application_payload (mailbox_record.parts[1], capture_flow ());
+            auto parts = protocol::decode_application_parts (std::move (mailbox_record.parts[1]),
+                                                             capture_flow ());
             trace_mesh_host (
               "dispatch",
               std::string ("kind=") + std::to_string (static_cast<int> (kind)) + " source="
@@ -6433,7 +6442,7 @@ std::size_t public_host_runtime_t::dispatch_application_claim (
             record.release_mailbox_reservation = release_mailbox_reservation;
             record.retain_mailbox_reservation = retain_mailbox_reservation;
             record.transferred_owner_byte_cost = claim_holder->record_bytes[index];
-            dispatch (owner, record, protocol::decode_application_parts (payload));
+            dispatch (owner, record, std::move (parts));
             ++count;
         }
         catch (const protocol::service_wire_error_t &) {

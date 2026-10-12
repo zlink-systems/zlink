@@ -1667,17 +1667,19 @@ void app_t::_apply_zlink_framework ()
                                                           ? terminal.error ()->what ()
                                                           : "Actor handoff request failed");
                   }
-                  const auto body = terminal ? terminal.value () : zlink::message_t{};
-                  auto parts =
-                    runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (header, body);
-                  co_return co_await application_mesh->send_to_node (source_node, parts.items ())
+                  auto body = terminal ? terminal.value ().copy () : zlink::message_t{};
+                  auto parts = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+                    header, std::move (body));
+                  co_return co_await application_mesh->native_node ().send_to_node (
+                    source_node, std::move (parts).take_items ())
                     == zlink::submit_result_t::ok;
               });
             spot_runtime.on_actor_leave_notification (
               [application_mesh] (
                 const zlink::routing_id_t &target_node,
                 std::vector<zlink::message_t> parts) -> task_t<zlink::submit_result_t> {
-                  co_return co_await application_mesh->send_to_node (target_node, parts);
+                  co_return co_await application_mesh->native_node ().send_to_node (
+                    target_node, std::move (parts));
               });
         }
     }

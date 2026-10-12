@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "spot_runtime.hpp"
+#include "runtime/mesh/mesh_record_dispatcher.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 
@@ -14200,7 +14201,7 @@ spot_node_runtime_t::send_spot_mesh_parts_exact (const spot_id_t &source_spot_id
           framework_error_kind_t::not_found,
           "SPOT mesh send exact source or target generation is unavailable");
     }
-    auto native_parts = parts.items ();
+    auto native_parts = std::move (parts).take_items ();
     if (native_parts.empty ()) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "SPOT mesh send requires at least one message part");
@@ -14463,14 +14464,16 @@ task_t<std::pair<std::size_t, std::size_t>> spot_node_runtime_t::monitoring_coun
     });
 }
 
-bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &owner,
-                                                const service::receive_record_t &record,
-                                                std::vector<zlink::message_t> &parts,
-                                                service_provider_t &services,
-                                                serializer_registry_t &serializers,
-                                                std::function<void ()> deferred_terminal,
-                                                bool *terminal_deferred,
-                                                std::function<void ()> before_application_handler)
+bool spot_node_runtime_t::dispatch_mesh_record (
+  const service::ready_record_t &owner,
+  const service::receive_record_t &record,
+  std::vector<zlink::message_t> &parts,
+  service_provider_t &services,
+  serializer_registry_t &serializers,
+  std::function<void ()> deferred_terminal,
+  bool *terminal_deferred,
+  std::function<void ()> before_application_handler,
+  std::optional<result_t<runtime::messaging::envelope_header_t>> *decoded_header)
 {
     if (terminal_deferred)
         *terminal_deferred = false;
@@ -14505,9 +14508,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
 
         runtime::messaging::message_parts_t encoded (std::move (parts));
         runtime::messaging::envelope_codec_t codec;
-        auto header = codec.decode_header (
-          encoded, detail::message_flow_tracer_t (_state->dispatch).capture_enabled ());
+        auto header = detail::mesh_record_dispatcher_t::decode_header (encoded, _state->dispatch);
         if (!header) {
+            if (decoded_header)
+                decoded_header->emplace (std::move (header));
             parts = std::move (encoded).take_items ();
             return false;
         }
@@ -14836,6 +14840,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 return true;
             }
         }
+        if (decoded_header)
+            decoded_header->emplace (std::move (header));
         parts = std::move (encoded).take_items ();
         return false;
     }

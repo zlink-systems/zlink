@@ -1504,7 +1504,8 @@ bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
     service_mailbox_record_t record;
     record.owner = "transferred-owner";
     record.domain = service_mailbox_domain_t::application;
-    record.parts.emplace_back (512, std::uint8_t{0x2a});
+    record.parts.push_back (
+      zlink::message_t::from (std::vector<std::uint8_t> (512, std::uint8_t{0x2a})));
     if (!mailbox.try_enqueue (std::move (record))) {
         (*complete_active) ([] {});
         queue.drain ();

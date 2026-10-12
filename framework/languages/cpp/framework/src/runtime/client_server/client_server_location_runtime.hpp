@@ -45,7 +45,8 @@ pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        mesh::service_liveness_registry_t::clock_t::time_point now,
                        std::shared_ptr<application_job_queue_t> application_jobs,
                        std::shared_ptr<application_job_queue_t::permit_t> application_permit,
-                       receive_batch_budget_t budget = {});
+                       receive_batch_budget_t budget = {},
+                       const dispatch_options_t *dispatch_options = nullptr);
 
 class client_server_location_runtime_t final : public client_server_runtime_t
 {

@@ -2653,14 +2653,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   return;
                               }
                               run_direct ([&] {
+                                  std::optional<result_t<messaging::envelope_header_t>>
+                                    decoded_header;
                                   if (spot_runtime.dispatch_mesh_record (
-                                        owner, record, parts, *_services, *_serializers)) {
+                                        owner, record, parts, *_services, *_serializers, {},
+                                        nullptr, {}, &decoded_header)) {
                                       return;
                                   }
                                   detail::mesh_record_dispatcher_t dispatcher (
                                     *_services, *_serializers, registration->handlers, *_filters,
                                     _dispatch_options);
-                                  (void) dispatcher.dispatch (record, std::move (parts));
+                                  (void) dispatcher.dispatch (record, std::move (parts),
+                                                              std::move (decoded_header));
                               });
                           },
                           accept_application_receive, next_application_receive))
@@ -2977,10 +2981,11 @@ void mesh_node_host_service_t::dispatch_application (
           std::make_shared<application_dispatch_terminal_owner_t> (std::move (terminal));
         detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
         bool terminal_deferred = false;
+        std::optional<result_t<messaging::envelope_header_t>> decoded_header;
         const auto handled = application_spot_runtime.dispatch_mesh_record (
           owner, record, parts, *services, *serializers,
           [deferred_terminal] { deferred_terminal->settle (); }, &terminal_deferred,
-          record.before_application_handler);
+          record.before_application_handler, &decoded_header);
         trace_mesh_application ("framework-dispatch", record, parts.size (),
                                 handled ? "handled" : "not-handled");
         if (!handled
@@ -2989,7 +2994,8 @@ void mesh_node_host_service_t::dispatch_application (
             detail::mesh_record_dispatcher_t dispatcher (
               *services, *serializers, registration->handlers, *filters, dispatch_options,
               record.before_application_handler);
-            const auto dispatched = dispatcher.dispatch (record, std::move (parts));
+            const auto dispatched =
+              dispatcher.dispatch (record, std::move (parts), std::move (decoded_header));
             trace_mesh_application ("route-dispatch", record, 0,
                                     dispatched ? "success" : "failure");
         }

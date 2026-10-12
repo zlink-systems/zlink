@@ -262,13 +262,14 @@ pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        mesh::service_liveness_registry_t::clock_t::time_point now,
                        std::shared_ptr<application_job_queue_t> application_jobs,
                        std::shared_ptr<application_job_queue_t::permit_t> application_permit,
-                       receive_batch_budget_t budget)
+                       receive_batch_budget_t budget,
+                       const dispatch_options_t *dispatch_options)
 {
     bool progressed = (co_await server->drain_monitor_events_task (now)) != 0;
     std::vector<received_application_record_t> application_records;
     while (application_permit && budget.can_receive ()) {
         const auto result = co_await server->pump_one (now, std::move (application_permit), &budget,
-                                                       &application_records);
+                                                       &application_records, dispatch_options);
         if (result == client_server_pump_result_t::no_data
             || result == client_server_pump_result_t::backpressured)
             break;
@@ -1245,7 +1246,8 @@ task_t<void> client_server_location_runtime_t::pump ()
                         auto task = std::make_shared<task_t<bool>> (pump_server_transport (
                           server.owner, now, _application_jobs,
                           std::make_shared<application_job_queue_t::permit_t> (
-                            std::move (*reserved))));
+                            std::move (*reserved)),
+                          {}, &_channel_runtime.dispatch_options_ref ()));
                         {
                             std::lock_guard dispatch_lock (_server_progress_mutex);
                             state->task = task;
@@ -1362,7 +1364,7 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                                        dispatch_limits::receive_batch_bytes);
             if (!active_claim)
                 break;
-            for (const auto &record : active_claim->records) {
+            for (auto &record : active_claim->records) {
                 if (_stop->load (std::memory_order_acquire)) {
                     if (record.reply_token) {
                         const framework_exception_t error (
@@ -1381,42 +1383,43 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                  * envelope: [JSON header, payload]. flow-correlation §4: at
                  * Off the wire flow pair is neither validated nor
                  * materialized at this ingress. */
-                    auto envelope_header = runtime::messaging::envelope_codec_t{}.decode_header (
-                      zlink::message_t::from (record.parts[0]),
-                      detail::message_flow_tracer_t (_channel_runtime.dispatch_options_ref ())
-                        .capture_enabled ());
-                    if (!envelope_header) {
-                        throw framework_exception_t (
-                          framework_error_kind_t::protocol_error,
-                          envelope_header.error () != nullptr
-                            ? envelope_header.error ()->what ()
-                            : "ClientServer request envelope is malformed");
+                    if (!record.envelope_header) {
+                        auto envelope_header =
+                          runtime::messaging::envelope_codec_t{}.decode_header (
+                            record.parts[0],
+                            detail::message_flow_tracer_t (_channel_runtime.dispatch_options_ref ())
+                              .capture_enabled ());
+                        if (!envelope_header) {
+                            throw framework_exception_t (
+                              framework_error_kind_t::protocol_error,
+                              envelope_header.error () != nullptr
+                                ? envelope_header.error ()->what ()
+                                : "ClientServer request envelope is malformed");
+                        }
+                        record.envelope_header.emplace (std::move (envelope_header.value ()));
                     }
-                    auto &request_envelope = envelope_header.value ();
-                    const protocol::application_payload_t payload{
-                      request_envelope.message_name, request_envelope.content_type, record.parts[1],
-                      request_envelope.flow_id, request_envelope.flow_origin};
-                    const auto message = zlink::message_t::from (payload.payload_bytes ());
+                    auto &request_envelope = *record.envelope_header;
+                    const auto &message = record.parts[1];
                     detail::inbound_message_context_t inbound;
                     inbound.before_application_handler = record.before_application_handler;
                     inbound.message.channel_name = record.owner;
-                    inbound.message.packet_name = payload.packet_name;
-                    inbound.message.content_type = payload.content_type;
+                    inbound.message.packet_name = request_envelope.message_name;
+                    inbound.message.content_type = request_envelope.content_type;
                     inbound.message.metadata =
                       message_metadata_t (std::move (request_envelope.metadata));
                     if (!request_envelope.correlation_id.empty ())
                         inbound.message.correlation_id = request_envelope.correlation_id;
                     detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
                     auto flow_scope = runtime::flow_context_t::enter (
-                      payload.flow_id, payload.flow_origin, flow.mode (), flow_origin_t::inbound,
-                      std::nullopt);
+                      request_envelope.flow_id, request_envelope.flow_origin, flow.mode (),
+                      flow_origin_t::inbound, std::nullopt);
                     flow.trace (message_flow_outcome_t::received, [&] {
                         return message_flow_event_t{message_flow_outcome_t::received,
                                                     dispatch_error_surface_t::channel,
                                                     record.reply_token
                                                       ? dispatch_message_kind_t::request
                                                       : dispatch_message_kind_t::send,
-                                                    payload.packet_name,
+                                                    request_envelope.message_name,
                                                     record.owner,
                                                     std::nullopt,
                                                     inbound.message.correlation_id,
@@ -1431,7 +1434,7 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                                                     record.reply_token
                                                       ? dispatch_message_kind_t::request
                                                       : dispatch_message_kind_t::send,
-                                                    payload.packet_name,
+                                                    request_envelope.message_name,
                                                     record.owner,
                                                     std::nullopt,
                                                     inbound.message.correlation_id,
@@ -1446,11 +1449,11 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                     if (record.reply_token) {
                         auto reply =
                           co_await _channel_runtime.dispatch_request_on_handler_executor (
-                            record.owner, {}, payload.packet_name, scope.provider (), *_serializers,
-                            *_handlers, message, inbound);
+                            record.owner, {}, request_envelope.message_name, scope.provider (),
+                            *_serializers, *_handlers, message, inbound);
                         if (reply) {
                             pending_reply.emplace (protocol::application_payload_t{
-                              payload.packet_name,
+                              request_envelope.message_name,
                               std::string (
                                 runtime::messaging::envelope_codec_t::default_content_type),
                               reply.value ().to_bytes ()});
@@ -1460,21 +1463,21 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                                                      ? reply.error ()->what ()
                                                      : "ClientServer request handler failed");
                             report_client_server_dispatch_error (
-                              _channel_runtime.dispatch_options_ref (), record, payload.packet_name,
-                              dispatch_message_kind_t::request,
+                              _channel_runtime.dispatch_options_ref (), record,
+                              request_envelope.message_name, dispatch_message_kind_t::request,
                               dispatch_error_action_t::reply_error, error);
                             pending_failure_reply = error;
                         }
                     } else {
                         try {
                             co_await _channel_runtime.dispatch_send_on_handler_executor (
-                              record.owner, {}, payload.packet_name, scope.provider (),
+                              record.owner, {}, request_envelope.message_name, scope.provider (),
                               *_serializers, *_handlers, message, inbound);
                             flow.trace (message_flow_outcome_t::completed, [&] {
                                 return message_flow_event_t{message_flow_outcome_t::completed,
                                                             dispatch_error_surface_t::channel,
                                                             dispatch_message_kind_t::send,
-                                                            payload.packet_name,
+                                                            request_envelope.message_name,
                                                             record.owner,
                                                             std::nullopt,
                                                             inbound.message.correlation_id,
@@ -1486,8 +1489,9 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                         }
                         catch (const framework_exception_t &error) {
                             report_client_server_dispatch_error (
-                              _channel_runtime.dispatch_options_ref (), record, payload.packet_name,
-                              dispatch_message_kind_t::send, dispatch_error_action_t::drop, error);
+                              _channel_runtime.dispatch_options_ref (), record,
+                              request_envelope.message_name, dispatch_message_kind_t::send,
+                              dispatch_error_action_t::drop, error);
                         }
                     }
                 }
