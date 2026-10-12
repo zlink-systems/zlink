@@ -46,7 +46,8 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         activation.EnsureOperationAllowed();
@@ -67,7 +68,8 @@ internal sealed class ZLinkSpotOutboundEndpoint(
                     parts,
                     requestTimeout,
                     cancellationToken,
-                    metadata
+                    metadata,
+                    requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
         }

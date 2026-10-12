@@ -652,7 +652,8 @@ public sealed partial class EntrySpotActorDispatchTests
             ulong deadlineUnixMs,
             TimeSpan timeout,
             ReadOnlyMemory<byte> metadata,
-            CancellationToken cancellationToken
+            CancellationToken cancellationToken,
+            Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null
         )
         {
             Assert.False(request);

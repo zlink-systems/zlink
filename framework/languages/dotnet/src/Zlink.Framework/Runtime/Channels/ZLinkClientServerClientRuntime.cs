@@ -239,7 +239,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     internal async ValueTask<IReadOnlyList<Message>> RequestAsync(
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         Interlocked.Increment(ref _pendingRequests);
@@ -293,7 +294,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             target.Socket.Request().Messages(pending).Timeout(nativeTimeout),
                             nativeTimeout,
                             token,
-                            target.Liveness
+                            target.Liveness,
+                            requestAdmission: requestAdmission
                         ),
                     timeout - _time.GetElapsedTime(started),
                     $"ClientServer request failed for '{_channelName}': {{0}}.",

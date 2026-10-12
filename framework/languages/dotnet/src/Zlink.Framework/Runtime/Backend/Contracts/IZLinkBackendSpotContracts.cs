@@ -186,7 +186,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
-        bool durable = false
+        bool durable = false,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         ValueTask.FromException<ZLinkBackendRouteReceived>(
             new NotSupportedException(
@@ -274,7 +275,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     );
 
     bool ReplyActorNoBind(
@@ -331,7 +333,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         ulong deadlineUnixMs,
         TimeSpan timeout,
         ReadOnlyMemory<byte> metadata,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         throw new NotSupportedException(
             "This MeshNode backend does not support Instance Spot activation."
@@ -530,7 +533,8 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         ValueTask.FromException<ZLinkBackendRouteReceived>(
             new NotSupportedException("This Spot backend does not support direct channel requests.")
@@ -597,7 +601,8 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
         Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
-            null
+            null,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         ValueTask.FromException<ZLinkBackendRouteReceived>(
             new NotSupportedException("This Spot backend does not support direct Spot requests.")

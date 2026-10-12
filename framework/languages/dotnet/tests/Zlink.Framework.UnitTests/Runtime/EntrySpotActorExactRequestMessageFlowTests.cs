@@ -9,6 +9,86 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Fact]
+    public async Task Actor_PublicAsync_PreservesAdmissionAndReplyStageIsolation()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            new CapturingMessageFlowObserver()
+        );
+        var firstEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var firstReply = new TaskCompletionSource<IReadOnlyList<Message>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondReply = new TaskCompletionSource<IReadOnlyList<Message>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var count = 0;
+        node.ActorRequestSubmissionHandler = (admission, token) =>
+        {
+            Assert.NotNull(admission);
+            if (++count == 1)
+            {
+                admission.Complete();
+                firstEntered.SetResult();
+                return new ValueTask<IReadOnlyList<Message>>(firstReply.Task);
+            }
+            secondEntered.SetResult();
+            return new ValueTask<IReadOnlyList<Message>>(secondReply.Task.WaitAsync(token));
+        };
+        try
+        {
+            var client = new ZLinkActorClient(runtime);
+            var first = client
+                .RequestToActor(actor.ActorId, new ProbeRouteMessage("first"))
+                .Async<ProbeReply>();
+            await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await first.Admitted;
+            Assert.False(first.Reply.IsCompleted);
+            using var cancellation = new CancellationTokenSource();
+            var second = client
+                .RequestToActor(actor.ActorId, new ProbeRouteMessage("second"))
+                .Async<ProbeReply>(cancellation.Token);
+            await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(second.Admitted.IsCompleted);
+            Assert.False(second.Reply.IsCompleted);
+            cancellation.Cancel();
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                second.AsTask()
+            );
+            Assert.Same(
+                failure,
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    second.Admitted.AsTask()
+                )
+            );
+            Assert.True(first.Admitted.IsCompletedSuccessfully);
+            Assert.False(first.Reply.IsCompleted);
+            var replyFailure = new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InternalFailure,
+                "reply terminal"
+            );
+            firstReply.SetException(replyFailure);
+            Assert.Same(
+                replyFailure,
+                await Assert.ThrowsAsync<ZLinkFrameworkException>(() => first.AsTask())
+            );
+            await first.Admitted;
+        }
+        finally
+        {
+            firstReply.TrySetCanceled();
+            secondReply.TrySetCanceled();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Actor_Client_Request_All_Failure_Branches_Emit_One_Terminal_Each()
     {
         var node = new CapturingSpotNode();

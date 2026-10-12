@@ -121,7 +121,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         TimeSpan timeout,
         ReadOnlyMemory<byte> metadata,
         CancellationToken cancellationToken,
-        ulong? activationDeadlineUnixMs = null
+        ulong? activationDeadlineUnixMs = null,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         _ =
@@ -218,7 +219,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     request,
                     deadlineUnixMs,
                     metadata.IsEmpty ? null : metadata,
-                    cancellationToken
+                    cancellationToken,
+                    requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
             if (local.Result != RequestResult.Ok)
@@ -238,7 +240,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 deadlineUnixMs,
                 timeout,
                 metadata,
-                cancellationToken
+                cancellationToken,
+                requestAdmission: requestAdmission
             )
             .ConfigureAwait(false);
     }

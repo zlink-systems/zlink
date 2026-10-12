@@ -12587,7 +12587,8 @@ public sealed partial class EntrySpotActorDispatchTests
             CancellationToken cancellationToken,
             ReadOnlyMemory<byte> metadata = default,
             Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
-                null
+                null,
+            Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -13118,6 +13119,12 @@ public sealed partial class EntrySpotActorDispatchTests
             IReadOnlyList<Message>
         >? ActorRequestHandler { get; set; }
 
+        public Func<
+            ZLinkRequestAdmission?,
+            CancellationToken,
+            ValueTask<IReadOnlyList<Message>>
+        >? ActorRequestSubmissionHandler { get; set; }
+
         public ConcurrentBag<ZLinkBackendActorRef> DestroyedActors { get; } = [];
 
         public ConcurrentQueue<string> LifecycleEvents { get; } = new();
@@ -13643,7 +13650,8 @@ public sealed partial class EntrySpotActorDispatchTests
             TimeSpan timeout,
             CancellationToken cancellationToken,
             ReadOnlyMemory<byte> metadata = default,
-            bool durable = false
+            bool durable = false,
+            Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -13724,12 +13732,16 @@ public sealed partial class EntrySpotActorDispatchTests
             ZLinkBackendActorRef actor,
             IReadOnlyList<Message> parts,
             TimeSpan? timeout,
-            CancellationToken cancellationToken
+            CancellationToken cancellationToken,
+            Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null
         )
         {
             LastActorRequestTimeout = timeout;
             cancellationToken.ThrowIfCancellationRequested();
             ActorRequests.Add((actor, CopyParts(parts)));
+            if (ActorRequestSubmissionHandler is not null)
+                return ActorRequestSubmissionHandler(requestAdmission, cancellationToken);
+            requestAdmission?.Complete();
             return ValueTask.FromResult(
                 ActorRequestHandler?.Invoke(parts) ?? throw new NotSupportedException()
             );

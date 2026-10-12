@@ -149,6 +149,7 @@ public sealed class SubmitAdmissionRuntimeTests
                     typeof(TimeSpan),
                     typeof(CancellationToken),
                     typeof(ZLinkServiceLiveness),
+                    typeof(ZLinkRequestAdmission),
                 ]
             )!;
             var request =
@@ -162,6 +163,7 @@ public sealed class SubmitAdmissionRuntimeTests
                                 : new[] { payload },
                             TimeSpan.FromSeconds(5),
                             default(CancellationToken),
+                            null,
                             null,
                         ]
                     )!;
@@ -264,62 +266,6 @@ public sealed class SubmitAdmissionRuntimeTests
         for (var index = 0; index < 10_000; index++)
             _ = submission.EnsureAcceptedAsync();
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
-    }
-
-    [Fact]
-    public async Task BackpressuredRequestSubmission_WaitsForAdmissionBeforeReturningReply()
-    {
-        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var expectedReply = Array.Empty<Message>();
-        var reply = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        var completion = ZLinkRequestSubmissionOutcome.AwaitReplyAsync(
-            SubmitResult.Backpressured,
-            admitted.Task,
-            reply.Task
-        );
-
-        reply.SetResult(expectedReply);
-        Assert.False(completion.IsCompleted);
-
-        admitted.SetResult();
-        Assert.Same(expectedReply, await completion);
-    }
-
-    [Fact]
-    public async Task BackpressuredRequestSubmission_PropagatesAdmissionFailure()
-    {
-        var expectedFailure = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
-        var expectedReply = Array.Empty<Message>();
-        // Keep Reply successful so the admission failure must be observed independently.
-        var completion = ZLinkRequestSubmissionOutcome.AwaitReplyAsync(
-            SubmitResult.Backpressured,
-            Task.FromException(expectedFailure),
-            Task.FromResult<IReadOnlyList<Message>>(expectedReply)
-        );
-
-        var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => completion);
-
-        Assert.Same(expectedFailure, failure);
-    }
-
-    [Fact]
-    public async Task AcceptedRequestSubmission_UsesReplyWithoutWaitingForAdmission()
-    {
-        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var expectedReply = Array.Empty<Message>();
-        var reply = Task.FromResult<IReadOnlyList<Message>>(expectedReply);
-
-        var completion = ZLinkRequestSubmissionOutcome.AwaitReplyAsync(
-            SubmitResult.Ok,
-            admitted.Task,
-            reply
-        );
-
-        Assert.Same(reply, completion);
-        Assert.Same(expectedReply, await completion);
-        Assert.False(admitted.Task.IsCompleted);
     }
 
     [Fact]
@@ -448,17 +394,25 @@ public sealed class SubmitAdmissionRuntimeTests
         var operation = new CountingRequestSubmitOperation(
             pair.Client.Request().Message(request).Timeout(TimeSpan.FromSeconds(5))
         );
-        var completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
-            operation,
-            TimeSpan.FromMilliseconds(100)
-        );
+        var requestResult = StartPublicRequest(operation, TimeSpan.FromMilliseconds(100));
+        var completion = requestResult.AsTask();
+        Assert.False(requestResult.Admitted.IsCompleted);
         Assert.Equal(SubmitResult.Backpressured, operation.LastSubmission.Result);
         if (admitBeforeDeadline)
             await RecoverCapacityAsync();
+        if (admitBeforeDeadline)
+            await requestResult.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(2));
         var failure = await Assert.ThrowsAsync<ZlinkRequestException>(() =>
             completion.WaitAsync(TimeSpan.FromSeconds(2))
         );
         Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, failure.Result);
+        if (!admitBeforeDeadline)
+            Assert.Same(
+                failure,
+                await Assert.ThrowsAsync<ZlinkRequestException>(() =>
+                    requestResult.Admitted.AsTask()
+                )
+            );
         Assert.Equal(1, operation.SubmissionCount);
 
         // Ending the caller wait does not cancel binding's pending submission.
@@ -672,6 +626,125 @@ public sealed class SubmitAdmissionRuntimeTests
             message => Assert.Throws<ObjectDisposedException>(() => _ = message.Size)
         );
     }
+
+    [Fact]
+    public async Task PublicRequest_AdmissionCompletesBeforeReplyAndCallsAreIsolated()
+    {
+        using var pair = new AdmissionPair();
+        using var firstPayload = Message.From("first");
+        using var secondPayload = Message.From("second");
+        var first = StartPublicRequest(pair.Client.Request().Message(firstPayload));
+        var second = StartPublicRequest(pair.Client.Request().Message(secondPayload));
+        await first.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+        await second.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(first.Reply.IsCompleted);
+        Assert.False(second.Reply.IsCompleted);
+        using var receivedFirst = Received.Create();
+        using var receivedSecond = Received.Create();
+        Assert.True(pair.Server.Recv(receivedFirst));
+        Assert.True(pair.Server.Recv(receivedSecond));
+        using var firstReply = Message.From("first-reply");
+        receivedFirst.Reply().Message(firstReply).Submit();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    pair.DrainCompletions();
+                    return first.Reply.IsCompleted;
+                },
+                TimeSpan.FromSeconds(2)
+            )
+        );
+        ZLinkMessageParts.DisposeAll(await first);
+        Assert.False(second.Reply.IsCompleted);
+        using var secondReply = Message.From("second-reply");
+        receivedSecond.Reply().Message(secondReply).Submit();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    pair.DrainCompletions();
+                    return second.Reply.IsCompleted;
+                },
+                TimeSpan.FromSeconds(2)
+            )
+        );
+        ValueTask<IReadOnlyList<Message>> compatibleReply = second;
+        ZLinkMessageParts.DisposeAll(await compatibleReply);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PublicRequest_BlockedAdmissionAndReplyFailWithSameCause(bool cancel)
+    {
+        using var pair = new AdmissionPair();
+        var fillers = 0;
+        for (var sequence = 0; sequence < 32; sequence++)
+        {
+            using var filler = Message.From(AdmissionPair.Payload(sequence));
+            var submission = pair.Client.Send().Message(filler).Async();
+            fillers++;
+            if (submission.Result == SubmitResult.Backpressured)
+                break;
+        }
+        using var cancellation = new CancellationTokenSource();
+        using var payload = Message.From(AdmissionPair.Payload(100));
+        var operation = new CountingRequestSubmitOperation(
+            pair.Client.Request().Message(payload).Timeout(TimeSpan.FromSeconds(5))
+        );
+        var request = StartPublicRequest(
+            operation,
+            TimeSpan.FromMilliseconds(100),
+            cancellation.Token
+        );
+        Assert.Equal(SubmitResult.Backpressured, operation.LastSubmission.Result);
+        Assert.False(request.Admitted.IsCompleted);
+        Assert.False(request.Reply.IsCompleted);
+        if (cancel)
+            cancellation.Cancel();
+        var replyFailure = await Assert.ThrowsAnyAsync<Exception>(() =>
+            request.AsTask().WaitAsync(TimeSpan.FromSeconds(2))
+        );
+        var admissionFailure = await Assert.ThrowsAnyAsync<Exception>(() =>
+            request.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(2))
+        );
+        Assert.Same(replyFailure, admissionFailure);
+        if (cancel)
+            Assert.IsAssignableFrom<OperationCanceledException>(replyFailure);
+        else
+            Assert.Equal(
+                ZlinkRequestException.ErrorCode.TimedOut,
+                Assert.IsType<ZlinkRequestException>(replyFailure).Result
+            );
+        Assert.Equal(1, operation.SubmissionCount);
+        // Preserve the existing caller-cancellation connection and release the
+        // pending native operation using the fixture's existing completion pump.
+        for (var index = 0; index < fillers; index++)
+        {
+            using var filler = Received.Create();
+            Assert.True(pair.Server.Recv(filler));
+            pair.DrainCompletions();
+        }
+    }
+
+    private static Zlink.Framework.Contracts.Channels.ZLinkRequest<
+        IReadOnlyList<Message>
+    > StartPublicRequest(
+        RequestSubmitOperation operation,
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default
+    ) =>
+        ZLinkRequestAdmission.Run<IReadOnlyList<Message>>(admission => new ValueTask<
+            IReadOnlyList<Message>
+        >(
+            ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                operation,
+                timeout ?? TimeSpan.FromSeconds(5),
+                cancellationToken,
+                requestAdmission: admission
+            )
+        ));
 
     private sealed class AdmissionPair : IDisposable
     {

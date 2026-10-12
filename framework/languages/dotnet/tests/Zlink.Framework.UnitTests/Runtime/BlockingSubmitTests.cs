@@ -283,11 +283,13 @@ public sealed class BlockingSubmitTests
 
         public IZLinkRequestCall Timeout(TimeSpan timeout) => this;
 
-        public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
+        public Zlink.Framework.Contracts.Channels.ZLinkRequest<TReply> Async<TReply>(
+            CancellationToken cancellationToken = default
+        )
         {
             Submissions++;
             SubmittingThreadId = Environment.CurrentManagedThreadId;
-            return (ValueTask<TReply>)(object)result;
+            return new(ValueTask.CompletedTask, (ValueTask<TReply>)(object)result);
         }
 
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>

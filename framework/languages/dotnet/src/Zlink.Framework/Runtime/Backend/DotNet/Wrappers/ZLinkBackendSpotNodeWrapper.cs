@@ -399,7 +399,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         ulong deadlineUnixMs,
         TimeSpan timeout,
         ReadOnlyMemory<byte> metadata,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         EnsureStarted();
@@ -463,7 +464,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                     deadlineUnixMs,
                     timeout,
                     SendFlags.None,
-                    metadata
+                    metadata,
+                    requestAdmission: requestAdmission
                 )
         );
         if (submit != SubmitResult.Ok)
@@ -1298,7 +1300,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
-        bool durable = false
+        bool durable = false,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         _node.RequestToNodeDirectAsync(
             targetNodeRid,
@@ -1307,7 +1310,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             metadata,
             timeout,
             cancellationToken,
-            durable
+            durable,
+            requestAdmission: requestAdmission
         );
 
     public SubmitResult SendToActor(
@@ -1330,7 +1334,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
@@ -1365,7 +1370,14 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                     new Messaging.ZLinkRequestTerminalException(result, record.FailureErrno)
                 );
             },
-            id => _node.RequestToActor(ToNativeActor(actor), parts, id, timeout ?? default)
+            id =>
+                _node.RequestToActor(
+                    ToNativeActor(actor),
+                    parts,
+                    id,
+                    timeout ?? default,
+                    requestAdmission: requestAdmission
+                )
         );
         if (submit != SubmitResult.Ok)
             throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
