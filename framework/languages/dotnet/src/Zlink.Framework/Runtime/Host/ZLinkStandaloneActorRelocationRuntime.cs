@@ -222,7 +222,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             // after the source fences in the initial journal are verified.
             var sourceNode = runtime.GetSpotNodeRuntime(sourceRef.Value.NodeRid);
             //  Spec 30 §11: the SafeToShutdown obligation starts at
-            //  seal, not at cutover — waiting until CommitMessageFollow
+            //  seal, not at cutover — waiting until cutover
             //  would let a shutdown query race the seal-to-cutover
             //  window. Attaching the token in the same locked call as
             //  the seal closes the window where a status read could
@@ -808,16 +808,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             sourceSnapshot.AuthorityOwnerGeneration,
             targetAuthorityOwnerGeneration,
             sourceAuthority.OwnerLeaseGeneration,
-            checked((ulong)target.LeaseGeneration)
+            checked((ulong)target.LeaseGeneration),
+            registration.Locations.Options.MessageFollowDuration,
+            registration.Locations.Options.RelocationCutoverWaitTimeout
         );
         var trailingDeliveries = runtime.RelayStandaloneActorRelocationTrailing(
             actorState,
             sourceRef,
             trailing
-        );
-        actorState.Handoff.CommitMessageFollow(
-            registration.Locations.Options.MessageFollowDuration,
-            registration.Locations.Options.RelocationCutoverWaitTimeout
         );
         if (
             trailingDeliveries.Count != 0

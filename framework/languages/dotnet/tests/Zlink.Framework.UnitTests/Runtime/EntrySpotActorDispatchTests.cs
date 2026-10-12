@@ -1476,9 +1476,10 @@ public sealed partial class EntrySpotActorDispatchTests
                 sourceAuthorityOwnerGeneration: 41,
                 targetAuthorityOwnerGeneration: 42,
                 sourceOwnerLeaseGeneration: 51,
-                targetOwnerLeaseGeneration: 52
+                targetOwnerLeaseGeneration: 52,
+                TimeSpan.FromSeconds(5)
             );
-            state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(5));
+
             using var body = Message.From(Encoding.UTF8.GetBytes("body"));
 
             var exception = Assert.Throws<ZLinkFrameworkException>(() =>
@@ -1543,9 +1544,10 @@ public sealed partial class EntrySpotActorDispatchTests
                 sourceAuthorityOwnerGeneration: 47,
                 targetAuthorityOwnerGeneration: 48,
                 sourceOwnerLeaseGeneration: 53,
-                targetOwnerLeaseGeneration: 54
+                targetOwnerLeaseGeneration: 54,
+                TimeSpan.FromSeconds(5)
             );
-            state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(5));
+
             state.Handoff.CompleteSourceMigration();
             state.Handoff.BeginCapture();
 
@@ -1764,8 +1766,10 @@ public sealed partial class EntrySpotActorDispatchTests
             ReplyFlags: 87
         );
         var target = new ZLinkBackendActorRef(RoutingId.From("remote-owner"), "actor-relay", 9);
-        var messageFollowLease = new ZLinkActorMessageFollowLease(TimeProvider.System);
-        messageFollowLease.Commit(TimeSpan.FromSeconds(5));
+        var messageFollowLease = new ZLinkActorMessageFollowLease(
+            TimeProvider.System,
+            TimeSpan.FromSeconds(5)
+        );
         var messageFollowRoute = new ZLinkActorMessageFollowRoute(
             new ZLinkBackendActorRef(RoutingId.From("old-owner"), "actor-relay", 8),
             target,
@@ -1889,8 +1893,7 @@ public sealed partial class EntrySpotActorDispatchTests
     [Fact]
     public void ActorMessageFollowerToRelay_RejectsHopLimitWithoutOverflow()
     {
-        var lease = new ZLinkActorMessageFollowLease(TimeProvider.System);
-        lease.Commit(TimeSpan.FromSeconds(5));
+        var lease = new ZLinkActorMessageFollowLease(TimeProvider.System, TimeSpan.FromSeconds(5));
         var route = new ZLinkActorMessageFollowRoute(
             new ZLinkBackendActorRef(RoutingId.From("old-owner"), "actor-relay", 8),
             new ZLinkBackendActorRef(RoutingId.From("new-owner"), "actor-relay", 8),
@@ -1921,8 +1924,7 @@ public sealed partial class EntrySpotActorDispatchTests
     [Fact]
     public void ActorMessageFollower_PreservesBoundOneWayOperationAndFence()
     {
-        var lease = new ZLinkActorMessageFollowLease(TimeProvider.System);
-        lease.Commit(TimeSpan.FromSeconds(5));
+        var lease = new ZLinkActorMessageFollowLease(TimeProvider.System, TimeSpan.FromSeconds(5));
         var route = new ZLinkActorMessageFollowRoute(
             new ZLinkBackendActorRef(RoutingId.From("old-owner"), "actor-bound-follow", 8),
             new ZLinkBackendActorRef(RoutingId.From("new-owner"), "actor-bound-follow", 8),
@@ -2221,9 +2223,9 @@ public sealed partial class EntrySpotActorDispatchTests
                     sourceAuthorityOwnerGeneration: 41,
                     targetAuthorityOwnerGeneration: 42,
                     sourceOwnerLeaseGeneration: 51,
-                    targetOwnerLeaseGeneration: 52
+                    targetOwnerLeaseGeneration: 52,
+                    TimeSpan.FromSeconds(1)
                 );
-                state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
             }
             var retired = false;
             node.AfterLocalActorAuthorityRead = (_, _) =>
@@ -3939,8 +3941,10 @@ public sealed partial class EntrySpotActorDispatchTests
                 }
             );
             ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(runtime, frame);
-            var lease = new ZLinkActorMessageFollowLease(TimeProvider.System);
-            lease.Commit(TimeSpan.FromSeconds(5));
+            var lease = new ZLinkActorMessageFollowLease(
+                TimeProvider.System,
+                TimeSpan.FromSeconds(5)
+            );
             var route = new ZLinkActorMessageFollowRoute(
                 actor,
                 new ZLinkBackendActorRef(
@@ -4008,8 +4012,10 @@ public sealed partial class EntrySpotActorDispatchTests
             // The runtime's own node rid keeps this on the backend forward
             // path (a remote target now takes the actor-frame relay plane).
             var target = new ZLinkBackendActorRef(RoutingId.From("entry-node"), "actor-forward", 2);
-            var messageFollowLease = new ZLinkActorMessageFollowLease(TimeProvider.System);
-            messageFollowLease.Commit(TimeSpan.FromSeconds(5));
+            var messageFollowLease = new ZLinkActorMessageFollowLease(
+                TimeProvider.System,
+                TimeSpan.FromSeconds(5)
+            );
             var messageFollowRoute = new ZLinkActorMessageFollowRoute(
                 source,
                 target,
@@ -4055,8 +4061,10 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.False(node.MessageFollowParts[1].HasMore);
 
             using var nextBody = Message.From(Encoding.UTF8.GetBytes("next"));
-            var nextLease = new ZLinkActorMessageFollowLease(TimeProvider.System);
-            nextLease.Commit(TimeSpan.FromSeconds(5));
+            var nextLease = new ZLinkActorMessageFollowLease(
+                TimeProvider.System,
+                TimeSpan.FromSeconds(5)
+            );
             var nextMessageFollowRoute = messageFollowRoute with { Lease = nextLease };
             var nextCompletion = follower.EnqueueTracked(
                 nextMessageFollowRoute,
@@ -4095,8 +4103,10 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             var follower = new ZLinkActorMessageFollower(runtime);
             using var body = Message.From(new byte[4096]);
-            var lease = new ZLinkActorMessageFollowLease(TimeProvider.System);
-            lease.Commit(TimeSpan.FromMinutes(1));
+            var lease = new ZLinkActorMessageFollowLease(
+                TimeProvider.System,
+                TimeSpan.FromMinutes(1)
+            );
             var route = new ZLinkActorMessageFollowRoute(
                 new ZLinkBackendActorRef(RoutingId.From("source-node"), "actor-follow-no-cap", 1),
                 new ZLinkBackendActorRef(RoutingId.From("entry-node"), "actor-follow-no-cap", 2),
@@ -5475,9 +5485,10 @@ public sealed partial class EntrySpotActorDispatchTests
             sourceAuthorityOwnerGeneration: 1,
             targetAuthorityOwnerGeneration: 2,
             sourceOwnerLeaseGeneration: 1,
-            targetOwnerLeaseGeneration: 2
+            targetOwnerLeaseGeneration: 2,
+            TimeSpan.FromSeconds(1)
         );
-        actorState.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
+
         actorState.RetireMigratedActorInstance(sourceRef);
 
         Assert.Null(actorState.Actor);
@@ -9804,8 +9815,10 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor.ActorId,
                 actor.Generation
             );
-            var lease = new ZLinkActorMessageFollowLease(TimeProvider.System);
-            lease.Commit(TimeSpan.FromSeconds(5));
+            var lease = new ZLinkActorMessageFollowLease(
+                TimeProvider.System,
+                TimeSpan.FromSeconds(5)
+            );
             var route = new ZLinkActorMessageFollowRoute(
                 actor,
                 target,

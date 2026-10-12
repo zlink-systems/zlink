@@ -133,8 +133,11 @@ internal static class ZLinkActorMessageFollowDispatcher
         ZLinkBackendActorRouteContext route
     )
     {
-        if (!messageFollowRoute.Lease.IsCommitted)
-            throw Stale(messageFollowRoute, "the source-to-target route is not committed");
+        if (!messageFollowRoute.Lease.IsActive)
+            throw Stale(
+                messageFollowRoute,
+                "the source-to-target route has expired or was cancelled"
+            );
         if (!route.IsDirectRoute)
             return;
         if (route.MessageFollowHopCount >= 8)

@@ -96,9 +96,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 1,
                 2,
                 1,
-                2
+                2,
+                TimeSpan.FromSeconds(1)
             );
-            state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
             if (leaveFails)
                 state
                     .Handoff.TryBeginSourceMembershipLeave("source-retirement")!
@@ -256,9 +256,9 @@ public sealed partial class EntrySpotActorDispatchTests
             1,
             2,
             1,
-            2
+            2,
+            TimeSpan.FromSeconds(1)
         );
-        state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
         Assert.NotNull(state.Handoff.TryBeginSourceMembershipLeave("source-unfinished-leave"));
         var diagnosed = new TaskCompletionSource<Exception>(
             TaskCreationOptions.RunContinuationsAsynchronously

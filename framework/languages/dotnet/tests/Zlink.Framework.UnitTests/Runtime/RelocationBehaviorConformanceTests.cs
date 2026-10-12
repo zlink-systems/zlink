@@ -1459,7 +1459,8 @@ public sealed partial class RelocationBehaviorConformanceTests
             );
             AssertObservedBehavior(fixture.RootElement, trace.Events);
             var retiredSource = source.Runtime.GetOrCreateActorState(actorId);
-            await WaitUntilAsync(() => retiredSource.Actor is null);
+            await WaitUntilAsync(() => !retiredSource.Handoff.IsSourceMigrationInProgress);
+            Assert.Null(retiredSource.Actor);
             Assert.Null(retiredSource.Context);
             Assert.Null(retiredSource.Activation);
             Assert.Null(retiredSource.Handoff.SourceMembershipLeaveCompletion);

@@ -1872,6 +1872,20 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public void Liveness_ReceiveRenewsDeadline_OnlySilenceExpires()
+    {
+        var time = new ControllableTimeProvider();
+        var liveness = new ZLinkServiceLiveness(time.GetTimestamp(), time);
+        time.AdvanceMonotonic(ZLinkServiceLiveness.PeerTimeout - TimeSpan.FromSeconds(1));
+        Assert.False(liveness.IsExpired(time.GetTimestamp()));
+        liveness.RecordReceived();
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        Assert.False(liveness.IsExpired(time.GetTimestamp()));
+        time.AdvanceMonotonic(ZLinkServiceLiveness.PeerTimeout - TimeSpan.FromSeconds(1));
+        Assert.True(liveness.IsExpired(time.GetTimestamp()));
+    }
+
+    [Fact]
     public async Task InboundLivenessExpiry_UpdatesNodeReadiness()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -1888,16 +1902,19 @@ public sealed class ServiceRuntimeFoundationTests
         source.ConnectPeer(target.Status().LocalEndpoint, target.RoutingId);
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
 
-        var index =
-            (Dictionary<RoutingId, ZLinkMeshPeer>)
-                typeof(ZLinkManagedMeshNode)
-                    .GetField(
-                        "_peersByRid",
-                        System.Reflection.BindingFlags.Instance
-                            | System.Reflection.BindingFlags.NonPublic
-                    )!
-                    .GetValue(target)!;
-        index[sourceRid].Liveness = new ZLinkServiceLiveness(0);
+        Assert.Equal(MeshNodeState.Ready, target.Status().State);
+        await source.DisposeAsync();
+        // With the sender closed, no new receive can renew the admitted deadline.
+        // Use the same clock-driven infrastructure tick as the liveness close tests.
+        var expiryTimestamp =
+            Stopwatch.GetTimestamp()
+            + (long)(ZLinkServiceLiveness.PeerTimeout.TotalSeconds * Stopwatch.Frequency);
+        typeof(ZLinkManagedMeshNode)
+            .GetMethod(
+                "ProcessInfrastructure",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+            )!
+            .Invoke(target, [expiryTimestamp]);
 
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 0);
         Assert.Equal(MeshNodeState.Started, target.Status().State);
