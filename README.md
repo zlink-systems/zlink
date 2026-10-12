@@ -101,7 +101,7 @@ public sealed class HelloHandler : IZLinkRequestHandler<Hello, Greeting>
 A client calls `greeting` without naming a node — which process handles it is
 resolved at runtime. The same registration and handler shape exists in C++,
 Java, Kotlin, and TypeScript; see
-[Installation and first run](https://docs.zlink.systems/dotnet/guide/server/02-getting-started/)
+[Installation and first run](https://docs.zlink.systems/dotnet/quickstart/)
 and switch language at the top of the chapter.
 
 ## Language support

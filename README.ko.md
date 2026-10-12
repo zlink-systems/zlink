@@ -94,7 +94,7 @@ public sealed class HelloHandler : IZLinkRequestHandler<Hello, Greeting>
 
 client는 노드를 지정하지 않고 `greeting`을 호출하며, 어느 프로세스가 처리할지는
 런타임에 결정됩니다. 같은 등록·handler 구조가 C++, Java, Kotlin, TypeScript에도
-있습니다. [설치와 첫 실행](https://docs.zlink.systems/ko/dotnet/guide/server/02-getting-started/)에서
+있습니다. [설치와 첫 실행](https://docs.zlink.systems/ko/dotnet/quickstart/)에서
 장 상단의 언어 탭을 바꿔 확인하세요.
 
 ## 언어 지원
