@@ -1543,6 +1543,10 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
 
     const replyPromise = client.requestToChannel('api', typedPacket('Ping', { value: 'ping' })).timeout(1000).submit();
     const request = await recvRouterMessage(router);
+    let replied = false;
+    void replyPromise.then(() => { replied = true; });
+    await replyPromise.admitted;
+    assert.equal(replied, false);
     const envelope = decodeDotnetEnvelope(request.parts);
     assert.equal(envelope.header.kind, 1);
     assert.equal(envelope.header.channelName, 'api');

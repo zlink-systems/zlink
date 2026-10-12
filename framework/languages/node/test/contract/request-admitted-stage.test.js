@@ -113,3 +113,26 @@ test('shared completed transport results yield independent public reply and admi
   await third.admitted;
   assert.equal(await third, 7);
 });
+
+for (const wrapped of [false, true]) {
+  test(`successful reply completes admission without an observer (delivery wrapper=${wrapped})`, async () => {
+    const {
+      createZLinkRequest
+    } = require('../../packages/framework/dist/runtime/messaging/request-result');
+    const reply = deferred();
+    const pending = createZLinkRequest(
+      () => reply.promise,
+      wrapped ? (value) => value.then((result) => result) : undefined
+    );
+    let admitted = false;
+    void pending.admitted.then(() => {
+      admitted = true;
+    });
+    await setImmediate();
+    assert.equal(admitted, false);
+    reply.resolve('reply');
+    assert.equal(await pending, 'reply');
+    await setImmediate();
+    assert.equal(admitted, true);
+  });
+}

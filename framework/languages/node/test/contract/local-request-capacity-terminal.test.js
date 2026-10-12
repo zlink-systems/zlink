@@ -76,24 +76,75 @@ for (const kind of ['spot', 'actor']) {
   test(`local ${kind} public admission ends at mailbox acceptance before reply`, async () => {
     const f = fixture();
     let operation;
-    const registration = framework.createFrameworkRegistration({
-      spotNodes: { capacity: { router: { bind: 'inproc://local-admission' } } }
-    });
-    const client = new framework.DefaultZLinkRouteClient(registration, {
-      request() {
-        operation = f.request(kind);
-        return operation.promise;
+    const serial = new framework.ZLinkSpotSerialTurnExecutor();
+    const outbound = new framework.DefaultZLinkSpotOutbound({
+      serial,
+      addressTransport: {
+        requestToSpotAddress() {
+          operation = f.request(kind);
+          return operation.promise;
+        }
       }
     });
     const occupied = await f.queue.acquire(undefined, 'remote');
     try {
-      const pending = client.requestToNode('capacity', 'local', {}).submit();
+      class Query {}
+      const actorClient = new framework.DefaultZLinkActorClient({
+        nodeProvider: () => ({
+          requestToActor() {
+            operation = f.request(kind);
+            return operation.id;
+          }
+        }),
+        completionTableProvider: () => ({
+          submit(start) {
+            start();
+            return operation.promise;
+          }
+        }),
+        locationResolver: () => ({
+          resolveDirectActorRoute: async () => ({
+            kind: 'ready',
+            route: {
+              meshName: 'capacity',
+              actorId: 'actor',
+              actorRef: {
+                meshName: 'capacity',
+                actorId: 'actor',
+                nodeRid: 'local',
+                objectGeneration: 1n
+              },
+              ownerNodeRid: 'local',
+              ownerNodeGeneration: 1n,
+              spotKind: framework.ZLinkSpotKind.Entry,
+              spotId: 'entry',
+              spotGeneration: 1n,
+              authorityOwnerGeneration: 1n,
+              ownerId: 'local-owner',
+              ownerLeaseGeneration: 1n
+            }
+          })
+        })
+      });
+      let pending;
+      await serial.execute(() => {
+        pending = kind === 'actor'
+          ? actorClient.requestToActor('actor', new Query()).submit()
+          : outbound.requestToSpot('entry', new Query()).submit();
+      });
       assert.ok(pending instanceof Promise);
       assert.ok(pending.admitted instanceof Promise);
       let admitted = false;
       let replied = false;
-      void pending.admitted.then(() => { admitted = true; });
-      void pending.then(() => { replied = true; }, () => undefined);
+      void pending.admitted.then(() => {
+        admitted = true;
+      });
+      void pending.then(
+        () => {
+          replied = true;
+        },
+        () => undefined
+      );
       await setImmediate();
       assert.equal(admitted, false);
       assert.equal(replied, false);

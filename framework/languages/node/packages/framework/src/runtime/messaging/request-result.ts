@@ -34,10 +34,17 @@ export function createZLinkRequest<TReply>(
   } catch (error) {
     pending = Promise.reject(error);
   }
-  const observed = pending.catch((error: unknown) => {
-    rejectAdmission(error);
-    throw error;
-  });
+  const observed = pending.then(
+    (value) => {
+      // A successful reply proves admission even without an observation callback.
+      resolveAdmission();
+      return value;
+    },
+    (error: unknown) => {
+      rejectAdmission(error);
+      throw error;
+    }
+  );
   const reply = deliverReply?.(observed) ?? observed;
   return Object.defineProperty(reply, 'admitted', { value: admitted }) as ZLinkRequest<TReply>;
 }
