@@ -845,8 +845,13 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::optional<stateful::object_ref_t> resolve_spot (const std::string &spot_id) const;
 
   private:
+    struct instance_activation_ready_t
+    {
+        authority_snapshot_t snapshot;
+        std::shared_ptr<const protocol::instance_activation_recovery_t> command;
+    };
     using instance_activation_admission_t =
-      std::variant<authority_snapshot_t, instance_spot_activation_result_t>;
+      std::variant<instance_activation_ready_t, instance_spot_activation_result_t>;
     struct instance_activation_operation_t
     {
         task_completion_source_t<instance_activation_admission_t> admission;
