@@ -619,10 +619,6 @@ internal sealed class ZLinkActorCreationCoordinator(
         }
         catch (Exception publishFailure)
         {
-            await state
-                .ExecuteLockedAsync(state.BeginTeardownOnLane, CancellationToken.None)
-                .ConfigureAwait(false);
-
             try
             {
                 await teardownActor(state, nativeActor, CancellationToken.None)

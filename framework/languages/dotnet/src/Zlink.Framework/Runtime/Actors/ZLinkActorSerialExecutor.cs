@@ -40,6 +40,15 @@ internal sealed class ZLinkActorSerialExecutor
     public ValueTask<Turn> EnterAsync(
         CancellationToken cancellationToken,
         bool countAsPendingRequest = false
+    ) => EnterAsync(cancellationToken, countAsPendingRequest, ZLinkSerialWorkLane.Application);
+
+    public ValueTask<Turn> EnterLifecycleAsync(CancellationToken cancellationToken) =>
+        EnterAsync(cancellationToken, false, ZLinkSerialWorkLane.Lifecycle);
+
+    private ValueTask<Turn> EnterAsync(
+        CancellationToken cancellationToken,
+        bool countAsPendingRequest,
+        ZLinkSerialWorkLane lane
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -51,11 +60,7 @@ internal sealed class ZLinkActorSerialExecutor
                         ZLinkFrameworkErrorKind.NotFound,
                         "Actor dispatch admission is closed for a terminal lifecycle transition."
                     );
-                return PostWaiterOnLane(
-                    ZLinkSerialWorkLane.Application,
-                    cancellationToken,
-                    countAsPendingRequest
-                );
+                return PostWaiterOnLane(lane, cancellationToken, countAsPendingRequest);
             })
         );
         return AwaitTurnAsync(waiter);

@@ -8196,9 +8196,12 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
                 .ToArray();
             await sourceEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // Execution gate §2/§7/§13 and membership §4.1 do not order all
+            // members' Join turns before the first source OnLeaveActor turn.
+            // Release that callback independently of the remaining Join completions.
+            releaseSource.TrySetResult();
             var results = await Task.WhenAll(joins).WaitAsync(TimeSpan.FromSeconds(2));
             Assert.All(results, result => Assert.IsType<ZLinkActorJoinResult.Accepted>(result));
-            releaseSource.TrySetResult();
             // The source owner drains callbacks and the accepted Close without cancelling the host.
             await allLeft.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await close!.WaitAsync(TimeSpan.FromSeconds(5));
