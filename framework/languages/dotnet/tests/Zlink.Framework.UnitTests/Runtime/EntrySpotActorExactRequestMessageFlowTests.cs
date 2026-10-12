@@ -3,18 +3,88 @@ using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
-    [Fact]
-    public async Task Actor_PublicAsync_PreservesAdmissionAndReplyStageIsolation()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Spot_PublicAsync_AdmitsBeforeReply(bool instanceIntent, bool remote)
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(node, includeInstanceSpotRoute: true);
+        var reply = new TaskCompletionSource<ZLinkBackendRouteReceived>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        node.SpotRequestSubmissionHandler = (admission, parts) =>
+        {
+            Assert.NotNull(admission);
+            admission.Complete();
+            return new ValueTask<ZLinkBackendRouteReceived>(reply.Task);
+        };
+        try
+        {
+            var resolved = (
+                await runtime.ResolveInstanceSpotAsync(
+                    new InstanceSpotIntentAddress(string.Empty, string.Empty, "spot-ready"),
+                    CancellationToken.None
+                )
+            ).Handle!;
+            if (remote)
+                resolved = new ZLinkResolvedSpotHandle(
+                    resolved.Snapshot with
+                    {
+                        NodeRid = RoutingId.From("remote-spot-node"),
+                    },
+                    1,
+                    _ =>
+                        ValueTask.FromResult<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>(
+                            null
+                        ),
+                    () => { }
+                );
+            var request = instanceIntent
+                ? new ZLinkInstanceSpotRequestCall<ProbeRouteMessage>(
+                    runtime,
+                    new InstanceSpotIntentAddress(string.Empty, string.Empty, "spot-ready"),
+                    new ProbeRouteMessage("request")
+                ).Async<ProbeReply>()
+                : new ZLinkRouteSpotRequestCall<ProbeRouteMessage>(
+                    runtime,
+                    resolved,
+                    new ProbeRouteMessage("request")
+                ).Async<ProbeReply>();
+            await request.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(request.Reply.IsCompleted);
+            Assert.Equal(
+                remote ? RoutingId.From("remote-spot-node") : node.RoutingId,
+                Assert.Single(node.SpotRequests).NodeRid
+            );
+            reply.SetException(new InvalidOperationException("held reply"));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => request.AsTask());
+            await request.Admitted;
+        }
+        finally
+        {
+            reply.TrySetCanceled();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Actor_PublicAsync_PreservesAdmissionAndReplyStageIsolation(bool local)
     {
         var node = new CapturingSpotNode();
         var (runtime, actor) = await CreateStartedRuntimeAsync(
             node,
-            new CapturingMessageFlowObserver()
+            new CapturingMessageFlowObserver(),
+            includeActorFactory: local
         );
         var firstEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously

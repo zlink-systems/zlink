@@ -10543,7 +10543,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 .AddSingleton(instanceDispatchProbe)
                 .AddTransient<ColdSendInstanceHandler>()
                 .AddTransient<RecoveryRaceEventHandler>()
-                .AddTransient<RecoveryRaceRequestHandler>();
+                .AddTransient<RecoveryRaceRequestHandler>()
+                .AddTransient<AdmissionInstanceHandler>();
         if (dispatchProbe is not null)
         {
             serviceCollection.AddSingleton(dispatchProbe);
@@ -12356,6 +12357,12 @@ public sealed partial class EntrySpotActorDispatchTests
             IReadOnlyList<Message>
         >? SpotRequestHandler { get; set; }
 
+        public Func<
+            ZLinkRequestAdmission?,
+            IReadOnlyList<Message>,
+            ValueTask<ZLinkBackendRouteReceived>
+        >? SpotRequestSubmissionHandler { get; set; }
+
         public ConcurrentQueue<RequestResult> SpotRequestResults { get; } = new();
 
         public List<(RoutingId NodeRid, string SpotId, ulong Generation)> SpotSends { get; } = [];
@@ -12596,6 +12603,11 @@ public sealed partial class EntrySpotActorDispatchTests
             _ = timeout;
             _ = metadata;
             _ = readyRoute;
+            if (SpotRequestSubmissionHandler is not null)
+            {
+                SpotRequests.Add((targetRid, targetSpotId, spotGeneration));
+                return SpotRequestSubmissionHandler(requestAdmission, parts);
+            }
             if (SpotRequestHandler is null)
                 return ValueTask.FromException<ZLinkBackendRouteReceived>(
                     new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected)
@@ -13099,6 +13111,16 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             get => _entrySpot.SpotRequestHandler;
             set => _entrySpot.SpotRequestHandler = value;
+        }
+
+        public Func<
+            ZLinkRequestAdmission?,
+            IReadOnlyList<Message>,
+            ValueTask<ZLinkBackendRouteReceived>
+        >? SpotRequestSubmissionHandler
+        {
+            get => _entrySpot.SpotRequestSubmissionHandler;
+            set => _entrySpot.SpotRequestSubmissionHandler = value;
         }
 
         public ConcurrentQueue<RequestResult> SpotRequestResults => _entrySpot.SpotRequestResults;

@@ -1,11 +1,34 @@
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Spots;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class RequestAdmissionStageTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReplySuccess_CompletesUnobservedAdmission(bool asynchronous)
+    {
+        var reply = new TaskCompletionSource<int>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var request = ZLinkRequestAdmission.Run<int>(_ =>
+            asynchronous ? new ValueTask<int>(reply.Task) : ValueTask.FromResult(42)
+        );
+        if (asynchronous)
+        {
+            Assert.False(request.Admitted.IsCompleted);
+            Assert.False(request.Reply.IsCompleted);
+            reply.SetResult(42);
+        }
+        Assert.Equal(42, await request);
+        Assert.True(request.Admitted.IsCompletedSuccessfully);
+        await request.Admitted;
+    }
+
     [Theory]
     [InlineData(typeof(IZLinkRequestCall))]
     [InlineData(typeof(IZLinkActorRequestCall))]

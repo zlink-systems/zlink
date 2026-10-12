@@ -21,7 +21,11 @@ internal sealed class ZLinkRequestAdmission
         {
             try
             {
-                return await execute(admission).ConfigureAwait(false);
+                var reply = await execute(admission).ConfigureAwait(false);
+                // A successful reply proves admission even when the execution
+                // path did not expose its earlier acceptance notification.
+                admission.Complete();
+                return reply;
             }
             catch (Exception error)
             {
