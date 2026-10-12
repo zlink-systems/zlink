@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Contracts.Errors;
+using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 
@@ -12,6 +13,122 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class ActorHandlerActivationTests
 {
+    [Fact]
+    public async Task ActorLifecycle_UsesLifecycleLaneBeforeQueuedApplication()
+    {
+        var state = new ZLinkActorRuntimeState("actor-lifecycle-lane");
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new ConcurrentQueue<string>();
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            "lane-probe",
+            ZlinkStreamMetadata.Empty
+        );
+        var active = state
+            .ExecuteDispatchAsync(
+                header,
+                async _ =>
+                {
+                    started.TrySetResult();
+                    await release.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            var application = state
+                .ExecuteDispatchAsync(
+                    header,
+                    _ =>
+                    {
+                        order.Enqueue("application");
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            var lifecycle = state
+                .ExecuteLifecycleAsync(
+                    _ =>
+                    {
+                        order.Enqueue("lifecycle");
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            release.TrySetResult();
+            await Task.WhenAll(active, application, lifecycle).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "lifecycle", "application" }, order.ToArray());
+        }
+        finally
+        {
+            release.TrySetResult();
+            await active;
+        }
+    }
+
+    [Fact]
+    public async Task Teardown_DestroyedBetweenPreparationAndParticipation_IsIdempotent()
+    {
+        var state = new ZLinkActorRuntimeState("actor-terminal-race");
+        var nativeActor = new ZLinkBackendActorRef(RoutingId.From("entry"), state.ActorId, 1);
+        state.BindNativeActorRef(nativeActor);
+        var first = await state.ExecuteLockedAsync(
+            () => state.BeginOrJoinTeardownAttemptOnLane(nativeActor),
+            CancellationToken.None
+        );
+        // Reproduce the public Destroy snapshot turn before an earlier self-destroy terminal.
+        var participant = await state.ExecuteLockedAsync(
+            () => state.BeginOrJoinTeardownAttemptOnLane(nativeActor),
+            CancellationToken.None
+        );
+        Assert.False(participant.OwnsExecution);
+        Assert.Same(first.Completion, participant.Completion);
+        await state.ExecuteLockedAsync(
+            () => state.MarkNativeDestroyed(first),
+            CancellationToken.None
+        );
+        await state.ExecuteLockedAsync(
+            () => state.CompleteTeardownAttemptOnLane(first),
+            CancellationToken.None
+        );
+        var repeated = await state.ExecuteLockedAsync(
+            () => state.BeginOrJoinTeardownAttemptOnLane(nativeActor),
+            CancellationToken.None
+        );
+        Assert.False(repeated.OwnsExecution);
+        Assert.Null(await repeated.Completion);
+        Assert.Null(state.NativeActorRef);
+        Assert.False(state.IsTeardownPending);
+        Assert.Null(await participant.Completion);
+    }
+
+    [Fact]
+    public async Task Teardown_StaleSnapshot_DoesNotDestroyReplacement()
+    {
+        var state = new ZLinkActorRuntimeState("actor-replaced");
+        var original = new ZLinkBackendActorRef(RoutingId.From("entry"), state.ActorId, 1);
+        var replacement = original with { Generation = 2 };
+        state.BindNativeActorRef(replacement);
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await state.ExecuteLockedAsync(
+                () => state.BeginOrJoinTeardownAttemptOnLane(original),
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, failure.Kind);
+        Assert.Equal(replacement, state.NativeActorRef);
+        Assert.False(state.IsTeardownPending);
+        Assert.False(state.ContextInvalidated);
+    }
+
     [Fact]
     public async Task Actor_Activations_Own_Separate_Handler_Instances_And_Scoped_Dependencies()
     {
@@ -245,7 +362,13 @@ public sealed class ActorHandlerActivationTests
             .AsTask();
         await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        state.BeginTeardown();
+        state.BindNativeActorRef(
+            new ZLinkBackendActorRef(RoutingId.From("entry"), state.ActorId, 1)
+        );
+        await state.ExecuteLockedAsync(
+            () => state.BeginOrJoinTeardownAttemptOnLane(state.NativeActorRef!.Value),
+            CancellationToken.None
+        );
         var cleanup = state
             .BeginHandlerActivationCompletion(() =>
             {
@@ -357,9 +480,15 @@ public sealed class ActorHandlerActivationTests
 
         await state.ExecuteDispatchAsync(
             header,
-            _ =>
+            async _ =>
             {
-                state.BeginTeardown();
+                state.BindNativeActorRef(
+                    new ZLinkBackendActorRef(RoutingId.From("entry"), state.ActorId, 1)
+                );
+                await state.ExecuteLockedAsync(
+                    () => state.BeginOrJoinTeardownAttemptOnLane(state.NativeActorRef!.Value),
+                    CancellationToken.None
+                );
                 var terminal = state.BeginHandlerActivationCompletion(() =>
                 {
                     state.ClearAfterDestroyOnLane();
@@ -368,7 +497,6 @@ public sealed class ActorHandlerActivationTests
                 Assert.True(terminal.RequiresDispatchRelease);
                 Assert.False(terminal.Completion.IsCompleted);
                 terminalTask = terminal.Completion;
-                return ValueTask.CompletedTask;
             },
             CancellationToken.None
         );
@@ -394,7 +522,13 @@ public sealed class ActorHandlerActivationTests
 
         using (state.EnterDeferredJoinExecution())
         {
-            state.BeginTeardown();
+            state.BindNativeActorRef(
+                new ZLinkBackendActorRef(RoutingId.From("entry"), state.ActorId, 1)
+            );
+            await state.ExecuteLockedAsync(
+                () => state.BeginOrJoinTeardownAttemptOnLane(state.NativeActorRef!.Value),
+                CancellationToken.None
+            );
             var terminal = state.BeginHandlerActivationCompletion(() =>
             {
                 state.ClearAfterDestroyOnLane();

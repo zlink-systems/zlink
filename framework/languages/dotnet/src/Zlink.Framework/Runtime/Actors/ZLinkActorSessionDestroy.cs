@@ -20,8 +20,11 @@ internal sealed partial class ZLinkActorSessionManager
         )
             return;
 
-        var nativeActor = await state
-            .ExecuteLockedAsync<ZLinkBackendActorRef?>(
+        var teardown = await state
+            .ExecuteLockedAsync<(
+                ZLinkBackendActorRef Actor,
+                ZLinkActorTeardownOperation Operation
+            )?>(
                 () =>
                 {
                     if (state.Actor is null)
@@ -49,17 +52,21 @@ internal sealed partial class ZLinkActorSessionManager
                             $"Actor '{actor.Context.ActorId}' is not owned by this Entry Spot."
                         );
 
-                    state.BeginTeardownOnLane();
-                    return actorRef;
+                    return (actorRef, state.BeginOrJoinTeardownAttemptOnLane(actorRef));
                 },
                 cancellationToken
             )
             .ConfigureAwait(false);
 
-        if (nativeActor is not { } actorRef)
+        if (teardown is not { } transaction)
             return;
 
-        await ExecuteActorTeardownAttemptAsync(state, actorRef, CancellationToken.None)
+        await ExecuteActorTeardownAttemptAsync(
+                state,
+                transaction.Actor,
+                transaction.Operation,
+                CancellationToken.None
+            )
             .ConfigureAwait(false);
     }
 }
