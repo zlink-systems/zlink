@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Contracts;
+using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -20,6 +21,45 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class BoundSessionReplacementLifecycleTests
 {
+    private const int DisconnectShutdownStressIterations = 100;
+
+    private static void AssertNoActorUnbound(ReplacementFixture fixture) =>
+        Assert.DoesNotContain(
+            fixture.Socket.SentFrames,
+            frame =>
+            {
+                Assert.True(ZLinkStreamFrameCodec.TryDecode(frame, out var header, out _));
+                return ZLinkStreamProtocolDefaults.DecodeHeader(header.ToArray()).Name
+                    == ZlinkStreamControlProtocol.UnboundControlName;
+            }
+        );
+
+    [Fact]
+    public async Task Client_Dispose_Immediately_Followed_By_Drain_Does_Not_Submit_Actor_Unbound()
+    {
+        for (var iteration = 0; iteration < DisconnectShutdownStressIterations; iteration++)
+        {
+            await using var fixture = await ReplacementFixture.CreateAsync(
+                ReplacementCallbackBehavior.Success
+            );
+            Assert.Equal(
+                ZLinkSerialPostAdmission.Accepted,
+                fixture.Session.EnqueueConnected("local", "remote")
+            );
+            fixture.BindRetiredSessionActor("actor-a");
+
+            fixture.Session.EnqueueDisconnected(
+                new ZLinkStreamError(ZLinkStreamSessionError.TransportError, "transport closed")
+            );
+            Assert.True(await fixture.Session.CloseForDrainAsync(CancellationToken.None));
+            await fixture.Session.DisposeAsync();
+
+            Assert.Null(fixture.Session.TerminalFailure);
+            Assert.Empty(fixture.Lifetime.Context.Actors.Bound);
+            AssertNoActorUnbound(fixture);
+        }
+    }
+
     [Fact]
     public async Task Physical_Close_Drain_Does_Not_Submit_Actor_Unbound()
     {
@@ -38,15 +78,7 @@ public sealed class BoundSessionReplacementLifecycleTests
         Assert.Null(fixture.Session.TerminalFailure);
         Assert.Equal(1, fixture.Socket.DisconnectCount);
         Assert.Empty(fixture.Lifetime.Context.Actors.Bound);
-        Assert.DoesNotContain(
-            fixture.Socket.SentFrames,
-            frame =>
-            {
-                Assert.True(ZLinkStreamFrameCodec.TryDecode(frame, out var header, out _));
-                return ZLinkStreamProtocolDefaults.DecodeHeader(header.ToArray()).Name
-                    == "$zlink.actor.unbound";
-            }
-        );
+        AssertNoActorUnbound(fixture);
     }
 
     [Fact]

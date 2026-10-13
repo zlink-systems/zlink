@@ -450,6 +450,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             .toCompletableFuture()
                             .join();
             CompletionStage<Void> blocker = sourceQueue.enqueueLifecycleBarrier(() -> activeTurn);
+            link.sourceQueue = sourceQueue;
             AtomicInteger released = new AtomicInteger();
             CompletionStage<Void> b1Accepted =
                     sourceQueue.enqueueRelocatable(
@@ -618,9 +619,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 b1Accepted.toCompletableFuture().get(4, TimeUnit.SECONDS);
                 assertEquals(1, EVENTS.stream().filter("command44.abort"::equals).count());
                 assertEquals(1, EVENTS.stream().filter("source.replay:B1"::equals).count());
-                assertTrue(
-                        EVENTS.indexOf("source.replay:B1") < EVENTS.indexOf("command44.abort"),
-                        "source queue must replay before command 44 abort: " + EVENTS);
+                // Relocation flow section 4.4 requires queue restoration before abort.
+                // Application handler execution has its own execution gate.
+                assertBefore("source.queue.restored", "command44.abort");
                 assertEquals(0, targetCommits.get());
                 assertFalse(EVENTS.contains("target.open"));
                 assertEquals(0, sourceAttemptCount(sourceJoin));
@@ -1126,6 +1127,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     }
 
     private static final class CanonicalLink {
+        private ZLinkSerialExecutionQueue sourceQueue;
         private final AtomicReference<ZLinkCanonicalRelocationStateMachine> sourceMachine =
                 new AtomicReference<>();
         private final AtomicReference<ZLinkCanonicalRelocationStateMachine> targetMachine =
@@ -1361,6 +1363,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                         ZLinkServiceM6BWireCodec
                                                                 .SessionRelocationRouteAction.ABORT,
                                                         route.action());
+                                                Field relocation =
+                                                        ZLinkSerialExecutionQueue.class
+                                                                .getDeclaredField("relocation");
+                                                relocation.setAccessible(true);
+                                                assertNull(
+                                                        relocation.get(sourceQueue),
+                                                        "source queue must leave its relocation cut before abort");
+                                                EVENTS.add("source.queue.restored");
                                                 EVENTS.add("command44.abort");
                                                 yield CompletableFuture.completedFuture(null);
                                             }

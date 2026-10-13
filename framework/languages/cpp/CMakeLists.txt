@@ -1696,7 +1696,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework_codec_protobuf)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  foreach(termination_case physical logical)
+  foreach(termination_case physical logical disconnect-then-shutdown)
     zlink_framework_cpp_add_test(
       NAME test_cpp_framework_unbound_${termination_case}
       COMMAND test_cpp_framework_actor_gateway --unbound-${termination_case}
