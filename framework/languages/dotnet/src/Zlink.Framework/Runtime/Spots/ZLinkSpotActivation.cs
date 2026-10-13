@@ -111,6 +111,7 @@ internal abstract partial class ZLinkSpotActivation
             CommitNativeActorJoinAsync
         );
         _actorDispatchSubmitter = new ZLinkSpotActorDispatchSubmitter(
+            _runtime,
             _serial,
             _dispatcher.ActorPackets
         );

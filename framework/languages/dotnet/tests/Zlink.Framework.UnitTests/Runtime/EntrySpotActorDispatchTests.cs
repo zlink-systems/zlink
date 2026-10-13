@@ -10475,7 +10475,8 @@ public sealed partial class EntrySpotActorDispatchTests
         ManualTimeProvider? locationTimeProvider = null,
         Action<ZLinkLocationRuntime>? locationRuntimeCapture = null,
         Func<IZLinkMeshNodeLocationResolver, IZLinkMeshNodeLocationResolver>? meshResolverWrapper =
-            null
+            null,
+        AcceptedSendProbe? acceptedSendProbe = null
     )
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
@@ -10539,6 +10540,8 @@ public sealed partial class EntrySpotActorDispatchTests
             .AddTransient<ProbeActorThrowingRequestHandler>()
             .AddTransient<MeshChannelRequestHandler>()
             .AddTransient<MeshRouteRequestHandler>();
+        if (acceptedSendProbe is not null)
+            serviceCollection.AddSingleton(acceptedSendProbe);
         if (instanceDispatchProbe is not null)
             serviceCollection
                 .AddSingleton(instanceDispatchProbe)
