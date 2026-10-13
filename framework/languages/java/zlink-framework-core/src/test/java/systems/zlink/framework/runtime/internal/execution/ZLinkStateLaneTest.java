@@ -25,6 +25,56 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkStateLaneTest {
+    @Test
+    void completedTurnsDrainOnOneExecutorInvocation() {
+        var scheduled = new java.util.ArrayDeque<Runnable>();
+        var lane = new ZLinkStateLane(scheduled::addLast);
+        var turns = new ArrayList<Integer>();
+        var results = new ArrayList<CompletableFuture<Integer>>();
+        for (int index = 0; index < 64; index++) {
+            int value = index;
+            results.add(
+                    lane.runAsync(
+                                    () -> {
+                                        assertSame(lane, ZLinkStateLane.current());
+                                        turns.add(value);
+                                        return value;
+                                    })
+                            .toCompletableFuture());
+        }
+        assertEquals(1, scheduled.size());
+        scheduled.removeFirst().run();
+        assertEquals(64, turns.size());
+        assertTrue(scheduled.isEmpty());
+        for (int index = 0; index < results.size(); index++) {
+            assertEquals(index, results.get(index).join());
+            assertEquals(index, turns.get(index));
+        }
+        assertTrue(lane.closeAsync().toCompletableFuture().isDone());
+    }
+
+    @Test
+    void pendingTurnKeepsTheLaneUntilItsCompletion() {
+        var scheduled = new java.util.ArrayDeque<Runnable>();
+        var lane = new ZLinkStateLane(scheduled::addLast);
+        var pending = new CompletableFuture<Void>();
+        assertTrue(lane.tryPost(() -> pending));
+        var ran = new AtomicBoolean();
+        var following = lane.runAsync(() -> ran.set(true));
+        var closed = lane.closeAsync().toCompletableFuture();
+        scheduled.removeFirst().run();
+        assertFalse(ran.get());
+        assertFalse(closed.isDone());
+        assertTrue(scheduled.isEmpty());
+        pending.complete(null);
+        assertEquals(1, scheduled.size());
+        scheduled.removeFirst().run();
+        following.toCompletableFuture().join();
+        assertTrue(ran.get());
+        assertTrue(closed.isDone());
+        assertTrue(scheduled.isEmpty());
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
     void closeWaitsForAnAdmissionThatHasNotYetPublishedItsTurn(boolean post) throws Exception {

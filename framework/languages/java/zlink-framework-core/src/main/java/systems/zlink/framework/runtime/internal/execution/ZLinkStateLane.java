@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.execution;
 
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 
 import java.util.Objects;
@@ -31,6 +32,9 @@ import java.util.function.Supplier;
 public final class ZLinkStateLane {
     private static final int DRAIN_BATCH_LIMIT = 100;
     private static final int CLOSED = Integer.MIN_VALUE;
+    // A private mailbox signal, never returned as an operation's completion result.
+    private static final CompletableFuture<Void> TURN_FINISHED =
+            CompletableFuture.completedFuture(null);
     private static final ThreadLocal<ZLinkStateLane> CURRENT = new ThreadLocal<>();
     // Lane identity and FIFO belong to the mailbox, not to an executor.
     // In particular, a request-scoped handler owner needs no private executor.
@@ -67,14 +71,19 @@ public final class ZLinkStateLane {
     }
 
     public <T> CompletionStage<T> runAsync(Supplier<T> work) {
-        return submit(work, false);
+        return publishOutsideLane(submit(work, false));
     }
 
     public <T> CompletionStage<T> runNowOrQueue(Supplier<T> work) {
-        return submit(work, true);
+        return publishOutsideLane(submit(work, true));
     }
 
-    private <T> CompletionStage<T> submit(Supplier<T> work, boolean runIdleTurnNow) {
+    /** Synchronous registration boundary; its private result cannot acquire dependents. */
+    public <T> T awaitTurn(Supplier<T> work) {
+        return ZLinkCompletionBridge.await(submit(work, true));
+    }
+
+    private <T> CompletableFuture<T> submit(Supplier<T> work, boolean runIdleTurnNow) {
         Objects.requireNonNull(work, "work");
         throwIfReentrant();
         if (!tryAdmit()) throw new IllegalStateException("state lane is closed");
@@ -90,6 +99,10 @@ public final class ZLinkStateLane {
         } finally {
             releaseAdmission();
         }
+        return result;
+    }
+
+    private static <T> CompletionStage<T> publishOutsideLane(CompletableFuture<T> result) {
         // No caller can observe the private result before submission returns.
         // A completed turn needs no completion task; a pending turn must still
         // publish outside the lane so a dependent can reenter it and wait.
@@ -122,7 +135,7 @@ public final class ZLinkStateLane {
                                 ? error
                                 : new CompletionException(error));
             }
-            return CompletableFuture.completedFuture(null);
+            return TURN_FINISHED;
         };
     }
 
@@ -233,33 +246,34 @@ public final class ZLinkStateLane {
     }
 
     private void runNext(int processed) {
-        WorkItem work = processed == DRAIN_BATCH_LIMIT ? null : mailbox.poll();
-        if (work == null) {
-            scheduled.set(0);
-            if (!mailbox.isEmpty()) {
-                scheduleDrain();
+        while (processed < DRAIN_BATCH_LIMIT) {
+            WorkItem work = mailbox.poll();
+            if (work == null) break;
+            CompletionStage<Void> execution;
+            try {
+                execution = work.run();
+            } catch (RuntimeException | Error error) {
+                execution = CompletableFuture.failedFuture(error);
             }
-            completeCloseIfDrained();
-            return;
+            processed++;
+            if (!execution.toCompletableFuture().isDone()) {
+                int next = processed;
+                execution.whenComplete((ignored, error) -> resumeDrain(next));
+                return;
+            }
         }
+        scheduled.set(0);
+        if (!mailbox.isEmpty()) scheduleDrain();
+        completeCloseIfDrained();
+    }
 
-        CompletionStage<Void> execution;
+    private void resumeDrain(int processed) {
         try {
-            execution = work.run();
-        } catch (RuntimeException | Error error) {
-            execution = CompletableFuture.failedFuture(error);
+            executor.execute(() -> runNext(processed));
+        } catch (RuntimeException rejected) {
+            scheduled.set(0);
+            if (admission.get() < 0) completed.completeExceptionally(rejected);
         }
-        execution.whenComplete(
-                (ignored, error) -> {
-                    try {
-                        executor.execute(() -> runNext(processed + 1));
-                    } catch (RuntimeException rejected) {
-                        scheduled.set(0);
-                        if (admission.get() < 0) {
-                            completed.completeExceptionally(rejected);
-                        }
-                    }
-                });
     }
 
     private static void runWithCurrent(ZLinkStateLane lane, Runnable command) {
