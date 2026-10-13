@@ -12,7 +12,7 @@ using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
-internal struct ZLinkMultipartPayloadView
+internal readonly struct ZLinkMultipartPayloadView
 {
     internal const int InlinePartCount = 2;
     internal const int RangeWidth = 2;
@@ -20,7 +20,6 @@ internal struct ZLinkMultipartPayloadView
     private readonly (int Offset, int Length) _first;
     private readonly (int Offset, int Length) _second;
     private readonly int[]? _ranges;
-    private ReadOnlyMemory<byte>? _managedFrame;
 
     internal ZLinkMultipartPayloadView(Message frame, int[] ranges)
         : this(
@@ -44,7 +43,6 @@ internal struct ZLinkMultipartPayloadView
         _first = first;
         _second = second;
         _ranges = ranges;
-        _managedFrame = null;
     }
 
     internal readonly int Count { get; }
@@ -57,11 +55,7 @@ internal struct ZLinkMultipartPayloadView
 
     internal ReadOnlyMemory<byte> GetMemory(int index)
     {
-        // The span path borrows the native owner. Memory consumers share one
-        // owned frame copy, preserving the same-array contract across its parts.
-        var range = GetRange(index);
-        var memory = _managedFrame ??= _frame.AsReadOnlyMemory();
-        return memory.Slice(range.Offset, range.Length);
+        return GetSpan(index).ToArray();
     }
 
     internal readonly IReadOnlyList<Message> RetainMessages()
