@@ -424,7 +424,7 @@ export class RawServiceMeshRuntime {
   isPeerRouteReady(nodeRoutingId: string, lifecycleGeneration?: bigint): boolean {
     // Admission is bound to the observed selected route: the route observer
     // removes the peer when that route ends or is replaced.
-    const peer = this.topology.peer(nodeRoutingId);
+    const peer = this.topology.admittedPeer(nodeRoutingId);
     return (
       peer !== undefined &&
       (lifecycleGeneration === undefined ||
@@ -485,11 +485,7 @@ export class RawServiceMeshRuntime {
   }
 
   isObjectClientNodeDirectTarget(nodeRoutingId: string): boolean {
-    const descriptor =
-      nodeRoutingId === this.descriptor.nodeRoutingId
-        ? this.topology.localDescriptor()
-        : this.topology.knownDescriptor(nodeRoutingId);
-    return descriptor?.objectRole === 'client';
+    return this.topology.isObjectClientNodeDirectTarget(nodeRoutingId);
   }
 
   async sendToNode(
@@ -592,7 +588,7 @@ export class RawServiceMeshRuntime {
     timeoutMs: number,
     onAdmitted?: () => void
   ): Promise<readonly Buffer[]> {
-    const admission = this.topology.peer(targetNodeRoutingId)?.liveness;
+    const admission = this.topology.admittedPeer(targetNodeRoutingId)?.liveness;
     return this.requireStarted().request(
       targetNodeRoutingId,
       parts,
@@ -892,7 +888,7 @@ export class RawServiceMeshRuntime {
         decodeReject(received.parts[0]!);
         return 'infrastructure';
       }
-      const peer = this.topology.peer(received.sourceRid);
+      const peer = this.topology.admittedPeer(received.sourceRid);
       if (peer === undefined) return 'protocolError';
       if (peer.liveness !== undefined && peer.liveness.connectionId === received.routeGeneration)
         this.liveness.recordReceived(peer.liveness, nowMs);
@@ -1198,7 +1194,7 @@ export class RawServiceMeshRuntime {
       })().catch((error) => this.operations.fail(pending.id, error));
       return pending;
     }
-    const selectedPeer = this.topology.peer(selectedTargetNodeRoutingId);
+    const selectedPeer = this.topology.admittedPeer(selectedTargetNodeRoutingId);
     if (selectedPeer === undefined) {
       // Logical target selection is the requester's decision: an RID that is
       // not an admitted peer is not a target. Whether an admitted target's

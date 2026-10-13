@@ -14,7 +14,9 @@ test('transport liveness section 5 makes an admitted handshake Ready before any 
   const liveness = new ServiceLivenessRegistry();
   liveness.admit('peer', 'pair', 0);
   const runtime = {
-    topology: { peer: () => ({ connectionId: 'pair', descriptor: { lifecycleGeneration: 7n } }) },
+    topology: {
+      admittedPeer: () => ({ connectionId: 'pair', descriptor: { lifecycleGeneration: 7n } })
+    },
     liveness
   };
   assert.equal(RawServiceMeshRuntime.prototype.isPeerRouteReady.call(runtime, 'peer', 7n), true);
