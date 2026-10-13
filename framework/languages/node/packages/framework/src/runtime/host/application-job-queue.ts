@@ -170,18 +170,18 @@ export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
 
   releaseBeforeHandler(): void {
     if (this.owner.shouldHoldPermitBeforeHandler()) return;
-    this.release();
+    this.owner.releasePermit(this);
   }
 
   releaseAfterInternalProcessing(): void {
-    this.release();
+    this.owner.releasePermit(this);
   }
 
-  private release(): void {
-    if (this.state === 'released' || this.state === 'idle') return;
+  takeReleaseState(): 'reserved' | 'queued' | undefined {
+    if (this.state === 'released' || this.state === 'idle') return undefined;
     const state = this.state;
     this.state = 'released';
-    this.owner.release(state);
+    return state;
   }
 }
 
@@ -233,11 +233,7 @@ class ApplicationJobReceiveRotation implements ApplicationJobReceiveRotationPort
   }
 
   releaseUnused(): void {
-    while (this.consumed < this.granted) {
-      const permit = this.grants[this.consumed++]!;
-      permit.releaseAfterInternalProcessing();
-      permit.releaseStorage();
-    }
+    this.owner.releaseUnusedReceiveRotation(this.grants, this.consumed, this.granted);
     // Keep the prepared grant slots and reset only the logical count.
     this.granted = 0;
     this.consumed = 0;
@@ -478,19 +474,34 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
     this.permitCounts[QueuePermitCount.Queued] = this.permitCounts[QueuePermitCount.Queued]! + 1;
   }
 
-  release(state: 'reserved' | 'queued'): void {
-    if (state === 'reserved') {
-      if (this.permitCounts[QueuePermitCount.Reserved] === 0) {
-        throw new Error('Application job queue reserved permit accounting underflow.');
-      }
-      this.permitCounts[QueuePermitCount.Reserved] =
-        this.permitCounts[QueuePermitCount.Reserved]! - 1;
-    } else {
-      if (this.permitCounts[QueuePermitCount.Queued] === 0) {
-        throw new Error('Application job queue queued permit accounting underflow.');
-      }
-      this.permitCounts[QueuePermitCount.Queued] = this.permitCounts[QueuePermitCount.Queued]! - 1;
+  releasePermit(permit: ApplicationJobQueuePermit): void {
+    const state = permit.takeReleaseState();
+    if (state !== undefined) this.release(state);
+  }
+
+  releaseUnusedReceiveRotation(
+    grants: readonly (ApplicationJobQueuePermit | undefined)[],
+    consumed: number,
+    granted: number
+  ): void {
+    const count = granted - consumed;
+    if (count === 0) return;
+    // Unconsumed grants still belong to this receive round; no record has acquired them.
+    for (let index = consumed; index < granted; index++) {
+      const permit = grants[index]!;
+      permit.takeReleaseState();
+      permit.releaseStorage();
     }
+    this.release('reserved', count);
+  }
+
+  release(state: 'reserved' | 'queued', count = 1): void {
+    const index = state === 'reserved' ? QueuePermitCount.Reserved : QueuePermitCount.Queued;
+    const available = this.permitCounts[index]!;
+    if (available < count) {
+      throw new Error(`Application job queue ${state} permit accounting underflow.`);
+    }
+    this.permitCounts[index] = available - count;
     this.drainWaiters();
     this.evaluatePressure();
   }
