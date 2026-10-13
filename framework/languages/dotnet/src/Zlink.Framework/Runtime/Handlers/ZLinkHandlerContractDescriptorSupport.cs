@@ -4,6 +4,13 @@ namespace Zlink.Framework.Runtime.Handlers;
 
 internal static class ZLinkHandlerContractDescriptorSupport
 {
+    internal static readonly IReadOnlyList<ZLinkHandlerArgumentKind> HandleAsyncArgumentPlan =
+    [
+        ZLinkHandlerArgumentKind.Message,
+        ZLinkHandlerArgumentKind.Context,
+        ZLinkHandlerArgumentKind.CancellationToken,
+    ];
+
     public static ZLinkHandlerMethodInvoker CreateHandleAsyncInvoker(
         Type handlerType,
         string description
