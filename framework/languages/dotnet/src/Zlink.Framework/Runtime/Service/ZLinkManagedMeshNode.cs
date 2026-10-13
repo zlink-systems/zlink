@@ -6007,7 +6007,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.ProtocolError);
             return false;
         }
-        var head = received.Parts[0].ToArray();
+        var head = received.Parts[0].AsReadOnlySpan();
         if (
             head.Length >= 5
             && head[0] == ServiceWireConstants.Magic0
@@ -6032,7 +6032,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     received.RouteGeneration,
                     received.ReplyToken,
                     received.Parts,
-                    head,
+                    head.ToArray(),
                     received.Reply,
                     received.Send
                 );

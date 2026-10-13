@@ -9,6 +9,76 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class MessagingHotPathWireTests
 {
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(17)]
+    public void BorrowedPayloadPreservesAllPartRangesAndOwnedMemory(int count)
+    {
+        var parts = Enumerable
+            .Range(0, count)
+            .Select(index => Message.From(new byte[index]))
+            .ToArray();
+        try
+        {
+            using var frame = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+                parts
+            );
+            Assert.True(
+                ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                    frame,
+                    out var view
+                )
+            );
+            Assert.Equal(count, view.Count);
+            for (var index = 0; index < count; index++)
+            {
+                Assert.Equal(index, view.GetSpan(index).Length);
+                Assert.True(view.GetSpan(index).Overlaps(frame.AsReadOnlySpan()) || index == 0);
+            }
+            Assert.Throws<ArgumentOutOfRangeException>(() => view.GetSpan(count));
+            var retained = view.GetMemory(count - 1);
+            frame.Dispose();
+            Assert.Equal(new byte[count - 1], retained.ToArray());
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Fact]
+    public void BorrowedTwoPartPayloadDecodingDoesNotAllocate()
+    {
+        using var header = Message.From("header"u8);
+        using var body = Message.From(new byte[1024]);
+        using var frame = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([
+            header,
+            body,
+        ]);
+        for (var index = 0; index < 32; index++)
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(frame, out _);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 1024; index++)
+        {
+            if (
+                !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                    frame,
+                    out var view
+                )
+                || view.Count != 2
+                || view.GetSpan(1).Length != 1024
+            )
+                throw new InvalidOperationException(
+                    "The borrowed payload must preserve both parts."
+                );
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(0L, allocated);
+    }
+
     private const string CommandHeader =
         "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"wire\",\"messageName\":\"payload\",\"contentType\":\"application/json\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,\"flowId\":null,\"flowOrigin\":null}";
     private const string RequestHeader =

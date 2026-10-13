@@ -657,14 +657,14 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         {
             try
             {
-                if (payloadView is not null)
+                if (payloadView is { } sendView)
                     await _routeInvoker
                         .InvokeSendAsync(
                             descriptor,
                             _meshName.Value,
                             sourceRid,
                             header,
-                            payloadView,
+                            sendView,
                             cancellationToken,
                             received.Metadata
                         )
@@ -694,14 +694,14 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         ZLinkRouteHandlerReply reply;
         try
         {
-            reply = payloadView is not null
+            reply = payloadView is { } requestView
                 ? await _routeInvoker
                     .InvokeRequestAsync(
                         descriptor,
                         _meshName.Value,
                         sourceRid,
                         header,
-                        payloadView,
+                        requestView,
                         cancellationToken,
                         received.Metadata
                     )

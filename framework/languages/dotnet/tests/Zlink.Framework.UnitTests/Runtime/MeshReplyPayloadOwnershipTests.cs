@@ -20,7 +20,9 @@ public sealed class MeshReplyPayloadOwnershipTests
         var wire = Wire(expected, typeof(Probe));
         using var reply = Unpack(wire);
         AssertAlive(wire);
-        Assert.True(reply.ApplicationPayloadView!.GetSpan(1).Overlaps(wire[1].AsReadOnlySpan()));
+        Assert.True(
+            reply.ApplicationPayloadView!.Value.GetSpan(1).Overlaps(wire[1].AsReadOnlySpan())
+        );
         Assert.Equal(expected, Decode<Probe>(reply));
         AssertDisposed(wire);
     }
@@ -35,7 +37,9 @@ public sealed class MeshReplyPayloadOwnershipTests
         using var reply = Unpack(wire);
         AssertAlive(wire);
         Assert.NotNull(reply.ApplicationPayloadView);
-        Assert.True(reply.ApplicationPayloadView.GetSpan(1).Overlaps(wire[1].AsReadOnlySpan()));
+        Assert.True(
+            reply.ApplicationPayloadView.Value.GetSpan(1).Overlaps(wire[1].AsReadOnlySpan())
+        );
         Assert.Equal(expected, Decode<BytesValue>(reply, codecs));
         AssertDisposed(wire);
     }

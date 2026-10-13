@@ -1711,7 +1711,10 @@ public sealed class ServiceRuntimeFoundationTests
 
         using var reply = await request;
         Assert.Equal(1, reply.PartCount);
-        Assert.Equal(new byte[] { 9, 8, 7 }, reply.ApplicationPayloadView!.GetSpan(0).ToArray());
+        Assert.Equal(
+            new byte[] { 9, 8, 7 },
+            reply.ApplicationPayloadView!.Value.GetSpan(0).ToArray()
+        );
     }
 
     [Fact]

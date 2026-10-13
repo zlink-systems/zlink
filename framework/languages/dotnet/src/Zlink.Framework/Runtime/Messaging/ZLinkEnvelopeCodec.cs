@@ -12,26 +12,59 @@ using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
-internal sealed class ZLinkMultipartPayloadView(Message frame, int[] ranges)
+internal struct ZLinkMultipartPayloadView
 {
+    internal const int InlinePartCount = 2;
+    internal const int RangeWidth = 2;
+    private readonly Message _frame;
+    private readonly (int Offset, int Length) _first;
+    private readonly (int Offset, int Length) _second;
+    private readonly int[]? _ranges;
     private ReadOnlyMemory<byte>? _managedFrame;
 
-    internal int Count => ranges.Length / 2;
+    internal ZLinkMultipartPayloadView(Message frame, int[] ranges)
+        : this(
+            frame,
+            ranges.Length / RangeWidth,
+            ranges.Length >= RangeWidth ? (ranges[0], ranges[1]) : default,
+            ranges.Length >= InlinePartCount * RangeWidth ? (ranges[2], ranges[3]) : default,
+            ranges.Length > InlinePartCount * RangeWidth ? ranges : null
+        ) { }
 
-    internal ReadOnlySpan<byte> GetSpan(int index)
+    internal ZLinkMultipartPayloadView(
+        Message frame,
+        int count,
+        (int Offset, int Length) first,
+        (int Offset, int Length) second,
+        int[]? ranges
+    )
     {
-        EnsureIndex(index);
-        return frame.AsReadOnlySpan().Slice(ranges[index * 2], ranges[index * 2 + 1]);
+        _frame = frame;
+        Count = count;
+        _first = first;
+        _second = second;
+        _ranges = ranges;
+        _managedFrame = null;
+    }
+
+    internal readonly int Count { get; }
+
+    internal readonly ReadOnlySpan<byte> GetSpan(int index)
+    {
+        var range = GetRange(index);
+        return _frame.AsReadOnlySpan().Slice(range.Offset, range.Length);
     }
 
     internal ReadOnlyMemory<byte> GetMemory(int index)
     {
-        EnsureIndex(index);
-        var memory = _managedFrame ??= frame.AsReadOnlyMemory();
-        return memory.Slice(ranges[index * 2], ranges[index * 2 + 1]);
+        // The span path borrows the native owner. Memory consumers share one
+        // owned frame copy, preserving the same-array contract across its parts.
+        var range = GetRange(index);
+        var memory = _managedFrame ??= _frame.AsReadOnlyMemory();
+        return memory.Slice(range.Offset, range.Length);
     }
 
-    internal IReadOnlyList<Message> RetainMessages()
+    internal readonly IReadOnlyList<Message> RetainMessages()
     {
         var result = new Message[Count];
         var created = 0;
@@ -49,10 +82,13 @@ internal sealed class ZLinkMultipartPayloadView(Message frame, int[] ranges)
         }
     }
 
-    private void EnsureIndex(int index)
+    private readonly (int Offset, int Length) GetRange(int index)
     {
         if ((uint)index >= (uint)Count)
             throw new ArgumentOutOfRangeException(nameof(index));
+        return _ranges is { } ranges ? (ranges[index * RangeWidth], ranges[index * RangeWidth + 1])
+            : index == 0 ? _first
+            : _second;
     }
 }
 
