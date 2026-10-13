@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <list>
 #include <functional>
@@ -815,37 +814,56 @@ class application_job_queue_t
         return reserved_count (credits) + queued_count (credits);
     }
 
-    static std::optional<pressure_transition_t> evaluate_pressure_locked (state_t &owner)
+    static application_job_queue_pressure_state_t desired_pressure (const state_t &owner,
+                                                                    std::uint64_t credits) noexcept
     {
-        const auto now = std::chrono::steady_clock::now ();
-        bool changed = false;
-        if (pressure_state (owner.credits.load ())
-              == application_job_queue_pressure_state_t::running
-            && permits_in_use (owner.credits.load ()) >= owner.pause_threshold_permit_count) {
+        const auto current = pressure_state (credits);
+        const auto count = permits_in_use (credits);
+        if (current == application_job_queue_pressure_state_t::running
+            && count >= owner.pause_threshold_permit_count)
+            return application_job_queue_pressure_state_t::paused;
+        if (current == application_job_queue_pressure_state_t::paused
+            && count <= owner.resume_threshold_permit_count)
+            return application_job_queue_pressure_state_t::running;
+        return current;
+    }
+
+    static void publish_pressure_locked (state_t &owner,
+                                         application_job_queue_pressure_state_t next,
+                                         std::chrono::steady_clock::time_point now)
+    {
+        if (next == application_job_queue_pressure_state_t::paused) {
             owner.credits.fetch_or (paused_credit, std::memory_order_acq_rel);
             owner.pause_started_at = now;
             owner.pause_accounted_at = now;
             ++owner.paused_transition_count;
-            changed = true;
-        }
-        // Releases can race the reservation owner. Once paused is published,
-        // re-read credits so a release preceding that publication cannot lose
-        // the resume boundary; later releases observe paused themselves.
-        if (pressure_state (owner.credits.load ()) == application_job_queue_pressure_state_t::paused
-            && permits_in_use (owner.credits.load ()) <= owner.resume_threshold_permit_count) {
+        } else {
             owner.cumulative_pause_duration_ns = saturated_add (
               owner.cumulative_pause_duration_ns, duration_ns (owner.pause_accounted_at, now));
             owner.credits.fetch_and (~paused_credit, std::memory_order_acq_rel);
             owner.pause_started_at = {};
             owner.pause_accounted_at = {};
             ++owner.running_transition_count;
-            changed = true;
         }
-        if (!changed)
+    }
+
+    static std::optional<pressure_transition_t> evaluate_pressure_locked (state_t &owner)
+    {
+        const auto credits = owner.credits.load ();
+        auto next = desired_pressure (owner, credits);
+        if (next == pressure_state (credits))
             return std::nullopt;
+        const auto now = std::chrono::steady_clock::now ();
+        publish_pressure_locked (owner, next, now);
+        // A release preceding paused publication can change the final state.
+        const auto final = desired_pressure (owner, owner.credits.load ());
+        if (final != next) {
+            publish_pressure_locked (owner, final, now);
+            next = final;
+        }
         ++owner.pressure_sequence;
         pressure_transition_t transition;
-        transition.state = pressure_state (owner.credits.load ());
+        transition.state = next;
         transition.sequence = owner.pressure_sequence;
         transition.sockets.reserve (owner.receive_flow_sockets.size ());
         for (const auto &[_, socket] : owner.receive_flow_sockets)
@@ -917,20 +935,13 @@ class application_job_queue_t
         std::list<std::shared_ptr<waiter_state_t>> ready;
         permit_batch_t grants;
         std::optional<pressure_transition_t> transition;
-        auto before = owner->credits.load (std::memory_order_acquire);
-        for (;;) {
-            const auto remaining = permits_in_use (before) - count;
-            if ((before & waiting_credit) != 0
-                || ((before & paused_credit) != 0
-                    && remaining <= owner->resume_threshold_permit_count)) {
-                std::lock_guard lock (owner->mutex);
-                owner->credits.fetch_sub (amount, std::memory_order_acq_rel);
-                settle_released_capacity_locked (owner, ready, grants, transition);
-                break;
-            }
-            if (owner->credits.compare_exchange_weak (
-                  before, before - amount, std::memory_order_acq_rel, std::memory_order_acquire))
-                return;
+        const auto before = owner->credits.fetch_sub (amount, std::memory_order_acq_rel);
+        if ((before & waiting_credit) == 0
+            && desired_pressure (*owner, before - amount) == pressure_state (before))
+            return;
+        {
+            std::lock_guard lock (owner->mutex);
+            settle_released_capacity_locked (owner, ready, grants, transition);
         }
         dispatch_pressure_transition (owner, std::move (transition));
         deliver_supply (ready, grants);

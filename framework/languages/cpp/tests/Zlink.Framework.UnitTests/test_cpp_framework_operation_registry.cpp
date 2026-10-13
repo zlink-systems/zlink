@@ -7,6 +7,8 @@
 
 #include <cassert>
 #include <atomic>
+#include <array>
+#include <vector>
 #include <barrier>
 #include <chrono>
 #include <fstream>
@@ -48,8 +50,61 @@ template <typename Predicate> bool wait_until (Predicate predicate)
     return true;
 }
 
+void verify_completion_turn_batches ()
+{
+    constexpr std::size_t count = 256;
+    foundation::operation_registry_t ordered;
+    std::vector<std::size_t> observed (count);
+    std::atomic_size_t completed{0};
+    for (std::size_t index = 0; index < count; ++index) {
+        assert (ordered.register_operation (
+          foundation::call_id_t{21, index + 1},
+          foundation::operation_registry_t::clock_t::time_point::max (),
+          [&, index] (foundation::operation_terminal_t terminal, auto) {
+              assert (terminal == foundation::operation_terminal_t::completed);
+              const auto position = completed.load (std::memory_order_relaxed);
+              observed[position] = index;
+              completed.store (position + 1, std::memory_order_release);
+          }));
+    }
+    for (std::size_t index = 0; index < count; ++index)
+        assert (ordered.complete (foundation::call_id_t{21, index + 1}, {}));
+    assert (wait_until ([&] { return completed.load (std::memory_order_acquire) == count; }));
+    for (std::size_t index = 0; index < count; ++index)
+        assert (observed[index] == index);
+    assert (ordered.shutdown () == 0);
+
+    foundation::operation_registry_t concurrent;
+    std::array<std::atomic_size_t, count> delivered{};
+    std::barrier begin (5);
+    for (std::size_t index = 0; index < count; ++index) {
+        assert (concurrent.register_operation (
+          foundation::call_id_t{22, index + 1},
+          foundation::operation_registry_t::clock_t::time_point::max (),
+          [&, index] (foundation::operation_terminal_t terminal, auto) {
+              assert (terminal == foundation::operation_terminal_t::completed);
+              delivered[index].fetch_add (1, std::memory_order_release);
+          }));
+    }
+    std::vector<std::thread> producers;
+    for (std::size_t producer = 0; producer < 4; ++producer) {
+        producers.emplace_back ([&, producer] {
+            begin.arrive_and_wait ();
+            for (std::size_t index = producer; index < count; index += 4)
+                assert (concurrent.complete (foundation::call_id_t{22, index + 1}, {}));
+        });
+    }
+    begin.arrive_and_wait ();
+    for (auto &producer : producers)
+        producer.join ();
+    assert (concurrent.shutdown () == 0);
+    for (const auto &calls : delivered)
+        assert (calls.load (std::memory_order_acquire) == 1);
+}
+
 int main ()
 {
+    verify_completion_turn_batches ();
     const auto &fixture = completion_terminal_fixture ();
     assert (fixture.at ("fixture") == "zlink.framework.completion-terminal");
     assert (fixture.at ("version") == 1);

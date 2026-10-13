@@ -3,7 +3,8 @@
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 
-#include <condition_variable>
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -14,31 +15,21 @@ namespace zlink::framework::runtime::foundation
 
 struct operation_registry_drain_state_t
 {
-    void admit () noexcept
-    {
-        std::lock_guard lock (mutex);
-        ++outstanding;
-    }
-
+    void admit () noexcept { outstanding.fetch_add (1, std::memory_order_relaxed); }
     void release () noexcept
     {
-        {
-            std::lock_guard lock (mutex);
-            if (outstanding != 0)
-                --outstanding;
-        }
-        drained.notify_all ();
+        if (outstanding.fetch_sub (1, std::memory_order_release) == 1)
+            outstanding.notify_all ();
     }
-
     void wait () noexcept
     {
-        std::unique_lock lock (mutex);
-        drained.wait (lock, [&] { return outstanding == 0; });
+        auto count = outstanding.load (std::memory_order_acquire);
+        while (count != 0) {
+            outstanding.wait (count, std::memory_order_acquire);
+            count = outstanding.load (std::memory_order_acquire);
+        }
     }
-
-    std::mutex mutex;
-    std::condition_variable drained;
-    std::size_t outstanding = 0;
+    std::atomic<std::size_t> outstanding{0};
 };
 
 struct operation_completion_item_t
@@ -119,11 +110,8 @@ class operation_completion_dispatcher_t
 
     ~operation_completion_dispatcher_t () noexcept
     {
-        {
-            std::lock_guard lock (_state->mutex);
-            _state->stopping = true;
-        }
-        _state->ready.notify_all ();
+        _state->pending.fetch_or (stopping, std::memory_order_release);
+        _state->pending.notify_all ();
         if (!_worker.joinable ())
             return;
         if (_worker.get_id () == std::this_thread::get_id ()) {
@@ -158,15 +146,23 @@ class operation_completion_dispatcher_t
     {
         if (!completions.head)
             return;
-        {
-            std::lock_guard lock (_state->mutex);
-            if (_state->tail)
-                _state->tail->next = std::move (completions.head);
-            else
-                _state->head = std::move (completions.head);
-            _state->tail = completions.tail;
+        auto *tail = completions.head.get ();
+        completions.head = reverse (std::move (completions.head));
+        auto current = _state->pending.load (std::memory_order_relaxed);
+        for (;;) {
+            tail->next.reset (item (current));
+            const auto next =
+              reinterpret_cast<std::uintptr_t> (completions.head.get ()) | (current & stopping);
+            if (_state->pending.compare_exchange_weak (current, next, std::memory_order_release,
+                                                       std::memory_order_relaxed)) {
+                completions.head.release ();
+                if (item (current) == nullptr)
+                    _state->pending.notify_one ();
+                return;
+            }
+            // A failed publication never owns the observed queue prefix.
+            tail->next.release ();
         }
-        _state->ready.notify_one ();
     }
 
     void discard (std::unique_ptr<operation_completion_item_t> completion) noexcept
@@ -178,42 +174,56 @@ class operation_completion_dispatcher_t
     }
 
   private:
+    static constexpr std::uintptr_t stopping = 1;
+    static_assert (alignof (operation_completion_item_t) > stopping);
     struct state_t
     {
-        std::mutex mutex;
-        std::condition_variable ready;
-        std::unique_ptr<operation_completion_item_t> head;
-        operation_completion_item_t *tail = nullptr;
-        bool stopping = false;
+        std::atomic<std::uintptr_t> pending{0};
     };
+
+    static operation_completion_item_t *item (std::uintptr_t pending) noexcept
+    {
+        return reinterpret_cast<operation_completion_item_t *> (pending & ~stopping);
+    }
+
+    static std::unique_ptr<operation_completion_item_t>
+    reverse (std::unique_ptr<operation_completion_item_t> head) noexcept
+    {
+        std::unique_ptr<operation_completion_item_t> reversed;
+        while (head) {
+            auto next = std::move (head->next);
+            head->next = std::move (reversed);
+            reversed = std::move (head);
+            head = std::move (next);
+        }
+        return reversed;
+    }
 
     static void run (std::shared_ptr<state_t> state) noexcept
     {
         completion_dispatcher_current = true;
         for (;;) {
-            std::unique_ptr<operation_completion_item_t> completion;
-            {
-                std::unique_lock lock (state->mutex);
-                state->ready.wait (lock, [&] { return state->stopping || state->head; });
-                if (!state->head) {
-                    if (state->stopping)
-                        return;
-                    continue;
+            auto pending = state->pending.load (std::memory_order_acquire);
+            if (pending == 0) {
+                state->pending.wait (0, std::memory_order_acquire);
+                continue;
+            }
+            pending = state->pending.fetch_and (stopping, std::memory_order_acq_rel);
+            auto ready = reverse (std::unique_ptr<operation_completion_item_t> (item (pending)));
+            if (!ready && (pending & stopping) != 0)
+                return;
+            while (ready) {
+                auto completion = std::move (ready);
+                ready = std::move (completion->next);
+                try {
+                    completion->callback (completion->terminal, std::move (completion->payload));
                 }
-                completion = std::move (state->head);
-                state->head = std::move (completion->next);
-                if (!state->head)
-                    state->tail = nullptr;
+                catch (...) {
+                    // One consumer must not prevent later terminal callbacks
+                    // from running on the process-shared dispatcher lane.
+                }
+                completion->release_owner ();
             }
-            try {
-                completion->callback (completion->terminal, std::move (completion->payload));
-            }
-            catch (...) {
-                // One consumer must not prevent later terminal callbacks
-                // from running on the process-shared dispatcher lane.
-            }
-            completion->release_owner ();
-            completion.reset ();
         }
     }
 
