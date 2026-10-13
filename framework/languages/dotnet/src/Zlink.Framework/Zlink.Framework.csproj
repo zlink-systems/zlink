@@ -7,6 +7,9 @@
         <Description>ZLink framework core abstractions and runtime for .NET.</Description>
         <IsPackable>true</IsPackable>
         <NoWarn>$(NoWarn);ZLINK1100</NoWarn>
+        <!-- Use value-type async state machines in both Debug and Release so
+             synchronous completions do not allocate a state-machine object. -->
+        <Optimize>true</Optimize>
     </PropertyGroup>
 
     <ItemGroup>
