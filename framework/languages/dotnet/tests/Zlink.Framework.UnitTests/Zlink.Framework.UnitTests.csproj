@@ -85,6 +85,7 @@
         <Compile Include="Runtime/ProtobufNativePayloadTests.cs"/>
         <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
         <Compile Include="Runtime/MeshPermitHandoffTests.cs"/>
+        <Compile Include="Runtime/MeshReceiveWakeTests.cs"/>
         <Compile Include="Runtime/MeshReplyPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshOutboundPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshMonitorHotPathTests.cs"/>
