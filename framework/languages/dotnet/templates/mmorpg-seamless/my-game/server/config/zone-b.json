@@ -1,0 +1,10 @@
+{
+  "Id": "zoneB",
+  "RedisEndpoint": "127.0.0.1:6379",
+  "KeyPrefix": "my-game:",
+  "MeshEndpoint": "tcp://127.0.0.1:7102",
+  "StreamEndpoint": null,
+  "ZoneIds": ["zone-4", "zone-5", "zone-6"],
+  "ZoneCapacity": 6,
+  "Bootstrap": true
+}
