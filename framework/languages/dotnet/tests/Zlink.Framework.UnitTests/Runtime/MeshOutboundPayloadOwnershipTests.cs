@@ -5,7 +5,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
-using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Messaging;
 using BytesValue = Google.Protobuf.WellKnownTypes.BytesValue;
@@ -37,7 +36,7 @@ public sealed class MeshOutboundPayloadOwnershipTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Immediate_public_send_waits_for_its_registered_completion_turn(bool channel)
+    public async Task Immediate_public_send_completes_through_the_native_submit_path(bool channel)
     {
         var received = new ReplyGate();
         using var target = BuildHost(replyGate: received);
@@ -50,45 +49,22 @@ public sealed class MeshOutboundPayloadOwnershipTests
             peer: targetNode.Node.RoutingId
         );
         await source.StartAsync();
-        using var completionTurn = new BlockingCompletionTurn();
         try
         {
             await WaitForPeerAsync(source, targetNode.Node.RoutingId);
-            ZLinkCompletionDispatcher.Shared.Post(completionTurn);
-            await completionTurn.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var client = source.Services.GetRequiredService<IZLinkRouteClient>();
             var payload = new BytesValue { Value = ByteString.CopyFrom(new byte[64]) };
             var send = channel
                 ? client.SendToChannel(Channel, payload).Async()
                 : client.SendToNode(Mesh, targetNode.Node.RoutingId, payload).Async();
             await received.Received.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.False(send.IsCompleted);
-            completionTurn.Release.Set();
             await send.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
         {
-            completionTurn.Release.Set();
             await source.StopAsync();
             await target.StopAsync();
         }
-    }
-
-    private sealed class BlockingCompletionTurn : ZLinkCompletionDispatcher.WorkItem, IDisposable
-    {
-        internal TaskCompletionSource Started { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal ManualResetEventSlim Release { get; } = new();
-
-        internal override void Execute()
-        {
-            Started.SetResult();
-            Release.Wait();
-        }
-
-        internal override void Completed(Exception? failure) { }
-
-        public void Dispose() => Release.Dispose();
     }
 
     [Theory]

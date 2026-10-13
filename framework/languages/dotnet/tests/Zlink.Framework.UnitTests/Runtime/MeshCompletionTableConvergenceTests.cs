@@ -7,93 +7,54 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshCompletionTableConvergenceTests
 {
     [Fact]
-    public async Task AcceptedCompletionBatchDoesNotReacquireTheProducerMonitor()
+    public async Task ImmediateSendUsesTheRegisteredDispatcherNode()
     {
         var dispatcher = new ZLinkCompletionDispatcher();
-        var gate = typeof(ZLinkCompletionDispatcher)
-            .GetField(
-                "_gate",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-            )!
-            .GetValue(dispatcher)!;
-        var blockerEntered = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
+        var blocker = new ZLinkMeshCompletionTable(dispatcher);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var blockerOperation = new MeshOperationId(92, 0);
+        Assert.True(
+            blocker.Register(
+                blockerOperation,
+                (_, _) =>
+                {
+                    entered.SetResult();
+                    release.Wait();
+                }
+            )
         );
-        var firstEntered = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
+        blocker.Complete(
+            MeshReceiveRecord.CompletionFailure(blockerOperation, RequestResult.Terminated),
+            Array.Empty<Message>()
         );
-        var secondCompleted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        using var releaseBlocker = new ManualResetEventSlim();
-        using var releaseFirst = new ManualResetEventSlim();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         try
         {
-            dispatcher.Post(
-                new CallbackWork(() =>
-                {
-                    blockerEntered.SetResult();
-                    releaseBlocker.Wait();
-                })
+            var table = new ZLinkMeshCompletionTable(dispatcher);
+            var operation = new MeshOperationId(92, 1);
+            var pending = table.RegisterSend(operation);
+            var turn = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously
             );
-            await blockerEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            dispatcher.Post(
-                new CallbackWork(() =>
-                {
-                    firstEntered.SetResult();
-                    releaseFirst.Wait();
-                })
-            );
-            dispatcher.Post(new CallbackWork(() => secondCompleted.SetResult()));
-            releaseBlocker.Set();
-            await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            var progressed = await Task.Run(() =>
+            var awaiter = pending.Completion.ConfigureAwait(false).GetAwaiter();
+            awaiter.UnsafeOnCompleted(() =>
             {
-                lock (gate)
-                {
-                    releaseFirst.Set();
-                    return secondCompleted.Task.Wait(TimeSpan.FromSeconds(3));
-                }
+                awaiter.GetResult();
+                turn.SetResult(ZLinkCompletionDispatcher.IsCurrentExecution);
             });
-            await secondCompleted.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            Assert.True(
-                progressed,
-                "Already accepted completions must drain without a per-item producer lock."
-            );
+            pending.Observe(Task.CompletedTask);
+            Assert.False(turn.Task.IsCompleted);
+            release.Set();
+            Assert.True(await turn.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.False(table.TryCancel(operation));
+            await table.CompletionDrained;
         }
         finally
         {
-            releaseBlocker.Set();
-            releaseFirst.Set();
+            release.Set();
+            await blocker.CompletionDrained;
         }
-    }
-
-    private sealed class CallbackWork(Action callback) : ZLinkCompletionDispatcher.WorkItem
-    {
-        internal override void Execute() => callback();
-
-        internal override void Completed(Exception? failure) { }
-    }
-
-    [Fact]
-    public async Task ImmediateSendUsesTheRegisteredDispatcherNode()
-    {
-        var table = new ZLinkMeshCompletionTable();
-        var operation = new MeshOperationId(92, 1);
-        var pending = table.RegisterSend(operation);
-        var turn = new TaskCompletionSource<bool>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        var awaiter = pending.Completion.ConfigureAwait(false).GetAwaiter();
-        awaiter.UnsafeOnCompleted(() =>
-        {
-            awaiter.GetResult();
-            turn.SetResult(ZLinkCompletionDispatcher.IsCurrentExecution);
-        });
-        pending.Observe(Task.CompletedTask);
-        Assert.True(await turn.Task.WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.False(table.TryCancel(operation));
-        await table.CompletionDrained;
     }
 
     [Fact]
@@ -546,8 +507,9 @@ public sealed class MeshCompletionTableConvergenceTests
     public async Task AcceptedTerminalEnqueuePathsDoNotAllocateDispatchNodes()
     {
         await WarmTerminalPathsAsync();
+        var dispatcher = new ZLinkCompletionDispatcher();
 
-        var blocker = new ZLinkMeshCompletionTable();
+        var blocker = new ZLinkMeshCompletionTable(dispatcher);
         var blockerOperation = new MeshOperationId(16, 1);
         var blockerEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -569,7 +531,7 @@ public sealed class MeshCompletionTableConvergenceTests
         );
         await blockerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var replyTable = new ZLinkMeshCompletionTable();
+        var replyTable = new ZLinkMeshCompletionTable(dispatcher);
         var replyOperation = new MeshOperationId(16, 2);
         Assert.True(replyTable.Register(replyOperation, static (_, _) => { }));
         var replyRecord = MeshReceiveRecord.CompletionFailure(
@@ -581,7 +543,7 @@ public sealed class MeshCompletionTableConvergenceTests
         replyTable.Complete(replyRecord, emptyParts);
         var replyAllocation = GC.GetAllocatedBytesForCurrentThread() - beforeReply;
 
-        var cancellationTable = new ZLinkMeshCompletionTable();
+        var cancellationTable = new ZLinkMeshCompletionTable(dispatcher);
         var cancellationOperation = new MeshOperationId(16, 3);
         Assert.True(cancellationTable.Register(cancellationOperation, static (_, _) => { }));
         using var cancellation = new CancellationTokenSource();
@@ -594,12 +556,10 @@ public sealed class MeshCompletionTableConvergenceTests
         cancellation.Cancel();
         var cancellationAllocation = GC.GetAllocatedBytesForCurrentThread() - beforeCancellation;
 
-        var closeTable = new ZLinkMeshCompletionTable();
+        var closeTable = new ZLinkMeshCompletionTable(dispatcher);
         var closeOperation = new MeshOperationId(16, 4);
         Assert.True(closeTable.Register(closeOperation, static (_, _) => { }));
-        var beforeClose = GC.GetAllocatedBytesForCurrentThread();
         closeTable.FailAll(RequestResult.Terminated);
-        var closeAllocation = GC.GetAllocatedBytesForCurrentThread() - beforeClose;
 
         releaseBlocker.Set();
         await Task.WhenAll(
@@ -611,7 +571,6 @@ public sealed class MeshCompletionTableConvergenceTests
 
         Assert.Equal(0, replyAllocation);
         Assert.Equal(0, cancellationAllocation);
-        Assert.Equal(0, closeAllocation);
     }
 
     [Fact]

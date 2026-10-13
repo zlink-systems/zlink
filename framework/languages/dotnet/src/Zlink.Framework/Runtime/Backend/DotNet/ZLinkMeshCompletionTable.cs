@@ -198,24 +198,15 @@ internal sealed class ZLinkMeshCompletionTable
 
     public void FailAll(RequestResult result)
     {
-        Dictionary<MeshOperationId, PendingCompletion>.Enumerator entries;
+        PendingCompletion[] entries;
         lock (_gate)
         {
             _closed = true;
-            entries = _pending.GetEnumerator();
+            entries = _pending.Values.ToArray();
+            _pending.Clear();
         }
-        // Closed admission prevents additions; .NET 8 enumeration permits removals.
-        while (true)
+        foreach (var pending in entries)
         {
-            PendingCompletion pending;
-            lock (_gate)
-            {
-                if (!entries.MoveNext())
-                    return;
-                var entry = entries.Current;
-                _pending.Remove(entry.Key);
-                pending = entry.Value;
-            }
             pending.PrepareFailure(result);
             _dispatcher.Post(pending);
         }
