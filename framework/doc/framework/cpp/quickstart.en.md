@@ -102,9 +102,12 @@ built from source. The framework links only `opentelemetry-cpp::api`, so
 The server Framework runtime uses [zlink License 1.0](../../../LICENSE).
 Versions before 1.0.0 are free regardless of machine count; starting with
 1.0.0, one server machine is free and each additional machine requires a paid
-license. Releases through 0.30.0 remain under FSL-1.1-ALv2. Client connector
-packages and code copied from `samples/`, `tutorial/`, and `quickstart/` use
-Apache-2.0. Tests and performance-gate source retain the Framework license.
+license. Releases through 0.30.0 remain under FSL-1.1-ALv2.
+
+Client connector packages and code copied from `samples/`, `tutorial/`,
+`quickstart/`, and `framework/languages/shared_sample/` use Apache-2.0.
+Connector tests, performance-gate source, and connector e2e fixtures retain
+zlink License 1.0.
 `core` and `bindings` use MPL-2.0, and `zlink::http_client` uses Apache-2.0.
 
 ## 2. The consumer's CMake

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { render } from 'preact';
 import { GamePage } from '../pages/game/game-page';
 import { loadClientEndpoints } from '../shared/config/runtime';

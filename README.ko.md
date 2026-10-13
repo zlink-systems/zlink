@@ -185,7 +185,7 @@ Framework 샘플은 개별 API 호출이 아니라 완결된 애플리케이션 
 |---|---|
 | `core/`, `bindings/` | [Mozilla Public License 2.0](./LICENSE) |
 | `framework/`의 서버 Framework runtime | [zlink License 1.0 한국어 번역](./framework/LICENSE.ko.md) ([영문 정본](./framework/LICENSE)) |
-| client connector, 서버 runtime과 공유하는 C++ helper header와 Node `stream-wire` codec, 언어별 `samples/`, `tutorial/`, `quickstart/`의 예제 코드 | [Apache License 2.0](./framework/languages/cpp/http-client/LICENSE) |
+| client connector, `common/include/`의 C++ 공용 header 전체, Node `stream-wire`, 언어별 `samples/`, `tutorial/`, `quickstart/`, `shared_sample/`의 예제 코드 | [Apache License 2.0](./framework/languages/cpp/http-client/LICENSE) |
 | 언어별 Framework `http-client` 패키지 | Apache License 2.0 |
 
 서버 Framework runtime은 zlink License 1.0을 따릅니다. 1.0.0 전 버전은 머신 수와 관계없이 무료입니다. 1.0.0부터는 서버 한 대가 무료이고, 추가 머신마다 유료 라이선스가 필요합니다. 0.30.0 이하 릴리스는 FSL-1.1-ALv2를 유지합니다.

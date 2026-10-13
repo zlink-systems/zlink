@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
 import { JoinForm } from '../../features/join-world/join-form';
 import { GameController } from '../../features/join-world/model';

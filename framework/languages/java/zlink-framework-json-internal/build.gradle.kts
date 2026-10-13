@@ -13,6 +13,12 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.add("-Xlint:-module")
 }
 
+tasks.withType<Jar>().configureEach {
+    from(layout.projectDirectory.file("LICENSE")) {
+        into("META-INF")
+    }
+}
+
 dependencies {
     implementation(zlinkLibs.zlink.bindings)
     api("com.fasterxml.jackson.core:jackson-databind:2.17.2")

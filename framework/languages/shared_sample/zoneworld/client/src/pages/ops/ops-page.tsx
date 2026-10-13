@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { AnnounceForm } from '../../features/announce-world/announce-form';
 import { DiagnosticsCard } from '../../features/node-diagnostics/diagnostics-card';

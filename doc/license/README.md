@@ -14,8 +14,9 @@ English | [한국어](README.ko.md)
 | Client connectors and copied examples | Per-language client connectors; shared C++ helper headers and the Node `stream-wire` codec used by connectors and the Framework runtime; example code under `samples/`, `tutorial/`, and `quickstart/` | Apache-2.0 | See §6 for ecosystem declarations; full text at [`framework/languages/cpp/http-client/LICENSE`](../../framework/languages/cpp/http-client/LICENSE) |
 | `http-client` | Each language's `http-client` package under `framework/` (dotnet/java/kotlin/node/cpp) | Apache-2.0 | See §6 for ecosystem declarations; full text also at [`framework/languages/cpp/http-client/LICENSE`](../../framework/languages/cpp/http-client/LICENSE) |
 
-Tests and performance-gate source retain the Framework license. Each scope has
-its own redistribution terms.
+Connector tests, performance-gate source, and connector e2e fixtures retain the
+Framework license. Code and fixtures under `framework/languages/shared_sample/`
+are Apache-2.0 as part of the copyable sample.
 
 ## 2. Why `core`/`bindings` are MPL-2.0
 
@@ -52,16 +53,18 @@ through 0.30.0 remain under FSL-1.1-ALv2.
 
 ## 4. Client connectors and examples use Apache-2.0
 
-Client connectors and example code copied from `samples/`, `tutorial/`, and
-`quickstart/` use Apache-2.0. Package metadata and source SPDX identifiers
-express this boundary. Tests and performance-gate source retain the Framework
-license even when they use a connector.
+Client connectors and example code copied from `samples/`, `tutorial/`,
+`quickstart/`, and `framework/languages/shared_sample/` use Apache-2.0. Package
+metadata and source SPDX identifiers express this boundary. Connector tests,
+performance-gate source, and connector e2e fixtures retain the Framework
+license.
 
 The Node `stream-wire` package is a shared wire-codec dependency used by both
 the connector and server Framework packages. Its package metadata and bundled
-license use Apache-2.0. The four C++ common headers used by the connector are
-also Apache-2.0. Server Framework runtime and test source retain zlink License
-1.0.
+license use Apache-2.0. All eight C++ headers under
+`framework/languages/cpp/common/include/` are also Apache-2.0 because client
+connectors use them. Server Framework runtime and non-connector test source
+retain zlink License 1.0.
 
 ## 5. `http-client` uses Apache-2.0
 
@@ -84,7 +87,7 @@ with the C++ package and in the repository at
 | Ecosystem | Server Framework runtime (zlink License 1.0) | Client connectors and examples (Apache-2.0) | `http-client` (Apache-2.0) |
 |-----------|-------------------------------------------|---------------------------------------------|------------------------------|
 | dotnet | `Directory.Build.targets` bundles `framework/LICENSE` in packable `.nupkg` files | Connector `.csproj` declares Apache-2.0 and includes the full text as `LICENSE` | `Zlink.HttpClient.csproj` declares Apache-2.0 |
-| java/kotlin | The root `build.gradle.kts` Maven `pom.licenses` block names zlink License 1.0 and links to `framework/LICENSE` | The same block declares `zlink-stream-connector` as Apache-2.0; its shared `zlink-framework-json-internal` dependency remains zlink License 1.0 | The same block declares `zlink-http-client` and `zlink-http-client-kotlin` as Apache-2.0 |
+| java/kotlin | The root `build.gradle.kts` Maven `pom.licenses` block names zlink License 1.0 and links to `framework/LICENSE` | The same block declares `zlink-stream-connector` and `zlink-framework-json-internal` as Apache-2.0; the internal JSON package embeds the full text in its JAR | The same block declares `zlink-http-client` and `zlink-http-client-kotlin` as Apache-2.0 |
 | node | Server packages use `"license": "SEE LICENSE IN LICENSE"` and include `framework/LICENSE` in their package-root `LICENSE` file | `stream-connector` declares Apache-2.0 and includes the full text; `stream-wire` does too and is shared with server Framework packages | `http-client/package.json` declares Apache-2.0 and includes the full text |
-| cpp | Framework packages use zlink License 1.0; server-only source files use `LicenseRef-zlink-License-1.0` | Conan/vcpkg metadata declare Apache-2.0; CMake installs `cpp/http-client/LICENSE`; production connector, its four common helper headers, and sample source headers use Apache-2.0 | `framework/languages/cpp/http-client/LICENSE` contains the full text and source files use `SPDX-License-Identifier: Apache-2.0` |
+| cpp | Framework packages use zlink License 1.0; server-only source files use `LicenseRef-zlink-License-1.0` | Conan/vcpkg metadata declare Apache-2.0; CMake installs `cpp/http-client/LICENSE`; production connector, all eight `common/include/` headers, and sample source headers use Apache-2.0 | `framework/languages/cpp/http-client/LICENSE` contains the full text and source files use `SPDX-License-Identifier: Apache-2.0` |
 | Unity | — | `package.json` declares Apache-2.0 and includes the full text in package-root `LICENSE.md` | — |

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { useState } from 'preact/hooks';
 
 export function AnnounceForm({ onAnnounce, result }: { onAnnounce: (text: string) => Promise<void>; result: string | null }) {

@@ -4,6 +4,7 @@
   "version": "0.10.0",
   "type": "module",
   "description": "ZoneWorld browser client. One client, every language server (scenario §9).",
+  "license": "Apache-2.0",
   "scripts": {
     "prepare:browser": "node scripts/prepare-browser.mjs",
     "dev": "vite",

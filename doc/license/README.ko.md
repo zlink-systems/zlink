@@ -14,8 +14,9 @@
 | client connector와 복사 사용 예제 | 언어별 connector, connector 의존 C++ 공용 helper header와 connector·Framework runtime이 함께 쓰는 Node `stream-wire` codec, `samples/`, `tutorial/`, `quickstart/`의 예제 코드 | Apache-2.0 | 생태계별 표기 위치는 §6 참고, 전문은 [`framework/languages/cpp/http-client/LICENSE`](../../framework/languages/cpp/http-client/LICENSE) |
 | http-client | 전 언어(dotnet/java/kotlin/node/cpp)의 `framework/` 아래 언어별 `http-client` 패키지 | Apache-2.0 | 생태계별 표기 위치는 §6 참고, 전문은 [`framework/languages/cpp/http-client/LICENSE`](../../framework/languages/cpp/http-client/LICENSE)에도 |
 
-테스트와 performance gate 소스는 framework 라이선스를 유지한다. 각 범위는 서로 다른
-재배포 조건을 적용한다.
+connector 테스트, performance gate 소스와 connector e2e fixture는 framework 라이선스를
+유지한다. `framework/languages/shared_sample/`의 코드와 fixture는 복사 사용 샘플의 일부로
+Apache-2.0을 따른다.
 
 ## 2. `core`/`bindings`가 MPL-2.0인 이유
 
@@ -49,16 +50,17 @@ MPL-2.0에 남는다: 독자적인 제품·SaaS 표면이 없는 인프라라서
 
 ## 4. client connector와 예제가 Apache-2.0을 따르는 이유
 
-client connector와 `samples/`, `tutorial/`, `quickstart/`에서 복사해 사용하는 예제 코드는
-Apache-2.0을 따릅니다. package metadata와 소스 SPDX가 이 경계를 표시합니다. 테스트와
-performance gate 소스는 connector를 사용해도 framework 라이선스를 유지합니다.
+client connector와 `samples/`, `tutorial/`, `quickstart/`,
+`framework/languages/shared_sample/`에서 복사해 사용하는 예제 코드는 Apache-2.0을 따릅니다.
+package metadata와 소스 SPDX가 이 경계를 표시합니다. connector 테스트, performance gate 소스와
+connector e2e fixture는 framework 라이선스를 유지합니다.
 
 Node `stream-wire` package는 connector와 서버 Framework package가 함께 사용하는 공유 wire codec이다.
 package metadata와 동봉 license는 Apache-2.0을 사용하며, 서버 Framework runtime과 테스트 소스의
 라이선스는 바뀌지 않는다.
 
-connector가 사용하는 C++ 공용 helper header 네 개도 Apache-2.0을 따른다. 서버 Framework runtime과
-테스트의 나머지 소스는 zlink License 1.0을 유지한다.
+`framework/languages/cpp/common/include/`의 header 여덟 개도 connector가 사용하므로 Apache-2.0을
+따른다. 서버 Framework runtime과 connector 외부 테스트 소스는 zlink License 1.0을 유지한다.
 
 ## 5. `http-client`가 Apache-2.0을 따르는 이유
 
@@ -81,7 +83,7 @@ libzmq를 fork한 `core`와 달리, `http-client` 자체의 래퍼 코드에는 
 | 생태계 | 서버 Framework (zlink License 1.0) | client connector와 예제 (Apache-2.0) | `http-client` (Apache-2.0) |
 |--------|----------------------------------|--------------------------------------|------------------------------|
 | dotnet | `Directory.Build.targets`가 packable `.nupkg`에 `framework/LICENSE`를 포함한다 | connector `.csproj`가 Apache-2.0을 선언하고 전문을 `LICENSE`로 포함한다 | `Zlink.HttpClient.csproj`가 Apache-2.0을 선언한다 |
-| java/kotlin | 루트 `build.gradle.kts`의 Maven `pom.licenses` 블록이 zlink License 1.0과 `framework/LICENSE` URL을 지정한다 | 같은 블록이 `zlink-stream-connector`를 Apache-2.0으로 선언한다. 공유 dependency `zlink-framework-json-internal`은 zlink License 1.0을 유지한다 | 같은 블록이 `zlink-http-client`와 `zlink-http-client-kotlin`을 Apache-2.0으로 선언한다 |
+| java/kotlin | 루트 `build.gradle.kts`의 Maven `pom.licenses` 블록이 zlink License 1.0과 `framework/LICENSE` URL을 지정한다 | 같은 블록이 `zlink-stream-connector`와 `zlink-framework-json-internal`을 Apache-2.0으로 선언한다. JSON 내부 package는 JAR에 Apache 전문을 포함한다 | 같은 블록이 `zlink-http-client`와 `zlink-http-client-kotlin`을 Apache-2.0으로 선언한다 |
 | node | server package는 `"license": "SEE LICENSE IN LICENSE"`와 package-root `LICENSE`를 사용한다 | `stream-connector`가 Apache-2.0을 선언하고 전문을 포함한다. `stream-wire`도 Apache-2.0과 전문을 포함하며 서버 Framework package와 공유된다 | `http-client/package.json`이 Apache-2.0과 Apache 전문을 포함한다 |
-| cpp | framework package는 zlink License 1.0을 사용한다. server-only source headers는 `LicenseRef-zlink-License-1.0`을 사용한다 | Conan/vcpkg metadata는 Apache-2.0을 선언한다. CMake는 `cpp/http-client/LICENSE`를 설치하며 production connector, 의존 C++ common helper, sample headers는 Apache-2.0을 사용한다 | `framework/languages/cpp/http-client/LICENSE`에 Apache 전문과 source SPDX가 있다 |
+| cpp | framework package는 zlink License 1.0을 사용한다. server-only source headers는 `LicenseRef-zlink-License-1.0`을 사용한다 | Conan/vcpkg metadata는 Apache-2.0을 선언한다. CMake는 `cpp/http-client/LICENSE`를 설치하며 production connector, `common/include/` header 여덟 개와 sample headers는 Apache-2.0을 사용한다 | `framework/languages/cpp/http-client/LICENSE`에 Apache 전문과 source SPDX가 있다 |
 | Unity | — | `package.json`이 Apache `LICENSE.md`를 지정하고 package-root 파일에 전문을 포함한다 | — |

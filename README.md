@@ -198,7 +198,7 @@ Licensing differs by repository layer.
 |---|---|
 | `core/`, `bindings/` | [Mozilla Public License 2.0](./LICENSE) |
 | Server Framework runtime under `framework/` | [zlink License 1.0](./framework/LICENSE) |
-| Client connectors, their shared C++ helper headers and Node `stream-wire` codec, and example code in language-specific `samples/`, `tutorial/`, and `quickstart/` directories | [Apache License 2.0](./framework/languages/cpp/http-client/LICENSE) |
+| Client connectors, all shared C++ headers under `common/include/`, Node `stream-wire`, and examples under language-specific `samples/`, `tutorial/`, `quickstart/`, and `shared_sample/` directories | [Apache License 2.0](./framework/languages/cpp/http-client/LICENSE) |
 | Language-specific Framework `http-client` packages | Apache License 2.0 |
 
 The server Framework runtime uses the zlink License 1.0. Versions before 1.0.0 are free

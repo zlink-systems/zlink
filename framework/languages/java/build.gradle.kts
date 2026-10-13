@@ -188,7 +188,8 @@ subprojects {
                             if (project.name in setOf(
                                     "zlink-http-client",
                                     "zlink-http-client-kotlin",
-                                    "zlink-stream-connector")) {
+                                    "zlink-stream-connector",
+                                    "zlink-framework-json-internal")) {
                                 license {
                                     name.set("Apache-2.0")
                                     url.set("https://www.apache.org/licenses/LICENSE-2.0")

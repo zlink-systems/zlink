@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { NodeAlertNotify } from '../../shared/api/contracts';
 
 export function AlertList({ alerts }: { alerts: readonly NodeAlertNotify[] }) {

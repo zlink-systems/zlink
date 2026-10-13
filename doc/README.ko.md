@@ -98,4 +98,4 @@
 
 | 문서 | 설명 |
 |------|------|
-| [README.ko.md](license/README.ko.md) | `core/`·`bindings/`의 MPL-2.0, 서버 Framework runtime의 zlink License 1.0, client connector와 복사 사용 예제 및 `http-client`의 Apache-2.0 조건. 1.0.0 전 서버 runtime은 머신 수 제한 없이 무료이고, 1.0.0부터는 서버 한 대가 무료이며 추가 머신은 유료입니다. 0.30.0 이하 릴리스는 FSL-1.1-ALv2를 유지합니다. |
+| [README.ko.md](license/README.ko.md) | `core/`·`bindings/`의 MPL-2.0, 서버 Framework runtime의 zlink License 1.0, client connector·C++ `common/include/` header 전체·`shared_sample/`을 포함한 복사 사용 예제 및 `http-client`의 Apache-2.0 조건. 1.0.0 전 서버 runtime은 머신 수 제한 없이 무료이고, 1.0.0부터는 서버 한 대가 무료이며 추가 머신은 유료입니다. 0.30.0 이하 릴리스는 FSL-1.1-ALv2를 유지합니다. |

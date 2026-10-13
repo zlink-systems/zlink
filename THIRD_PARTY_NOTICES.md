@@ -134,9 +134,12 @@ This repository uses three licenses, split by layer:
   of machine count; starting with 1.0.0, one server machine is free and each
   additional machine requires a paid license. Releases through 0.30.0 remain
   under FSL-1.1-ALv2. See `framework/LICENSE` for the full license text.
-- Client connectors, their shared C++ helper headers and Node `stream-wire`
-  codec used by connectors and the Framework runtime, and example code under language-specific
-  `samples/`, `tutorial/`, and `quickstart/` directories are licensed under Apache-2.0.
+- Client connectors, all eight shared C++ headers under
+  `framework/languages/cpp/common/include/`, Node `stream-wire` used by
+  connectors and the Framework runtime, and example code under language-specific
+  `samples/`, `tutorial/`, `quickstart/`, and `framework/languages/shared_sample/`
+  are licensed under Apache-2.0. Connector tests, performance-gate source, and
+  connector e2e fixtures retain zlink License 1.0.
   Packages include the Apache license text where their packaging configuration
   bundles a license file; the canonical text is
   `framework/languages/cpp/http-client/LICENSE`.

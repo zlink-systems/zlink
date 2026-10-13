@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { signal } from '@preact/signals';
 import { NodeModel } from '../../entities/node/model';
 import type {

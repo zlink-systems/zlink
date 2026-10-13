@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.framework.runtime.internal.json;
 
 import com.fasterxml.jackson.core.JsonGenerator;
