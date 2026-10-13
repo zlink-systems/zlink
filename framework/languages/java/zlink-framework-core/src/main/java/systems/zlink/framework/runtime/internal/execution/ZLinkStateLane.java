@@ -80,7 +80,28 @@ public final class ZLinkStateLane {
 
     /** Synchronous registration boundary; its private result cannot acquire dependents. */
     public <T> T awaitTurn(Supplier<T> work) {
-        return ZLinkCompletionBridge.await(submit(work, true));
+        Objects.requireNonNull(work, "work");
+        throwIfReentrant();
+        if (!tryAdmit()) throw new IllegalStateException("state lane is closed");
+        CompletableFuture<T> result;
+        try {
+            if (tryClaimInlineTurn()) {
+                try {
+                    return callWithCurrent(this, work);
+                } catch (CompletionException failure) {
+                    // Preserve the synchronous boundary's existing failure unwrapping.
+                    return ZLinkCompletionBridge.await(CompletableFuture.failedFuture(failure));
+                } finally {
+                    releaseInlineTurn();
+                }
+            }
+            result = new CompletableFuture<>();
+            mailbox.add(completeWork(work, result));
+            scheduleDrain();
+        } finally {
+            releaseAdmission();
+        }
+        return ZLinkCompletionBridge.await(result);
     }
 
     private <T> CompletableFuture<T> submit(Supplier<T> work, boolean runIdleTurnNow) {
@@ -140,14 +161,22 @@ public final class ZLinkStateLane {
     }
 
     private boolean tryRunInline(WorkItem turn) {
-        if (!scheduled.compareAndSet(0, 1)) return false;
+        if (!tryClaimInlineTurn()) return false;
         try {
-            if (!mailbox.isEmpty()) return false;
             turn.run();
             return true;
         } finally {
             releaseInlineTurn();
         }
+    }
+
+    private boolean tryClaimInlineTurn() {
+        if (!scheduled.compareAndSet(0, 1)) return false;
+        if (!mailbox.isEmpty()) {
+            releaseInlineTurn();
+            return false;
+        }
+        return true;
     }
 
     public CompletionStage<Void> runAsync(Runnable work) {
@@ -287,19 +316,12 @@ public final class ZLinkStateLane {
 
     private static <T> T callWithCurrent(ZLinkStateLane lane, Supplier<T> command) {
         ZLinkStateLane previous = CURRENT.get();
-        if (lane == null) {
-            CURRENT.remove();
-        } else {
-            CURRENT.set(lane);
-        }
+        CURRENT.set(lane);
         try {
             return command.get();
         } finally {
-            if (previous == null) {
-                CURRENT.remove();
-            } else {
-                CURRENT.set(previous);
-            }
+            // Keep the thread's diagnostic slot, without retaining an inactive owner.
+            CURRENT.set(previous);
         }
     }
 
