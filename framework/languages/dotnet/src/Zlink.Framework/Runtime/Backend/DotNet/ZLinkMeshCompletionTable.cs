@@ -1,3 +1,4 @@
+using System.Threading.Tasks.Sources;
 using Zlink.Framework.Runtime.Backend.Contracts;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet;
@@ -15,7 +16,7 @@ internal sealed class ZLinkMeshCompletionTable
     private readonly object _gate = new();
     private readonly Dictionary<MeshOperationId, PendingCompletion> _pending = new();
     private readonly ZLinkCompletionDispatcher _dispatcher;
-    private TaskCompletionSource _drained = CompletedSignal();
+    private TaskCompletionSource? _drained;
     private int _outstandingOperations;
     private bool _closed;
 
@@ -29,7 +30,13 @@ internal sealed class ZLinkMeshCompletionTable
         get
         {
             lock (_gate)
-                return _drained.Task;
+                return _outstandingOperations == 0
+                    ? Task.CompletedTask
+                    : (
+                        _drained ??= new TaskCompletionSource(
+                            TaskCreationOptions.RunContinuationsAsynchronously
+                        )
+                    ).Task;
         }
     }
 
@@ -38,6 +45,24 @@ internal sealed class ZLinkMeshCompletionTable
         if (correlationId == default)
             return false;
         ArgumentNullException.ThrowIfNull(handler);
+        Add(new PendingReply(this, correlationId, handler));
+        return true;
+    }
+
+    internal PendingSend RegisterSend(MeshOperationId operationId)
+    {
+        if (operationId == default)
+            throw new ArgumentException(
+                "A non-default operation is required.",
+                nameof(operationId)
+            );
+        var pending = new PendingSend(this, operationId);
+        Add(pending);
+        return pending;
+    }
+
+    private void Add(PendingCompletion pending)
+    {
         lock (_gate)
         {
             if (_closed)
@@ -45,21 +70,12 @@ internal sealed class ZLinkMeshCompletionTable
                     ZLinkFrameworkErrorKind.ShuttingDown,
                     "The mesh completion table is closed."
                 );
-            if (_pending.ContainsKey(correlationId))
-                throw new InvalidOperationException("The reply correlation already has a waiter.");
             // The dispatcher node exists before the operation becomes visible
             // in the pending table, preserving registration-before-submit.
-            var pending = new PendingCompletion(this, correlationId, handler);
-            var nextDrained =
-                _outstandingOperations == 0
-                    ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
-                    : null;
-            _pending.Add(correlationId, pending);
-            if (nextDrained is not null)
-                _drained = nextDrained;
+            if (!_pending.TryAdd(pending.CorrelationId, pending))
+                throw new InvalidOperationException("The reply correlation already has a waiter.");
             _outstandingOperations++;
         }
-        return true;
     }
 
     public bool RegisterRequest(MeshOperationId correlationId, ZLinkBackendRequestCallback callback)
@@ -140,15 +156,16 @@ internal sealed class ZLinkMeshCompletionTable
     )
     {
         ArgumentNullException.ThrowIfNull(completeCancellation);
-        PendingCompletion? pending;
+        PendingReply? pending;
         lock (_gate)
         {
-            if (!_pending.TryGetValue(correlationId, out pending))
+            if (!_pending.TryGetValue(correlationId, out var entry))
                 return default;
+            pending = (PendingReply)entry;
             pending.SetCancellationAction(completeCancellation);
         }
         return cancellationToken.Register(
-            static state => ((PendingCompletion)state!).CancelFromToken(),
+            static state => ((PendingReply)state!).CancelFromToken(),
             pending
         );
     }
@@ -166,22 +183,41 @@ internal sealed class ZLinkMeshCompletionTable
     {
         if (!TryTake(record.OperationId, out var pending))
             return false;
-        pending.PrepareReply(record, parts);
+        ((PendingReply)pending).PrepareReply(record, parts);
         _dispatcher.Post(pending);
         return true;
     }
 
+    private void CompleteSend(MeshOperationId operationId, Exception? failure)
+    {
+        if (!TryTake(operationId, out var pending))
+            return;
+        ((PendingSend)pending).PrepareSend(failure);
+        _dispatcher.Post(pending);
+    }
+
     public void FailAll(RequestResult result)
     {
+        Dictionary<MeshOperationId, PendingCompletion>.Enumerator entries;
         lock (_gate)
         {
             _closed = true;
-            foreach (var entry in _pending)
+            entries = _pending.GetEnumerator();
+        }
+        // Closed admission prevents additions; .NET 8 enumeration permits removals.
+        while (true)
+        {
+            PendingCompletion pending;
+            lock (_gate)
             {
-                entry.Value.PrepareFailure(result);
-                _dispatcher.Post(entry.Value);
+                if (!entries.MoveNext())
+                    return;
+                var entry = entries.Current;
+                _pending.Remove(entry.Key);
+                pending = entry.Value;
             }
-            _pending.Clear();
+            pending.PrepareFailure(result);
+            _dispatcher.Post(pending);
         }
     }
 
@@ -191,7 +227,7 @@ internal sealed class ZLinkMeshCompletionTable
             return _pending.Remove(correlationId, out pending!);
     }
 
-    private void TryDispatchCancellation(PendingCompletion expected)
+    private void TryDispatchCancellation(PendingReply expected)
     {
         lock (_gate)
         {
@@ -215,7 +251,10 @@ internal sealed class ZLinkMeshCompletionTable
                 return;
             _outstandingOperations--;
             if (_outstandingOperations == 0)
+            {
                 drained = _drained;
+                _drained = null;
+            }
         }
         drained?.TrySetResult();
         if (failure is not null)
@@ -231,36 +270,104 @@ internal sealed class ZLinkMeshCompletionTable
         }
     }
 
-    private static TaskCompletionSource CompletedSignal()
+    internal abstract class PendingCompletion : ZLinkCompletionDispatcher.WorkItem
     {
-        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        signal.TrySetResult();
-        return signal;
+        protected readonly ZLinkMeshCompletionTable Owner;
+        internal MeshOperationId CorrelationId { get; }
+
+        protected PendingCompletion(ZLinkMeshCompletionTable owner, MeshOperationId correlationId)
+        {
+            Owner = owner;
+            CorrelationId = correlationId;
+        }
+
+        internal abstract void PrepareFailure(RequestResult result);
+
+        internal override void Completed(Exception? failure) =>
+            Owner.ReleaseReservation(this, failure);
     }
 
-    private sealed class PendingCompletion : ZLinkCompletionDispatcher.WorkItem
+    internal sealed class PendingSend : PendingCompletion, IValueTaskSource
+    {
+        private ManualResetValueTaskSourceCore<bool> _source;
+        private Task? _admission;
+        private Exception? _failure;
+
+        internal PendingSend(ZLinkMeshCompletionTable owner, MeshOperationId operationId)
+            : base(owner, operationId) { }
+
+        internal ValueTask Completion => new(this, _source.Version);
+
+        internal void Observe(Task admission)
+        {
+            _admission = admission;
+            if (admission.IsCompleted)
+                CompleteAdmission();
+            else
+                admission.ConfigureAwait(false).GetAwaiter().UnsafeOnCompleted(CompleteAdmission);
+        }
+
+        private void CompleteAdmission()
+        {
+            Exception? failure = null;
+            try
+            {
+                _admission!.GetAwaiter().GetResult();
+            }
+            catch (Exception error)
+            {
+                failure = error;
+            }
+            _admission = null;
+            Owner.CompleteSend(CorrelationId, failure);
+        }
+
+        internal void PrepareSend(Exception? failure) => _failure = failure;
+
+        internal void Reject(Exception failure) => Owner.CompleteSend(CorrelationId, failure);
+
+        internal override void PrepareFailure(RequestResult result) =>
+            _failure = ZLinkRequestFailureMapper.CreateCompletionException(result, "MeshNode send");
+
+        internal override void Execute()
+        {
+            if (_failure is { } failure)
+                _source.SetException(failure);
+            else
+                _source.SetResult(true);
+        }
+
+        void IValueTaskSource.GetResult(short token) => _source.GetResult(token);
+
+        ValueTaskSourceStatus IValueTaskSource.GetStatus(short token) => _source.GetStatus(token);
+
+        void IValueTaskSource.OnCompleted(
+            Action<object?> continuation,
+            object? state,
+            short token,
+            ValueTaskSourceOnCompletedFlags flags
+        ) => _source.OnCompleted(continuation, state, token, flags);
+    }
+
+    private sealed class PendingReply : PendingCompletion
     {
         private static readonly IReadOnlyList<Message> EmptyParts = Array.Empty<Message>();
 
-        private readonly ZLinkMeshCompletionTable _owner;
         private readonly CompletionHandler _handler;
         private MeshReceiveRecord _record;
         private IReadOnlyList<Message>? _parts;
         private Action? _cancellationAction;
         private DispatchKind _kind;
 
-        internal PendingCompletion(
+        internal PendingReply(
             ZLinkMeshCompletionTable owner,
             MeshOperationId correlationId,
             CompletionHandler handler
         )
+            : base(owner, correlationId)
         {
-            _owner = owner;
-            CorrelationId = correlationId;
             _handler = handler;
         }
-
-        internal MeshOperationId CorrelationId { get; }
 
         internal void SetCancellationAction(Action action)
         {
@@ -271,7 +378,7 @@ internal sealed class ZLinkMeshCompletionTable
             _cancellationAction = action;
         }
 
-        internal void CancelFromToken() => _owner.TryDispatchCancellation(this);
+        internal void CancelFromToken() => Owner.TryDispatchCancellation(this);
 
         internal void PrepareReply(MeshReceiveRecord record, IReadOnlyList<Message> parts)
         {
@@ -280,7 +387,7 @@ internal sealed class ZLinkMeshCompletionTable
             _kind = DispatchKind.Reply;
         }
 
-        internal void PrepareFailure(RequestResult result)
+        internal override void PrepareFailure(RequestResult result)
         {
             _record = MeshReceiveRecord.CompletionFailure(CorrelationId, result);
             _parts = EmptyParts;
@@ -314,7 +421,7 @@ internal sealed class ZLinkMeshCompletionTable
         {
             _parts = null;
             _cancellationAction = null;
-            _owner.ReleaseReservation(this, failure);
+            base.Completed(failure);
         }
 
         private enum DispatchKind

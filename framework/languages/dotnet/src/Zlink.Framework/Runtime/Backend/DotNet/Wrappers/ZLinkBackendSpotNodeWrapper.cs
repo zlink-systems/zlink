@@ -45,7 +45,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         _node = node;
-        _completions = new ZLinkMeshCompletionTable();
+        _completions = node.Completions;
         _pump = new ZLinkMeshDispatchPump(node, _completions, applicationJobQueue);
         _node.SetCompletionHandlerCore((record, parts) => _completions.TryComplete(record, parts));
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);

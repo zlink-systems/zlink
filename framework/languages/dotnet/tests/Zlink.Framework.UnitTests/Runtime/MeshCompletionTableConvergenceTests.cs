@@ -7,6 +7,59 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshCompletionTableConvergenceTests
 {
     [Fact]
+    public async Task ImmediateSendUsesTheRegisteredDispatcherNode()
+    {
+        var table = new ZLinkMeshCompletionTable();
+        var operation = new MeshOperationId(92, 1);
+        var pending = table.RegisterSend(operation);
+        var turn = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var awaiter = pending.Completion.ConfigureAwait(false).GetAwaiter();
+        awaiter.UnsafeOnCompleted(() =>
+        {
+            awaiter.GetResult();
+            turn.SetResult(ZLinkCompletionDispatcher.IsCurrentExecution);
+        });
+        pending.Observe(Task.CompletedTask);
+        Assert.True(await turn.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.False(table.TryCancel(operation));
+        await table.CompletionDrained;
+    }
+
+    [Fact]
+    public async Task SendShutdownWinsOverLateBindingAdmission()
+    {
+        var table = new ZLinkMeshCompletionTable();
+        var admission = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var pending = table.RegisterSend(new MeshOperationId(93, 1));
+        pending.Observe(admission.Task);
+        var completion = pending.Completion.AsTask();
+        table.FailAll(RequestResult.Terminated);
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => completion);
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
+        admission.SetResult();
+        await table.CompletionDrained;
+        Assert.True(completion.IsFaulted);
+    }
+
+    [Fact]
+    public async Task ImmediateSendPreservesTheBindingFailure()
+    {
+        var table = new ZLinkMeshCompletionTable();
+        var failure = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
+        var pending = table.RegisterSend(new MeshOperationId(94, 1));
+        pending.Observe(Task.FromException(failure));
+        var observed = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
+            pending.Completion.AsTask()
+        );
+        Assert.Same(failure, observed);
+        await table.CompletionDrained;
+    }
+
+    [Fact]
     public async Task DispatcherCreatedOnOwnerLane_DoesNotInheritLaneCurrentScope()
     {
         var lane = new ZLinkStateLane();
