@@ -346,8 +346,7 @@ export function decodeChannelReply<TReply>(
     return undefined as TReply;
   }
   if (header.contentType === BINARY_CONTENT_TYPE) {
-    const part = parts[1];
-    return (part instanceof ZLinkBufferMessage ? part.data() : Buffer.from(part.data())) as TReply;
+    return ZLinkBufferMessage.retainPayload(parts[1]) as TReply;
   }
   if (serializer !== undefined) {
     return serializer.deserialize<TReply>(

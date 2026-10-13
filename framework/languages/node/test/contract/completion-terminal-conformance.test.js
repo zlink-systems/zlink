@@ -116,17 +116,17 @@ test('mesh completion dispatch occurs after the atomic entry take', async () => 
   table.dispose();
 });
 
-test('mesh completion copy failure still consumes the terminal winner', async () => {
+test('mesh completion payload access failure still consumes the terminal winner', async () => {
   const diagnostics = [];
   const table = new completion.ZLinkMeshCompletionTable((diagnostic) => diagnostics.push(diagnostic));
   const operationId = operation('alpha');
   const pending = table.submit(() => operationId);
   const broken = record(operationId, 'reply:success');
-  broken.parts = [{ data: () => { throw new Error('copy failed'); } }];
+  broken.parts = [{ data: () => { throw new Error('payload access failed'); } }];
 
   table.complete(broken);
   assert.equal(table.pendingCount, 0);
-  await assert.rejects(pending, /copy failed/);
+  await assert.rejects(pending, /payload access failed/);
 
   table.complete(record(operationId, 'reply:success'));
   assert.equal(diagnostics.length, 1);

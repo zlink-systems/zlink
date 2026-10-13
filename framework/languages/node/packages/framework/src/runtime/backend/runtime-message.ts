@@ -17,6 +17,12 @@ export class ZLinkBufferMessage implements Message {
     return new ZLinkBufferMessage(bytes);
   }
 
+  static retainPayload(message: Message): Buffer {
+    // Binding data() Buffers retain their storage after the message handle closes.
+    // Preserve that ownership at runtime boundaries without copying the payload.
+    return message.data();
+  }
+
   data(): Buffer {
     return this.bytes;
   }

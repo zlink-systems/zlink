@@ -27,6 +27,7 @@ import {
 } from './node-backend-adapter-support';
 import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
 import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
+import { ZLinkBufferMessage } from '../runtime-message';
 import type {
   ZLinkRawBindingPort,
   ZLinkRawDealerPort,
@@ -521,8 +522,7 @@ function receiveRecord(
 
 function retainAndClose(messages: readonly Message[]): readonly Buffer[] {
   try {
-    // Binding Buffer views retain their storage independently of the message handle.
-    return messages.map((message) => message.data());
+    return messages.map((message) => ZLinkBufferMessage.retainPayload(message));
   } finally {
     for (const message of messages) message.close();
   }

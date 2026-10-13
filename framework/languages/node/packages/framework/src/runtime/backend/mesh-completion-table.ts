@@ -244,15 +244,13 @@ function retainCompletion(record: ReceiveRecord): ZLinkMeshCompletion {
 }
 
 function retainCompletionParts(parts: readonly ZLinkMessage[]): Message[] {
-  // A runtime message already owns a managed Buffer and close() is a no-op.
-  // Binding-native messages can expose native storage through data(), which
-  // becomes invalid when their owner closes; materialize that one boundary copy.
+  // Reuse managed messages and wrap binding payloads in the runtime representation.
   let retained: Message[] | undefined;
   for (let index = 0; index < parts.length; index++) {
     const part = parts[index]!;
     if (!(part instanceof Message)) {
       retained ??= parts.slice() as Message[];
-      retained[index] = Message.fromOwned(Buffer.from(part.data()));
+      retained[index] = Message.fromOwned(Message.retainPayload(part));
     }
   }
   return retained ?? (parts as Message[]);

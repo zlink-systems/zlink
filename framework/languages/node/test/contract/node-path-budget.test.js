@@ -58,7 +58,7 @@ const {
   runWithApplicationJobPermit
 } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
 
-test('managed binary replies move payload ownership while generic messages retain a boundary copy', () => {
+test('managed and binding binary replies retain payload views after source close', () => {
   const header = { channelName: 'mesh', messageName: 'Reply', correlationId: 'a'.repeat(32) };
   const payload = Buffer.alloc(1024, 7);
   const parts = encodeChannelReplyParts(header, payload);
@@ -67,20 +67,14 @@ test('managed binary replies move payload ownership while generic messages retai
   assert.equal(reply, payload);
   for (const part of managed) part.close();
   assert.equal(reply[0], 7);
-  const nativeBytes = Buffer.alloc(1024, 8);
-  const generic = [
-    { data: () => parts[0], close() {} },
-    {
-      data: () => nativeBytes,
-      close() {
-        nativeBytes.fill(0);
-      }
-    }
-  ];
+  const { Message } = require('@zlink-systems/zlink');
+  const generic = [Message.from(parts[0]), Message.from(Buffer.alloc(1024, 8))];
+  const nativeBytes = generic[1].data();
   const retained = decodeChannelReply(generic);
   for (const part of generic) part.close();
   assert.equal(retained[0], 8);
-  assert.notEqual(retained, nativeBytes);
+  nativeBytes[0] = 9;
+  assert.equal(retained[0], 9, 'Retain binding storage without a second payload allocation.');
 });
 
 test('rotation accounting preserves exact INT32_MAX capacity and bigint snapshots', () => {
