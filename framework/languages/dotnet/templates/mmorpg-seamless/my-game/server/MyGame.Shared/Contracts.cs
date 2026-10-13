@@ -75,5 +75,4 @@ public static class NodeProtocol
     public const string RelocationRequested = "RELOCATION_REQUESTED";
     public const string Relocated = "RELOCATED";
     public const string SafeToShutdown = "SAFE_TO_SHUTDOWN";
-    public const string LogDirectoryEnvironmentVariable = "MY_GAME_LOG_DIR";
 }

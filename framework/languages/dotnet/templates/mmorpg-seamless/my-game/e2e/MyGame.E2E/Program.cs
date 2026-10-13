@@ -33,7 +33,7 @@ try
     var root = Path.GetFullPath(Option("--root") ?? Directory.GetCurrentDirectory());
     if (args.Contains("--check-structure"))
     {
-        StructureCheck.Run(root, Option("--structure"));
+        StructureCheck.Run(root, Option("--structure"), selfTest: true);
         return 0;
     }
     var mode = Option("--mode") ?? "run";

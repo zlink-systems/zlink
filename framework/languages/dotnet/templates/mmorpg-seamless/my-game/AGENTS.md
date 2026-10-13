@@ -18,7 +18,7 @@ The player Actor owns its coordinate and movement sequence. A Zone's presence re
 
 Read `README.md` before changing node registration or deployment. Update `zlink.structure.json` and node configurations together when the initial composition changes. Run the structure consistency check and e2e after changes. Keep the four scenario assertions: cross, border, reconnect, and update. A single intermittent failure is a defect; repeated success does not cancel the failure.
 
-Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1`. Logs are retained under `.logs/`; inspect node and flow logs from the first failing run. The runner owns its process IDs and Compose project and removes them on completion. Do not stop unrelated processes or containers.
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1`. Logs are retained under `.logs/`; inspect node stderr logs from the first failing run. Framework diagnostics at `Normal` include message flow records in these logs. The runner owns its process IDs and Compose project and removes them on completion. Do not stop unrelated processes or containers.
 
 ## Public API boundaries
 

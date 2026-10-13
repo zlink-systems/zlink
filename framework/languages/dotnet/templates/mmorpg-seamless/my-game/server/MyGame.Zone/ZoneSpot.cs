@@ -17,14 +17,6 @@ public sealed class ZoneSpot(IZLinkSpotContext context, IZLinkActorClient actors
 
     public void Configure()
     {
-        if (string.IsNullOrEmpty(Context.SpotId))
-        {
-            Context.Handlers.AddSubscribe<BorderHandler>(
-                GameNames.BorderChannel,
-                GameNames.BorderTopic("zone-3", "zone-4")
-            );
-            return;
-        }
         foreach (var adjacent in GameNames.AdjacentZones(Context.SpotId))
             Context.Handlers.AddSubscribe<BorderHandler>(
                 GameNames.BorderChannel,

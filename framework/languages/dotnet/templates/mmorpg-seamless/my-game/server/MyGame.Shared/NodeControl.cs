@@ -14,7 +14,6 @@ public static class NodeControl
     )
     {
         using var lifetime = new CancellationTokenSource();
-        _ = host.Services.GetRequiredService<MessageFlowFile>();
         await host.StartAsync(lifetime.Token);
         var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
         if (settings.Bootstrap && bootstrap is not null)

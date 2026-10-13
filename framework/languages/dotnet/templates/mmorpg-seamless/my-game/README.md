@@ -12,7 +12,7 @@ flowchart LR
     zoneB -->|Location / lease| location[(Redis Location Store)]
 ```
 
-`zlink.structure.json` uses the same node IDs and edge order as the landing page's `mmo-seamless` topology. Channel registrations, initial Spot owners, and configuration paths are checked against this project's server contracts. Runtime relocation can change the owner recorded in Redis without changing the initial structure definition.
+The initial `zlink.structure.json` uses the landing page's `mmo-seamless` composition. The structure checker accepts additional or reordered nodes, Spots and edges when identifiers, references, configuration paths and IDs, configured Zone IDs, and declared channel and Spot types agree with the format and server contracts. Runtime relocation can change the owner recorded in Redis without changing the initial structure definition.
 
 ## Prerequisites
 
@@ -44,6 +44,8 @@ pwsh -NoProfile -File ./run-e2e.ps1
 ```
 
 Both scripts build the solution and call the same C# orchestrator. It checks the structure, starts a uniquely named Compose project with an ephemeral Redis port, starts four server processes, waits for their explicit readiness responses, executes the scenarios, and cleans up its processes and container. Node endpoints and configuration overrides are generated per run under `.logs/`. Docker does not expose Redis beyond loopback.
+
+Node stderr logs (`<node>.err.log`) include Framework message flow records because dispatch diagnostics use `Normal`. Inspect these logs from the first failing run.
 
 The default runs all four scenarios. To select scenarios, use:
 
@@ -82,14 +84,18 @@ Structure validation can run without Docker:
 dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
 ```
 
+Every e2e run validates the composition before starting nodes. Only `--check-structure` also runs checker self-tests with valid extensions and deliberately inconsistent inputs. The checker does not require the initial preset's node counts, deployment IDs or edge indices.
+
 ## Known issues / 알려진 문제
 
-The pinned public Framework `0.30.0` has the following reported defects. The template preserves the assertions and reports failures; it does not compensate with retries or delays. Fixes are scheduled for `0.30.1`.
+The pinned public Framework `0.30.0` has the following defects. The template preserves the assertions and reports failures; it does not compensate with retries or delays. Fixes for #1690 and #1691 are scheduled for `0.30.1`.
+
+- Zone startup is blocked: startup validation calls `ZoneSpot.Configure()` with an empty `Context.SpotId`. The public Spot contract requires an instance identity, which this application uses to select adjacent-zone subscription topics. This fails with `ArgumentOutOfRangeException` through `ZLinkSpotStartupValidator.ValidateAsync` before scenarios run. No fixed topic is registered to compensate; the Framework must provide the contracted Context.
 
 - [#1690](https://github.com/zlink-systems/zlink/issues/1690): Session node `ShutdownAsync` with a bound connection can return `TeardownFailed` with native errno 110. Cleanup errors remain in the result and process logs, even if selected scenarios passed.
-- [#1691](https://github.com/zlink-systems/zlink/issues/1691): After relocation admission seal, an already accepted handler's `BoundSession.Send` can fail with `application admission is sealed`. The default `update` scenario fails on `0.30.0`; passing cross, border, and reconnect does not establish update continuity.
+- [#1691](https://github.com/zlink-systems/zlink/issues/1691): After relocation admission seal, an already accepted handler's `BoundSession.Send` can fail with `application admission is sealed`. Once startup is available, the default `update` scenario also requires this fix; passing cross, border, and reconnect does not establish update continuity.
 
-공개 Framework `0.30.0`에서 위 결함을 확인했다. `update`의 코드와 기대값은 유지하며 기본 실행에서도 제외하지 않는다. 선택한 시나리오가 통과해도 종료 실패를 숨기지 않는다. `0.30.1`에서 수정한 뒤 전체 시나리오를 다시 검증해야 한다.
+공개 Framework `0.30.0`의 시작 검사가 빈 `SpotId`로 `Configure()`를 호출하여 Zone 기동이 실패한다. 고정 topic으로 보상하지 않으며, Framework의 Context 계약 수정이 필요하다. `update`의 코드와 기대값은 유지하며 기본 실행에서도 제외하지 않는다. 기동 결함과 #1690·#1691을 수정한 package에서 전체 시나리오를 다시 검증해야 한다.
 
 ## Deployment sequence
 

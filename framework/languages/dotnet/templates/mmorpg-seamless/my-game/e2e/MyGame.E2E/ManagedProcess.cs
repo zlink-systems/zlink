@@ -27,9 +27,6 @@ internal sealed class ManagedProcess : IAsyncDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        var flowDirectory = Path.Combine(logDirectory, name);
-        Directory.CreateDirectory(flowDirectory);
-        start.Environment[NodeProtocol.LogDirectoryEnvironmentVariable] = flowDirectory;
         foreach (var argument in arguments)
             start.ArgumentList.Add(argument);
         process =
