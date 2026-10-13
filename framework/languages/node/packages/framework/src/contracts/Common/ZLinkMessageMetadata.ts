@@ -11,7 +11,7 @@ export interface ZLinkMessageMetadataPolicy {
 class ImmutableZLinkMessageMetadata implements ZLinkMessageMetadata {
   readonly values: ReadonlyMap<string, string>;
 
-  constructor(values: ReadonlyMap<string, string> | Readonly<Record<string, string>> = new Map()) {
+  constructor(values: Iterable<readonly [string, string]> = []) {
     this.values = Object.freeze(new ImmutableMetadataMap(values));
   }
 
@@ -23,12 +23,8 @@ class ImmutableZLinkMessageMetadata implements ZLinkMessageMetadata {
 class ImmutableMetadataMap implements ReadonlyMap<string, string> {
   readonly #values: Map<string, string>;
 
-  constructor(values: ReadonlyMap<string, string> | Readonly<Record<string, string>>) {
-    this.#values = new Map(
-      typeof (values as ReadonlyMap<string, string>)[Symbol.iterator] === 'function'
-        ? (values as ReadonlyMap<string, string>)
-        : Object.entries(values)
-    );
+  constructor(values: Iterable<readonly [string, string]>) {
+    this.#values = new Map(values);
   }
 
   get size(): number {
@@ -74,5 +70,14 @@ export const ZLinkMessageMetadataEmpty: ZLinkMessageMetadata = Object.freeze(
 export function zlinkMessageMetadata(
   values: ReadonlyMap<string, string> | Readonly<Record<string, string>>
 ): ZLinkMessageMetadata {
-  return Object.freeze(new ImmutableZLinkMessageMetadata(values));
+  const entries =
+    typeof (values as ReadonlyMap<string, string>)[Symbol.iterator] === 'function'
+      ? (values as ReadonlyMap<string, string>)
+      : Object.entries(values);
+  const size = Array.isArray(entries)
+    ? entries.length
+    : (entries as ReadonlyMap<string, string>).size;
+  return size === 0
+    ? ZLinkMessageMetadataEmpty
+    : Object.freeze(new ImmutableZLinkMessageMetadata(entries));
 }
