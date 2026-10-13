@@ -45,22 +45,6 @@ internal static class ZLinkStreamControlFrames
         SendControl(stream, ZlinkStreamControlProtocol.BoundControlName, payload);
     }
 
-    public static void SendActorUnbound(IZLinkStream stream, ushort slot)
-    {
-        if (slot == 0)
-            throw new InvalidOperationException("Actor slot must not be zero.");
-        Span<byte> payload = stackalloc byte[ZlinkStreamControlProtocol.ActorUnboundPayloadSize];
-        payload[0] = ZlinkStreamControlProtocol.ActorControlVersion;
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(
-            payload.Slice(
-                ZlinkStreamControlProtocol.ActorSlotOffset,
-                ZlinkStreamControlProtocol.ActorSlotSize
-            ),
-            slot
-        );
-        SendControl(stream, ZlinkStreamControlProtocol.UnboundControlName, payload);
-    }
-
     public static async ValueTask SendActorUnboundAsync(
         IZLinkStream stream,
         ushort slot,

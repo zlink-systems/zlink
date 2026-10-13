@@ -154,9 +154,6 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     internal void SendActorBound(ZLinkSessionActor actor) =>
         ZLinkStreamControlFrames.SendActorBound(_stream, actor.Slot, actor.ActorId);
 
-    internal void SendActorUnbound(ushort slot) =>
-        ZLinkStreamControlFrames.SendActorUnbound(_stream, slot);
-
     internal ValueTask SendActorUnboundAsync(ushort slot) =>
         ZLinkStreamControlFrames.SendActorUnboundAsync(_stream, slot, CancellationToken.None);
 

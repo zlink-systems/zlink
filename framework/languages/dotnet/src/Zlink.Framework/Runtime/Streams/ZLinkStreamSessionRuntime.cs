@@ -873,9 +873,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         }
     }
 
+    internal bool IsTransportTerminating => Volatile.Read(ref _terminalClose) is not null;
+
     private bool IsClosing =>
-        Volatile.Read(ref _terminalClose) is not null
-        || Volatile.Read(ref _actorBindingReplacementClosing) != 0;
+        IsTransportTerminating || Volatile.Read(ref _actorBindingReplacementClosing) != 0;
 
     private async ValueTask InvokeActorBindingReplacedAsync(
         ActorBindingReplacementIdentity identity

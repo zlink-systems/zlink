@@ -6128,6 +6128,54 @@ int actor_unbound_waits_for_accepted_push_fifo ()
     return events.size () == 2 && events.back () == "$zlink.actor.unbound" ? 0 : 3;
 }
 
+int actor_unbound_follows_session_termination (bool physical)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    constexpr auto stream_name = "unbound-termination";
+    constexpr auto submission_wait_timeout = std::chrono::seconds (5);
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto manager = gateway.manager ();
+    auto builder = zlink::framework::test::runtime_failure_builder ();
+    builder.stream (stream_name).bind ("tcp://127.0.0.1:0");
+    auto runtime = stream_runtime_t::from (builder);
+    auto stream = runtime.open_session (stream_name);
+    auto unbound = std::make_shared<std::atomic_int> (0);
+    auto unbound_submitted = std::make_shared<std::promise<void>> ();
+    auto submitted = unbound_submitted->get_future ();
+    runtime.attach_transport_writer (
+      stream,
+      [unbound, unbound_submitted] (const stream_header_t &header, const zlink::message_t &) {
+          if (header.packet_name () == "$zlink.actor.unbound" && ++(*unbound) == 1)
+              unbound_submitted->set_value ();
+          return task_t<void> (result_t<void>::success ());
+      });
+    session_actor_manager_access_t::attach (manager, stream);
+    session_actor_manager_access_t::bind_native (
+      manager, [] (actor_ref_t, std::uint64_t, std::uint16_t) {
+          return request_task_t<void> (result_t<void>::success ());
+      });
+    state->disconnect_dispatcher = [] (const actor_ref_t &) {
+        return task_t<void> (result_t<void>::success ());
+    };
+    auto binding =
+      manager.bind (test_actor_ref ("node", "player", "actor-a", 1)).async ().result ();
+    if (!binding)
+        return 1;
+    if (physical) {
+        if (!stream.close ().result ())
+            return 2;
+        session_actor_manager_access_t::disconnect (manager);
+    } else {
+        if (!binding.value ().notify_disconnected ().result ())
+            return 3;
+        if (submitted.wait_for (submission_wait_timeout) != std::future_status::ready)
+            return 4;
+    }
+    return unbound->load () == (physical ? 0 : 1) ? 0 : 4;
+}
+
 int session_disconnect_uses_actor_slot_issue_order ()
 {
     using namespace zlink::framework;
@@ -6167,6 +6215,10 @@ int main (int argc, char **argv)
 {
     if (argc == 2) {
         const std::string test (argv[1]);
+        if (test == "--unbound-physical")
+            return actor_unbound_follows_session_termination (true);
+        if (test == "--unbound-logical")
+            return actor_unbound_follows_session_termination (false);
         if (test == "--reconcile-source")
             return reconcile_deadline_fast_fails_when_store_shows_source ();
         if (test == "--reconcile-no-commit")

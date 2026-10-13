@@ -1696,6 +1696,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework_codec_protobuf)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  foreach(termination_case physical logical)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_unbound_${termination_case}
+      COMMAND test_cpp_framework_actor_gateway --unbound-${termination_case}
+      LABELS "framework-unit;framework-contract;framework-actor;stream;termination"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
   add_zlink_framework_test(
     test_cpp_framework_relocation_seal_contract
     tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp

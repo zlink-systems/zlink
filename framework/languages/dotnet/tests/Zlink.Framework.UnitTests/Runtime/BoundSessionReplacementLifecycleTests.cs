@@ -21,6 +21,35 @@ namespace Zlink.Framework.UnitTests;
 public sealed class BoundSessionReplacementLifecycleTests
 {
     [Fact]
+    public async Task Physical_Close_Drain_Does_Not_Submit_Actor_Unbound()
+    {
+        await using var fixture = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success
+        );
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            fixture.Session.EnqueueConnected("local", "remote")
+        );
+        fixture.BindRetiredSessionActor("actor-a");
+
+        Assert.True(await fixture.Session.CloseForDrainAsync(CancellationToken.None));
+        await fixture.Session.DisposeAsync();
+
+        Assert.Null(fixture.Session.TerminalFailure);
+        Assert.Equal(1, fixture.Socket.DisconnectCount);
+        Assert.Empty(fixture.Lifetime.Context.Actors.Bound);
+        Assert.DoesNotContain(
+            fixture.Socket.SentFrames,
+            frame =>
+            {
+                Assert.True(ZLinkStreamFrameCodec.TryDecode(frame, out var header, out _));
+                return ZLinkStreamProtocolDefaults.DecodeHeader(header.ToArray()).Name
+                    == "$zlink.actor.unbound";
+            }
+        );
+    }
+
+    [Fact]
     public async Task StaleSlotRequestRepliesInvalidOperationWithoutCallingSessionHandler()
     {
         using var listener = CaptureStreamActivities(out var activities);
