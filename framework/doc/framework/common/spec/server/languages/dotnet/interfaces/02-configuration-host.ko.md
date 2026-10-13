@@ -137,8 +137,9 @@ Host는 network bind 전에 다음 조건을 검증한다.
 - RID prefix 형식과 fixed RID 재claim 충돌
 - TLS certificate, key와 trust 설정
 
-검증 실패는 `ZLinkConfigurationException`으로 host startup을 실패시킨다. Runtime을 first call에서 만들지
-않으므로 구성 오류가 message 처리 중에 처음 나타나지 않는다.
+이 절의 host 구성 검증 실패는 `ZLinkConfigurationException`으로 host startup을 실패시킨다. Runtime을 first
+call에서 만들지 않으므로 host 구성 오류가 message 처리 중에 처음 나타나지 않는다. Spot `Configure()`에서
+정한 등록의 검사 시점은 [공통 API 「23」](../../../00-foundation/06-framework-api.ko.md#23-startup-validation)이 정한다.
 
 ## 8. Runtime option
 

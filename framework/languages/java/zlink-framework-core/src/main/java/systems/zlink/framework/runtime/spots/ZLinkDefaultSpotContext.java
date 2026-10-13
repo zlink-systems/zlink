@@ -565,6 +565,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     void setSpot(ZLinkSpot<?> spot) {
+        if (spot.context() != this) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "SPOT must expose the context provided by the runtime: "
+                            + spot.getClass().getName());
+        }
         this.spot = spot;
         timers.setSpot(spot);
         actorTimers.values().forEach(timer -> timer.setSpot(spot));

@@ -268,7 +268,8 @@ handler 등록 표면과 filter 계약은 [channel messaging §3](interfaces/03-
 [spot-messaging §8](../../03-spot-actor/02-spot-messaging.ko.md), [stream-session §7.2](../../04-session/01-stream-session.ko.md),
 [runtime-monitoring §6](../../06-observability/01-runtime-monitoring.ko.md).
 
-**C++은 모든 위반을 host 시작 전에 실패로 만든다.** 오류는 예외가 아니라
+**C++은 host 구성에서 정한 등록의 위반을 host 시작 전에 실패로 만든다.** Spot `Configure()`에서 정한 등록의
+검사 시점은 [공통 API 「23」](../../00-foundation/06-framework-api.ko.md#23-startup-validation)이 정한다. 오류는 예외가 아니라
 `result_t`/`framework_exception_t` 경계 규약을 따른다([common runtime](interfaces/01-common-runtime.ko.md)).
 
 ## 10. 회귀 테스트

@@ -49,7 +49,8 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
     );
     const resolvedPacketName = packetName ?? metadata?.packetName;
     if (metadata === undefined || resolvedPacketName === undefined) {
-      throw new ZLinkConfigurationException(
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
         `Actor packet handler '${handlerType.name}' must declare a packet name.`
       );
     }
@@ -68,7 +69,8 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
   addPacket(descriptor: ZLinkActorPacketDescriptor): this {
     const key = packetKey(descriptor.kind, descriptor.actorType, descriptor.packetName);
     if (this.packets.has(key)) {
-      throw new ZLinkConfigurationException(
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
         `Actor packet '${descriptor.packetName}' for '${descriptor.actorType.name}' is already registered.`
       );
     }

@@ -102,6 +102,7 @@ internal sealed class ZLinkSpotActivationFactory(
         }
         catch (Exception initializationFailure)
         {
+            initializationFailure = ConfigurationFailure(initializationFailure);
             var failures = new ZLinkFailureCollector(initializationFailure);
             if (activation is null)
             {
@@ -162,6 +163,7 @@ internal sealed class ZLinkSpotActivationFactory(
         }
         catch (Exception initializationFailure)
         {
+            initializationFailure = ConfigurationFailure(initializationFailure);
             var failures = new ZLinkFailureCollector(initializationFailure);
             if (activation is null)
             {
@@ -180,6 +182,15 @@ internal sealed class ZLinkSpotActivationFactory(
             );
         }
     }
+
+    internal static Exception ConfigurationFailure(Exception failure) =>
+        failure is ZLinkConfigurationException configuration
+            ? new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                configuration.Message,
+                innerException: configuration
+            )
+            : failure;
 }
 
 internal readonly record struct ZLinkSpotActivationCreateResult(

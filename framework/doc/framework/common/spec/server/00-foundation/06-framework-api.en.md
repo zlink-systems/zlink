@@ -1088,6 +1088,7 @@ The failure conditions of Create/GetOrCreate map to error kinds as follows.
 | No node can host it | `Unavailable` |
 | An owner route that secured a reservation but isn't ready | `Unavailable` |
 | Store resolve/reservation/commit and activation-infrastructure failures | `InternalFailure` |
+| A Spot `Configure()` registration fails its checks (§23) | `InvalidOperation` |
 | An object kind/stable-type conflict | `TypeMismatch` |
 | A stale authority fence | `Unavailable` |
 
@@ -1181,7 +1182,15 @@ messages.
 - completeness of TLS certificate, key, and trust settings
 - validity of the endpoint built from bind host, advertised host, and the actual bound port
 
-A configuration error fails host startup rather than deferring to a lazy first call.
+An error in settings decided by host configuration fails host startup rather than deferring to a
+lazy first call.
+
+**Registrations decided in a Spot's `Configure()` are not host-startup checks.** `Configure()` runs only
+with the real Context bound to its identity ([Spot Model "7"](../03-spot-actor/01-spot-model.en.md#7-differences-visible-in-net)),
+so no Spot is created and no `Configure()` is called in advance for host startup checks. Those
+registrations are checked during that Spot's activation before Ready is published, and a violation
+fails the activation with `InvalidOperation` (the Create/GetOrCreate error table in §20). An Entry
+Spot is activated inside host startup, so its failure is observed as a host startup failure.
 
 ## 24. Runtime Query and Monitoring
 

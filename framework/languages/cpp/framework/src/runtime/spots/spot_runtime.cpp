@@ -4387,7 +4387,7 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
                                                                       invoker_t invoker)
 {
     if (kind == spot_handler_kind_t::subscription && topic.empty ()) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                      "SPOT subscription handler topic is required for '"
                                        + std::string (handler_type.name ()) + "' (packet '"
                                        + packet_name + "')");
@@ -4399,7 +4399,7 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
                               && descriptor.topic == topic && descriptor.actor_type == actor_type;
                    });
     if (duplicate) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                      "duplicate spot handler registration");
     }
 

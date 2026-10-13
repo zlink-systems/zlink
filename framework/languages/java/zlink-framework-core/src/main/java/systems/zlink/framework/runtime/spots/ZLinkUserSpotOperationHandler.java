@@ -1,6 +1,11 @@
 package systems.zlink.framework.runtime.spots;
 
+import static systems.zlink.framework.runtime.protocol.ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED;
+import static systems.zlink.framework.runtime.protocol.ServiceWireConstants.FRAMEWORK_ERROR_SPOT_GENERATION_STALE;
+import static systems.zlink.framework.runtime.protocol.ServiceWireConstants.FRAMEWORK_ERROR_SPOT_MOVING;
+
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.locations.*;
@@ -31,11 +36,14 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkUserSpotOperationHandler
         implements ZLinkInternalMeshNode.UserSpotOperationHandler {
-    private static final int TERMINAL_REQUEST_FAILED = 105;
-    private static final int TERMINAL_INVALID_STATE = 107;
-    private static final int FAILURE_REQUEST_FAILED = 17;
-    private static final int FAILURE_SPOT_GENERATION_STALE = 33;
-    private static final int FAILURE_SPOT_MOVING = 34;
+    private static final int TERMINAL_REQUEST_FAILED = RequestResult.INTERNAL_ERROR.value();
+    // Schema terminal-failure-integrity pairs moving/stale failures with conflict (107).
+    // Generic activation InvalidOperation uses invalidState (111) in the failure mapper.
+    private static final int TERMINAL_CONFLICT = RequestResult.CONFLICT.value();
+    private static final int FAILURE_REQUEST_FAILED = (int) FRAMEWORK_ERROR_REQUEST_FAILED;
+    private static final int FAILURE_SPOT_GENERATION_STALE =
+            (int) FRAMEWORK_ERROR_SPOT_GENERATION_STALE;
+    private static final int FAILURE_SPOT_MOVING = (int) FRAMEWORK_ERROR_SPOT_MOVING;
     private static final ZLinkStoreCancellation OPEN = () -> false;
     private final String meshName;
     private final ZLinkInternalMeshNode node;
@@ -85,7 +93,7 @@ final class ZLinkUserSpotOperationHandler
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
                                 return failed(
-                                        TERMINAL_INVALID_STATE,
+                                        TERMINAL_CONFLICT,
                                         FAILURE_SPOT_GENERATION_STALE,
                                         "User Spot reservation is missing");
                             }
@@ -130,13 +138,10 @@ final class ZLinkUserSpotOperationHandler
                                                     abort(admission.reservation())
                                                             .thenCompose(
                                                                     ignored ->
-                                                                            failed(
-                                                                                    terminal(
-                                                                                            failure),
-                                                                                    failureCode(
-                                                                                            failure),
-                                                                                    message(
-                                                                                            failure))));
+                                                                            CompletableFuture
+                                                                                    .failedFuture(
+                                                                                            unwrap(
+                                                                                                    failure))));
                         });
     }
 
@@ -235,7 +240,7 @@ final class ZLinkUserSpotOperationHandler
                                                 fence.authorityOwnerGeneration());
                                 if (closing == null) {
                                     return failed(
-                                            TERMINAL_INVALID_STATE,
+                                            TERMINAL_CONFLICT,
                                             FAILURE_SPOT_MOVING,
                                             "Closing User Spot is missing its owner coordinator");
                                 }
@@ -253,13 +258,13 @@ final class ZLinkUserSpotOperationHandler
                             }
                             if (readiness == ZLinkSpotLifecycle.CloseReadiness.LOCAL_MISSING) {
                                 return failed(
-                                        TERMINAL_INVALID_STATE,
+                                        TERMINAL_CONFLICT,
                                         FAILURE_SPOT_MOVING,
                                         "Ready User Spot is missing local admission");
                             }
                             if (readiness == ZLinkSpotLifecycle.CloseReadiness.GENERATION_STALE) {
                                 return failed(
-                                        TERMINAL_INVALID_STATE,
+                                        TERMINAL_CONFLICT,
                                         FAILURE_SPOT_GENERATION_STALE,
                                         "User Spot local generation is stale");
                             }
@@ -276,7 +281,7 @@ final class ZLinkUserSpotOperationHandler
                             SpotActivation activation = lifecycle.spotActivationFor(fence.spotId());
                             if (activation == null) {
                                 return failed(
-                                        TERMINAL_INVALID_STATE,
+                                        TERMINAL_CONFLICT,
                                         FAILURE_SPOT_MOVING,
                                         "Ready User Spot is missing local activation");
                             }
@@ -787,38 +792,18 @@ final class ZLinkUserSpotOperationHandler
     }
 
     private static ZLinkUserSpotOperationException moving(String message) {
-        return new ZLinkUserSpotOperationException(
-                TERMINAL_INVALID_STATE, FAILURE_SPOT_MOVING, message);
+        return new ZLinkUserSpotOperationException(TERMINAL_CONFLICT, FAILURE_SPOT_MOVING, message);
     }
 
     private static ZLinkUserSpotOperationException stale(String message) {
         return new ZLinkUserSpotOperationException(
-                TERMINAL_INVALID_STATE, FAILURE_SPOT_GENERATION_STALE, message);
+                TERMINAL_CONFLICT, FAILURE_SPOT_GENERATION_STALE, message);
     }
 
     private static <T> CompletionStage<T> failed(
             int terminalResult, int failureCode, String message) {
         return CompletableFuture.failedFuture(
                 new ZLinkUserSpotOperationException(terminalResult, failureCode, message));
-    }
-
-    private static int terminal(Throwable failure) {
-        Throwable current = unwrap(failure);
-        return current instanceof ZLinkUserSpotOperationException typed
-                ? typed.terminalResult()
-                : TERMINAL_REQUEST_FAILED;
-    }
-
-    private static int failureCode(Throwable failure) {
-        Throwable current = unwrap(failure);
-        return current instanceof ZLinkUserSpotOperationException typed
-                ? typed.failureCode()
-                : FAILURE_REQUEST_FAILED;
-    }
-
-    private static String message(Throwable failure) {
-        Throwable current = unwrap(failure);
-        return current.getMessage() == null ? "User Spot operation failed" : current.getMessage();
     }
 
     private static Throwable unwrap(Throwable failure) {

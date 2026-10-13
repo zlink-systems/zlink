@@ -274,8 +274,7 @@ processes.
 
 **Completion result.** Registers synchronously with no return value. The `spot`/`entrySpot`
 field is `Type<T> | (() => Type<T>)` — use a lazy resolver (`() => RoomSpot`) to avoid a circular
-reference. A duplicate handler key under the same owner surfaces as a configuration error in
-startup validation.
+reference. For a duplicate handler key within the same owner, the check timing and failure outcome follow [Common API "23"](../../common/spec/server/00-foundation/06-framework-api.en.md#23-startup-validation).
 
 **When to use.** Attach exactly one decorator to every Spot handler class. See the registration
 entries in the topology-discovery category for Node/Channel handlers, and the stream-session
