@@ -662,9 +662,7 @@ Spot subscription은 다음 값으로 등록한다.
 - `topic`: 해당 Channel 안에서 Spot을 선택하는 값
 - packet name: typed handler를 선택하는 값
 
-**아래 검사는 등록을 확정하는 시점에 한다.** 명시 등록과 패키지 스캔처럼 host 구성에서 정한 등록은 host
-startup에서, Spot의 `Configure()`에서 정한 등록은 그 Spot의 activation에서 검사한다. 검사 시점과 실패
-결과는 [공통 API 「23」](../00-foundation/06-framework-api.ko.md#23-startup-validation)이 정한다.
+아래 등록 조건의 검사 시점과 실패 결과는 [공통 API 「23」](../00-foundation/06-framework-api.ko.md#23-startup-validation)이 정한다.
 
 - topic이 없거나 빈 문자열이면 등록은 실패한다.
 - 등록한 Spot이 해당 ChannelName에 참여하지 않으면 등록은 실패한다.
@@ -691,7 +689,7 @@ public void Configure()
 `ProjectionUpdatedHandler`는 application이 구현한 해당 message type의 subscription
 handler다.
 같은 Spot에서 ChannelName, topic, [message kind](../00-foundation/02-glossary.ko.md#message-kind)와 packet name이 모두 같은 등록을
-반복하면 그 Spot의 activation이 실패한다.
+반복하는 경우의 검사 시점과 실패 결과는 [공통 API 「23」](../00-foundation/06-framework-api.ko.md#23-startup-validation)을 따른다.
 
 ### 5.2 Spot 상태를 바꾸는 control 작업
 

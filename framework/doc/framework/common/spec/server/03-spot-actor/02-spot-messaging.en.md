@@ -722,10 +722,8 @@ A Spot subscription is registered with the following values.
 - `topic`: the value selecting a Spot within that Channel
 - packet name: the value selecting a typed handler
 
-**The checks below run when a registration is fixed.** A registration decided by host configuration,
-such as explicit registration or package scan, is checked at host startup; a registration decided in a
-Spot's `Configure()` is checked during that Spot's activation. The check timing and the failure outcome
-are defined by [Common API "23"](../00-foundation/06-framework-api.en.md#23-startup-validation).
+The check timing and failure outcomes for the registration conditions below are defined by
+[Common API "23"](../00-foundation/06-framework-api.en.md#23-startup-validation).
 
 - A missing or empty `topic` fails the registration.
 - A registered Spot that does not participate in that ChannelName fails the registration.
@@ -753,7 +751,7 @@ public void Configure()
 `ProjectionUpdatedHandler` is the application-implemented subscription handler for
 that message type. Repeating a registration on the same Spot with the same
 ChannelName, topic, [message kind](../00-foundation/02-glossary.en.md#message-kind), and packet
-name fails that Spot's activation.
+name has its check timing and failure outcomes defined by [Common API "23"](../00-foundation/06-framework-api.en.md#23-startup-validation).
 
 ### 5.2 Control Work That Changes Spot State
 

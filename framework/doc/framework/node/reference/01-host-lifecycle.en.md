@@ -42,8 +42,8 @@ export class AppModule {}
 
 **Completion result.** Registers synchronously with no return value. It validates the
 configuration at NestJS module initialization time, and if it fails, fails startup itself with a
-`ZLinkConfigurationException` — a bad configuration never surfaces for the first time while
-messages are already being processed. The check timing of registrations decided in a Spot's `Configure()` follows [Common API "23"](../../common/spec/server/00-foundation/06-framework-api.en.md#23-startup-validation).
+`ZLinkConfigurationException` — errors in settings decided by host configuration are reported by this startup validation.
+Spot `Configure()` registration check timing and failure outcomes follow [Common API "23"](../../common/spec/server/00-foundation/06-framework-api.en.md#23-startup-validation).
 
 **When to use.** Every host calls this exactly once. See the topology-discovery category for the
 topology/handler registration details of `ZLinkNestFrameworkOptionsBuilder`.
