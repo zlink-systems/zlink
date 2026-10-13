@@ -405,7 +405,7 @@ Payload: 5A 46 01 01
 
 The public encoding and validation rules for the `framework-json-v1` profile used by default
 typed application messages are owned exclusively by
-[Message Model §2.3](../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile). The runtime validates
+[Message Model §5](../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile). The runtime validates
 the payload and converts it to a typed value under that profile. This document defines no second rule
 set; parser choice, buffer reuse, and transport delivery of the original UTF-8 bytes remain internal
 implementation details.

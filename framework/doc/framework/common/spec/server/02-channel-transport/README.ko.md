@@ -138,7 +138,7 @@ flowchart LR
 | Session의 bind·relay·rebind·relocation 책임 | [Session 주제](../04-session/README.ko.md) |
 | Location Store record 형식과 CAS 규율 | [Location runtime](../05-location-relocation/01-location-runtime.ko.md) — 05-location-relocation 주제로 이관 중 |
 | Relocation의 phase state machine과, Actor가 어느 Spot에 속하는지 나타내는 [Actor membership](../00-foundation/02-glossary.ko.md#actor-membership) commit 절차 | [Relocation handoff 상태 전이](../05-location-relocation/04-relocation-flow.ko.md) — 05-location-relocation 주제로 이관 중 |
-| Typed application message JSON의 공개 encoding·validation 규칙 | [Message model §2.3](../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile) |
+| Typed application message JSON의 공개 encoding·validation 규칙 | [Message model §5](../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile) |
 | Shared permit과 byte HWM | [Core byte HWM과 Application job flow](../01-execution/04-application-job-queue-and-backpressure.ko.md) — 01-execution 주제로 이관 중 |
 
 ---

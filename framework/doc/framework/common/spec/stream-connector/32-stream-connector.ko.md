@@ -343,7 +343,7 @@ Framework가 만드는 `Error`의 `code`는 Framework 오류 종류의 snake_cas
 | MessagePack | 2 |
 | Protobuf | 3 |
 
-**JSON이 기본 codec이다.** 모든 언어의 connector는 typed payload codec 하나를 connector 생성
+**JSON이 기본 codec이며, 그 encoding과 검증은 서버 typed payload와 같은 [framework-json-v1 profile](../server/00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)을 따른다.** 모든 언어의 connector는 typed payload codec 하나를 connector 생성
 option으로 받으며 typed send, request와 수신에 함께 사용한다. MessagePack·Protobuf는 선택 package가
 이 codec 구현을 제공한다. 메시지 타입마다 codec을 등록하거나 send/request operation마다 codec을
 바꾸는 public API는 제공하지 않는다. **typed payload codec과, payload 타입에서 packet 이름을 정하는
