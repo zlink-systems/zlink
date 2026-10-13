@@ -219,6 +219,45 @@ public sealed class SharedAsyncDisposalTests
     }
 
     [Fact]
+    public void NonDisposableHandlerCleanupAllocatesLikeAnEmptyOwner()
+    {
+        using var services = new ServiceCollection().BuildServiceProvider();
+        for (var i = 0; i < 32; i++)
+        {
+            var warm = new ZLinkScopedHandlerInstanceOwner(services);
+            warm.Resolve<NonDisposableCleanupHandler>();
+            warm.DisposeAsync().GetAwaiter().GetResult();
+            new ZLinkScopedHandlerInstanceOwner(services).DisposeAsync().GetAwaiter().GetResult();
+        }
+        const int iterations = 128;
+        var empty = new ZLinkScopedHandlerInstanceOwner[iterations];
+        var resolved = new ZLinkScopedHandlerInstanceOwner[iterations];
+        for (var i = 0; i < iterations; i++)
+        {
+            empty[i] = new ZLinkScopedHandlerInstanceOwner(services);
+            resolved[i] = new ZLinkScopedHandlerInstanceOwner(services);
+            resolved[i].Resolve<NonDisposableCleanupHandler>();
+        }
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        foreach (var owner in empty)
+            owner.DisposeAsync().GetAwaiter().GetResult();
+        var emptyBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        start = GC.GetAllocatedBytesForCurrentThread();
+        foreach (var owner in resolved)
+            owner.DisposeAsync().GetAwaiter().GetResult();
+        var resolvedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        Assert.True(
+            resolvedBytes <= emptyBytes,
+            $"Empty owner cleanup {emptyBytes / iterations} B; non-disposable cleanup {resolvedBytes / iterations} B."
+        );
+        Assert.Throws<ObjectDisposedException>(() =>
+            resolved[0].Resolve<NonDisposableCleanupHandler>()
+        );
+    }
+
+    public sealed class NonDisposableCleanupHandler { }
+
+    [Fact]
     public async Task HandlerOwner_Disposes_Synchronous_Handler_Outside_Lane_Without_A_ThreadPool_Hop()
     {
         await using var services = new ServiceCollection().BuildServiceProvider();

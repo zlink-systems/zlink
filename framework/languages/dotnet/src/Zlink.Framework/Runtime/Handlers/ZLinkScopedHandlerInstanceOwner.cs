@@ -302,7 +302,10 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
                 if (!_disposed)
                 {
                     _disposed = true;
-                    _undisposed.AddRange(_fallbackInstances.Values.Reverse());
+                    foreach (var instance in _fallbackInstances)
+                        if (instance.Value is IDisposable or IAsyncDisposable)
+                            _undisposed.Add(instance.Value);
+                    _undisposed.Reverse();
                     _fallbackInstances.Clear();
                 }
                 if (_disposeTask is { IsCompleted: false } || _undisposed.Count == 0)
