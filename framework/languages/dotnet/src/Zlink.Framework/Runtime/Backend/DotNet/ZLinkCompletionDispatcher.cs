@@ -1,84 +1,54 @@
 namespace Zlink.Framework.Runtime.Backend.DotNet;
 
-// Completion ownership moves here after a pending-operation table atomically
-// takes its entry. One process-wide lane keeps callbacks off transport and
-// cancellation stacks without creating a thread for every table or callback.
-internal sealed class ZLinkCompletionDispatcher
+// The table reserves one WorkItem before submit and transfers terminal
+// ownership to it after atomic take. Each completion gets a pool turn so an
+// inline caller continuation cannot hold up unrelated operations.
+internal static class ZLinkCompletionDispatcher
 {
-    internal static ZLinkCompletionDispatcher Shared { get; } = new();
-
     [ThreadStatic]
     private static bool _isCurrentExecution;
 
-    private readonly object _gate = new();
-    private WorkItem? _head;
-    private WorkItem? _tail;
-
-    internal ZLinkCompletionDispatcher()
-    {
-        var worker = new Thread(Run) { IsBackground = true, Name = "zlink-framework-completion" };
-        if (ExecutionContext.IsFlowSuppressed())
-            worker.Start();
-        else
-            using (ExecutionContext.SuppressFlow())
-                worker.Start();
-    }
-
     internal static bool IsCurrentExecution => _isCurrentExecution;
 
-    // WorkItem is allocated with the pending operation. Posting a terminal
-    // result only links that existing node, so a reply, cancellation, or close
-    // cannot arrive before its callback has a dispatcher node.
-    internal void Post(WorkItem work)
+    internal static void Post(WorkItem work)
     {
         ArgumentNullException.ThrowIfNull(work);
-        lock (_gate)
-        {
-            if (_tail is null)
-                _head = work;
-            else
-                _tail.Next = work;
-            _tail = work;
-            Monitor.Pulse(_gate);
-        }
+        ThreadPool.UnsafeQueueUserWorkItem(work, preferLocal: false);
     }
 
-    private void Run()
+    internal abstract class WorkItem : IThreadPoolWorkItem
     {
-        _isCurrentExecution = true;
-        while (true)
+        internal abstract void Execute();
+
+        internal abstract void Completed(Exception? failure);
+
+        void IThreadPoolWorkItem.Execute()
         {
-            WorkItem work;
-            lock (_gate)
-            {
-                while (_head is null)
-                    Monitor.Wait(_gate);
-                work = _head;
-                _head = work.Next;
-                work.Next = null;
-                if (_head is null)
-                    _tail = null;
-            }
-
-            Exception? failure = null;
+            _isCurrentExecution = true;
             try
             {
-                work.Execute();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
+                Exception? failure = null;
+                try
+                {
+                    Execute();
+                }
+                catch (Exception exception)
+                {
+                    failure = exception;
+                }
 
-            try
-            {
-                work.Completed(failure);
+                try
+                {
+                    Completed(failure);
+                }
+                catch (Exception exception)
+                {
+                    TryLogFailure("mesh-completion-accounting", exception);
+                }
             }
-            catch (Exception exception)
+            finally
             {
-                // Completion-accounting failures must not stop the only shared
-                // lane and strand every later terminal callback.
-                TryLogFailure("mesh-completion-accounting", exception);
+                _isCurrentExecution = false;
             }
         }
     }
@@ -91,16 +61,7 @@ internal sealed class ZLinkCompletionDispatcher
         }
         catch
         {
-            // Diagnostics must never terminate the only process-wide lane.
+            // A diagnostic failure cannot prevent the next operation's turn.
         }
-    }
-
-    internal abstract class WorkItem
-    {
-        internal WorkItem? Next { get; set; }
-
-        internal abstract void Execute();
-
-        internal abstract void Completed(Exception? failure);
     }
 }

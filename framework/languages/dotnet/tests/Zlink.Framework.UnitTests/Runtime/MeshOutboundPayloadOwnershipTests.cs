@@ -6,14 +6,66 @@ using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Messaging;
 using BytesValue = Google.Protobuf.WellKnownTypes.BytesValue;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class MeshOutboundPayloadOwnershipTests
 {
+    [Fact]
+    public void OneWaySubmissionStateDoesNotAllocateAnOwnerObject()
+    {
+        for (var index = 0; index < 32; index++)
+        {
+            var warm = new ZLinkOneWayCallGate("MeshNode send");
+            warm.Claim();
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 1024; index++)
+        {
+            var gate = new ZLinkOneWayCallGate("MeshNode send");
+            gate.Claim();
+        }
+        Assert.Equal(0L, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
     private const string Mesh = "outbound-ownership";
     private const string Channel = "worker";
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Immediate_public_send_completes_through_the_native_submit_path(bool channel)
+    {
+        var received = new ReplyGate();
+        using var target = BuildHost(replyGate: received);
+        await target.StartAsync();
+        var targetNode = target
+            .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+            .GetMeshNodeRuntime(Mesh);
+        using var source = BuildHost(
+            endpoint: targetNode.Node.MeshStatus().LocalEndpoint,
+            peer: targetNode.Node.RoutingId
+        );
+        await source.StartAsync();
+        try
+        {
+            await WaitForPeerAsync(source, targetNode.Node.RoutingId);
+            var client = source.Services.GetRequiredService<IZLinkRouteClient>();
+            var payload = new BytesValue { Value = ByteString.CopyFrom(new byte[64]) };
+            var send = channel
+                ? client.SendToChannel(Channel, payload).Async()
+                : client.SendToNode(Mesh, targetNode.Node.RoutingId, payload).Async();
+            await received.Received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await send.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            await source.StopAsync();
+            await target.StopAsync();
+        }
+    }
 
     [Theory]
     [InlineData(false)]
@@ -271,6 +323,8 @@ public sealed class MeshOutboundPayloadOwnershipTests
 
     public sealed class ReplyGate
     {
+        public TaskCompletionSource Received { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -285,7 +339,7 @@ public sealed class MeshOutboundPayloadOwnershipTests
             BytesValue message,
             ZLinkRouteMessageContext context,
             CancellationToken cancellationToken
-        ) => ValueTask.CompletedTask;
+        ) => SendAsync();
 
         ValueTask<BytesValue> IZLinkRouteRequestHandler<BytesValue, BytesValue>.HandleAsync(
             BytesValue request,
@@ -297,7 +351,13 @@ public sealed class MeshOutboundPayloadOwnershipTests
             BytesValue message,
             IZLinkMessageContext context,
             CancellationToken cancellationToken
-        ) => ValueTask.CompletedTask;
+        ) => SendAsync();
+
+        private ValueTask SendAsync()
+        {
+            gate?.Received.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
 
         ValueTask<BytesValue> IZLinkRequestHandler<BytesValue, BytesValue>.HandleAsync(
             BytesValue request,

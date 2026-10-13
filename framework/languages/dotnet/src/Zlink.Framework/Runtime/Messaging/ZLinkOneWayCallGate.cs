@@ -1,6 +1,6 @@
 namespace Zlink.Framework.Runtime.Messaging;
 
-internal sealed class ZLinkOneWayCallGate(string operationName)
+internal struct ZLinkOneWayCallGate(string operationName)
 {
     private int _submitted;
 

@@ -34,11 +34,7 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
     {
         var activation = GetActivationFactories(services);
         foreach (var handlerType in handlerTypes)
-            activation.Factories.GetOrAdd(
-                handlerType,
-                static (type, available) => Compile(type, available),
-                activation.Services
-            );
+            GetFactory(activation, handlerType);
     }
 
     internal void Prepare(Type handlerType) => GetFactory(handlerType);
@@ -96,11 +92,23 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
         );
     }
 
+    internal static object CreateForDispatch(IServiceProvider services, Type handlerType) =>
+        GetFactory(GetActivationFactories(services), handlerType)(services);
+
     private Func<IServiceProvider, object> GetFactory(Type handlerType) =>
-        _activation.Factories.GetOrAdd(
+        GetFactory(_activation, handlerType);
+
+    private static Func<IServiceProvider, object> GetFactory(
+        (
+            IServiceProviderIsService? Services,
+            ConcurrentDictionary<Type, Func<IServiceProvider, object>> Factories
+        ) activation,
+        Type handlerType
+    ) =>
+        activation.Factories.GetOrAdd(
             handlerType,
             static (type, available) => Compile(type, available),
-            _activation.Services
+            activation.Services
         );
 
     private static (
@@ -302,7 +310,10 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
                 if (!_disposed)
                 {
                     _disposed = true;
-                    _undisposed.AddRange(_fallbackInstances.Values.Reverse());
+                    foreach (var instance in _fallbackInstances)
+                        if (instance.Value is IDisposable or IAsyncDisposable)
+                            _undisposed.Add(instance.Value);
+                    _undisposed.Reverse();
                     _fallbackInstances.Clear();
                 }
                 if (_disposeTask is { IsCompleted: false } || _undisposed.Count == 0)

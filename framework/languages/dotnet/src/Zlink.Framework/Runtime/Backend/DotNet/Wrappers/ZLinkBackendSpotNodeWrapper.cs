@@ -45,7 +45,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         _node = node;
-        _completions = new ZLinkMeshCompletionTable();
+        _completions = node.Completions;
         _pump = new ZLinkMeshDispatchPump(node, _completions, applicationJobQueue);
         _node.SetCompletionHandlerCore((record, parts) => _completions.TryComplete(record, parts));
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);
@@ -415,9 +415,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             return Array.Empty<Message>();
         }
 
-        var terminal = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var terminal = new TaskCompletionSource<IReadOnlyList<Message>>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -489,9 +487,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         EnsureStarted();
-        var terminal = new TaskCompletionSource<(UserSpotCreateCompletion, IReadOnlyList<Message>)>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var terminal =
+            new TaskCompletionSource<(UserSpotCreateCompletion, IReadOnlyList<Message>)>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -561,9 +558,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         EnsureStarted();
-        var terminal = new TaskCompletionSource<(ActorCreateCompletion?, IReadOnlyList<Message>)>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var terminal = new TaskCompletionSource<(ActorCreateCompletion?, IReadOnlyList<Message>)>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -636,9 +631,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         EnsureStarted();
-        var terminal = new TaskCompletionSource<bool>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var terminal = new TaskCompletionSource<bool>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -698,9 +691,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         EnsureStarted();
-        var terminal = new TaskCompletionSource<UserSpotCloseCompletion>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var terminal = new TaskCompletionSource<UserSpotCloseCompletion>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -942,6 +933,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         return _node.Peers();
     }
 
+    public ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetRid) =>
+        _node.ClassifyLiveRouterTarget(targetRid);
+
     public IReadOnlyList<MeshPeerChannel> MeshPeerChannels(
         RoutingId peerRid,
         ulong lifecycleGeneration
@@ -1178,9 +1172,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         CancellationToken cancellationToken
     )
     {
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var completion = new TaskCompletionSource();
         var correlationId = _node.AllocateOperationId();
         _completions.RegisterBeforeSubmit(
             correlationId,
@@ -1331,9 +1323,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         ZLinkRequestAdmission? requestAdmission = null
     )
     {
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var completion = new TaskCompletionSource<IReadOnlyList<Message>>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,

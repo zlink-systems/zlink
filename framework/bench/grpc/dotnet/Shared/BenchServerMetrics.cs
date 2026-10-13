@@ -10,6 +10,7 @@ public sealed class BenchServerMetrics
     private long _allPhaseMessages;
     private long _errors;
     private TimeSpan _cpuStart = Process.GetCurrentProcess().TotalProcessorTime;
+    private long _allocatedStart = GC.GetTotalAllocatedBytes(precise: true);
 
     public void Reset()
     {
@@ -20,6 +21,7 @@ public sealed class BenchServerMetrics
             _errors = 0;
             _latencyNs.Clear();
             _cpuStart = Process.GetCurrentProcess().TotalProcessorTime;
+            _allocatedStart = GC.GetTotalAllocatedBytes(precise: true);
         }
     }
 
@@ -75,6 +77,7 @@ public sealed class BenchServerMetrics
             allPhaseMessages,
             errors;
         TimeSpan cpuStart;
+        long allocatedStart;
         long[] samples;
         lock (_gate)
         {
@@ -82,6 +85,7 @@ public sealed class BenchServerMetrics
             allPhaseMessages = _allPhaseMessages;
             errors = Interlocked.Read(ref _errors);
             cpuStart = _cpuStart;
+            allocatedStart = _allocatedStart;
             samples = _latencyNs.ToArray();
         }
         Array.Sort(samples);
@@ -96,7 +100,8 @@ public sealed class BenchServerMetrics
             Percentile(samples, 0.95) / 1000.0,
             Percentile(samples, 0.99) / 1000.0,
             cpuSeconds,
-            process.WorkingSet64 / 1024.0 / 1024.0
+            process.WorkingSet64 / 1024.0 / 1024.0,
+            GC.GetTotalAllocatedBytes(precise: true) - allocatedStart
         );
     }
 
@@ -125,7 +130,8 @@ public sealed record BenchServerSnapshot(
     double P95Micros,
     double P99Micros,
     double CpuSeconds,
-    double WorkingSetMb
+    double WorkingSetMb,
+    long AllocatedBytes
 )
 {
     public bool Ready => true;
@@ -135,5 +141,5 @@ public sealed record BenchServerSnapshot(
     public long Received => ActiveMessages;
     public long CurrentInFlight => 0;
     public long PeakInFlight => 0;
-    public static BenchServerSnapshot Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static BenchServerSnapshot Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }

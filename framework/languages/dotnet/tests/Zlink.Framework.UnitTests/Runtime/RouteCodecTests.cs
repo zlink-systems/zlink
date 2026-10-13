@@ -12,6 +12,85 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class RouteCodecTests
 {
     [Fact]
+    public void UnfilteredDispatchAllocatesOnlyItsScopeAndHandler()
+    {
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var dispatcher = new ZLinkHandlerDispatcher(
+            services.GetRequiredService<IServiceScopeFactory>(),
+            new ZLinkFrameworkRegistration()
+        );
+        ZLinkHandlerMethodInvoker invoke = static (_, _, _, _, _, _) => ValueTask.CompletedTask;
+        var descriptor = new ZLinkRouteHandlerDescriptor(
+            ZLinkMessageKind.Command,
+            "mesh",
+            "allocation",
+            typeof(AllocationHandler),
+            typeof(object),
+            null,
+            invoke
+        );
+        var context = new ZLinkRouteMessageContext(
+            "mesh",
+            null,
+            RoutingId.From("source"),
+            "allocation",
+            "application/json",
+            null,
+            null
+        );
+        for (var index = 0; index < 32; index++)
+            dispatcher
+                .DispatchRouteAsync(
+                    descriptor,
+                    null,
+                    context,
+                    ZLinkHandlerDispatchKind.NodeDirectSend,
+                    default
+                )
+                .GetAwaiter()
+                .GetResult();
+
+        const int iterations = 128;
+        var beforeInstances = AllocationHandler.Created;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            var scope = services.CreateAsyncScope();
+            ZLinkHandlerInvocationEngine
+                .InvokeAsync(new AllocationHandler(), invoke, null, context, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            scope.DisposeAsync().GetAwaiter().GetResult();
+        }
+        var directBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+            dispatcher
+                .DispatchRouteAsync(
+                    descriptor,
+                    null,
+                    context,
+                    ZLinkHandlerDispatchKind.NodeDirectSend,
+                    default
+                )
+                .GetAwaiter()
+                .GetResult();
+        var dispatchBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(iterations * 2, AllocationHandler.Created - beforeInstances);
+        Assert.True(
+            dispatchBytes <= directBytes + iterations * 64L,
+            $"Dispatch allocated {dispatchBytes} bytes; owned scope and handler allocated {directBytes} bytes."
+        );
+    }
+
+    private sealed class AllocationHandler
+    {
+        internal static int Created;
+
+        public AllocationHandler() => Interlocked.Increment(ref Created);
+    }
+
+    [Fact]
     public void MeshMetadataCodec_RoundTrips_The_Last_Value_Snapshot()
     {
         var callMetadata = new ZLinkCallMetadata();

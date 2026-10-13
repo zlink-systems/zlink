@@ -10,7 +10,7 @@ internal sealed class ZLinkPublishCall(
     object? message
 ) : IZLinkFanoutPublishCall
 {
-    private readonly ZLinkOneWayCallGate _submission = new("Fanout publish");
+    private ZLinkOneWayCallGate _submission = new("Fanout publish");
 
     public ValueTask Async(CancellationToken cancellationToken = default)
     {

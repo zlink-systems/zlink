@@ -44,7 +44,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public void FrameworkMultipart_Message_Preserves_Wire_And_Decodes_Shared_Views()
+    public void FrameworkMultipart_Message_Preserves_Wire_And_Decodes_Borrowed_Spans()
     {
         using var header = Message.From(new byte[] { 1, 2, 3 });
         using var body = Message.From(new byte[] { 4, 5, 6, 7 });
@@ -65,9 +65,8 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.NotNull(decoded);
         Assert.Equal(new byte[] { 1, 2, 3 }, decoded.GetSpan(0).ToArray());
         Assert.Equal(new byte[] { 4, 5, 6, 7 }, decoded.GetSpan(1).ToArray());
-        Assert.True(MemoryMarshal.TryGetArray(decoded.GetMemory(0), out var first));
-        Assert.True(MemoryMarshal.TryGetArray(decoded.GetMemory(1), out var second));
-        Assert.Same(first.Array, second.Array);
+        var copiedView = decoded;
+        Assert.Equal(new byte[] { 4, 5, 6, 7 }, copiedView.GetMemory(1).ToArray());
     }
 
     [Fact]
@@ -1711,7 +1710,10 @@ public sealed class ServiceRuntimeFoundationTests
 
         using var reply = await request;
         Assert.Equal(1, reply.PartCount);
-        Assert.Equal(new byte[] { 9, 8, 7 }, reply.ApplicationPayloadView!.GetSpan(0).ToArray());
+        Assert.Equal(
+            new byte[] { 9, 8, 7 },
+            reply.ApplicationPayloadView!.Value.GetSpan(0).ToArray()
+        );
     }
 
     [Fact]

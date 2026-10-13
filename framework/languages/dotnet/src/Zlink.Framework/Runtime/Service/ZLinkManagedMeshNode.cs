@@ -22,6 +22,7 @@ namespace Zlink.Framework.Runtime.Service;
 
 internal sealed class ZLinkManagedMeshNode : IMeshNode
 {
+    internal ZLinkMeshCompletionTable Completions { get; } = new();
     private const int ReceiveBatchSize = 64;
     private const int MaxInfrastructureControlParts = 64;
     private const long MaxInfrastructureControlBytes = 256 * 1024;
@@ -2088,6 +2089,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             );
         });
     }
+
+    internal ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetRid) =>
+        _channelSelection.ClassifyRouterTarget(targetRid);
 
     public MeshNodePeer[] Peers()
     {
@@ -5994,7 +5998,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Publish(MeshMonitorEventKind.ProtocolError);
             return false;
         }
-        var head = received.Parts[0].ToArray();
+        var head = received.Parts[0].AsReadOnlySpan();
         if (
             head.Length >= 5
             && head[0] == ServiceWireConstants.Magic0
@@ -6019,7 +6023,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     received.RouteGeneration,
                     received.ReplyToken,
                     received.Parts,
-                    head,
+                    head.ToArray(),
                     received.Reply,
                     received.Send
                 );
@@ -8999,6 +9003,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     RebuildChannelSelectionPlansUnderLock();
                     Publish(MeshMonitorEventKind.PeerNotRequired, peerRid: sourceRid);
                 }
+                else
+                    _channelSelection.PrepareRouterTargets(_peersByRid);
                 return;
             }
 
@@ -9777,15 +9783,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private async ValueTask SendDirectWireAsync(
+    private ValueTask SendDirectWireAsync(
         RoutingId target,
         IReadOnlyList<Message> messages,
         CancellationToken cancellationToken
     )
     {
         var ownershipTransferred = false;
+        ZLinkMeshCompletionTable.PendingSend? pending = null;
         try
         {
+            pending = Completions.RegisterSend(NextStandaloneOperationId());
             Task admission;
             lock (_socketGate)
             {
@@ -9799,45 +9807,40 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     .EnsureAcceptedAsync();
                 ownershipTransferred = true;
             }
-            await admission.ConfigureAwait(false);
+            pending.Observe(admission);
+            return pending.Completion;
         }
-        finally
+        catch (Exception failure)
         {
             if (!ownershipTransferred)
                 DisposeParts(messages);
+            if (pending is null)
+                return ValueTask.FromException(failure);
+            pending.Reject(failure);
+            return pending.Completion;
         }
     }
 
-    private async ValueTask SendDirectWireAsync(
+    private ValueTask SendDirectWireAsync(
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         CancellationToken cancellationToken
     )
     {
-        var messages = wire.Select(Message.From).ToArray();
-        var ownershipTransferred = false;
+        var messages = new Message[wire.Count];
+        var created = 0;
         try
         {
-            Task admission;
-            lock (_socketGate)
-            {
-                var socket = _socket;
-                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
-                    throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
-                admission = socket
-                    .Send(target)
-                    .Messages(messages)
-                    .Async(cancellationToken)
-                    .EnsureAcceptedAsync();
-                ownershipTransferred = true;
-            }
-            await admission.ConfigureAwait(false);
+            for (; created < messages.Length; created++)
+                messages[created] = Message.From(wire[created]);
         }
-        finally
+        catch
         {
-            if (!ownershipTransferred)
-                DisposeParts(messages);
+            for (var index = 0; index < created; index++)
+                messages[index].Dispose();
+            throw;
         }
+        return SendDirectWireAsync(target, messages, cancellationToken);
     }
 
     private ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
@@ -11668,6 +11671,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void RebuildChannelSelectionPlansUnderLock()
     {
+        _channelSelection.PrepareRouterTargets(_peersByRid);
         var channelNames = new HashSet<string>(StringComparer.Ordinal);
         // RouteMesh selects an admitted remote Server. The local Server role
         // advertises membership but is never a candidate for its own route.

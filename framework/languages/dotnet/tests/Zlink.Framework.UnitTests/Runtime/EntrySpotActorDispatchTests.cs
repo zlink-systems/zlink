@@ -432,6 +432,7 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             runtime.EnsureKnownRouteMeshPeer("entry", targetRid, "packet 'GetNodeStatus'");
+            Assert.Equal(0, node.MeshPeerSnapshotReads);
         }
         finally
         {
@@ -13396,7 +13397,25 @@ public sealed partial class EntrySpotActorDispatchTests
                 0
             );
 
-        public IReadOnlyList<MeshNodePeer> MeshPeers() => AdmittedMeshPeers;
+        public int MeshPeerSnapshotReads { get; private set; }
+
+        public ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetRid)
+        {
+            var peer = AdmittedMeshPeers.FirstOrDefault(peer => peer.RoutingId == targetRid);
+            if (peer is null)
+                return ZLinkRouteMeshTargetClassification.Unknown;
+            if (peer.ObjectRole == ZLinkMeshNodeObjectRole.Client)
+                return ZLinkRouteMeshTargetClassification.ObjectClientTarget;
+            return peer.State == MeshPeerState.Admitted
+                ? ZLinkRouteMeshTargetClassification.ReadyEligible
+                : ZLinkRouteMeshTargetClassification.Unknown;
+        }
+
+        public IReadOnlyList<MeshNodePeer> MeshPeers()
+        {
+            MeshPeerSnapshotReads++;
+            return AdmittedMeshPeers;
+        }
 
         public IReadOnlyList<MeshPeerChannel> MeshPeerChannels(
             RoutingId peerRid,

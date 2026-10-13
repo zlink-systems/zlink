@@ -579,18 +579,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             : ZLinkRouteMeshTargetClassification.Unknown;
     }
 
-    internal ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetNodeRid)
-    {
-        var peer = Node.MeshPeers()
-            .FirstOrDefault(candidate => candidate.RoutingId == targetNodeRid);
-        if (peer is null)
-            return ZLinkRouteMeshTargetClassification.Unknown;
-        if (peer.ObjectRole == ZLinkMeshNodeObjectRole.Client)
-            return ZLinkRouteMeshTargetClassification.ObjectClientTarget;
-        return peer.State == MeshPeerState.Admitted
-            ? ZLinkRouteMeshTargetClassification.ReadyEligible
-            : ZLinkRouteMeshTargetClassification.Unknown;
-    }
+    internal ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetNodeRid) =>
+        Node.ClassifyLiveRouterTarget(targetNodeRid);
 
     public IReadOnlyCollection<ZLinkSpotActivation> Spots => _spots.Spots;
 

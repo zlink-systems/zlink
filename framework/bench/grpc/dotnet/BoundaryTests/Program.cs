@@ -24,6 +24,39 @@ foreach (
         throw new InvalidOperationException($"Nanosecond boundary conversion failed: {ticks}");
 }
 var serverMetrics = new BenchServerMetrics();
+const int allocationPayloadBytes = 1024 * 1024;
+serverMetrics.Reset();
+var allocationPayload = new byte[allocationPayloadBytes];
+using (
+    var allocationSnapshot = System.Text.Json.JsonDocument.Parse(
+        System.Text.Json.JsonSerializer.Serialize(serverMetrics.Snapshot())
+    )
+)
+{
+    if (
+        allocationSnapshot.RootElement.GetProperty("AllocatedBytes").GetInt64()
+        < allocationPayloadBytes
+    )
+        throw new InvalidOperationException(
+            "Target allocation snapshot excluded an active allocation."
+        );
+}
+GC.KeepAlive(allocationPayload);
+serverMetrics.Reset();
+using (
+    var allocationSnapshot = System.Text.Json.JsonDocument.Parse(
+        System.Text.Json.JsonSerializer.Serialize(serverMetrics.Snapshot())
+    )
+)
+{
+    if (
+        allocationSnapshot.RootElement.GetProperty("AllocatedBytes").GetInt64()
+        >= allocationPayloadBytes
+    )
+        throw new InvalidOperationException(
+            "Target allocation snapshot retained the previous interval."
+        );
+}
 serverMetrics.Record(BenchMetricHeaders.CreatePayloadBytes(4096, 1, BenchPhase.Warmup, 0));
 if (serverMetrics.Snapshot().AllPhaseMessages != 1 || serverMetrics.Snapshot().Received != 0)
     throw new InvalidOperationException("Warmup receipt was excluded from all-phase stats.");
