@@ -3,7 +3,7 @@ namespace Zlink.Framework.Runtime.Backend.DotNet;
 // Completion ownership moves here after a pending-operation table atomically
 // takes its entry. One process-wide lane keeps callbacks off transport and
 // cancellation stacks without creating a thread for every table or callback.
-internal sealed class ZLinkCompletionDispatcher
+internal sealed class ZLinkCompletionDispatcher : IThreadPoolWorkItem
 {
     internal static ZLinkCompletionDispatcher Shared { get; } = new();
 
@@ -13,16 +13,6 @@ internal sealed class ZLinkCompletionDispatcher
     private readonly object _gate = new();
     private WorkItem? _head;
     private WorkItem? _tail;
-
-    internal ZLinkCompletionDispatcher()
-    {
-        var worker = new Thread(Run) { IsBackground = true, Name = "zlink-framework-completion" };
-        if (ExecutionContext.IsFlowSuppressed())
-            worker.Start();
-        else
-            using (ExecutionContext.SuppressFlow())
-                worker.Start();
-    }
 
     internal static bool IsCurrentExecution => _isCurrentExecution;
 
@@ -37,30 +27,44 @@ internal sealed class ZLinkCompletionDispatcher
             if (_tail is null)
             {
                 _head = work;
-                Monitor.Pulse(_gate);
+                ThreadPool.UnsafeQueueUserWorkItem(this, preferLocal: false);
             }
+            else if (_head is null)
+                _head = work;
             else
                 _tail.Next = work;
             _tail = work;
         }
     }
 
-    private void Run()
+    void IThreadPoolWorkItem.Execute()
     {
         _isCurrentExecution = true;
-        while (true)
+        try
         {
-            WorkItem work;
-            lock (_gate)
+            while (true)
             {
-                while (_head is null)
-                    Monitor.Wait(_gate);
-                work = _head;
-                _head = null;
-                _tail = null;
-            }
+                WorkItem work;
+                lock (_gate)
+                {
+                    if (_head is null)
+                    {
+                        _tail = null;
+                        return;
+                    }
+                    work = _head;
+                    _head = null;
+                    // Retain the tail as this drain's reservation. A post
+                    // during callback execution starts the next accepted batch
+                    // without scheduling a second consumer for the same lane.
+                }
 
-            DrainBatch(work);
+                DrainBatch(work);
+            }
+        }
+        finally
+        {
+            _isCurrentExecution = false;
         }
     }
 

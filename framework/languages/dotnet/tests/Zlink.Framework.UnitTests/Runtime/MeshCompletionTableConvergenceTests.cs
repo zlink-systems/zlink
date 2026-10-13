@@ -1,11 +1,69 @@
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshCompletionTableConvergenceTests
 {
+    [Fact]
+    public async Task TableRequestContinuationRunsInTheThreadPoolDispatcherTurn()
+    {
+        var blocker = new ZLinkMeshCompletionTable();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var blockerId = new MeshOperationId(92, 1);
+        blocker.Register(
+            blockerId,
+            (_, _) =>
+            {
+                entered.SetResult();
+                release.Wait();
+            }
+        );
+        blocker.Complete(MeshReceiveRecord.CompletionFailure(blockerId, RequestResult.Ok), []);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        try
+        {
+            await using var context = Systems.Zlink.Zlink.CreateContext();
+            await using var node = new ZLinkManagedMeshNode(context, "completion-turn");
+            await using var backend = new ZLinkBackendSpotNodeWrapper(node);
+            var request = backend.DestroyActorAsync(
+                new ZLinkBackendActorRef(RoutingId.From("owner"), "missing", 1),
+                TimeSpan.FromSeconds(3),
+                CancellationToken.None
+            );
+            Assert.False(request.IsCompleted);
+            var observed = new TaskCompletionSource<(bool Dispatcher, bool ThreadPool)>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            request
+                .ConfigureAwait(false)
+                .GetAwaiter()
+                .UnsafeOnCompleted(() =>
+                    observed.TrySetResult(
+                        (
+                            ZLinkCompletionDispatcher.IsCurrentExecution,
+                            Thread.CurrentThread.IsThreadPoolThread
+                        )
+                    )
+                );
+            release.Set();
+            var turn = await observed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.True(turn.Dispatcher);
+            Assert.True(turn.ThreadPool);
+            await Assert.ThrowsAnyAsync<Exception>(async () => await request);
+            await backend.Completions.CompletionDrained;
+        }
+        finally
+        {
+            release.Set();
+            await blocker.CompletionDrained;
+        }
+    }
+
     [Fact]
     public async Task ImmediateSendUsesTheRegisteredDispatcherNode()
     {
