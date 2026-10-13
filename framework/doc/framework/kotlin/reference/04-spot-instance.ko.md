@@ -137,8 +137,7 @@ override fun configure() {
 `ZLinkSuspendingSpotActorSendHandler`, `ZLinkSuspendingSpotActorRequestHandler`)로 실제 역할을
 판별한다 — Java 레퍼런스 04번의 handler 등록 표와 대응 관계가 같다.
 
-**완료 결과.** Java 레퍼런스와 같다 — 반환값 없이 동기로 등록되고, 같은 owner의 handler key 중복은
-startup 검증에서 드러난다.
+**완료 결과.** Java 레퍼런스와 같다 — 반환값 없이 동기로 등록되고, 같은 owner의 handler key 중복의 검사 시점과 실패 결과는 [공통 API 「23」](../../common/spec/server/00-foundation/06-framework-api.ko.md#23-startup-validation)을 따른다.
 
 **선택 기준.** `configure()`가 호출될 때마다 이 Spot이 처리할 모든 suspending handler를 등록한다.
 

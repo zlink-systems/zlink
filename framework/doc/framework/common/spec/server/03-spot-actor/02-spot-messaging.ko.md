@@ -662,11 +662,9 @@ Spot subscription은 다음 값으로 등록한다.
 - `topic`: 해당 Channel 안에서 Spot을 선택하는 값
 - packet name: typed handler를 선택하는 값
 
-**아래 검사는 등록을 확정하는 시점에 하며, 실패한 등록은 그 시점의 작업을 실패시킨다.** 명시 등록과 패키지
-스캔처럼 host 구성에서 정한 등록은 host 시작을 실패시킨다. Spot의 `Configure()`에서 정한 등록은 그 Spot의
-activation을 Ready 공개 전에 실패시킨다. `Configure()`는 identity가 결합된 실제 Context로만 실행하며
-([Spot 모델 「7」](01-spot-model.ko.md#7-net에서-보이는-차이)), host 시작 검사를 위해 Spot을 미리 만들거나
-`Configure()`를 호출하지 않는다.
+**아래 검사는 등록을 확정하는 시점에 한다.** 명시 등록과 패키지 스캔처럼 host 구성에서 정한 등록은 host
+startup에서, Spot의 `Configure()`에서 정한 등록은 그 Spot의 activation에서 검사한다. 검사 시점과 실패
+결과는 [공통 API 「23」](../00-foundation/06-framework-api.ko.md#23-startup-validation)이 정한다.
 
 - topic이 없거나 빈 문자열이면 등록은 실패한다.
 - 등록한 Spot이 해당 ChannelName에 참여하지 않으면 등록은 실패한다.

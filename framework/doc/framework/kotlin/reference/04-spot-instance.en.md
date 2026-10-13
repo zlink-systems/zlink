@@ -150,7 +150,7 @@ override fun configure() {
 same as the handler registration table in the Java reference's document 04.
 
 **Completion result.** Same as the Java reference — registers synchronously with no return
-value, and a duplicate handler key under the same owner surfaces in startup validation.
+value, and for a duplicate handler key under the same owner, the check timing and failure outcome follow [Common API "23"](../../common/spec/server/00-foundation/06-framework-api.en.md#23-startup-validation).
 
 **When to use.** Registers every suspending handler this Spot will process, each time
 `configure()` is called.

@@ -722,12 +722,10 @@ A Spot subscription is registered with the following values.
 - `topic`: the value selecting a Spot within that Channel
 - packet name: the value selecting a typed handler
 
-**The checks below run when a registration is fixed, and a failed registration fails the operation of
-that moment.** A registration decided by host configuration, such as explicit registration or package
-scan, fails host startup. A registration decided in a Spot's `Configure()` fails that Spot's activation
-before Ready is published. `Configure()` runs only with the real Context bound to its identity
-([Spot Model "7"](01-spot-model.en.md#7-differences-visible-in-net)); no Spot is created and no
-`Configure()` is called in advance for host startup checks.
+**The checks below run when a registration is fixed.** A registration decided by host configuration,
+such as explicit registration or package scan, is checked at host startup; a registration decided in a
+Spot's `Configure()` is checked during that Spot's activation. The check timing and the failure outcome
+are defined by [Common API "23"](../00-foundation/06-framework-api.en.md#23-startup-validation).
 
 - A missing or empty `topic` fails the registration.
 - A registered Spot that does not participate in that ChannelName fails the registration.

@@ -39,7 +39,7 @@ services.AddHealthChecks()
 **Completion.** Registers synchronously with no return value. At host startup, it validates
 configuration before binding the network; on failure it fails startup itself with
 `ZLinkConfigurationException` — a bad configuration never surfaces for the first time while
-messages are being processed.
+messages are being processed. The check timing of registrations decided in a Spot's `Configure()` follows [Common API "23"](../../common/spec/server/00-foundation/06-framework-api.en.md#23-startup-validation).
 
 **When to use it.** Every host calls this exactly once. For topology and handler registration
 details under `IZLinkFrameworkOptions`, see the topology-discovery category.

@@ -40,7 +40,7 @@ export class AppModule {}
 
 **완료 결과.** 반환값 없이 동기로 등록된다. NestJS module 초기화 시점에 구성을 검증하고, 실패하면
 `ZLinkConfigurationException`으로 startup 자체를 실패시킨다 — 잘못된 구성이 message 처리 중에
-처음 나타나지 않는다.
+처음 나타나지 않는다. Spot `Configure()`에서 정한 등록의 검사 시점은 [공통 API 「23」](../../common/spec/server/00-foundation/06-framework-api.ko.md#23-startup-validation)을 따른다.
 
 **선택 기준.** 모든 host가 정확히 한 번 호출한다. `ZLinkNestFrameworkOptionsBuilder`의 topology·
 handler 등록 세부는 topology-discovery category를 참고한다.

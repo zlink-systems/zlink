@@ -40,7 +40,7 @@ return app.run(argc, argv);
 **Completion result.** Registers synchronously with no return value. `app.run(argc, argv)`
 validates the configuration before the socket bind, and if it fails, fails startup itself with a
 configuration error — a bad configuration never surfaces for the first time while messages are
-already being processed.
+already being processed. The check timing of registrations decided in a Spot's `Configure()` follows [Common API "23"](../../common/spec/server/00-foundation/06-framework-api.en.md#23-startup-validation).
 
 **When to use.** Every host calls this exactly once. See the topology-discovery category for the
 topology and handler registration details of `zlink_framework_options_t`.
