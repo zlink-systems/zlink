@@ -2091,16 +2091,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     internal ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetRid) =>
-        RunState(() =>
-        {
-            if (!_peersByRid.TryGetValue(targetRid, out var peer))
-                return ZLinkRouteMeshTargetClassification.Unknown;
-            if (peer.Admission?.ObjectRole == (byte)ZLinkMeshNodeObjectRole.Client)
-                return ZLinkRouteMeshTargetClassification.ObjectClientTarget;
-            return peer.State == MeshPeerState.Admitted
-                ? ZLinkRouteMeshTargetClassification.ReadyEligible
-                : ZLinkRouteMeshTargetClassification.Unknown;
-        });
+        _channelSelection.ClassifyRouterTarget(targetRid);
 
     public MeshNodePeer[] Peers()
     {
@@ -9012,6 +9003,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     RebuildChannelSelectionPlansUnderLock();
                     Publish(MeshMonitorEventKind.PeerNotRequired, peerRid: sourceRid);
                 }
+                else
+                    _channelSelection.PrepareRouterTargets(_peersByRid);
                 return;
             }
 
@@ -11678,6 +11671,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void RebuildChannelSelectionPlansUnderLock()
     {
+        _channelSelection.PrepareRouterTargets(_peersByRid);
         var channelNames = new HashSet<string>(StringComparer.Ordinal);
         // RouteMesh selects an admitted remote Server. The local Server role
         // advertises membership but is never a candidate for its own route.

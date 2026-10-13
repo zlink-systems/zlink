@@ -14,6 +14,45 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshChannelSelectionHotPathTests
 {
     [Fact]
+    public async Task RepeatedSendTargetClassificationDoesNotEnterTheNodeStateLane()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "classification-turn");
+        var peer = AddReadyPeer(node);
+        peer.State = MeshPeerState.Admitted;
+        Method<Action>(node, "RebuildChannelSelectionPlansUnderLock")();
+        var lane = Field<ZLinkStateLane>(node, "_lane");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var classifications = Task.Run(() =>
+        {
+            for (var index = 0; index < 1024; index++)
+                Assert.Equal(
+                    ZLinkRouteMeshTargetClassification.ReadyEligible,
+                    node.ClassifyLiveRouterTarget(peer.RoutingId)
+                );
+        });
+        try
+        {
+            // A node state turn cannot run while the existing turn is held.
+            // All classifications must finish without requesting such a turn.
+            await classifications.WaitAsync(TimeSpan.FromSeconds(3));
+        }
+        finally
+        {
+            release.SetResult();
+            await held;
+            await classifications;
+        }
+    }
+
+    [Fact]
     public async Task LiveTargetClassificationUsesTheMonitoringAdmissionState()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -24,11 +63,13 @@ public sealed class MeshChannelSelectionHotPathTests
             node.ClassifyLiveRouterTarget(peer.RoutingId)
         );
         peer.State = MeshPeerState.Admitted;
+        Method<Action>(node, "RebuildChannelSelectionPlansUnderLock")();
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.ReadyEligible,
             node.ClassifyLiveRouterTarget(peer.RoutingId)
         );
         peer.State = MeshPeerState.Configured;
+        Method<Action>(node, "RebuildChannelSelectionPlansUnderLock")();
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.Unknown,
             node.ClassifyLiveRouterTarget(peer.RoutingId)
