@@ -208,8 +208,13 @@ class channel_runtime_state_t
     std::map<std::string, std::shared_ptr<channel_native_client_t>> native_clients;
     std::map<std::string, std::shared_ptr<channel_native_publisher_t>> native_publishers;
     std::map<std::string, std::shared_ptr<route_channel_runtime_t>> route_channels;
-    std::map<std::string, mesh_node_send_t> mesh_node_senders;
-    std::map<std::string, mesh_node_request_t> mesh_node_requesters;
+    struct mesh_node_transport_t
+    {
+        mesh_node_send_t send;
+        mesh_node_request_t request;
+    };
+    using mesh_node_transport_ptr_t = std::shared_ptr<const mesh_node_transport_t>;
+    std::map<std::string, mesh_node_transport_ptr_t> mesh_node_transports;
     std::map<std::string, mesh_channel_send_t> mesh_channel_senders;
     std::map<std::string, mesh_channel_request_t> mesh_channel_requesters;
     std::map<std::string, client_server_send_t> client_server_senders;

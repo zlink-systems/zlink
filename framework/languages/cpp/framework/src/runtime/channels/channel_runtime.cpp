@@ -62,32 +62,25 @@ spot_mesh_sender (const std::shared_ptr<channel_runtime_state_t> &state,
       .get ();
 }
 
-std::optional<channel_runtime_state_t::mesh_node_send_t>
-mesh_node_sender (const std::shared_ptr<channel_runtime_state_t> &state,
-                  const std::string &mesh_name)
-{
-    return state->lane
-      .run_checked ([&] {
-          const auto found = state->mesh_node_senders.find (mesh_name);
-          return found == state->mesh_node_senders.end ()
-                   ? std::nullopt
-                   : std::optional<channel_runtime_state_t::mesh_node_send_t> (found->second);
-      })
-      .get ();
-}
+using node_transport_t = std::variant<std::monostate,
+                                      std::shared_ptr<route_channel_runtime_t>,
+                                      channel_runtime_state_t::mesh_node_transport_ptr_t>;
 
-std::optional<channel_runtime_state_t::mesh_node_request_t>
-mesh_node_requester (const std::shared_ptr<channel_runtime_state_t> &state,
-                     const std::string &mesh_name)
+result_t<node_transport_t>
+resolve_node_transport (const std::shared_ptr<channel_runtime_state_t> &state,
+                        const std::string &mesh_name)
 {
     return state->lane
-      .run_checked ([&] {
-          const auto found = state->mesh_node_requesters.find (mesh_name);
-          return found == state->mesh_node_requesters.end ()
-                   ? std::nullopt
-                   : std::optional<channel_runtime_state_t::mesh_node_request_t> (found->second);
+      .run_task ([&] () -> node_transport_t {
+          if (const auto route = state->route_channels.find (mesh_name);
+              route != state->route_channels.end ())
+              return route->second;
+          if (const auto mesh = state->mesh_node_transports.find (mesh_name);
+              mesh != state->mesh_node_transports.end ())
+              return mesh->second;
+          return std::monostate{};
       })
-      .get ();
+      .result ();
 }
 
 template <typename TClientServerTransports, typename TRouteMeshTransports>
@@ -772,9 +765,11 @@ void channel_runtime_t::bind_mesh_node_transport (
 {
     _state->lane
       .run_checked ([&] {
-          _state->mesh_node_senders.insert_or_assign (mesh_name, std::move (send));
-          _state->mesh_node_requesters.insert_or_assign (std::move (mesh_name),
-                                                         std::move (request));
+          _state->mesh_node_transports.insert_or_assign (
+            std::move (mesh_name),
+            std::make_shared<const channel_runtime_state_t::mesh_node_transport_t> (
+              channel_runtime_state_t::mesh_node_transport_t{std::move (send),
+                                                             std::move (request)}));
       })
       .get ();
 }
@@ -1458,11 +1453,10 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
                                            "route client is not configured");
     }
     runtime::messaging::message_parts_t parts;
-    const auto use_route_channel = detail::has_route_channel (state->runtime, router_channel_id);
-    const auto mesh_sender = use_route_channel
-                               ? std::nullopt
-                               : detail::mesh_node_sender (state->runtime, router_channel_id);
-    if (!use_route_channel && !mesh_sender) {
+    const auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
+    if (!transport)
+        co_return detail::propagate_failure<void> (transport, "node transport lookup failed");
+    if (std::holds_alternative<std::monostate> (transport.value ())) {
         co_return result_t<void>::failure (framework_error_kind_t::unavailable,
                                            "route channel or SPOT mesh '" + router_channel_id
                                              + "' is not registered");
@@ -1477,11 +1471,13 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
         co_return detail::result_access_t::failure<void> (error);
     }
     try {
-        if (mesh_sender) {
-            co_return co_await (*mesh_sender) (target_node_rid, std::move (parts));
+        if (const auto mesh =
+              std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (
+                &transport.value ())) {
+            co_return co_await (*mesh)->send (target_node_rid, std::move (parts));
         }
-        detail::channel_runtime_manager_t manager (state->runtime);
-        auto &runtime = manager.get_route_channel (router_channel_id);
+        auto &runtime =
+          *std::get<std::shared_ptr<detail::route_channel_runtime_t>> (transport.value ());
         co_return runtime.submit_send_parts (target_node_rid, std::move (parts));
     }
     catch (const framework_exception_t &error) {
@@ -1788,20 +1784,23 @@ request_task_t<zlink::message_t> route_client_t::submit_request_reply_message_er
                                                        "route client is not configured");
     }
     runtime::messaging::message_parts_t parts;
-    const auto use_route_channel = detail::has_route_channel (state->runtime, router_channel_id);
-    const auto mesh_requester = use_route_channel
-                                  ? std::nullopt
-                                  : detail::mesh_node_requester (state->runtime, router_channel_id);
-    if (!use_route_channel && !mesh_requester) {
+    const auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
+    if (!transport)
+        co_return detail::propagate_failure<zlink::message_t> (transport,
+                                                               "node transport lookup failed");
+    const auto route =
+      std::get_if<std::shared_ptr<detail::route_channel_runtime_t>> (&transport.value ());
+    const auto mesh =
+      std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (&transport.value ());
+    if (!route && !mesh) {
         co_return result_t<zlink::message_t>::failure (
           framework_error_kind_t::unavailable,
           "route channel or MeshNode '" + router_channel_id + "' is not registered");
     }
     auto effective_timeout = timeout;
     try {
-        if (use_route_channel) {
-            detail::channel_runtime_manager_t manager (state->runtime);
-            auto &runtime = manager.get_route_channel (router_channel_id);
+        if (route) {
+            auto &runtime = **route;
             effective_timeout = timeout > std::chrono::milliseconds::zero ()
                                   ? timeout
                                   : runtime.default_request_timeout ();
@@ -1837,19 +1836,16 @@ request_task_t<zlink::message_t> route_client_t::submit_request_reply_message_er
         runtime::messaging::envelope_codec_t envelope;
         auto admitted = co_await detail::request_admission_source_t{};
         auto reply_task = [&] () -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
-            if (mesh_requester)
-                return (*mesh_requester) (target_node_rid, std::move (parts), effective_timeout);
+            if (mesh)
+                return (*mesh)->request (target_node_rid, std::move (parts), effective_timeout);
             return request_task_t<result_t<runtime::messaging::message_parts_t>> (
               detail::offload_route_reply (
                 state->executor,
-                [runtime_state = state->runtime, router_channel_id, target_node_rid,
-                 parts = std::move (parts), effective_timeout, ambient_context,
-                 admitted] () mutable {
+                [runtime = *route, target_node_rid, parts = std::move (parts), effective_timeout,
+                 ambient_context, admitted] () mutable {
                     const auto worker_context = detail::enter_ambient_context (ambient_context);
-                    detail::channel_runtime_manager_t manager (runtime_state);
-                    auto &runtime = manager.get_route_channel (router_channel_id);
-                    return runtime.request_reply_parts (target_node_rid, std::move (parts),
-                                                        effective_timeout, admitted);
+                    return runtime->request_reply_parts (target_node_rid, std::move (parts),
+                                                         effective_timeout, admitted);
                 }),
               admitted);
         }();
