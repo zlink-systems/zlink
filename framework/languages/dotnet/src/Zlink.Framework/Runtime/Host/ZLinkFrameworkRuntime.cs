@@ -1425,6 +1425,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         }
         if (_locationLifecycle is not null)
             await CaptureAsync(_locationLifecycle.PauseBackgroundWorkAsync).ConfigureAwait(false);
+        if (Services.GetService<ZLinkAutoConnectLifecycleCoordinator>() is { } autoConnectLifecycle)
+            await CaptureAsync(() => autoConnectLifecycle.StopAsync(forceStopToken))
+                .ConfigureAwait(false);
         var generationCleanupReporter = (
             state?.ErrorSink ?? Volatile.Read(ref _generationErrorSink)
         )?.CaptureGenerationReporter();
