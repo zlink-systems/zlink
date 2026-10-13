@@ -296,8 +296,10 @@ transfers to the caller.
 ## 4. Call Failure And Reconciliation
 
 The C++ interface doesn't directly port a different language's
-cancellation token. If host shutdown or deadline is confirmed before
-the Framework starts an operation, it doesn't call the provider. If a
+cancellation token. Admission and deadlines for provider calls
+follow the contract that owns the operation. Store cleanup during host
+shutdown follows the common teardown limit in
+[Host Relocation §14](../../../05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate). If a
 timeout, transport error, or process interruption occurs after a call
 has started, whether the commit was applied may be uncertain. The
 Framework reconciles the result with the Location Store's read

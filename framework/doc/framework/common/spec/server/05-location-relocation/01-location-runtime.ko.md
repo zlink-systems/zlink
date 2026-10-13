@@ -1438,7 +1438,7 @@ Store에 남는다. 이를 대상으로 삼지 않는 규칙은 §4.1이 정한�
 [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다. 두 정리 경로는
 서로 독립적이며 서로 다른 lifetime으로 동작한다.
 
-Deadline을 넘으면 `ForceStopped` 결과를 한 번만 완료한다. Timer, Store callback, 재연결
+Deadline을 넘은 뒤의 종료 시점과 결과는 [Host relocation §14](05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁)를 따르며, 결과는 한 번만 완료한다. Timer, Store callback, 재연결
 작업과 observer는 Framework가 소유한 runtime resource보다 오래 남지 않아야 한다.
 
 ## 12. 구현 및 contract test 검증 요구

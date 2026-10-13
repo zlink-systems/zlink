@@ -767,9 +767,9 @@ closing isn't created. In a language with no standard expression, only
 `ClosingContext`'s deadline is passed, and the framework ends the wait for
 callback completion at the deadline. The application doesn't keep the
 context or cancellation signal after the callback. `HostShutdown` doesn't
-start relocation or rollback due to callback failure. A callback exception
-ends as `ForceStopped/TeardownFailed`; deadline expiry ends as
-`ForceStopped/DeadlineExceeded`. Callback execution isn't guaranteed on
+start relocation or rollback due to callback failure. The callback observation limit and
+termination result of `HostShutdown` follow
+[Host Relocation §14](../05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate). Callback execution isn't guaranteed on
 process crash or `SIGKILL`. The enum, context, and standard
 cancellation expression are set by each language's interface document.
 

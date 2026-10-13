@@ -636,8 +636,8 @@ scope를 정리하고 Location authority와 resource를 정리한다.
 있다. Spot closing만을 위한 별도 Framework cancellation 타입을 만들지는 않는다. 표준 표현이 없는 언어에서는 `ClosingContext`의
 deadline만 전달하고 Framework가 deadline에 callback completion 대기를 끝낸다. Application은 callback 이후
 context와 cancellation signal을 보관하지 않는다. `HostShutdown`은 callback failure로 relocation나 rollback을
-시작하지 않는다. Callback exception은 `ForceStopped/TeardownFailed`, deadline 만료는
-`ForceStopped/DeadlineExceeded`로 끝난다. Process crash와 `SIGKILL`에서는 callback 실행을 보장하지 않는다.
+시작하지 않는다. `HostShutdown`의 callback 관찰 기한과 종료 결과는
+[Host relocation §14](../05-location-relocation/05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁)를 따른다. Process crash와 `SIGKILL`에서는 callback 실행을 보장하지 않는다.
 정확한 enum, context와 표준 cancellation 표현은 언어별 interface 문서가 정한다.
 
 ## 6. 모든 이동 경로가 공유하는 relocation policy

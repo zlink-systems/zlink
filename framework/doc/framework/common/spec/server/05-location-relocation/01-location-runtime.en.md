@@ -1599,7 +1599,7 @@ the Store. Section 4.1 defines the rule that prevents targeting it. Fixed RID li
 defined by [MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid). The two
 cleanup paths are independent and operate with different lifetimes.
 
-If the deadline passes, a `ForceStopped` result completes exactly once. Timers, Store
+After the deadline passes, the end time and result follow [Host Relocation §14](05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate), and the result completes exactly once. Timers, Store
 callbacks, reconnection work, and observers must not outlive the runtime resources the
 Framework owns.
 

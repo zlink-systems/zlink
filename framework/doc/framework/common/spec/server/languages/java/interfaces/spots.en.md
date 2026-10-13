@@ -320,8 +320,8 @@ reactivation rule after cleanup are owned by
 [Spot Model §6.2](../../../03-spot-actor/01-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 The context's `deadline` is an absolute `Instant`. A separate Framework
 cancellation argument isn't added to the Java Spot closing callback. The
-framework ends the stage-completion wait at the deadline and proceeds
-with bounded teardown. Only Entry/User/Instance Spot receive this
+HostShutdown context deadline and stage-completion observation follow
+the common limit of [Host Relocation §14](../../../05-location-relocation/05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate). Only Entry/User/Instance Spot receive this
 callback — a per-Actor closing callback isn't provided. Host
 [Shutdown](../../../00-foundation/02-glossary.en.md#shutdown) runs the callback
 while Actor membership and the local instance are valid, and cleans up

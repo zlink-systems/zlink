@@ -271,8 +271,9 @@ ownership은 caller에게 이전된다.
 
 ## 4. 호출 실패와 재조정
 
-C++ interface는 다른 언어의 cancellation token을 그대로 옮기지 않는다. Framework가 operation을
-시작하지 않은 상태에서 host shutdown이나 deadline이 확정되면 provider를 호출하지 않는다. 호출을
+C++ interface는 다른 언어의 cancellation token을 그대로 옮기지 않는다. Provider 호출의 수락 여부와
+기한은 그 operation의 소유 계약을 따른다. Host shutdown의 Store 정리는
+[Host relocation §14](../../../05-location-relocation/05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁)의 공통 teardown 기한을 따른다. 호출을
 시작한 뒤 timeout, transport 오류 또는 process interruption이 발생하면 commit 여부가 불확실할 수
 있다. Framework는 Location Store의 직접 read와 version 또는 Relocation Store의 Framework-issued
 reference로 결과를 재조정한다.

@@ -801,8 +801,8 @@ roll back to the source.
 If some MeshNodes' `Relocating` descriptor write result can't be confirmed, every
 attempted descriptor is rolled back to `Serving`. Only once every rollback is confirmed
 is it `Blocked/StoreUnavailable`. If even one can't be confirmed, no new work is
-accepted, cleanup proceeds for a fixed maximum time, and it ends as
-`ForceStopped/TeardownFailed`.
+accepted, cleanup proceeds through the bounded teardown of §14, and the host is force-stopped. §14 decides
+the termination reason.
 
 ## 14. The Race Between Shutdown and Relocate
 
@@ -830,18 +830,34 @@ completes within a fixed time, in this order.
    membership and local instances remain valid. Per-Actor closing callbacks aren't called.
 5. After Spot callbacks, cleans up local Actor and Spot scope, owner record,
    descriptor, listener, and transport, in order.
-6. If finished within the deadline, ends with `Stopped/None`; if not, ends with
-   `ForceStopped/DeadlineExceeded` or `ForceStopped/TeardownFailed` after bounded
-   teardown.
+6. Cleanup finished without failure within the deadline ends with `Stopped/None`. Everything else
+   follows the bounded-teardown and termination-reason rules below.
 
-**The owner of the host termination result sets one bounded-teardown limit.** It is one
-[owner lease renew timeout](01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops)
-counted from the moment the shutdown deadline passes. The remaining steps 4–5 above and cleanup order 1–4
-below all start within this limit and are not skipped because the deadline has passed. Wait observation
-and the cleanup of owner records, descriptors and the lease all use this limit. An owner record not
-confirmed within it is reclaimed by another host after the owner lease expires. The termination result is
-`ForceStopped/DeadlineExceeded` when the deadline expired, including a timeout during bounded teardown,
-and `ForceStopped/TeardownFailed` when a callback threw.
+**The owner of the host termination result fixes the bounded-teardown end time and the termination
+reason once.**
+
+- **End time.** It is the shutdown deadline plus the configured owner lease renew timeout. The deadline is
+  the original deadline time, not the moment the runtime notices expiry. Each stage, Store request and
+  result reconciliation uses only the time remaining until that end time; no stage restarts the timeout.
+  This end time extends neither the owner lease nor the local admission deadline and does not guarantee
+  successful Store cleanup before lease expiry. Eligibility for Store mutations follows
+  [Location Runtime](01-location-runtime.en.md) §§5 and 6.1.
+- **Remaining stages.** Cleanup requests for steps 4–5 above and cleanup order 1–4 below follow the
+  existing order and are not omitted merely because the shutdown deadline expired. Completion observation
+  for each stage ends no later than the end time. Once that time is reached, the remaining cancellation
+  and cleanup requests are issued without further waiting, and the termination result completes once. The
+  owner of each unconfirmed operation handles it so that it cannot submit a continuation to a closed
+  execution context or access a destroyed resource. The original application completion source is not
+  changed.
+- **Unconfirmed records.** Records whose cleanup cannot be confirmed by the end time follow the lifecycle
+  and recovery conditions in Location Runtime §§6.1 and 11. Passing the end time alone does not guarantee
+  automatic reclamation by another host.
+- **Termination reason.** An exception originating in the callback, or forced termination due to an
+  unconfirmed Store result under §13, yields `ForceStopped/TeardownFailed`. In the absence of those
+  failures, a wait or observation ended by the shutdown deadline or the end time yields
+  `ForceStopped/DeadlineExceeded`. Cancellation or timeout caused by the Framework's deadline expiry is
+  not classified as an exception originating in the callback. Only cleanup completed without failure
+  within the shutdown deadline yields `Stopped/None`.
 
 When a listener and transport are cleaned up, already-accepted transport callbacks and
 in-flight read/write operations are completed or cancelled first. In particular,
@@ -897,9 +913,9 @@ generation — is called a
 4. Closes peer connections, listeners, executors, and binding transport.
 
 A language supporting standard cooperative cancellation passes a cleanup cancellation
-signal representing the remaining deadline to the Spot closing callback. An
-already-accepted handler's token isn't reused. A callback exception is
-`ForceStopped/TeardownFailed`; deadline expiry is `ForceStopped/DeadlineExceeded`.
+signal representing the end time above to the Spot closing callback. An
+already-accepted handler's token isn't reused. The termination reason follows the
+classification above.
 Callback execution isn't guaranteed on hardware failure or `SIGKILL`. It doesn't
 guarantee that a different runtime automatically takes over an interrupted relocation or
 cleanup.

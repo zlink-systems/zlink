@@ -724,8 +724,8 @@ queue를 복원한다 — 위 표의 `Blocked/RelocationFailed` 경로와 같다
 
 일부 MeshNode의 `Relocating` descriptor 기록 결과를 확인하지 못하면 시도한 모든 descriptor를
 `Serving`으로 되돌린다. 모든 변경 취소를 확인해야 `Blocked/StoreUnavailable`이다. 하나라도
-확인할 수 없으면 새 작업을 받지 않고 정해진 최대 시간 동안 정리한 뒤
-`ForceStopped/TeardownFailed`로 끝난다.
+확인할 수 없으면 새 작업을 받지 않고 §14의 bounded teardown으로 정리한 뒤 강제 종료한다. 종료 reason은
+§14가 정한다.
 
 ## 14. Shutdown과 Relocate의 경쟁
 
@@ -750,16 +750,28 @@ application 작업을 받지 않도록 바꾸는 동작을 [admission seal](../0
    Actor별 closing callback은 호출하지 않는다.
 5. Spot callback 뒤 local Actor와 Spot scope, owner record, descriptor, listener와
    transport를 순서대로 정리한다.
-6. Deadline 안에 끝나면 `Stopped/None`, 끝나지 않으면 bounded teardown 뒤
-   `ForceStopped/DeadlineExceeded` 또는 `ForceStopped/TeardownFailed`로 끝난다.
+6. 실패 없이 deadline 안에 정리를 마치면 `Stopped/None`이다. 나머지는 아래 bounded teardown과 종료
+   reason 규칙을 따른다.
 
-**Bounded teardown의 기한은 host 종료 결과의 owner가 하나로 정한다.** Shutdown deadline이 지난 시점부터
-[owner lease renew timeout](01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다) 하나가
-그 기한이다. 위 4~5단계와 아래 정리 순서 1~4의 남은 단계는 이 기한 안에서 모두 시작하며, deadline이
-지났다는 이유로 건너뛰지 않는다. 대기 관찰, owner record·descriptor·lease 정리는 모두 이 기한을 쓴다. 이
-기한 안에 확인하지 못한 owner record는 owner lease 만료 뒤 다른 host가 회수한다. 종료 결과는 deadline
-만료이면 bounded teardown 중의 시간 초과를 포함해 `ForceStopped/DeadlineExceeded`이고, callback이 예외를
-던졌으면 `ForceStopped/TeardownFailed`다.
+**Bounded teardown의 종료 시각과 종료 reason은 host 종료 결과의 owner가 한 번 정한다.**
+
+- **종료 시각.** `shutdown deadline + 설정된 owner lease renew timeout`이다. Deadline은 runtime이 만료를
+  발견한 시각이 아니라 원래 deadline 시각이다. 각 단계와 Store 요청·결과 재확인은 이 종료 시각까지 남은
+  시간만 쓰며, 단계마다 timeout을 새로 시작하지 않는다. 이 시각은 owner lease나 local admission deadline을
+  연장하지 않고, lease 만료 전 Store 정리의 성공을 보장하지 않는다. Store 변경 자격은
+  [Location runtime](01-location-runtime.ko.md) §5·§6.1을 따른다.
+- **남은 단계.** 위 4~5단계와 아래 정리 순서 1~4의 정리 요청은 기존 순서대로 하며, shutdown deadline이
+  지났다는 이유만으로 생략하지 않는다. 각 단계의 완료 관찰은 종료 시각까지만 한다. 종료 시각에 이르면 더
+  기다리지 않고 남은 단계의 취소·정리 요청을 하고 종료 결과를 한 번 완료한다. 완료를 확인하지 못한 작업은
+  닫힌 실행 문맥에 continuation을 제출하거나 파괴한 resource를 참조하지 않도록 그 작업의 owner가 처리한다.
+  원 application 완료 소스의 결과는 바꾸지 않는다.
+- **확인하지 못한 record.** 종료 시각까지 정리 결과를 확인하지 못한 record의 후속 처리는 Location runtime
+  §6.1·§11의 lifecycle과 recovery 조건을 따른다. 종료 시각이 지났다는 것만으로 다른 host의 자동 회수를
+  보장하지 않는다.
+- **종료 reason.** Callback 자체의 예외와 §13의 Store 결과 미확인에 따른 강제 종료는
+  `ForceStopped/TeardownFailed`다. 그런 실패가 없고 shutdown deadline이나 종료 시각 때문에 대기·관찰이
+  끝나면 `ForceStopped/DeadlineExceeded`다. Framework가 기한 만료로 만든 취소·timeout은 callback 자체의
+  예외로 분류하지 않는다. 실패 없이 shutdown deadline 안에 정리가 끝난 경우만 `Stopped/None`이다.
 
 Listener와 transport를 정리할 때는 이미 수락한 transport callback과 진행 중인 read·write
 operation을 먼저 완료하거나 취소한다. 특히 TLS·WebSocket resource와 per-connection write
@@ -806,10 +818,9 @@ Fanout publisher의 endpoint, identity와 실행 세대를 Store에 게시한 �
 3. MeshNode, ClientServer server와 fanout publisher descriptor와 owner lease를 해제한다.
 4. Peer connection, listener, executor와 binding transport를 닫는다.
 
-표준 cooperative cancellation을 지원하는 언어는 Spot closing callback에 남은 deadline을
-나타내는 정리용 cancellation signal을 전달한다. 이미 수락한 handler의 token은 재사용하지
-않는다. Callback exception은 `ForceStopped/TeardownFailed`, deadline 만료는
-`ForceStopped/DeadlineExceeded`다. Hardware failure와 `SIGKILL`에서는 callback을 보장하지
+표준 cooperative cancellation을 지원하는 언어는 Spot closing callback에 위 종료 시각을 나타내는
+정리용 cancellation signal을 전달한다. 이미 수락한 handler의 token은 재사용하지 않는다. 종료 reason은
+위 분류를 따른다. Hardware failure와 `SIGKILL`에서는 callback을 보장하지
 않는다. 종료 중이던 relocation이나 cleanup을 다른 runtime이 자동으로 이어받는 동작을
 보장하지 않는다.
 

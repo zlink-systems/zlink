@@ -280,7 +280,7 @@ CompletionStage<CartReply> reply = spotClient
 않는다. 유휴 판정 조건과 정리 뒤 재활성화 규칙은
 [Spot 모델 §6.2](../../../03-spot-actor/01-spot-model.ko.md#62-사용하지-않고-남아-있는-instance-spot-정리)가 소유한다. Context의
 `deadline`은 absolute `Instant`다. Java Spot closing callback에는 별도 Framework cancellation 인자를 추가하지
-않는다. Framework는 deadline에 stage completion 대기를 끝내고 bounded teardown을 진행한다.
+않는다. HostShutdown context의 deadline과 stage 완료 관찰은 [Host relocation §14](../../../05-location-relocation/05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁)가 정한 공통 기한을 따른다.
 Entry·User·Instance Spot만 callback을 받고 Actor별 closing callback은 제공하지 않는다. Host [Shutdown](../../../00-foundation/02-glossary.ko.md#shutdown)은 Actor
 membership과 local instance가 유효한 상태에서 callback을 실행하고 completion 뒤 scope와 authority를 정리한다.
 Standalone Actor relocation은 Entry Spot을 닫지 않으므로 이 callback을 호출하지 않는다.
