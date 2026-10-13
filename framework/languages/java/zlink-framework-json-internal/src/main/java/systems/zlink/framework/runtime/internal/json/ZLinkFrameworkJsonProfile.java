@@ -54,6 +54,7 @@ public final class ZLinkFrameworkJsonProfile {
                         .configure(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES, true)
                         .configure(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY, true)
                         .configure(DeserializationFeature.ACCEPT_FLOAT_AS_INT, false)
+                        .configure(DeserializationFeature.FAIL_ON_NUMBERS_FOR_ENUMS, true)
                         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
                         .propertyNamingStrategy(new KotlinAwareLowerCamelCaseStrategy())
                         .findAndAddModules()

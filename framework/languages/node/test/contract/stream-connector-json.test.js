@@ -91,6 +91,34 @@ test('default connector decodes server integer strings using the existing typed 
   }
 });
 
+test('default connector uses enum names and rejects ordinal representations in typed DTOs', () => {
+  const framework = require('../../packages/framework/dist');
+  class ProfileReportReq {}
+  framework.ZLinkPacket('profile.report', {
+    payload: {
+      type: 'object',
+      properties: {
+        reasonId: { type: 'enum', names: ['nickname', 'profile', 'harassment', 'other'] }
+      },
+      required: ['reasonId']
+    }
+  })(ProfileReportReq);
+
+  const value = { reasonId: 'profile' };
+  const encoded = json.toJson(value, ProfileReportReq);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(encoded.payload)), value);
+  assert.deepEqual(json.zlinkStreamJsonCodec.decode(encoded, ProfileReportReq), value);
+
+  for (const reasonId of [1, '1']) {
+    const payload = {
+      codec: connector.ZlinkStreamCodec.Json,
+      payload: new TextEncoder().encode(JSON.stringify({ reasonId })),
+      messageType: ProfileReportReq
+    };
+    assert.throws(() => json.zlinkStreamJsonCodec.decode(payload, ProfileReportReq));
+  }
+});
+
 test('stream connector json codec encodes and decodes json payloads', () => {
   const payload = json.toJson({ ready: true });
 

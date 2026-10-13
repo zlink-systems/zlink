@@ -154,6 +154,18 @@ public sealed class ConnectorJsonProfileTests
         );
     }
 
+    [Fact]
+    public void Default_connector_uses_enum_names_and_rejects_numeric_enum_properties()
+    {
+        var expected = new EnumPayload(State.Ready);
+        var encoded = expected.ToJson();
+
+        Assert.Equal("{\"state\":\"Ready\"}", Encoding.UTF8.GetString(encoded.Payload.Span));
+        Assert.Equal(expected, Payload("{\"state\":\"Ready\"}").FromJson<EnumPayload>());
+        Assert.ThrowsAny<JsonException>(() => Payload("{\"state\":1}").FromJson<EnumPayload>());
+        Assert.ThrowsAny<JsonException>(() => Payload("{\"state\":\"1\"}").FromJson<EnumPayload>());
+    }
+
     private static ZlinkStreamEncodedPayload Payload(string json) =>
         new(ZlinkStreamCodec.Json, Encoding.UTF8.GetBytes(json));
 
@@ -175,6 +187,8 @@ public sealed class ConnectorJsonProfileTests
     {
         Ready,
     }
+
+    public sealed record EnumPayload(State State);
 
     public sealed class ProfileSession(IZLinkSessionContext context) : IZLinkSession
     {
