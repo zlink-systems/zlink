@@ -3,8 +3,7 @@ package systems.zlink.framework.runtime.internal.service;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 
 import java.time.Duration;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -13,6 +12,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -25,7 +25,13 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final ZLinkServiceCompletionDispatcher completions =
             ZLinkServiceCompletionDispatcher.INSTANCE;
     private final Object gate = new Object();
-    private final Map<UUID, Entry<?>> entries = new HashMap<>();
+    private static final int INITIAL_SLOT_COUNT = 64;
+    private static final int HASH_SPREAD_SHIFT = 16;
+    private volatile Entry<?>[] slots = new Entry<?>[0];
+    private Entry<?>[] buckets = new Entry<?>[INITIAL_SLOT_COUNT];
+    // Only the registry turn pops; completed/discarded registrations push after release.
+    private final AtomicInteger freeSlot = new AtomicInteger();
+    private int pendingCount;
     private final Throwable closeFailure;
     private Entry<?> activeHead;
     private Entry<?> activeTail;
@@ -65,6 +71,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         this.closeFailure = Objects.requireNonNull(closeFailure, "closeFailure");
         this.timeoutFailure = Objects.requireNonNull(timeoutFailure, "timeoutFailure");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+        growSlots();
         this.maintenance =
                 scheduler.scheduleAtFixedRate(this::expireMaintenance, 1, 1, TimeUnit.MILLISECONDS);
     }
@@ -154,7 +161,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     public int pendingCount() {
         synchronized (gate) {
-            return entries.size();
+            return pendingCount;
         }
     }
 
@@ -182,7 +189,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 current.completeWithFailure(closeFailure);
                 current = next;
             }
-            entries.clear();
+            Arrays.fill(buckets, null);
+            pendingCount = 0;
             activeHead = null;
             activeTail = null;
         }
@@ -200,19 +208,23 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     private Entry<?> takeLocked(UUID id) {
-        Entry<?> entry = entries.remove(id);
+        Entry<?> entry = removeEntry(id);
         if (entry != null) {
             unlinkActive(entry);
         }
         return entry;
     }
 
-    private boolean cancel(UUID id, Entry<?> expected) {
+    private boolean cancel(int slot, long generation) {
+        Entry<?> expected;
         synchronized (gate) {
-            if (entries.get(id) != expected || expected.completion.isDone()) {
+            expected = slots[slot];
+            if (expected.generation != generation
+                    || findEntry(expected.id) != expected
+                    || expected.completion.isDone()) {
                 return false;
             }
-            entries.remove(id);
+            removeEntry(expected.id);
             unlinkActive(expected);
         }
         expected.completeWithCancellation();
@@ -256,7 +268,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             while (current != null) {
                 Entry<?> next = current.activeNext;
                 if (deadlineReached(nowNanos, current.deadlineNanos)) {
-                    entries.remove(current.id, current);
+                    removeEntry(current.id);
                     unlinkActive(current);
                     current.completeWithFailure(
                             Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
@@ -288,19 +300,103 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (id == null) {
             do {
                 id = ZLinkServiceOperationIds.next();
-            } while (entries.containsKey(id));
+            } while (findEntry(id) != null);
         } else if ((id.getMostSignificantBits() == 0 && id.getLeastSignificantBits() == 0)
-                || entries.containsKey(id)) {
+                || findEntry(id) != null) {
             throw new IllegalArgumentException("operation identity is zero or already pending");
         }
-        Entry<T> entry = new Entry<>();
+        @SuppressWarnings("unchecked")
+        Entry<T> entry = (Entry<T>) claimSlot();
         completions.register(entry);
         entry.id = id;
         entry.deadlineNanos = nanoTime.getAsLong() + timeoutNanos;
-        entry.completion.cancellation(() -> cancel(entry.id, entry));
-        entries.put(id, entry);
+        entry.generation++;
+        Operation<T> operation = new Operation<>(this, entry.slot, entry.generation, id);
+        entry.completion = operation;
+        int bucket = bucket(id);
+        entry.hashNext = buckets[bucket];
+        buckets[bucket] = entry;
+        pendingCount++;
         linkActive(entry);
-        return new Operation<>(id, entry.completion);
+        return operation;
+    }
+
+    private int bucket(UUID id) {
+        int hash = id.hashCode();
+        return (hash ^ (hash >>> HASH_SPREAD_SHIFT)) & (buckets.length - 1);
+    }
+
+    private Entry<?> findEntry(UUID id) {
+        if (id == null) return null;
+        Entry<?> entry = buckets[bucket(id)];
+        while (entry != null && !id.equals(entry.id)) entry = entry.hashNext;
+        return entry;
+    }
+
+    private Entry<?> removeEntry(UUID id) {
+        int bucket = bucket(id);
+        Entry<?> previous = null;
+        Entry<?> entry = buckets[bucket];
+        while (entry != null) {
+            if (id.equals(entry.id)) {
+                if (previous == null) buckets[bucket] = entry.hashNext;
+                else previous.hashNext = entry.hashNext;
+                entry.hashNext = null;
+                pendingCount--;
+                return entry;
+            }
+            previous = entry;
+            entry = entry.hashNext;
+        }
+        return null;
+    }
+
+    private Entry<?> claimSlot() {
+        if (freeSlot.get() == 0) growSlots();
+        int head;
+        Entry<?> entry;
+        do {
+            head = freeSlot.get();
+            entry = slots[head - 1];
+        } while (!freeSlot.compareAndSet(head, entry.freeNext));
+        return entry;
+    }
+
+    private void growSlots() {
+        int oldSize = slots.length;
+        int size = oldSize == 0 ? INITIAL_SLOT_COUNT : Math.multiplyExact(oldSize, 2);
+        Entry<?>[] expanded = Arrays.copyOf(slots, size);
+        for (int index = oldSize; index < size; index++) {
+            expanded[index] = new Entry<>(this, index);
+            expanded[index].freeNext = index + 2;
+        }
+        Entry<?> last = expanded[size - 1];
+        slots = expanded;
+        if (size > buckets.length) {
+            buckets = new Entry<?>[size];
+            for (Entry<?> entry = activeHead; entry != null; entry = entry.activeNext) {
+                int bucket = bucket(entry.id);
+                entry.hashNext = buckets[bucket];
+                buckets[bucket] = entry;
+            }
+        }
+        int head;
+        do {
+            head = freeSlot.get();
+            last.freeNext = head;
+        } while (!freeSlot.compareAndSet(head, oldSize + 1));
+    }
+
+    private void releaseSlot(Entry<?> entry) {
+        entry.id = null;
+        entry.completion = null;
+        entry.hashNext = null;
+        entry.terminalKind = Entry.NONE;
+        int head;
+        do {
+            head = freeSlot.get();
+            entry.freeNext = head;
+        } while (!freeSlot.compareAndSet(head, entry.slot + 1));
     }
 
     private static long timeoutNanos(Duration timeout) {
@@ -319,26 +415,71 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         return nowNanos - deadlineNanos >= 0;
     }
 
-    public record Operation<T>(UUID id, CompletableFuture<T> completion) {
-        public Operation {
-            Objects.requireNonNull(id, "id");
-            Objects.requireNonNull(completion, "completion");
+    public static final class Operation<T> extends CompletableFuture<T> {
+        private volatile ZLinkServiceOperationRegistry owner;
+        private final int slot;
+        private final long generation;
+        private final UUID id;
+
+        private Operation(ZLinkServiceOperationRegistry owner, int slot, long generation, UUID id) {
+            this.owner = owner;
+            this.slot = slot;
+            this.generation = generation;
+            this.id = id;
+        }
+
+        public UUID id() {
+            return id;
+        }
+
+        public CompletableFuture<T> completion() {
+            return this;
+        }
+
+        void clearCancellation() {
+            owner = null;
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            ZLinkServiceOperationRegistry registry = owner;
+            return registry != null && registry.cancel(slot, generation);
+        }
+
+        void completeCancellation() {
+            super.cancel(false);
         }
     }
 
     private static final class Entry<T> extends ZLinkServiceCompletionDispatcher.WorkItem {
+        private static final int NONE = 0;
         private static final int VALUE = 1;
         private static final int FAILURE = 2;
         private static final int CANCELLATION = 3;
 
-        private final OperationFuture<T> completion = new OperationFuture<>();
+        private final ZLinkServiceOperationRegistry owner;
+        private final int slot;
+        private int freeNext;
+        private long generation;
+        private Entry<?> hashNext;
+        private Operation<T> completion;
         private UUID id;
         private long deadlineNanos;
         private Entry<?> activePrevious;
         private Entry<?> activeNext;
-        private int terminalKind;
+        private int terminalKind = NONE;
         private Object terminalValue;
         private Throwable terminalFailure;
+
+        Entry(ZLinkServiceOperationRegistry owner, int slot) {
+            this.owner = owner;
+            this.slot = slot;
+        }
+
+        @Override
+        void released() {
+            owner.releaseSlot(this);
+        }
 
         void completeWithValue(Object value) {
             terminalKind = VALUE;
@@ -375,37 +516,6 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
         void dispatchNext(Entry<?> value) {
             setDispatchNext(value);
-        }
-
-        Entry<?> dispatchNext() {
-            return (Entry<?>) getDispatchNext();
-        }
-    }
-
-    private static final class OperationFuture<T> extends CompletableFuture<T> {
-        private static final Supplier NO_CANCELLATION = () -> false;
-        private volatile Supplier cancellation = NO_CANCELLATION;
-
-        void cancellation(Supplier cancellation) {
-            this.cancellation = Objects.requireNonNull(cancellation, "cancellation");
-        }
-
-        void clearCancellation() {
-            cancellation = NO_CANCELLATION;
-        }
-
-        @Override
-        public boolean cancel(boolean mayInterruptIfRunning) {
-            return cancellation.cancel();
-        }
-
-        void completeCancellation() {
-            super.cancel(false);
-        }
-
-        @FunctionalInterface
-        private interface Supplier {
-            boolean cancel();
         }
     }
 }

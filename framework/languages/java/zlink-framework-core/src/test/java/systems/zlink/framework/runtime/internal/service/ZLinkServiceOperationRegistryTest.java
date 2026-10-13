@@ -34,6 +34,16 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkServiceOperationRegistryTest {
     @Test
+    void registrationUsesTheCallerResultAsItsHandle() {
+        try (var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+                var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            var operation = registry.register(java.time.Duration.ofSeconds(5));
+            org.junit.jupiter.api.Assertions.assertSame(operation, operation.completion());
+            registry.discard(operation.id());
+        }
+    }
+
+    @Test
     void oneMaintenanceTaskServesEveryPendingDeadlineAndExpiresAtTheBoundary() {
         AtomicLong clock = new AtomicLong(100);
         try (var scheduler = new CountingScheduler();
@@ -275,10 +285,10 @@ final class ZLinkServiceOperationRegistryTest {
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
                 var registry = new ZLinkServiceOperationRegistry(scheduler)) {
             var operation = registry.register(Duration.ofSeconds(1));
-            var entriesField = ZLinkServiceOperationRegistry.class.getDeclaredField("entries");
-            entriesField.setAccessible(true);
-            var entries = (java.util.Map<?, ?>) entriesField.get(registry);
-            Object entry = entries.get(operation.id());
+            var lookup =
+                    ZLinkServiceOperationRegistry.class.getDeclaredMethod("findEntry", UUID.class);
+            lookup.setAccessible(true);
+            Object entry = lookup.invoke(registry, operation.id());
             for (var field : entry.getClass().getDeclaredFields()) {
                 if (Throwable.class.isAssignableFrom(field.getType())) {
                     field.setAccessible(true);
@@ -287,6 +297,23 @@ final class ZLinkServiceOperationRegistryTest {
             }
             assertTrue(registry.complete(operation.id(), "success"));
             assertEquals("success", operation.completion().join());
+        }
+    }
+
+    @Test
+    void discardedCallerCannotCancelAReusedPendingSlot() {
+        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
+                var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            UUID id = UUID.randomUUID();
+            for (int index = 0; index < 256; index++) {
+                var old = registry.register(id, Duration.ofSeconds(5));
+                assertTrue(registry.discard(id));
+                var current = registry.register(id, Duration.ofSeconds(5));
+                assertFalse(old.completion().cancel(false));
+                assertEquals(1, registry.pendingCount());
+                assertFalse(current.completion().isDone());
+                assertTrue(registry.discard(id));
+            }
         }
     }
 
@@ -539,6 +566,58 @@ final class ZLinkServiceOperationRegistryTest {
             assertTrue(registry.complete(operation.id(), "reply"));
             assertEquals("reply", operation.completion().orTimeout(1, TimeUnit.SECONDS).join());
         } finally {
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
+    void concurrentTerminalProducersKeepTheirPublicationOrder() throws Exception {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        var producers = Executors.newFixedThreadPool(4);
+        try (ZLinkServiceOperationRegistry registry =
+                new ZLinkServiceOperationRegistry(scheduler)) {
+            List<List<ZLinkServiceOperationRegistry.Operation<Integer>>> operations =
+                    new ArrayList<>();
+            List<List<Integer>> observed = new ArrayList<>();
+            CountDownLatch start = new CountDownLatch(1);
+            CountDownLatch callbacks = new CountDownLatch(256);
+            for (int producer = 0; producer < 4; producer++) {
+                List<ZLinkServiceOperationRegistry.Operation<Integer>> pending = new ArrayList<>();
+                List<Integer> values = new java.util.concurrent.CopyOnWriteArrayList<>();
+                observed.add(values);
+                for (int index = 0; index < 64; index++) {
+                    var operation = registry.<Integer>register(Duration.ofHours(1));
+                    operation
+                            .completion()
+                            .thenAccept(
+                                    value -> {
+                                        values.add(value);
+                                        callbacks.countDown();
+                                    });
+                    pending.add(operation);
+                }
+                operations.add(pending);
+            }
+            List<java.util.concurrent.Future<?>> submitted = new ArrayList<>();
+            for (var pending : operations) {
+                submitted.add(
+                        producers.submit(
+                                () -> {
+                                    await(start);
+                                    for (int index = 0; index < pending.size(); index++) {
+                                        assertTrue(
+                                                registry.complete(pending.get(index).id(), index));
+                                    }
+                                }));
+            }
+            start.countDown();
+            for (var submission : submitted) submission.get(1, TimeUnit.SECONDS);
+            assertTrue(callbacks.await(1, TimeUnit.SECONDS));
+            List<Integer> expected = java.util.stream.IntStream.range(0, 64).boxed().toList();
+            for (var values : observed) assertEquals(expected, values);
+            assertEquals(0, registry.pendingCount());
+        } finally {
+            producers.shutdownNow();
             scheduler.shutdownNow();
         }
     }
