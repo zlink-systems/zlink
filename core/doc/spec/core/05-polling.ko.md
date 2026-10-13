@@ -56,8 +56,9 @@ readiness를 기다리는 방법은 두 가지다.
 
 **`ZLINK_OPT_EVENTS`는 raw socket의 `ZLINK_POLLIN`·`ZLINK_POLLOUT`을 위 표와 같은 판정으로
 돌려준다.** 다른 bit(`ZLINK_POLLCOMPLETION` 등)는 돌려주지 않는다. 조회는 poller의 readiness 판정과
-같은 내부 진행(prefetch, 구독 필터링, packet 조립)을 할 수 있지만, application이 받을 record를
-소비하거나 버리지 않는다. 조회한 뒤 수신하면 조회하지 않았을 때와 같은 record를 받는다.
+같은 내부 진행(prefetch, 구독 필터링, packet 조립)을 할 수 있지만, 조회 자체가 application에 전달할
+record를 소비하거나 폐기하지 않는다. Prefetch하거나 조립한 record는 socket별 수신·구독·route 계약에 따라
+이후 receive에 보존된다. 조회 결과는 이후 receive까지 record나 readiness를 예약하지 않는다.
 
 여러 peer를 가진 raw socket의 `ZLINK_POLLOUT`은 socket 전체의 집계 readiness다.
 이 event는 writable해진 routing ID나 transport pair를 식별하지 않으며, 다른 peer의

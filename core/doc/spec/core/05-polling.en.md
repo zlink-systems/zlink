@@ -61,8 +61,10 @@ type is as follows.
 **`ZLINK_OPT_EVENTS` returns a raw socket's `ZLINK_POLLIN` and `ZLINK_POLLOUT` by the same
 judgment as the table above.** It returns no other bit (such as `ZLINK_POLLCOMPLETION`). A query may
 make the same internal progress as the poller's readiness judgment (prefetch, subscription filtering,
-packet assembly), but it never consumes or discards a record the application will receive. Receiving
-after a query yields the same record as receiving without it.
+packet assembly), but the query itself does not consume or discard a record for delivery to the
+application. Prefetched or assembled records remain available for later receive under the
+socket-specific receive, subscription and route contracts. A query does not reserve a record or
+readiness until a subsequent receive.
 
 For a raw socket with multiple peers, `ZLINK_POLLOUT` is aggregate readiness
 for the socket. The event does not identify which routing ID or transport pair
