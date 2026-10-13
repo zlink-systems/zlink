@@ -9,7 +9,15 @@ public sealed class MeshLivenessPhysicalCloseTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ExpiryRemovesTargetAndTerminatesPendingSend_ReceiveKeepsTarget(bool receive)
+    public async Task ExpiryRemovesTargetAndTerminatesPendingSend_ReceiveKeepsTarget(
+        bool receive
+    ) => await RunExpiryAsync(receive, observeProbeSubmission: false);
+
+    [Fact]
+    public async Task ReceivedRecordKeepsTargetAfterProbeSubmission() =>
+        await RunExpiryAsync(receive: true, observeProbeSubmission: true);
+
+    private static async Task RunExpiryAsync(bool receive, bool observeProbeSubmission)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         context.Options.AutoHwmEnabled = false;
@@ -43,6 +51,7 @@ public sealed class MeshLivenessPhysicalCloseTests
         var peers = Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid");
         peers.Add(rid, peer);
         SetField(node, "_socket", source);
+        SetField(node, "_activeSocketGeneration", Field<ulong>(node, "_lifecycleGeneration"));
         using var monitor = node.OpenMonitor();
         try
         {
@@ -63,6 +72,21 @@ public sealed class MeshLivenessPhysicalCloseTests
             if (receive)
                 peer.Liveness.RecordReceived(14 * Stopwatch.Frequency);
             Tick(node, 15 * Stopwatch.Frequency);
+            if (observeProbeSubmission)
+            {
+                // Observe after the existing control-submit worker has run. Its
+                // asynchronous Core admission may remain pending under backpressure.
+                var scheduler = Field<ConcurrentExclusiveSchedulerPair>(
+                    node,
+                    "_routedSubmitScheduler"
+                );
+                await Task.Factory.StartNew(
+                    () => Assert.True(peer.Admitted),
+                    CancellationToken.None,
+                    TaskCreationOptions.None,
+                    scheduler.ExclusiveScheduler
+                );
+            }
             if (receive)
             {
                 Assert.True(peer.Admitted);
@@ -98,6 +122,7 @@ public sealed class MeshLivenessPhysicalCloseTests
         finally
         {
             SetField(node, "_socket", null);
+            SetField(node, "_activeSocketGeneration", 0UL);
         }
     }
 
