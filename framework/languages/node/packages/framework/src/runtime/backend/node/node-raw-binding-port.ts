@@ -300,7 +300,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     }
     try {
       const replies = await bindingRequestReply(submission, deadlineMs, recordReceived, onAdmitted);
-      return copyAndClose(replies);
+      return retainAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');
     }
@@ -366,7 +366,7 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
     }
     try {
       const replies = await bindingRequestReply(submission, deadlineMs, undefined, onAdmitted);
-      return copyAndClose(replies);
+      return retainAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');
     }
@@ -498,9 +498,10 @@ function receiveRecord(
   }
 }
 
-function copyAndClose(messages: readonly Message[]): readonly Buffer[] {
+function retainAndClose(messages: readonly Message[]): readonly Buffer[] {
   try {
-    return messages.map((message) => message.toBytes());
+    // Binding Buffer views retain their storage independently of the message handle.
+    return messages.map((message) => message.data());
   } finally {
     for (const message of messages) message.close();
   }
