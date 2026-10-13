@@ -129,11 +129,17 @@ This repository uses three licenses, split by layer:
 
 - `core/` and `bindings/` (per-language native bindings) are licensed under
   MPL-2.0. See `LICENSE`.
-- `framework/` (the higher-level framework built on top of the bindings) is
-  licensed under zlink License 1.0. Versions before 1.0.0 are free regardless
+- The server Framework runtime under `framework/` is licensed under zlink
+  License 1.0. Versions before 1.0.0 are free regardless
   of machine count; starting with 1.0.0, one server machine is free and each
   additional machine requires a paid license. Releases through 0.30.0 remain
   under FSL-1.1-ALv2. See `framework/LICENSE` for the full license text.
+- Client connectors, their shared C++ helper headers and Node `stream-wire`
+  codec used by connectors and the Framework runtime, and example code under language-specific
+  `samples/`, `tutorial/`, and `quickstart/` directories are licensed under Apache-2.0.
+  Packages include the Apache license text where their packaging configuration
+  bundles a license file; the canonical text is
+  `framework/languages/cpp/http-client/LICENSE`.
 - Each language's `http-client` package under `framework/` (a thin wrapper
   over that platform's commonly used HTTP client library — .NET's
   `System.Net.Http`, Java/Kotlin's `java.net.http`, Node's `undici`, C++'s

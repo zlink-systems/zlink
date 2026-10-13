@@ -7,7 +7,7 @@ import os
 class ZlinkStreamConnectorConan(ConanFile):
     name = "zlink-stream-connector"
     version = "0.10.0"
-    license = "MPL-2.0"
+    license = "Apache-2.0"
     url = "https://github.com/zlink-systems/zlink"
     description = "ZLink C++ Stream Connector core library"
     package_type = "library"
@@ -36,6 +36,7 @@ class ZlinkStreamConnectorConan(ConanFile):
             "framework/languages/cpp/cmake",
             "framework/languages/cpp/common",
             "framework/languages/cpp/connector",
+            "framework/languages/cpp/http-client",
         ]
         copy(
             self,
@@ -43,7 +44,6 @@ class ZlinkStreamConnectorConan(ConanFile):
             src=os.path.join(repo_root, "framework/languages/cpp"),
             dst=os.path.join(self.export_sources_folder, "framework/languages/cpp"),
         )
-        copy(self, "LICENSE", src=repo_root, dst=self.export_sources_folder)
         copy(
             self,
             "json_stream_connector.hpp",

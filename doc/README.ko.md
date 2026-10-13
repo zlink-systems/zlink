@@ -14,7 +14,7 @@
 | **바인딩 사용자** | [guide/bindings/README.ko.md](../bindings/doc/guide/README.ko.md) | C++/Java/.NET/Node.js/Python 바인딩 |
 | **라이브러리 개발자** | [internals/architecture.ko.md](../core/doc/spec/core/systems/01-architecture.ko.md) | 내부 아키텍처 및 구현 상세 |
 | **빌드/배포 담당자** | [building/build-guide.ko.md](building/build-guide.ko.md) | 빌드, 테스트, 패키징 |
-| **채택 검토자 / 법무 담당자** | [license/README.ko.md](license/README.ko.md) | `core`/`bindings`/`framework`/`http-client` 전반의 라이선스 정책 |
+| **채택 검토자 / 법무 담당자** | [license/README.ko.md](license/README.ko.md) | `core`/`bindings`, 서버 Framework runtime, client connector와 복사 사용 예제, `http-client`의 라이선스 정책 |
 
 ---
 
@@ -98,4 +98,4 @@
 
 | 문서 | 설명 |
 |------|------|
-| [README.ko.md](license/README.ko.md) | `core/`·`bindings/`의 MPL-2.0, `framework/`의 zlink License 1.0, `http-client`의 Apache-2.0 조건. 1.0.0 전 버전은 머신 수 제한 없이 무료이고, 1.0.0부터는 서버 한 대가 무료이며 추가 머신은 유료입니다. 0.30.0 이하 릴리스는 FSL-1.1-ALv2를 유지합니다. |
+| [README.ko.md](license/README.ko.md) | `core/`·`bindings/`의 MPL-2.0, 서버 Framework runtime의 zlink License 1.0, client connector와 복사 사용 예제 및 `http-client`의 Apache-2.0 조건. 1.0.0 전 서버 runtime은 머신 수 제한 없이 무료이고, 1.0.0부터는 서버 한 대가 무료이며 추가 머신은 유료입니다. 0.30.0 이하 릴리스는 FSL-1.1-ALv2를 유지합니다. |

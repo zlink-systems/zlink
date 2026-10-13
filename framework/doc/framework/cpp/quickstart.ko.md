@@ -98,11 +98,12 @@ framework가 링크하는 것은 `opentelemetry-cpp::api` 하나이므로 `-DOTE
 | `zlink::stream_connector` | 외부 client(게임 client·모바일)를 만들 때([STREAM](guide/server/23-stream.ko.md)) |
 | `zlink::http_client` | 서버에서 HTTP를 호출할 때([HTTP Client 가이드](guide/http-client/README.ko.md)) |
 
-`framework`는 [zlink License 1.0](../../../LICENSE)([한국어 번역](../../../LICENSE.ko.md))을
-따릅니다. 1.0.0 전 버전은
-머신 수와 관계없이 무료이며, 1.0.0부터는 서버 한 대가 무료이고 추가 머신마다 유료
-라이선스가 필요합니다. 0.30.0 이하 릴리스는 FSL-1.1-ALv2를 유지합니다. `core`와
-`bindings`는 MPL-2.0, `zlink::http_client`는 Apache-2.0을 따릅니다.
+서버 Framework runtime은 [zlink License 1.0](../../../LICENSE)([한국어 번역](../../../LICENSE.ko.md))을
+따릅니다. 1.0.0 전 버전은 머신 수와 관계없이 무료이며, 1.0.0부터는 서버 한 대가 무료이고
+추가 머신마다 유료 라이선스가 필요합니다. 0.30.0 이하 릴리스는 FSL-1.1-ALv2를 유지합니다.
+client connector와 `samples/`, `tutorial/`, `quickstart/`에서 복사해 사용하는 예제 코드는
+Apache-2.0을 따릅니다. 테스트와 performance gate 소스는 Framework 라이선스를 유지합니다.
+`core`와 `bindings`는 MPL-2.0, `zlink::http_client`는 Apache-2.0을 따릅니다.
 
 ## 2. 소비자 쪽 CMake
 

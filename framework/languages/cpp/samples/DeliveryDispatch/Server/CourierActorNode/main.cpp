@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Apache-2.0 */
 
 #include "../Configuration/sample_names.hpp"
 #include "../Configuration/sample_readiness.hpp"

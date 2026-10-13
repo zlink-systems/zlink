@@ -152,8 +152,5 @@ not a game:
 
 ## License
 
-This package uses zlink License 1.0. Versions before 1.0.0 are free regardless
-of machine count. Starting with 1.0.0, one server machine is free and each
-additional machine requires a paid license. Releases through 0.30.0 remain
-under FSL-1.1-ALv2. The package includes the full text in `LICENSE.md`; the
-canonical text is [`framework/LICENSE`](../../../LICENSE).
+This package is licensed under Apache-2.0. The full license text is included in
+[`LICENSE.md`](LICENSE.md).

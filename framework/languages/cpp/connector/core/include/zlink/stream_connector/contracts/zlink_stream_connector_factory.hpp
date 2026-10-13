@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 
 #include <zlink/stream_connector/contracts/zlink_stream_connector.hpp>

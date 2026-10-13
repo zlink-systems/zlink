@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 
 #include "../../Application/bingo_match_reservation_store.hpp"

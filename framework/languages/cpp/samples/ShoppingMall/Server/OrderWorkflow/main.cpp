@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+/* SPDX-License-Identifier: Apache-2.0 */
 
 #include "../Common/workflow_logic.hpp"
 #include "../Configuration/sample_configuration.hpp"

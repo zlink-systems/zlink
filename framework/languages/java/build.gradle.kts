@@ -184,10 +184,11 @@ subprojects {
                         description.set(project.description ?: project.name)
                         url.set("https://github.com/zlink-systems/zlink")
                         licenses {
-                            // http-client wraps java.net.http (JDK standard library)
-                            // rather than any zlink-original transport, so it ships
-                            // under Apache-2.0 instead of zlink License 1.0.
-                            if (project.name in setOf("zlink-http-client", "zlink-http-client-kotlin")) {
+                            // Client-side packages ship under Apache-2.0.
+                            if (project.name in setOf(
+                                    "zlink-http-client",
+                                    "zlink-http-client-kotlin",
+                                    "zlink-stream-connector")) {
                                 license {
                                     name.set("Apache-2.0")
                                     url.set("https://www.apache.org/licenses/LICENSE-2.0")

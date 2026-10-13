@@ -197,10 +197,11 @@ Licensing differs by repository layer.
 | Scope | License |
 |---|---|
 | `core/`, `bindings/` | [Mozilla Public License 2.0](./LICENSE) |
-| `framework/` | [zlink License 1.0](./framework/LICENSE) |
+| Server Framework runtime under `framework/` | [zlink License 1.0](./framework/LICENSE) |
+| Client connectors, their shared C++ helper headers and Node `stream-wire` codec, and example code in language-specific `samples/`, `tutorial/`, and `quickstart/` directories | [Apache License 2.0](./framework/languages/cpp/http-client/LICENSE) |
 | Language-specific Framework `http-client` packages | Apache License 2.0 |
 
-`framework/` uses the zlink License 1.0. Versions before 1.0.0 are free
+The server Framework runtime uses the zlink License 1.0. Versions before 1.0.0 are free
 regardless of machine count. Starting with 1.0.0, one server machine is free
 and each additional machine requires a paid license. Releases through 0.30.0
 remain under FSL-1.1-ALv2.
