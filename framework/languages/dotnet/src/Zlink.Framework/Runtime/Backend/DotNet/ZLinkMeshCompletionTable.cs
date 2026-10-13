@@ -15,15 +15,9 @@ internal sealed class ZLinkMeshCompletionTable
 
     private readonly object _gate = new();
     private readonly Dictionary<MeshOperationId, PendingCompletion> _pending = new();
-    private readonly ZLinkCompletionDispatcher _dispatcher;
     private TaskCompletionSource? _drained;
     private int _outstandingOperations;
     private bool _closed;
-
-    internal ZLinkMeshCompletionTable(ZLinkCompletionDispatcher? dispatcher = null)
-    {
-        _dispatcher = dispatcher ?? ZLinkCompletionDispatcher.Shared;
-    }
 
     internal Task CompletionDrained
     {
@@ -184,7 +178,7 @@ internal sealed class ZLinkMeshCompletionTable
         if (!TryTake(record.OperationId, out var pending))
             return false;
         ((PendingReply)pending).PrepareReply(record, parts);
-        _dispatcher.Post(pending);
+        ZLinkCompletionDispatcher.Post(pending);
         return true;
     }
 
@@ -193,7 +187,7 @@ internal sealed class ZLinkMeshCompletionTable
         if (!TryTake(operationId, out var pending))
             return;
         ((PendingSend)pending).PrepareSend(failure);
-        _dispatcher.Post(pending);
+        ZLinkCompletionDispatcher.Post(pending);
     }
 
     public void FailAll(RequestResult result)
@@ -208,7 +202,7 @@ internal sealed class ZLinkMeshCompletionTable
         foreach (var pending in entries)
         {
             pending.PrepareFailure(result);
-            _dispatcher.Post(pending);
+            ZLinkCompletionDispatcher.Post(pending);
         }
     }
 
@@ -230,7 +224,7 @@ internal sealed class ZLinkMeshCompletionTable
             _pending.Remove(expected.CorrelationId);
         }
         expected.PrepareCancellation();
-        _dispatcher.Post(expected);
+        ZLinkCompletionDispatcher.Post(expected);
     }
 
     private void ReleaseReservation(PendingCompletion pending, Exception? failure)

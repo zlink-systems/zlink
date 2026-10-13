@@ -1,102 +1,55 @@
 namespace Zlink.Framework.Runtime.Backend.DotNet;
 
-// Completion ownership moves here after a pending-operation table atomically
-// takes its entry. One process-wide lane keeps callbacks off transport and
-// cancellation stacks without creating a thread for every table or callback.
-internal sealed class ZLinkCompletionDispatcher : IThreadPoolWorkItem
+// The table reserves one WorkItem before submit and transfers terminal
+// ownership to it after atomic take. Each completion gets a pool turn so an
+// inline caller continuation cannot hold up unrelated operations.
+internal static class ZLinkCompletionDispatcher
 {
-    internal static ZLinkCompletionDispatcher Shared { get; } = new();
-
     [ThreadStatic]
     private static bool _isCurrentExecution;
 
-    private readonly object _gate = new();
-    private WorkItem? _head;
-    private WorkItem? _tail;
-
     internal static bool IsCurrentExecution => _isCurrentExecution;
 
-    // WorkItem is allocated with the pending operation. Posting a terminal
-    // result only links that existing node, so a reply, cancellation, or close
-    // cannot arrive before its callback has a dispatcher node.
-    internal void Post(WorkItem work)
+    internal static void Post(WorkItem work)
     {
         ArgumentNullException.ThrowIfNull(work);
-        lock (_gate)
-        {
-            if (_tail is null)
-            {
-                _head = work;
-                ThreadPool.UnsafeQueueUserWorkItem(this, preferLocal: false);
-            }
-            else if (_head is null)
-                _head = work;
-            else
-                _tail.Next = work;
-            _tail = work;
-        }
+        ThreadPool.UnsafeQueueUserWorkItem(work, preferLocal: false);
     }
 
-    void IThreadPoolWorkItem.Execute()
+    internal abstract class WorkItem : IThreadPoolWorkItem
     {
-        _isCurrentExecution = true;
-        try
+        internal abstract void Execute();
+
+        internal abstract void Completed(Exception? failure);
+
+        void IThreadPoolWorkItem.Execute()
         {
-            while (true)
+            _isCurrentExecution = true;
+            try
             {
-                WorkItem work;
-                lock (_gate)
+                Exception? failure = null;
+                try
                 {
-                    if (_head is null)
-                    {
-                        _tail = null;
-                        return;
-                    }
-                    work = _head;
-                    _head = null;
-                    // Retain the tail as this drain's reservation. A post
-                    // during callback execution starts the next accepted batch
-                    // without scheduling a second consumer for the same lane.
+                    Execute();
+                }
+                catch (Exception exception)
+                {
+                    failure = exception;
                 }
 
-                DrainBatch(work);
+                try
+                {
+                    Completed(failure);
+                }
+                catch (Exception exception)
+                {
+                    TryLogFailure("mesh-completion-accounting", exception);
+                }
             }
-        }
-        finally
-        {
-            _isCurrentExecution = false;
-        }
-    }
-
-    private static void DrainBatch(WorkItem? work)
-    {
-        while (work is not null)
-        {
-            // Detach only the already accepted chain. Work posted by a callback
-            // belongs to the next turn, after all predecessors in this batch.
-            var next = work.Next;
-            work.Next = null;
-            Exception? failure = null;
-            try
+            finally
             {
-                work.Execute();
+                _isCurrentExecution = false;
             }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-
-            try
-            {
-                work.Completed(failure);
-            }
-            catch (Exception exception)
-            {
-                // Completion-accounting failures must not stop the only shared
-                // lane and strand every later terminal callback.
-                TryLogFailure("mesh-completion-accounting", exception);
-            }
-            work = next;
         }
     }
 
@@ -108,16 +61,7 @@ internal sealed class ZLinkCompletionDispatcher : IThreadPoolWorkItem
         }
         catch
         {
-            // Diagnostics must never terminate the only process-wide lane.
+            // A diagnostic failure cannot prevent the next operation's turn.
         }
-    }
-
-    internal abstract class WorkItem
-    {
-        internal WorkItem? Next { get; set; }
-
-        internal abstract void Execute();
-
-        internal abstract void Completed(Exception? failure);
     }
 }
