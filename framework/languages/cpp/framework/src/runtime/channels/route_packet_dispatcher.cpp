@@ -239,6 +239,8 @@ result_t<std::optional<route_dispatch_reply_t>>
 route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &received,
                                              runtime::messaging::envelope_header_t header) const
 {
+    trace_flow (message_flow_outcome_t::admitted, dispatch_message_kind_t::request, received,
+                header);
     if (_internal_packets != nullptr
         && _internal_packets->can_handle_request (header.message_name)) {
         auto reply = _internal_packets->dispatch_request (received, header, *_services);
@@ -279,10 +281,19 @@ route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &rece
     auto context =
       make_route_message_context (_router_channel_id, received.source_node_rid, header);
     const auto &filters = _filters != nullptr ? *_filters : empty_handler_filters ();
+    auto before_handler = _before_application_handler;
+    if (message_flow_tracer_t (_dispatch_options).enabled (message_flow_log_mode_t::normal)) {
+        before_handler = [this, &received, &header, before_handler] {
+            if (before_handler)
+                before_handler ();
+            trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::request,
+                        received, header);
+        };
+    }
     auto reply = _invoker
                    .invoke_request (*_handlers, filters, _request_dispatch_kind, _router_channel_id,
                                     header.message_name, *_services, *_serializers, body.value (),
-                                    context, _before_application_handler)
+                                    context, std::move (before_handler))
                    .result ();
     if (!reply) {
         framework_exception_t error (reply.error_kind (), reply.error ()

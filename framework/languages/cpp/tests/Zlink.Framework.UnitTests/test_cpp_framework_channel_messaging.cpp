@@ -2622,17 +2622,38 @@ int main ()
     zlink::framework::detail::no_route_internal_packet_dispatcher_t no_internal;
     const auto route_dispatch_thread = std::this_thread::get_id ();
     bool application_permit_released = false;
+    std::vector<zlink::framework::message_flow_outcome_t> request_flow;
+    bool dispatched_before_handler = false;
+    zlink::framework::dispatch_options_t request_flow_options;
+    request_flow_options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      request_flow_options, [&] (const auto &event) {
+          request_flow.push_back (event.outcome);
+          if (event.outcome == zlink::framework::message_flow_outcome_t::dispatched)
+              dispatched_before_handler =
+                provider.get_required<local_handler_t> ().last_route_request == 0;
+      });
     provider.get_required<local_handler_t> ().application_permit_released =
       &application_permit_released;
     test_route_receive_pump_t route_handler_pump{
       zlink::framework::detail::route_packet_dispatcher_t (
-        "game.route", provider, serializers, route_handlers, no_internal, {}, nullptr,
-        zlink::framework::handler_dispatch_kind_t::node_direct_send,
+        "game.route", provider, serializers, route_handlers, no_internal, request_flow_options,
+        nullptr, zlink::framework::handler_dispatch_kind_t::node_direct_send,
         zlink::framework::handler_dispatch_kind_t::node_direct_request,
         [&] { application_permit_released = true; })};
     route_handler_pump.enqueue (zlink::framework::detail::route_received_packet_t{
       zlink::routing_id_t::from (std::string ("source-node")), 78, route_request_parts});
     const auto route_handler_receive = route_handler_pump.drain ();
+    if (!dispatched_before_handler
+        || request_flow
+             != std::vector<zlink::framework::message_flow_outcome_t>{
+               zlink::framework::message_flow_outcome_t::received,
+               zlink::framework::message_flow_outcome_t::admitted,
+               zlink::framework::message_flow_outcome_t::dispatched,
+               zlink::framework::message_flow_outcome_t::replied}) {
+        std::fprintf (stderr, "request flow must include admitted and dispatched before reply\n");
+        return 412;
+    }
     if (!route_handler_receive || route_handler_receive.value ().replies.size () != 1) {
         return 48;
     }
@@ -2668,13 +2689,22 @@ int main ()
     auto &route_filter = provider.get_required<route_filter_t> ();
     route_filter.reject_request = true;
     provider.get_required<local_handler_t> ().last_route_request = 0;
+    request_flow.clear ();
+    auto filtered_flow_options = local_dispatch;
+    filtered_flow_options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      filtered_flow_options, [&] (const auto &event) { request_flow.push_back (event.outcome); });
     test_route_receive_pump_t filtered_route_pump{
       zlink::framework::detail::route_packet_dispatcher_t ("game.route", provider, serializers,
                                                            route_handlers, no_internal,
-                                                           local_dispatch, &route_filters)};
+                                                           filtered_flow_options, &route_filters)};
     filtered_route_pump.enqueue (zlink::framework::detail::route_received_packet_t{
       zlink::routing_id_t::from (std::string ("source-node")), 79, route_request_parts});
     const auto filtered_request = filtered_route_pump.drain ();
+    if (std::find (request_flow.begin (), request_flow.end (),
+                   zlink::framework::message_flow_outcome_t::dispatched)
+        != request_flow.end ())
+        return 413;
     if (!filtered_request || filtered_request.value ().replies.size () != 1
         || provider.get_required<local_handler_t> ().last_route_request != 0
         || route_filter.seen_kinds.empty ()
