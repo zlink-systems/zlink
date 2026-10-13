@@ -755,8 +755,9 @@ application 작업을 받지 않도록 바꾸는 동작을 [admission seal](../0
 
 **Bounded teardown의 종료 시각과 종료 reason은 host 종료 결과의 owner가 한 번 정한다.**
 
-- **종료 시각.** `shutdown deadline + 설정된 owner lease renew timeout`이다. Deadline은 runtime이 만료를
-  발견한 시각이 아니라 원래 deadline 시각이다. 각 단계와 Store 요청·결과 재확인은 이 종료 시각까지 남은
+- **종료 시각.** 기준 시각에 설정된 owner lease renew timeout을 더한 시각이다. 기준 시각은 Shutdown
+  operation이 있으면 그 operation의 원래 deadline 시각이고(runtime이 만료를 발견한 시각이 아니다), Shutdown
+  없이 §13에 따라 강제 종료하면 그 강제 종료를 확정한 시각이다. 각 단계와 Store 요청·결과 재확인은 이 종료 시각까지 남은
   시간만 쓰며, 단계마다 timeout을 새로 시작하지 않는다. 이 시각은 owner lease나 local admission deadline을
   연장하지 않고, lease 만료 전 Store 정리의 성공을 보장하지 않는다. Store 변경 자격은
   [Location runtime](01-location-runtime.ko.md) §5·§6.1을 따른다.

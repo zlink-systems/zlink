@@ -836,8 +836,9 @@ completes within a fixed time, in this order.
 **The owner of the host termination result fixes the bounded-teardown end time and the termination
 reason once.**
 
-- **End time.** It is the shutdown deadline plus the configured owner lease renew timeout. The deadline is
-  the original deadline time, not the moment the runtime notices expiry. Each stage, Store request and
+- **End time.** It is the reference time plus the configured owner lease renew timeout. The reference time
+  is the original deadline of the Shutdown operation when one exists (not the moment the runtime notices
+  expiry), or the time a forced termination under §13 is decided when there is no Shutdown. Each stage, Store request and
   result reconciliation uses only the time remaining until that end time; no stage restarts the timeout.
   This end time extends neither the owner lease nor the local admission deadline and does not guarantee
   successful Store cleanup before lease expiry. Eligibility for Store mutations follows
