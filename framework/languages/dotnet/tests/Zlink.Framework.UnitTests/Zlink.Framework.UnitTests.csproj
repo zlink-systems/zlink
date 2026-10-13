@@ -137,6 +137,7 @@
         <Compile Include="Runtime/GeneratedServiceWireCommandCodecConformanceTests.cs"/>
         <Compile Include="Runtime/GenerationTokenRangeTests.cs"/>
         <Compile Include="Runtime/FrameworkJsonProfileTests.cs"/>
+        <Compile Include="Runtime/ConnectorJsonProfileTests.cs"/>
         <Compile Include="Runtime/HandlerResultAwaiterTests.cs"/>
         <Compile Include="Runtime/HttpExecutionSchedulerTests.cs"/>
         <Compile Include="Runtime/InMemoryLocationStoreTests.cs"/>

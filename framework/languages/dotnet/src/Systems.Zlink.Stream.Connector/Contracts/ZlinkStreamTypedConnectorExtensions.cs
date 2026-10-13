@@ -1,10 +1,13 @@
 using System.Text.Json;
+using Systems.Zlink.Stream.Connector.Internal;
 
 namespace Systems.Zlink.Stream.Connector.Contracts;
 
 public static class ZlinkStreamJsonCodec
 {
-    private static JsonSerializerOptions _serializerOptions = new(JsonSerializerDefaults.Web);
+    private static JsonSerializerOptions _serializerOptions = new(
+        ZLinkJsonSerializerOptions.FrameworkPayload
+    );
 
     public static JsonSerializerOptions SerializerOptions
     {
@@ -27,6 +30,7 @@ public static class ZlinkStreamJsonExtensions
     public static T FromJson<T>(this ZlinkStreamEncodedPayload payload)
     {
         EnsureJson(payload);
+        ZLinkFrameworkJsonDocument.ValidateDocument(payload.Payload.Span);
         return JsonSerializer.Deserialize<T>(payload.Payload.Span, ZlinkStreamJsonCodec.Snapshot)!;
     }
 
@@ -397,7 +401,6 @@ public sealed class ZlinkStreamTypedWaitBuilder<TPayload>
         return Decode(message);
     }
 
-    // The typed projection keeps the flow pair the frame carried (spec §5.5).
     private ZlinkStreamMessage<TPayload> Decode(
         ZlinkStreamMessage<ZlinkStreamEncodedPayload> message
     )
