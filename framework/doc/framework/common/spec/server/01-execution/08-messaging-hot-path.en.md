@@ -111,7 +111,10 @@ on the normal path: caller → the selector owner's turn (E2), → the operation
 When both owners are the same there is at most one, and when the caller is already on that lane the
 entry is not counted. Over the completion interval — from "the binding's completion notification
 arrived" to "the first instruction of the caller continuation" — the Framework introduces at most one
-switch, the one that comes from the placement of §4.4. Owner turns run FIFO, so a caller that submits 100 requests back to
+switch, the one that comes from the placement of §4.4. This limit counts the execution-resource moves
+the Framework adds. Notification posts decided by the binding and posts to a scheduler or coroutine
+dispatcher chosen by the application are recorded separately, and §4.4 does not change the execution
+context chosen by the caller. The real round trip includes these post costs in its switches and latency. Owner turns run FIFO, so a caller that submits 100 requests back to
 back gets all 100 into the binding in submit order.
 
 The Send completion boundary is defined by
@@ -290,44 +293,56 @@ DI integration may reside in the core runtime or in a separate package or extens
 resides, adapter code executed to prepare handlers or filters is subject to this cost boundary and
 the lifetime rules in Framework API "10"·"11".
 
-Internal check — that ready-set transitions (empty → non-empty) match worker wake-ups, and that no
-per-record dispatch task or supervisor registration exists between W1 and W4, are white-box invariants
-verified by tracing.
+Internal check — that ready-owner registration has no omission or duplicate and the resource placed by
+§4.4 runs that turn, and that no per-record dispatch task or supervisor registration exists between W1
+and W4, are white-box invariants verified by tracing. Wake-ups of application execution resources and of
+receive hand-off resources are recorded separately.
 
 ### 4.4 Placing the execution resource — handing off the receive role
 
 The caller continuation of E5 and the handler turn after I4 run in a **new execution turn**. A new
-turn does not mean another thread. One rule decides which execution resource runs that turn.
+turn does not mean another thread ([Submit And Completion "11"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation)).
+One rule decides which execution resource runs that turn.
 
-- **An execution resource that holds no receive role** may run the turn itself once the current
-  processing — the completion decision or the receive turn, its call stack, locks and the lane-current
-  scope — has returned. The receive role is the work of an ingress owner: I0–I4 and the management
-  work of §4.2. Driving the binding poller that receives the E5 completion notification is part of it.
+- **An execution resource that holds no receive role** may run the turn itself while keeping the
+  new-turn condition of Submit And Completion "11". The receive role is the work of an ingress owner:
+  I0–I4 and the management work of §4.2. Driving the binding poller that receives the E5 completion
+  notification is part of it.
 - **An execution resource that holds the receive role** runs the turn itself only after it has handed
-  that role to another execution resource. The receiving resource is an existing execution resource of
-  the same runtime that is idle now and can start the next receive turn at once. The handing side
-  decides, in one step, both the use of that resource and the transfer of the receive role. When no such
-  resource exists, the current resource keeps the receive role, and the turn stays in the owner queue
-  and the completion dispatcher, where another execution resource (a worker) runs it.
+  that role to another execution resource. A hand-off succeeds only when the owner of the existing
+  execution-resource placement assigns a currently free resource exclusively to the next receive role,
+  and that resource can drive receive without waiting on the application queue. Posting to an executor,
+  or the existence of a waiter, does not count as success. The receiving resource starts the next
+  receive on the same poller after the previous resource's wait/drain and receive turn have ended. The
+  socket, poller, cursor, unreturned permits and shutdown lifetime belong to the receive role, not to an
+  execution resource. When the assignment cannot be guaranteed, there is no hand-off: the current
+  resource keeps the receive role, and the turn stays in the owner queue and the completion dispatcher,
+  where another execution resource (a worker) runs it.
 
 The rule does not change the following.
 
 | Contract kept | How this placement keeps it |
 |---|---|
 | Separation of progress areas ([Handler Turn "1"](02-handler-turn-and-execution-gate.en.md#1-separating-queue-from-gate)) | A resource that could not hand off the receive role runs no application work. After the hand-off, receive, completion and management progress belong to the receiving resource. |
-| Order and execution authority | The turn run directly is the head turn of its owner queue, and it goes through the gate acquisition of W1 and the permit release of W3 as before. It neither skips the queue nor bypasses the gate. |
+| Order and execution authority | Placement does not change the existing scope and order of queues, gates, claims and permits. Handler execution follows §4.3, the execution authority of a completion continuation follows [Handler Turn "2"](02-handler-turn-and-execution-gate.en.md#2-execution-gate--the-owners-processing-order) and ["3"](02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield), and the lifetime of the completion slot follows Submit And Completion "11". Placement alone grants no execution authority and skips no queue order, and the application context is entered through its existing entry path ([Handler Turn "13"](02-handler-turn-and-execution-gate.en.md#13-separating-application-progress-from-infrastructure-progress)). |
+| Independence between completion callbacks | Placement does not merge unrelated completion callbacks into a drain that depends on one callback returning. The worker management policy owned by the language runtime and the execution context chosen by the application stay as they are. Independent progress of receive, completion decisions and management does not mean that a new application callback runs while every application execution resource is held by a synchronous wait. |
 | The receive turn as the unit | The hand-off is decided once, at the boundary where a receive turn ends. There is no hand-off per record; the continuous claims of I2 and the per-turn management work stay. |
 | Number of execution resources | No execution resource is created and no limit is raised for the hand-off. Nothing waits to confirm that the receiving resource actually started. At most one resource drives receive on a socket at a time. |
 
-With this placement the Framework introduces no execution-resource switch when the hand-off succeeds,
-and one switch — to the existing worker or dispatcher — when no resource can take the role. Waking the
-receiving resource is a cost of the next receive turn and does not add to this turn's latency. A runtime
-with a single execution resource (the Node event loop) has no resource to hand off to and always takes
-the existing path.
+Switches are counted over the message or completion interval defined in §3 and §4.1. When the turn runs
+on the same execution resource, the count is 0; when it runs on another existing resource, that move counts
+as 1. Successful hand-offs are recorded separately from the switch count. The work of the resource that
+takes the next receive turn is not counted as a switch of this message, but the cost of the hand-off and
+its notification is not excluded from measurement. A runtime with a single execution resource (the Node
+event loop) has no resource to hand off to, so the resource holding the receive role always takes the
+existing path.
 
-Internal check conditions — the number of successful and failed hand-offs, the number of resources
-driving receive on one socket (at most 1), and an execution-resource high-water at or below the existing
-limit before and after hand-offs are white-box invariants checked by trace.
+Internal check conditions — that the receiving resource's receive, completion and management work
+progresses before a held handler or continuation is released, that the assigned resource is not
+reassigned to application work, that at most one resource drives receive per socket, the number of
+successful and failed hand-offs, and an execution-resource high-water at or below the existing limit
+before and after hand-offs are white-box invariants checked by trace. The language pages define which
+resource kind (task, virtual thread, carrier, OS thread) the high-water counts and its limit.
 
 ## 5. Target selection and reply path per API
 
@@ -373,7 +388,7 @@ check conditions of each stage.
 | Java | the virtual-thread pump | application lane workers | platform worker threads of the shared completion dispatcher |
 | Node | the event loop | microtasks on the same event loop | the same event loop |
 
-The table names only kinds of resources. Each language page (`spec/server/languages/`) records the
+The table names only kinds of resources. Which resource holds the receive role at a given moment is decided by the hand-off of §4.4. Each language page (`spec/server/languages/`) records the
 real type names, how the current implementation realises each stage of §3–§4, and which tests and bench
 cells verify §7.
 

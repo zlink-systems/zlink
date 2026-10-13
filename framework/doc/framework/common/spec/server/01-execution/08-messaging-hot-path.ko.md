@@ -103,7 +103,9 @@ binding submit까지 — 에서 허용되는 전환은 필수 소유 turn으로�
 caller → selector 소유자의 turn(E2), → operation 소유자의 turn(E3·E4). 두 소유자가 같으면 최대 1회이고,
 caller가 이미 그 lane 위에 있으면 그 진입은 세지 않는다. 완료 구간 — "binding의 완료 알림이 도착한
 시점"부터 "caller continuation의 첫 instruction"까지 — 에서 Framework가 만드는 전환은 §4.4의 배치에서
-생기는 최대 하나다. 소유 turn은 FIFO로 실행되므로 caller 하나가 100건을 연달아 제출하면 100건이 제출 순서대로
+생기는 최대 하나다. 이 상한은 Framework가 추가하는 실행 자원 이전을 센다. Binding이 정한 알림 게시와
+application이 고른 scheduler·coroutine dispatcher의 게시는 따로 기록하며, §4.4는 caller가 고른 실행
+context를 바꾸지 않는다. 실제 왕복의 전환과 지연에는 이 게시 비용도 들어간다. 소유 turn은 FIFO로 실행되므로 caller 하나가 100건을 연달아 제출하면 100건이 제출 순서대로
 binding에 모두 도달한다.
 
 Send의 완료 경계는 [Submit과 완료 §4](01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가
@@ -264,39 +266,49 @@ W1~W3에서 조회하는 일에는 이 비용 경계를 적용한다.
 DI 통합은 core runtime에 둘 수도 있고 별도 package·확장에 둘 수도 있다. 어디에 있든 handler·filter를
 준비하려고 실행되는 adapter 코드까지 이 비용 경계와 Framework API 「10」·「11」의 수명 규칙을 적용한다.
 
-내부 확인 조건 — 준비된 owner 집합의 전이(비어 있음 → 채워짐)와 worker 깨우기 횟수가 일치하고, W1~W4
-사이에 record별 dispatch task·supervisor 등록이 없다는 것은 trace로 확인하는 white-box 불변 조건이다.
+내부 확인 조건 — 준비된 owner 등록에 누락·중복이 없고 §4.4가 배치한 자원이 그 turn을 실행하는지, W1~W4
+사이에 record별 dispatch task·supervisor 등록이 없는지는 trace로 확인하는 white-box 불변 조건이다.
+Application 실행 자원의 깨우기와 수신 인계 자원의 깨우기는 따로 기록한다.
 
 ### 4.4 실행 자원 배치 — 수신 역할 인계
 
 E5의 caller continuation과 I4 뒤의 handler turn은 **새 execution turn**에서 실행한다. 새 turn은 다른
-thread를 뜻하지 않는다. 그 turn을 어느 실행 자원이 실행하는지는 다음 규칙 하나로 정한다.
+thread를 뜻하지 않는다([Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)).
+그 turn을 어느 실행 자원이 실행하는지는 다음 규칙 하나로 정한다.
 
-- **수신 역할을 맡지 않은 실행 자원**은 현재 처리 — 완료 확정이나 receive turn, 그 호출 stack, 잠금,
-  lane-current scope — 가 반환된 뒤 그 turn을 직접 실행할 수 있다. 수신 역할이란 ingress owner로서
-  I0~I4와 관리 작업(§4.2)을 진행하는 일이며, E5의 완료 알림을 받는 binding poller 구동도 여기에 든다.
+- **수신 역할을 맡지 않은 실행 자원**은 Submit과 완료 「11」의 새 turn 조건을 지켜 그 turn을 직접 실행할
+  수 있다. 수신 역할이란 ingress owner로서 I0~I4와 관리 작업(§4.2)을 진행하는 일이며, E5의 완료 알림을
+  받는 binding poller 구동도 여기에 든다.
 - **수신 역할을 맡은 실행 자원**은 그 역할을 다른 실행 자원에 넘긴 뒤에만 그 turn을 직접 실행한다.
-  넘겨받을 자원은 같은 runtime의 기존 실행 자원 중 지금 쉬고 있어 곧바로 다음 수신 회전을 시작할 수
-  있는 자원이다. 넘기는 쪽이 그 자원의 사용권과 수신 역할의 이전을 함께 확정한다. 넘겨받을 자원이
-  없으면 현재 자원이 수신 역할을 유지하고, turn은 owner queue와 completion dispatcher에 남아 다른 실행
-  자원(worker)이 실행한다.
+  인계는 기존 실행 자원 배치의 소유자가 지금 비어 있는 자원을 다음 수신 역할에 독점 배정하고, 그 자원이
+  application queue를 기다리지 않고 수신을 진행할 수 있을 때만 성공이다. Executor에 게시했다는 사실이나
+  waiter가 있다는 사실만으로 성공으로 판정하지 않는다. 이전 자원의 wait·drain과 receive turn이 끝난 뒤
+  넘겨받은 자원이 같은 poller의 다음 수신을 시작한다. Socket·poller·cursor·반환되지 않은 permit과
+  shutdown 수명은 실행 자원이 아니라 수신 역할에 속한다. 배정을 보장할 수 없으면 인계하지 않고, 현재
+  자원이 수신 역할을 유지하며, turn은 owner queue와 completion dispatcher에 남아 다른 실행 자원(worker)이
+  실행한다.
 
 이 규칙은 다음을 바꾸지 않는다.
 
 | 유지하는 계약 | 이 배치에서 지키는 방법 |
 |---|---|
 | 진행 영역 분리([Handler turn 「1」](02-handler-turn-and-execution-gate.ko.md#1-queue와-gate-분리-원칙)) | 수신 역할을 넘기지 못한 자원은 application 작업을 실행하지 않는다. 역할을 넘긴 뒤의 수신·completion·관리 진행은 넘겨받은 자원이 맡는다. |
-| 순서와 실행 권한 | 직접 실행하는 turn은 그 owner queue의 맨 앞 turn이며, W1의 gate 획득과 W3의 permit 반환을 그대로 거친다. Queue를 건너뛰거나 gate를 우회하지 않는다. |
+| 순서와 실행 권한 | 배치는 queue·gate·claim·permit의 기존 적용 범위와 순서를 바꾸지 않는다. Handler 실행은 §4.3, 완료 continuation의 실행 권한은 [Handler turn 「2」](02-handler-turn-and-execution-gate.ko.md#2-execution-gate--owner-처리-순서)·[「3」](02-handler-turn-and-execution-gate.ko.md#3-yield-시-gate와-claim), 완료 자리의 수명은 Submit과 완료 「11」을 따른다. 배치만으로 실행 권한을 얻거나 queue 순서를 건너뛰지 않으며, application 문맥에는 기존 진입 경로로 들어간다([Handler turn 「13」](02-handler-turn-and-execution-gate.ko.md#13-application과-infrastructure-진행-분리)). |
+| 완료 callback 사이의 독립 | 배치는 서로 무관한 완료 callback을 한 callback의 반환에 의존하는 drain으로 합치지 않는다. 언어 runtime이 소유한 worker 관리 정책과 application이 고른 실행 context는 유지한다. 수신·완료 확정·관리가 독립해 진행한다는 것이, 모든 application 실행 자원이 동기 대기로 묶인 상태에서 새 application callback의 실행까지 보장한다는 뜻은 아니다. |
 | 수신 회전 단위 | 인계는 수신 회전이 끝난 경계에서 한 번 판단한다. Record마다 인계하지 않으며 I2의 연속 claim과 회전당 관리 작업을 그대로 둔다. |
 | 실행 자원 수 | 인계를 위해 실행 자원을 새로 만들거나 상한을 늘리지 않는다. 넘겨받은 자원이 실제로 시작했는지 확인하는 대기를 두지 않는다. Socket마다 동시에 수신을 진행하는 자원은 하나다. |
 
-이 배치에서 Framework가 만드는 실행 자원 전환은 인계가 성공하면 0, 넘겨받을 자원이 없으면 기존
-worker·dispatcher로 가는 1이다. 넘겨받은 자원이 깨어나는 비용은 다음 수신 회전의 몫이며 이 turn의
-지연에 들어가지 않는다. 실행 자원이 하나뿐인 runtime(Node의 event loop)에는 넘겨받을 자원이 없으므로
-항상 기존 경로를 쓴다.
+전환 수는 §3·§4.1이 정한 해당 message 또는 완료 구간에서 센다. 그 turn이 같은 실행 자원에서 실행되면
+전환은 0이고, 다른 기존 자원에서 실행되면 그 이전 1을 센다. 인계 성공 횟수는 전환 수와 따로 기록한다.
+다음 수신 회전을 맡은 자원의 실행은 해당 message의 전환으로 세지 않지만, 인계와 통지에 드는 비용은
+측정에서 빼지 않는다. 실행 자원이 하나뿐인 runtime(Node의 event loop)에는 넘겨받을 자원이 없으므로
+수신 역할을 맡은 자원은 항상 기존 경로를 쓴다.
 
-내부 확인 조건 — 인계 성공·실패 횟수, socket별 동시 수신 자원 수(최대 1), 인계 전후 실행 자원 high-water가
-기존 상한 이하라는 것은 trace로 확인하는 white-box 불변 조건이다.
+내부 확인 조건 — handler나 continuation을 붙잡아 둔 상태에서도 넘겨받은 자원의 수신·completion·관리
+처리가 그 해제 전에 진행하는지, 배정된 자원이 application 작업에 다시 배정되지 않는지, socket별 동시
+수신 자원 수가 최대 1인지, 인계 성공·실패 횟수, 인계 전후 실행 자원 high-water가 기존 상한 이하인지는
+trace로 확인하는 white-box 불변 조건이다. 실행 자원의 종류(task, virtual thread, carrier, OS thread)별
+high-water의 대상과 상한은 언어별 문서가 정한다.
 
 ## 5. API별 대상 선택과 reply 경로
 
@@ -339,7 +351,7 @@ claim, §4.4의 배치, W1~W5의 묶음 처리라는 관찰 결과는 같으며,
 | Java | virtual-thread pump | application lane worker | 공유 completion dispatcher의 platform worker thread |
 | Node | event loop | 같은 event loop의 microtask | 같은 event loop |
 
-위 표는 자원의 종류만 적는다. 각 언어 문서(`spec/server/languages/`)가 실제 타입 이름과 현재 구현이
+위 표는 자원의 종류만 적는다. 어느 자원이 지금 수신 역할을 맡는지는 §4.4의 인계가 정한다. 각 언어 문서(`spec/server/languages/`)가 실제 타입 이름과 현재 구현이
 §3~§4의 어느 단계를 어떻게 실현하는지, §7의 검증이 어느 테스트와 벤치 셀에서 확인되는지 기록한다.
 
 ## 7. 검증 요구
