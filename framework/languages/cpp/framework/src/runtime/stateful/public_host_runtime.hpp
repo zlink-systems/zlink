@@ -933,7 +933,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void complete_operation (const pending_operation_t &operation,
                              operation_kind_t kind,
                              foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload);
+                             zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
     std::size_t dispatch_application_claim (
       mesh::service_mailbox_claim_t claim,

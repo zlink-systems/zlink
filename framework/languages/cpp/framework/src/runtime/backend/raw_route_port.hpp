@@ -87,7 +87,7 @@ struct raw_request_failure_t
 struct raw_request_completion_t
 {
     zlink::request_result_t terminal = zlink::request_result_t::internal_error;
-    raw_message_t parts;
+    std::vector<zlink::message_t> parts;
     std::optional<raw_request_failure_t> failure;
 };
 

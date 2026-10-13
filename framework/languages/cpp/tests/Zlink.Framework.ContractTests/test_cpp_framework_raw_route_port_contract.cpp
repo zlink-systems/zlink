@@ -120,12 +120,17 @@ class reply_probe_t final
         ++consumed;
         if (_error != 0)
             throw zlink::request_error_t (zlink::request_result_t::timed_out, _error);
-        return {};
+        std::vector<zlink::message_t> parts;
+        parts.push_back (zlink::message_t::from (std::vector<std::uint8_t> (4096, 0x5a)));
+        storage = parts.front ().data ();
+        return parts;
     }
     void detach () noexcept override {}
     void abandon (std::coroutine_handle<>) noexcept override {}
 
     int consumed = 0;
+
+    const void *storage = nullptr;
 
   private:
     int _error;
@@ -156,6 +161,9 @@ void verify_request_submission_stages ()
         if (expected_error == 0) {
             assert (observed.terminal == zlink::request_result_t::ok);
             assert (!observed.failure);
+            assert (observed.parts.size () == 1);
+            assert (static_cast<const void *> (observed.parts.front ().data ())
+                    == reply_probe->storage);
         } else {
             // Submit section 5 also applies when a retained operation's next
             // submit fails without a wait token. A reply timeout stays a deadline.

@@ -72,7 +72,7 @@ struct operation_completion_item_t
     operation_registry_t::callback_t callback;
     std::shared_ptr<operation_registry_drain_state_t> drain_state;
     operation_terminal_t terminal = operation_terminal_t::transport_failed;
-    std::vector<std::uint8_t> payload;
+    zlink::message_t payload;
     std::unique_ptr<operation_completion_item_t> next;
     mesh_request_metric_t request_metric;
 };
@@ -81,7 +81,7 @@ struct operation_completion_chain_t
 {
     void append (std::unique_ptr<operation_completion_item_t> completion,
                  operation_terminal_t terminal,
-                 std::vector<std::uint8_t> payload = {},
+                 zlink::message_t payload = {},
                  std::optional<operation_terminal_t> request_terminal = {}) noexcept
     {
         completion->finish_metrics (request_terminal.value_or (terminal));
@@ -145,7 +145,7 @@ class operation_completion_dispatcher_t
 
     void post (std::unique_ptr<operation_completion_item_t> completion,
                operation_terminal_t terminal,
-               std::vector<std::uint8_t> payload,
+               zlink::message_t payload,
                std::optional<operation_terminal_t> request_terminal = {}) noexcept
     {
         operation_completion_chain_t completions;
@@ -250,7 +250,7 @@ namespace
 void notify (const std::shared_ptr<operation_completion_dispatcher_t> &dispatcher,
              std::unique_ptr<operation_completion_item_t> completion,
              operation_terminal_t terminal,
-             std::vector<std::uint8_t> payload,
+             zlink::message_t payload,
              std::optional<operation_terminal_t> request_terminal = {}) noexcept
 {
     dispatcher->post (std::move (completion), terminal, std::move (payload), request_terminal);
@@ -304,13 +304,13 @@ bool operation_registry_t::take (const call_id_t &id,
     return true;
 }
 
-bool operation_registry_t::complete (const call_id_t &id, std::vector<std::uint8_t> payload)
+bool operation_registry_t::complete (const call_id_t &id, zlink::message_t payload)
 {
     return complete (id, std::move (payload), {});
 }
 
 bool operation_registry_t::complete (const call_id_t &id,
-                                     std::vector<std::uint8_t> payload,
+                                     zlink::message_t payload,
                                      before_dispatch_t before_dispatch,
                                      operation_terminal_t request_terminal)
 {
@@ -323,7 +323,7 @@ bool operation_registry_t::complete (const call_id_t &id,
             before_dispatch ();
     }
     catch (...) {
-        payload.clear ();
+        payload.close ();
         notify (_completion_dispatcher, std::move (completion),
                 operation_terminal_t::transport_failed, {});
         return true;
@@ -345,14 +345,14 @@ bool operation_registry_t::cancel (const call_id_t &id)
 
 bool operation_registry_t::fail (const call_id_t &id,
                                  operation_terminal_t terminal,
-                                 std::vector<std::uint8_t> payload)
+                                 zlink::message_t payload)
 {
     return fail (id, terminal, std::move (payload), {});
 }
 
 bool operation_registry_t::fail (const call_id_t &id,
                                  operation_terminal_t terminal,
-                                 std::vector<std::uint8_t> payload,
+                                 zlink::message_t payload,
                                  before_dispatch_t before_dispatch,
                                  std::optional<operation_terminal_t> request_terminal)
 {
@@ -370,7 +370,7 @@ bool operation_registry_t::fail (const call_id_t &id,
     catch (...) {
         terminal = operation_terminal_t::transport_failed;
         request_terminal.reset ();
-        payload.clear ();
+        payload.close ();
     }
     notify (_completion_dispatcher, std::move (completion), terminal, std::move (payload),
             request_terminal);

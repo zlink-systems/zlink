@@ -212,7 +212,8 @@ void verify_bound_session_bind_retries_until_route_is_admitted ()
       target_descriptor.node_routing_id,
       bound_session_bind_request (target_descriptor, "delayed-bind-actor"), 2s,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) mutable {
+                             zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       })));
     assert (completion.wait_for (0ms) == std::future_status::timeout);
@@ -244,7 +245,8 @@ void verify_bound_session_bind_exposes_only_accepted_attempt ()
     assert (await_task (source.request_bound_session_bind (
       remote.node_routing_id, bound_session_bind_request (remote, "stage-bind-actor"), 2s,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) {
+                             zlink::message_t native_payload) {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       },
       accepted)));
@@ -277,7 +279,8 @@ bound_session_request (mesh::raw_mesh_node_owner_t &source,
     request_task_t<bound_session_completion_t> result (reply->task (), admitted);
     assert (await_task (source.request_bound_session_bind (
       target.node_routing_id, bound_session_bind_request (target, "durable-bind-actor"), timeout,
-      [reply] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) {
+      [reply] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+          auto payload = native_payload.to_bytes ();
           if (terminal == foundation::operation_terminal_t::completed) {
               reply->complete (
                 result_t<bound_session_completion_t>::success ({terminal, std::move (payload)}));
@@ -391,7 +394,8 @@ void verify_bound_session_bind_permanent_absence_is_bounded ()
       target_descriptor.node_routing_id,
       bound_session_bind_request (target_descriptor, "missing-bind-actor"), 50ms,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) mutable {
+                             zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       })));
     assert (completion.wait_for (500ms) == std::future_status::ready);
@@ -422,7 +426,8 @@ void verify_bound_session_bind_reply_completes_registered_operation ()
       target_descriptor.node_routing_id,
       bound_session_bind_request (target_descriptor, "reply-bind-actor"), 2s,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) mutable {
+                             zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       })));
     complete_bound_session_bind (source, target, completion, "reply-bind-actor");
@@ -451,7 +456,8 @@ void verify_actor_create_retries_until_route_is_admitted ()
     auto submitted = source.request_actor_create (
       target_descriptor.node_routing_id, std::move (request), 2s,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) mutable {
+                             zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       });
     assert (await_task (std::move (submitted)));
@@ -595,7 +601,8 @@ void verify_actor_create_retry_timeout_is_unavailable ()
     auto submitted = source.request_actor_create (
       target_descriptor.node_routing_id, std::move (request), 50ms,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) mutable {
+                             zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       });
     assert (std::chrono::steady_clock::now () - submitted_at < 20ms);
@@ -630,7 +637,7 @@ void verify_actor_create_from_dispatch_thread_does_not_block ()
     auto submitted = source.request_actor_create (
       target_descriptor.node_routing_id, std::move (request), 500ms,
       [&callback_called, &callback_terminal] (foundation::operation_terminal_t terminal,
-                                              std::vector<std::uint8_t>) {
+                                              zlink::message_t) {
           callback_terminal.store (terminal, std::memory_order_release);
           callback_called.store (true, std::memory_order_release);
       });
@@ -2382,7 +2389,8 @@ void verify_raw_owner_node_send_and_liveness (
       first.request_to_node (second_descriptor.node_routing_id,
                              {"RequestProbe", "application/json", bytes ("request")}, 2s,
                              [&request_promise] (foundation::operation_terminal_t terminal,
-                                                 std::vector<std::uint8_t> payload) mutable {
+                                                 zlink::message_t native_payload) mutable {
+                                 auto payload = native_payload.to_bytes ();
                                  request_promise.set_value ({terminal, std::move (payload)});
                              })));
     mesh::raw_mesh_pump_result_t request_pump = mesh::raw_mesh_pump_result_t::no_data;
@@ -2441,7 +2449,8 @@ void verify_raw_owner_node_send_and_liveness (
     assert (await_task (first.request_actor_create (
       second_descriptor.node_routing_id, actor_create, 2s,
       [&actor_create_promise] (foundation::operation_terminal_t terminal,
-                               std::vector<std::uint8_t> payload) mutable {
+                               zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           actor_create_promise.set_value ({terminal, std::move (payload)});
       })));
     mesh::raw_mesh_pump_result_t actor_create_pump = mesh::raw_mesh_pump_result_t::no_data;
@@ -2490,7 +2499,8 @@ void verify_raw_owner_node_send_and_liveness (
         assert (await_task (
           first.request_actor_create (second_descriptor.node_routing_id, burst_request, 2s,
                                       [promise] (foundation::operation_terminal_t terminal,
-                                                 std::vector<std::uint8_t> payload) mutable {
+                                                 zlink::message_t native_payload) mutable {
+                                          auto payload = native_payload.to_bytes ();
                                           promise->set_value ({terminal, std::move (payload)});
                                       })));
     }
@@ -2675,7 +2685,8 @@ void verify_raw_owner_node_send_and_liveness (
         requests.push_back (
           std::make_shared<zlink::framework::task_t<bool>> (first.request_to_node (
             second_descriptor.node_routing_id, request_payload, 30s,
-            [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) {
+            [&] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+                auto payload = native_payload.to_bytes ();
                 assert (terminal == foundation::operation_terminal_t::completed);
                 assert (protocol::decode_application_payload (payload)
                         == expected_concurrent_reply);

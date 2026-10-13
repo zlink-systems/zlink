@@ -38,7 +38,7 @@ class service_wire_error_t : public std::runtime_error
 std::vector<std::uint8_t>
 pack_infrastructure_reply (const std::vector<std::vector<std::uint8_t>> &parts);
 std::vector<std::vector<std::uint8_t>>
-unpack_infrastructure_reply (const std::vector<std::uint8_t> &packed);
+unpack_infrastructure_reply (std::span<const std::uint8_t> packed);
 
 struct liveness_record_t
 {
@@ -612,6 +612,8 @@ struct session_relocation_route_t
 
 struct reply_header_t
 {
+    static constexpr std::size_t encoded_size =
+      prefix_size + sizeof (std::uint64_t) + 2 * sizeof (std::uint32_t);
     std::uint64_t correlation;
     std::uint32_t terminal_result;
     std::uint32_t failure_code;

@@ -1155,6 +1155,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_operation_registry PRIVATE
     ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/completion-terminal-v1.json")
   target_link_libraries(test_cpp_framework_operation_registry PRIVATE
+    zlink::cpp
     opentelemetry-cpp::metrics
     Threads::Threads
     nlohmann_json::nlohmann_json)

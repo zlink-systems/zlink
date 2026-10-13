@@ -186,7 +186,7 @@ inline binding_completion_observer_t observe_request_completion (
         if (admission_error)
             std::rethrow_exception (admission_error);
         source->complete (result_t<raw_request_completion_t>::success (
-          raw_request_completion_t{zlink::request_result_t::ok, copy_binding_parts (reply)}));
+          raw_request_completion_t{zlink::request_result_t::ok, std::move (reply)}));
     }
     catch (const std::exception &error) {
         source->complete (raw_request_failure_result (error));
@@ -204,19 +204,24 @@ copy_binding_messages (const std::vector<zlink::message_t> &parts)
     return result;
 }
 
+inline zlink::message_t materialize_binding_part (raw_bytes_t bytes)
+{
+    auto storage = std::make_unique<raw_bytes_t> (std::move (bytes));
+    auto message = zlink::advanced::external_message_t::from (
+      std::span<std::uint8_t> (*storage),
+      [] (void *, void *hint) { delete static_cast<raw_bytes_t *> (hint); }, storage.get ());
+    if (!message.valid ())
+        throw std::bad_alloc ();
+    storage.release ();
+    return message;
+}
+
 inline std::vector<zlink::message_t> materialize_binding_parts (raw_message_t parts)
 {
     std::vector<zlink::message_t> result;
     result.reserve (parts.size ());
     for (auto &part : parts) {
-        auto storage = std::make_unique<raw_bytes_t> (std::move (part));
-        auto message = zlink::advanced::external_message_t::from (
-          std::span<std::uint8_t> (*storage),
-          [] (void *, void *hint) { delete static_cast<raw_bytes_t *> (hint); }, storage.get ());
-        if (!message.valid ())
-            throw std::bad_alloc ();
-        storage.release ();
-        result.push_back (std::move (message));
+        result.push_back (materialize_binding_part (std::move (part)));
     }
     return result;
 }
