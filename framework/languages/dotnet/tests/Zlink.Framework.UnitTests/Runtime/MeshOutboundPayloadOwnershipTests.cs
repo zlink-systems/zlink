@@ -7,12 +7,30 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Messaging;
 using BytesValue = Google.Protobuf.WellKnownTypes.BytesValue;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class MeshOutboundPayloadOwnershipTests
 {
+    [Fact]
+    public void OneWaySubmissionStateDoesNotAllocateAnOwnerObject()
+    {
+        for (var index = 0; index < 32; index++)
+        {
+            var warm = new ZLinkOneWayCallGate("MeshNode send");
+            warm.Claim();
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 1024; index++)
+        {
+            var gate = new ZLinkOneWayCallGate("MeshNode send");
+            gate.Claim();
+        }
+        Assert.Equal(0L, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
     private const string Mesh = "outbound-ownership";
     private const string Channel = "worker";
 

@@ -4,9 +4,9 @@ namespace Zlink.Framework.Runtime.Messaging;
 
 // Owns the metadata half of every mesh-plane call builder (05-route-mesh §6):
 // last-write-wins accumulation and canonical-frame encoding with the 1024-byte
-// cap. Call classes hold one instance so the merge/encode knowledge lives here
-// rather than in ten builders.
-internal sealed class ZLinkCallMetadata
+// cap. Call builders inherit this storage, so metadata stays with its caller
+// without allocating a separate owner for every empty-metadata operation.
+internal class ZLinkCallMetadata
 {
     private Dictionary<string, string>? _values;
 
