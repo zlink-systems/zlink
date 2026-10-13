@@ -714,7 +714,7 @@ static async ValueTask PublishAsync<TEvent>(
 
 ## 5. Subscription Registration and Message Delivery
 
-### 5.1 Subscription Registration Values and Startup Checks
+### 5.1 Subscription Registration Values and When They Are Checked
 
 A Spot subscription is registered with the following values.
 
@@ -722,14 +722,17 @@ A Spot subscription is registered with the following values.
 - `topic`: the value selecting a Spot within that Channel
 - packet name: the value selecting a typed handler
 
-A missing or empty `topic` prevents the host from starting, whichever registration path
-(explicit registration or package scan) registered the handler.
+**The checks below run when a registration is fixed, and a failed registration fails the operation of
+that moment.** A registration decided by host configuration, such as explicit registration or package
+scan, fails host startup. A registration decided in a Spot's `Configure()` fails that Spot's activation
+before Ready is published. `Configure()` runs only with the real Context bound to its identity
+([Spot Model "7"](01-spot-model.en.md#7-differences-visible-in-net)); no Spot is created and no
+`Configure()` is called in advance for host startup checks.
 
-If a registered Spot doesn't participate in that ChannelName, the host can't
-start.
-
-Registering a subscription with all the following values the same, twice on the
-same Spot, also prevents the host from starting.
+- A missing or empty `topic` fails the registration.
+- A registered Spot that does not participate in that ChannelName fails the registration.
+- Registering a subscription with all the following values the same, twice on the same Spot, fails the
+  registration.
 
 - `ChannelName`
 - `topic`
@@ -752,7 +755,7 @@ public void Configure()
 `ProjectionUpdatedHandler` is the application-implemented subscription handler for
 that message type. Repeating a registration on the same Spot with the same
 ChannelName, topic, [message kind](../00-foundation/02-glossary.en.md#message-kind), and packet
-name prevents the host from starting.
+name fails that Spot's activation.
 
 ### 5.2 Control Work That Changes Spot State
 

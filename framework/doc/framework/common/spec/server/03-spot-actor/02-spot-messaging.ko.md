@@ -654,7 +654,7 @@ static async ValueTask PublishAsync<TEvent>(
 
 ## 5. Subscription 등록과 message 전달
 
-### 5.1 Subscription 등록 값과 시작 검사
+### 5.1 Subscription 등록 값과 검사 시점
 
 Spot subscription은 다음 값으로 등록한다.
 
@@ -662,11 +662,15 @@ Spot subscription은 다음 값으로 등록한다.
 - `topic`: 해당 Channel 안에서 Spot을 선택하는 값
 - packet name: typed handler를 선택하는 값
 
-topic이 없거나 빈 문자열이면 host를 시작할 수 없다. 등록 경로(명시 등록, 패키지 스캔)와 무관하다.
+**아래 검사는 등록을 확정하는 시점에 하며, 실패한 등록은 그 시점의 작업을 실패시킨다.** 명시 등록과 패키지
+스캔처럼 host 구성에서 정한 등록은 host 시작을 실패시킨다. Spot의 `Configure()`에서 정한 등록은 그 Spot의
+activation을 Ready 공개 전에 실패시킨다. `Configure()`는 identity가 결합된 실제 Context로만 실행하며
+([Spot 모델 「7」](01-spot-model.ko.md#7-net에서-보이는-차이)), host 시작 검사를 위해 Spot을 미리 만들거나
+`Configure()`를 호출하지 않는다.
 
-등록한 Spot이 해당 ChannelName에 참여하지 않으면 host를 시작할 수 없다.
-
-같은 Spot에 다음 값이 모두 같은 subscription을 두 번 등록해도 host를 시작할 수 없다.
+- topic이 없거나 빈 문자열이면 등록은 실패한다.
+- 등록한 Spot이 해당 ChannelName에 참여하지 않으면 등록은 실패한다.
+- 같은 Spot에 다음 값이 모두 같은 subscription을 두 번 등록하면 등록은 실패한다.
 
 - `ChannelName`
 - `topic`
@@ -689,7 +693,7 @@ public void Configure()
 `ProjectionUpdatedHandler`는 application이 구현한 해당 message type의 subscription
 handler다.
 같은 Spot에서 ChannelName, topic, [message kind](../00-foundation/02-glossary.ko.md#message-kind)와 packet name이 모두 같은 등록을
-반복하면 host를 시작할 수 없다.
+반복하면 그 Spot의 activation이 실패한다.
 
 ### 5.2 Spot 상태를 바꾸는 control 작업
 
