@@ -427,8 +427,8 @@ deadlock. Timer cancellation and payload cleanup also occur outside the lock.
 Releasing the lock and immediately invoking the callback on the same call stack is still
 insufficient. It lets application code re-enter the runtime before the current transport
 response or timeout handling has returned. The completion callback is placed on a
-process-shared completion dispatcher and runs on a new execution turn after the current
-handling returns.
+process-shared completion dispatcher and runs under the new-execution-turn conditions defined
+below.
 
 The order is as follows.
 

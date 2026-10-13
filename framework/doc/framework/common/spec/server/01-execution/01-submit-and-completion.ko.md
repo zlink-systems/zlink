@@ -395,7 +395,7 @@ Timer 취소와 payload 정리도 그 바깥에서 한다.
 잠금을 놓은 직후 같은 호출 stack에서 callback을 바로 실행하는 것만으로는 충분하지
 않다. 그렇게 하면 transport의 응답 처리나 timeout 처리가 끝나기 전에 application
 code가 runtime에 다시 진입할 수 있다. 완료 callback은 process가 공유하는 completion
-dispatcher에 넣고, 현재 처리가 반환된 뒤 새 execution turn에서 실행한다.
+dispatcher에 넣고, 아래에서 정한 새 execution turn 조건에 따라 실행한다.
 
 순서는 이렇다.
 

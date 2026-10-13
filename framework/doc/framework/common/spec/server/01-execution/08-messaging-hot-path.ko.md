@@ -95,10 +95,12 @@ sequenceDiagram
 | E2 resolve | 변경 시점에 미리 준비된 후보 목록과 선택 순서에서 target 하나를 고른다. 후보 교체와 선택은 selector 소유자의 state lane에서 하나의 순서로 확정한다 — 선택 상태(후보 목록·누적값·cursor)의 소유, 그 순서를 만드는 방법, 주기 탐색 한도에 닿았을 때 선택 절차를 그대로 수행하는 대체 경로는 [Channel messaging 「후보 목록과 선택 순서는 변경 시점에 미리 준비한다」](../02-channel-transport/02-channel-messaging.ko.md#후보-목록과-선택-순서는-변경-시점에-미리-준비한다)가 소유한다. 준비된 선택 순서의 정상 경로는 target 조회와 cursor 진행만 수행하며, 그를 위해 topology·liveness·port 소유자의 lane에 **추가** turn을 요청해 결과를 기다리지 않는다. 이 문서가 요구하는 것은 선택이 selector 소유자의 turn 하나 안에서 상수 시간에 끝난다는 것이다 — caller가 그 lane 위에 있지 않으면 그 turn으로의 전환 1회가 정상 경로에 포함된다. | selector 소유자의 turn | 요청마다 peer 목록을 훑거나 필터링·정렬을 다시 하지 않고, 다른 소유자의 lane을 기다리지 않는다. |
 | E3 register | terminal 완료가 나중에 도착할 수 있는 모든 operation — request와 send 둘 다 — 에 대해 pending entry와 completion dispatcher 자리를 등록한다. request는 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)대로 `OperationId`·`ReplyRouteId`와 reply route도 함께 등록한다. 등록은 자리가 없어 실패하지 않으며([Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)), 등록과 close를 같은 operation 소유자가 직렬화한다. Terminal 권한의 경쟁 규칙은 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)의 원자적 꺼내기가 소유하며, 이 문서는 그 꺼내기가 완료 알림을 받은 자리에서 이뤄지고 소유 turn으로의 추가 왕복을 만들지 않는다는 것만 정한다(E5). 등록은 transport submit 전에 완료하고([상태 소유와 state lane 「반환 전 완료 보장」](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)), 등록한 자리는 callback 반환까지 유지한다. 필수 소유 turn 외에 별도 등록 queue나 추가 lane 왕복을 만들지 않는다. pending entry와 등록한 dispatcher 자리의 상태 분류와 수명은 [Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)과 [상태 소유와 state lane 「4」](06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)이 정한다. 이 문서가 요구하는 것은 등록이 operation 소유자의 turn 하나 안에서 상수 시간에 끝난다는 것이다. | operation 소유자의 turn | 등록보다 완료가 먼저 처리되지 않으며, 별도 timer 객체를 요청마다 만들지 않는다 — deadline은 entry의 값이고 만료 검사는 §4.2의 관리 작업이나 timer wheel이 한다. |
 | E4 submit | binding의 비동기 request·send operation을 **한 번** 시작하고 결과 객체(`result`와 `admitted`, request는 `reply`)를 돌려받는다. Framework는 `result`로 즉시 판정하고 `result == BACKPRESSURED`일 때만 `admitted`를 소비한다(§15). E3의 등록을 확정한 그 turn 안에서 이어서 시작하며, caller는 제출의 반환을 관찰하기 전에 등록이 끝나 있음을 믿어도 된다. Framework는 자기 send queue를 두지 않는다. | E3와 같은 turn | operation이 시작된 뒤의 HWM 대기와 재시도는 Core·binding이 소유하며([Submit과 완료 「5」](01-submit-and-completion.ko.md#5-backpressure와-오류-분류)), Framework는 두 번째 operation을 만들지 않는다. 결과 객체 할당 1회가 추가될 뿐 실행 자원 전환(hop) 수는 바뀌지 않는다. |
-| E5 complete | binding의 완료 알림(reply·error·timeout·local admission)을 받은 자리에서 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)의 원자적 꺼내기로 terminal 권한을 한 번 확정하고, 결과를 E3에서 등록한 dispatcher 자리에 전달한다. caller continuation은 현재 완료 처리와 lane-current scope가 끝난 뒤 **새 execution turn**에서 실행한다([Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)). 그 turn을 실행할 자원은 §4.4가 정한다. | binding 완료 알림 자원 → §4.4가 정한 실행 자원 | Framework가 만드는 실행 자원 전환은 **최대 하나**다(§4.4). 완료 알림과 dispatcher 사이에 host mailbox·dispatch thread를 추가로 거치지 않는다. |
+| E5 complete | binding의 완료 알림(reply·error·timeout·local admission)을 받은 자리에서 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)의 원자적 꺼내기로 terminal 권한을 한 번 확정하고, 결과를 E3에서 등록한 dispatcher 자리에 전달한다. caller continuation은 [Submit과 완료 「11」](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)의 **새 execution turn** 조건에 따라 실행하며, 그 turn의 실행 자원은 §4.4가 정한다. | binding 완료 알림 자원 → §4.4가 정한 실행 자원 | Framework가 만드는 실행 자원 전환은 **최대 하나**다(§4.4). 완료 알림과 dispatcher 사이에 host mailbox·dispatch thread를 추가로 거치지 않는다. |
 
-**Source 경로의 실행 자원 전환은 두 구간에서 따로 센다.** 실행 자원 전환이란 message나 그 완료가 queue에
-들어갔다가 다른 thread·task·event loop 회전에서 꺼내지는 지점이다. 제출 구간 — caller의 호출부터 E4의
+**Source 경로의 실행 자원 전환은 두 구간에서 따로 센다.** 실행 자원 전환이란 message나 그 완료의 실행을
+맡는 실행 자원이 바뀌는 지점이다. 같은 실행 자원의 다음 execution turn에서 실행한다는 사실만으로는 전환으로
+세지 않는다. Task·microtask 게시와 깨우기는 실행 자원의 이전과 따로 기록하며, 무엇을 실행 자원 하나로
+식별하는지는 언어별 계측이 명시한다. 제출 구간 — caller의 호출부터 E4의
 binding submit까지 — 에서 허용되는 전환은 필수 소유 turn으로의 진입뿐이며 정상 경로에서 최대 2회다:
 caller → selector 소유자의 turn(E2), → operation 소유자의 turn(E3·E4). 두 소유자가 같으면 최대 1회이고,
 caller가 이미 그 lane 위에 있으면 그 진입은 세지 않는다. 완료 구간 — "binding의 완료 알림이 도착한
@@ -298,8 +300,8 @@ thread를 뜻하지 않는다([Submit과 완료 「11」](01-submit-and-completi
 | 수신 회전 단위 | 인계는 수신 회전이 끝난 경계에서 한 번 판단한다. Record마다 인계하지 않으며 I2의 연속 claim과 회전당 관리 작업을 그대로 둔다. |
 | 실행 자원 수 | 인계를 위해 실행 자원을 새로 만들거나 상한을 늘리지 않는다. 넘겨받은 자원이 실제로 시작했는지 확인하는 대기를 두지 않는다. Socket마다 동시에 수신을 진행하는 자원은 하나다. |
 
-전환 수는 §3·§4.1이 정한 해당 message 또는 완료 구간에서 센다. 그 turn이 같은 실행 자원에서 실행되면
-전환은 0이고, 다른 기존 자원에서 실행되면 그 이전 1을 센다. 인계 성공 횟수는 전환 수와 따로 기록한다.
+전환 수와 같은 자원의 판별은 §3의 정의를 따르고, 측정 구간은 §3·§4.1을 따른다. 인계 성공 횟수는 전환
+수와 따로 기록한다.
 다음 수신 회전을 맡은 자원의 실행은 해당 message의 전환으로 세지 않지만, 인계와 통지에 드는 비용은
 측정에서 빼지 않는다. 실행 자원이 하나뿐인 runtime(Node의 event loop)에는 넘겨받을 자원이 없으므로
 수신 역할을 맡은 자원은 항상 기존 경로를 쓴다.
