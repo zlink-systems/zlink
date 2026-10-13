@@ -26,7 +26,11 @@ import {
 import type { ZLinkRuntimeTaskErrorSink } from '../execution';
 import { ZLinkDispatchErrorReporter } from './dispatch-error-reporter';
 import { invokeZLinkHandlerFilters } from '../handlers';
-import { runInHandlerInstanceScope } from '../handlers/handler-instance-scope';
+import {
+  runInHandlerInstanceScope,
+  prepareHandlerInstance,
+  handlerInstanceCleanup
+} from '../handlers/handler-instance-scope';
 import { handlerFilterScope } from './handler-filter-scope';
 import type {
   ZLinkChannelRequestHandler,
@@ -109,6 +113,17 @@ export class ZLinkChannelDispatchServices {
   }
 
   channelRequestHandler(handlerType: Type): ZLinkChannelRequestHandler {
+    const activate =
+      this.registration.filterTypes.length === 0
+        ? prepareHandlerInstance(
+            this.providerResolver,
+            handlerType as Type<ZLinkChannelRequestHandler>
+          )
+        : undefined;
+    if (activate !== undefined)
+      return {
+        handle: (payload, context) => this.invokeScopeFreeHandler(activate, payload, context)
+      };
     return {
       handle: (payload, context) =>
         this.withHandlerScope(context, async (scope) => {
@@ -119,6 +134,17 @@ export class ZLinkChannelDispatchServices {
   }
 
   channelSendHandler(handlerType: Type): ZLinkChannelSendHandler {
+    const activate =
+      this.registration.filterTypes.length === 0
+        ? prepareHandlerInstance(
+            this.providerResolver,
+            handlerType as Type<ZLinkChannelSendHandler>
+          )
+        : undefined;
+    if (activate !== undefined)
+      return {
+        handle: (payload, context) => this.invokeScopeFreeHandler(activate, payload, context)
+      };
     return {
       handle: (payload, context) =>
         this.withHandlerScope(context, async (scope) => {
@@ -129,6 +155,17 @@ export class ZLinkChannelDispatchServices {
   }
 
   routeRequestHandler(handlerType: Type): ZLinkRouteRuntimeRequestHandler {
+    const activate =
+      this.registration.filterTypes.length === 0
+        ? prepareHandlerInstance(
+            this.providerResolver,
+            handlerType as Type<ZLinkRouteRuntimeRequestHandler>
+          )
+        : undefined;
+    if (activate !== undefined)
+      return {
+        handle: (payload, context) => this.invokeScopeFreeHandler(activate, payload, context)
+      };
     return {
       handle: (payload, context) =>
         this.withHandlerScope(context, async (scope) => {
@@ -139,6 +176,17 @@ export class ZLinkChannelDispatchServices {
   }
 
   routeSendHandler(handlerType: Type): ZLinkRouteRuntimeSendHandler {
+    const activate =
+      this.registration.filterTypes.length === 0
+        ? prepareHandlerInstance(
+            this.providerResolver,
+            handlerType as Type<ZLinkRouteRuntimeSendHandler>
+          )
+        : undefined;
+    if (activate !== undefined)
+      return {
+        handle: (payload, context) => this.invokeScopeFreeHandler(activate, payload, context)
+      };
     return {
       handle: (payload, context) =>
         this.withHandlerScope(context, async (scope) => {
@@ -146,6 +194,26 @@ export class ZLinkChannelDispatchServices {
           await handler.handle(payload, context);
         })
     };
+  }
+
+  private invokeScopeFreeHandler<TContext extends ZLinkMessageContext, TResult>(
+    activate: () => { handle(payload: unknown, context: TContext): TResult | Promise<TResult> },
+    payload: unknown,
+    context: TContext
+  ): TResult | Promise<TResult> {
+    const handler = activate();
+    const cleanup = handlerInstanceCleanup(handler);
+    if (cleanup === undefined) return handler.handle(payload, context);
+    let result: TResult | Promise<TResult>;
+    try {
+      result = handler.handle(payload, context);
+    } catch (error) {
+      const disposed = cleanup.call(handler);
+      return Promise.resolve(disposed).then(() => {
+        throw error;
+      });
+    }
+    return Promise.resolve(result).finally(() => cleanup.call(handler));
   }
 
   private async invokeHandlerFilters(

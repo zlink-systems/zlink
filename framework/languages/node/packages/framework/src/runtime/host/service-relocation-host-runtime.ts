@@ -184,6 +184,7 @@ import {
 } from './relocation-state-adapter';
 import {
   decodeServiceRelocationControlRequest,
+  serviceRelocationControlCommand,
   decodeServiceRelocationControlResponse,
   encodeServiceRelocationControlRequest,
   encodeServiceRelocationControlResponse,
@@ -806,14 +807,36 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     throw failure;
   }
 
-  async tryHandleControl(
+  tryHandleControl(
     meshName: string,
     record: ReceiveRecord,
     signal?: AbortSignal
-  ): Promise<boolean> {
+  ): boolean | Promise<boolean> {
     if (record.parts.length === 0) return false;
     const payload = record.parts[0]!.data();
-    if (isServiceWireCommand(payload, M6bServiceWireCommand.replyRelay)) {
+    const command = serviceRelocationControlCommand(payload);
+    if (command === undefined) {
+      if (record.kind !== ReceiveKind.NodeSend) return false;
+      const sourceLeave = decodeRemoteActorSourceLeaveTerminal(payload);
+      if (sourceLeave === undefined) return false;
+      if (
+        record.parts.length > 1 &&
+        decodePrepareSideband(record.parts.slice(1).map((part) => part.data())) === undefined
+      )
+        return false;
+      return this.acceptActorJoinSourceLeave(sourceLeave);
+    }
+    return this.handleControl(meshName, record, payload, command, signal);
+  }
+
+  private async handleControl(
+    meshName: string,
+    record: ReceiveRecord,
+    payload: Buffer,
+    command: number,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    if (command === M6bServiceWireCommand.replyRelay) {
       await this.handleReplyRelay(
         meshName,
         decodeMaintenanceReplyRelay(record.parts.map((part) => part.data())),
@@ -833,14 +856,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         return this.acceptActorJoinSourceLeave(sourceLeave);
       }
     }
-    if (isServiceWireCommand(payload, M6bServiceWireCommand.sessionRelocationSealed)) {
+    if (command === M6bServiceWireCommand.sessionRelocationSealed) {
       this.acceptSessionRelocationResponse(
         decodeSessionRelocationSealed(payload),
         record.sourceNodeRid
       );
       return true;
     }
-    if (isServiceWireCommand(payload, M6bServiceWireCommand.sessionRelocationSeal)) {
+    if (command === M6bServiceWireCommand.sessionRelocationSeal) {
       const request = decodeSessionRelocationSeal(payload);
       const response = await this.handleSessionRelocationSeal(
         meshName,
@@ -855,12 +878,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       );
       return true;
     }
-    if (isServiceWireCommand(payload, M6bServiceWireCommand.sessionRelocationRoute)) {
+    if (command === M6bServiceWireCommand.sessionRelocationRoute) {
       const request = decodeSessionRelocationRoute(payload);
       await this.handleSessionRelocationRoute(meshName, request, record.sourceNodeRid, signal);
       return true;
     }
-    if (isServiceWireCommand(payload, M6bServiceWireCommand.replyRelayAck)) {
+    if (command === M6bServiceWireCommand.replyRelayAck) {
       await this.acceptReplyRelayAck(
         meshName,
         decodeMaintenanceReplyRelayAck(payload),
@@ -5902,16 +5925,6 @@ function replyRelayPendingKey(
   value: Parameters<typeof replyRelayIdentityKey>[0]
 ): string {
   return JSON.stringify([ackTargetNodeRid, replyRelayIdentityKey(value)]);
-}
-
-function isServiceWireCommand(payload: Uint8Array, command: number): boolean {
-  return (
-    payload.byteLength >= 5 &&
-    payload[0] === 0x5a &&
-    payload[1] === 0x4d &&
-    payload[2] === 1 &&
-    payload[3] === command
-  );
 }
 
 export function encodeHandoffQueuedMessages(

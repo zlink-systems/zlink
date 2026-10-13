@@ -165,14 +165,23 @@ const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
 // drive the stateful ingress handler directly, so they mint an equivalent
 // owner over inert queue/permit ports and attach it at the capture point.
 function testIngressJobOwner(): ApplicationIngressRecordOwner {
+  let detached = false;
   const permit: ApplicationJobPermitPort = {
     origin: 'remote',
     markApplicationQueued() {},
-    detachForHandlerTurn() {},
+    get detachedForHandlerTurn() {
+      return detached;
+    },
+    detachForHandlerTurn() {
+      detached = true;
+    },
     releaseBeforeHandler() {},
     releaseAfterInternalProcessing() {}
   };
   const queue: ApplicationJobQueuePort = {
+    createReceiveRotation: () => {
+      throw new Error('This ingress-only fixture has no receive rotation.');
+    },
     acquire: async () => permit,
     acquireOrResume: () => permit
   };

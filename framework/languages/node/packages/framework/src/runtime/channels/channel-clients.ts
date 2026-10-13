@@ -25,6 +25,7 @@ import {
   requireClassicFanoutCompletion,
   throwAlreadySubmitted,
   ZLinkSubmitStatus,
+  submittedResult,
   type ZLinkSubmitResult
 } from '../messaging/submission-result';
 import type {
@@ -167,7 +168,17 @@ export class DefaultZLinkFanoutClient implements ZLinkFanoutClient {
   }
 }
 
+interface PreparedNodeSend {
+  readonly validate: () => void;
+  readonly submit: (
+    packetName: string | undefined,
+    metadata: ReadonlyMap<string, string>,
+    message?: unknown
+  ) => ZLinkSubmitResult | Promise<ZLinkSubmitResult>;
+}
+
 export class DefaultZLinkRouteClient implements ZLinkRouteClient {
+  private readonly nodeSends = new Map<string, Map<string, PreparedNodeSend>>();
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
     private readonly transport?: ZLinkRouteClientTransport,
@@ -177,19 +188,22 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   ) {}
 
   sendToNode(meshName: string, targetNodeRid: string, message: unknown): ZLinkSendCall {
-    return new DefaultZLinkSendCall(
-      () => this.requireMesh(meshName),
-      async (packetName, metadata) =>
-        normalizeSubmitResult(
-          await this.requireTransport().submit(
-            meshName,
-            targetNodeRid,
-            packetName,
-            message,
-            metadata
+    let targets = this.nodeSends.get(meshName);
+    if (targets === undefined) this.nodeSends.set(meshName, (targets = new Map()));
+    let prepared = targets.get(targetNodeRid);
+    if (prepared === undefined) {
+      prepared = {
+        validate: () => {
+          this.requireMesh(meshName);
+        },
+        submit: (packetName, metadata, payload) =>
+          normalizeSubmitResult(
+            this.requireTransport().submit(meshName, targetNodeRid, packetName, payload, metadata)
           )
-        )
-    );
+      };
+      targets.set(targetNodeRid, prepared);
+    }
+    return new DefaultZLinkSendCall(prepared.validate, prepared.submit, message);
   }
 
   requestToNode(meshName: string, targetNodeRid: string, request: unknown): ZLinkRequestCall {
@@ -422,21 +436,24 @@ export class DefaultZLinkSpotPublisherClient implements ZLinkSpotPublisherClient
 }
 
 class DefaultZLinkSendCall implements ZLinkSendCall {
-  private readonly selectedMetadata = new Map<string, string>();
+  private selectedMetadata?: Map<string, string>;
   private executed = false;
 
   constructor(
     private readonly validate: () => void,
     private readonly submitter: (
       packetName: string | undefined,
-      metadata: ReadonlyMap<string, string>
-    ) => Promise<ZLinkSubmitResult>
+      metadata: ReadonlyMap<string, string>,
+      message?: unknown
+    ) => ZLinkSubmitResult | Promise<ZLinkSubmitResult>,
+    private readonly message?: unknown
   ) {}
 
   metadata(key: string, value: string): this;
   metadata(metadata: ZLinkMessageMetadata): this;
   metadata(keyOrMetadata: string | ZLinkMessageMetadata, value?: string): this {
     ensureNotExecuted(this.executed);
+    this.selectedMetadata ??= new Map<string, string>();
     if (typeof keyOrMetadata === 'string') {
       this.selectedMetadata.set(keyOrMetadata, value!);
     } else {
@@ -447,12 +464,22 @@ class DefaultZLinkSendCall implements ZLinkSendCall {
     return this;
   }
 
-  async submit(): Promise<void> {
-    ensureNotExecuted(this.executed);
-    this.validate();
-    this.executed = true;
-    const result = await this.submitter(undefined, new Map(this.selectedMetadata));
-    requireOneWayCompletion(result, 'One-way send');
+  submit(): Promise<void> {
+    try {
+      ensureNotExecuted(this.executed);
+      this.validate();
+      this.executed = true;
+      const result = this.submitter(
+        undefined,
+        this.selectedMetadata ?? EMPTY_CALL_METADATA,
+        this.message
+      );
+      if (result instanceof Promise) return result.then(completeOneWaySend);
+      completeOneWaySend(result);
+      return completedOneWaySend;
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 }
 
@@ -462,13 +489,24 @@ function ensureNotExecuted(executed: boolean): void {
   }
 }
 
-function normalizeSubmitResult(result: void | ZLinkSubmitResult): ZLinkSubmitResult {
-  return result ?? { status: ZLinkSubmitStatus.Submitted };
+const EMPTY_CALL_METADATA: ReadonlyMap<string, string> = new Map();
+const completedOneWaySend = Promise.resolve();
+
+function completeOneWaySend(result: ZLinkSubmitResult): void {
+  requireOneWayCompletion(result, 'One-way send');
+}
+
+function normalizeSubmitResult(
+  result: void | ZLinkSubmitResult | Promise<void | ZLinkSubmitResult>
+): ZLinkSubmitResult | Promise<ZLinkSubmitResult> {
+  return result instanceof Promise
+    ? result.then((value) => value ?? submittedResult)
+    : (result ?? submittedResult);
 }
 
 class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
   private timeoutMs?: number;
-  private readonly selectedMetadata = new Map<string, string>();
+  private selectedMetadata?: Map<string, string>;
   private readonly turn: ZLinkSpotSerialTurn | undefined = captureZLinkSpotSerialTurn();
 
   constructor(
@@ -486,6 +524,7 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
   metadata(key: string, value: string): this;
   metadata(metadata: ZLinkMessageMetadata): this;
   metadata(keyOrMetadata: string | ZLinkMessageMetadata, value?: string): this {
+    this.selectedMetadata ??= new Map<string, string>();
     if (typeof keyOrMetadata === 'string') {
       this.selectedMetadata.set(keyOrMetadata, value!);
     } else {
@@ -508,7 +547,7 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
       return this.submitter<TReply>(
         undefined,
         this.timeoutMs ?? this.defaultRequestTimeoutMs,
-        new Map(this.selectedMetadata),
+        this.selectedMetadata === undefined ? EMPTY_CALL_METADATA : new Map(this.selectedMetadata),
         signal,
         onAdmitted
       );
@@ -522,7 +561,7 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
     const pending = this.submitter<TReply>(
       undefined,
       this.timeoutMs ?? this.defaultRequestTimeoutMs,
-      new Map(this.selectedMetadata),
+      this.selectedMetadata === undefined ? EMPTY_CALL_METADATA : new Map(this.selectedMetadata),
       signal
     );
     return turn.yieldPromise(pending);

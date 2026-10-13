@@ -2772,13 +2772,68 @@ export class ZLinkFrameworkRuntimeHost
     };
   }
 
-  private async dispatchMeshRecord(
+  private dispatchMeshNodeRecord(
+    meshName: string,
+    record: ReceiveRecord,
+    signal?: AbortSignal
+  ): void | Promise<void> {
+    const control = this.serviceRelocation.tryHandleControl(meshName, record, signal);
+    if (control instanceof Promise)
+      return control.then((handled) =>
+        handled ? undefined : this.dispatchMeshNodePayload(meshName, record, signal)
+      );
+    if (!control) return this.dispatchMeshNodePayload(meshName, record, signal);
+  }
+
+  private dispatchMeshNodePayload(
+    meshName: string,
+    record: ReceiveRecord,
+    signal?: AbortSignal
+  ): void | Promise<void> {
+    if (record.kind === ReceiveKind.NodeRequest && record.parts.length === 1) {
+      const terminal = decodeRemoteActorSourceLeaveTerminal(record.parts[0]!.data());
+      if (terminal !== undefined) {
+        return this.completeFormalSourceLeave(record, terminal);
+      }
+    }
+    const channelRuntime = this.channelRuntime;
+    if (channelRuntime === undefined) {
+      throw new ZLinkConfigurationException(
+        'MeshNode node-direct dispatch requires the channel runtime.'
+      );
+    }
+    return channelRuntime.dispatchMeshRoute(meshName, record, signal);
+  }
+
+  private async completeFormalSourceLeave(
+    record: ReceiveRecord,
+    terminal: NonNullable<ReturnType<typeof decodeRemoteActorSourceLeaveTerminal>>
+  ): Promise<void> {
+    const completed = await this.spotManager?.completeFormalSourceLeaveTerminal(
+      terminal.actorId,
+      terminal.transferId,
+      terminal.succeeded
+    );
+    if (completed !== true) {
+      throw new ZLinkConfigurationException(
+        `Actor '${terminal.actorId}' has no matching formal transfer terminal gate.`
+      );
+    }
+    if (record.reply(Buffer.alloc(0)) !== SubmitResult.Ok) {
+      throw new ZLinkConfigurationException(
+        `Actor '${terminal.actorId}' formal transfer terminal acknowledgement failed.`
+      );
+    }
+    return;
+  }
+
+  private dispatchMeshRecord(
     applicationJobOrigin: () => ApplicationJobOrigin,
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord,
     signal?: AbortSignal
-  ): Promise<void> {
+  ): void | Promise<void> {
     if (record.operationKind === OperationKind.ActorJoin) {
       if (this.spotManager === undefined) {
         throw new ZLinkConfigurationException(
@@ -2787,107 +2842,8 @@ export class ZLinkFrameworkRuntimeHost
       }
       return this.spotManager.dispatchMeshActorJoin(meshName, owner, record);
     }
-    if (record.kind === ReceiveKind.ActorBinding) {
-      if (record.kindData?.kind !== 'actorBinding') {
-        throw new ZLinkConfigurationException(
-          'MeshNode Actor binding record has no binding generation.'
-        );
-      }
-      const binding = record.kindData;
-      const replyBindingFailure = (kind: ZLinkFrameworkInternalErrorKind): void => {
-        const terminal = internalFrameworkWireReply(kind);
-        if (
-          record.replyFailure?.(terminal.terminalResult, terminal.failureCode) !== SubmitResult.Ok
-        ) {
-          throw new ZLinkConfigurationException(
-            `MeshNode Actor binding target '${binding.actor.actorId}' failure acknowledgement failed.`
-          );
-        }
-      };
-      const replyBindingSuccess = (): void => {
-        if (record.reply(Buffer.alloc(0)) !== SubmitResult.Ok) {
-          throw new ZLinkConfigurationException(
-            `MeshNode Actor binding target '${binding.actor.actorId}' acknowledgement failed.`
-          );
-        }
-      };
-      const state = this.actorManager?.getState(binding.actor.actorId);
-      const nativeActorRef = state?.nativeActorRef;
-      if (
-        state === undefined ||
-        nativeActorRef === undefined ||
-        nativeActorRef.actorId !== binding.actor.actorId ||
-        !routingIdsEqual(nativeActorRef.nodeRid, binding.actor.nodeRid)
-      ) {
-        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
-        return;
-      }
-      if (nativeActorRef.generation !== binding.actor.generation) {
-        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorGenerationStale);
-        return;
-      }
-      const node =
-        state.meshName === meshName ? this.spotNodeRuntime?.meshNode(meshName) : undefined;
-      const localStatus = node?.status();
-      // ownsLocation tracks local cleanup responsibility, not Actor authority.
-      // A relocation target can exact-read committed authority without owning that cleanup.
-      if (
-        localStatus === undefined ||
-        !routingIdsEqual(localStatus.routingId, binding.actor.nodeRid) ||
-        localStatus.lifecycleGeneration !== binding.actorNodeGeneration ||
-        state.locationGeneration !== binding.authorityOwnerGeneration ||
-        state.isMoving
-      ) {
-        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
-        return;
-      }
-      const sessionOwnerIsLocal =
-        routingIdsEqual(localStatus.routingId, binding.sessionNodeRid) &&
-        localStatus.lifecycleGeneration === binding.sessionOwnerNodeGeneration;
-      if (binding.transition === 'tombstone') {
-        const actorRef: ActorRef = {
-          actorId: binding.actor.actorId,
-          objectGeneration: binding.actor.generation,
-          meshName,
-          nodeRid: binding.actor.nodeRid
-        };
-        if (sessionOwnerIsLocal) {
-          releaseApplicationJobPermitBeforeHandler();
-          await this.streamBindingRuntime.retireRemoteBinding(
-            actorRef,
-            binding.sessionRid,
-            binding.bindingGeneration,
-            signal
-          );
-        }
-        state.retireBoundSessionBinding(binding);
-        replyBindingSuccess();
-        return;
-      }
-      const target = this.boundSessionRelay.boundSessions.resolveRemoteBoundSessionTarget(
-        binding.sessionNodeRid,
-        binding.sessionRid
-      );
-      if (target === undefined) {
-        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
-        return;
-      }
-      const installed = state.installBoundSessionBinding({
-        ...target,
-        sessionNodeRid: binding.sessionNodeRid,
-        sessionRid: binding.sessionRid,
-        sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
-        sessionOwnerId: binding.sessionOwnerId,
-        sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
-        bindingGeneration: binding.bindingGeneration
-      });
-      if (!installed) {
-        replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
-        return;
-      }
-      replyBindingSuccess();
-      return Promise.resolve();
-    }
+    if (record.kind === ReceiveKind.ActorBinding)
+      return this.dispatchMeshActorBinding(meshName, record, signal);
     switch (record.kind) {
       case ReceiveKind.TransferControl:
         if (record.kindData?.kind !== 'transferControl') {
@@ -2910,41 +2866,11 @@ export class ZLinkFrameworkRuntimeHost
       }
       case ReceiveKind.NodeSend:
       case ReceiveKind.NodeRequest: {
-        return this.admission.run(meshName, 'RouteMesh node dispatch', async () => {
-          if (await this.serviceRelocation.tryHandleControl(meshName, record, signal)) {
-            return;
-          }
-          if (record.kind === ReceiveKind.NodeRequest && record.parts.length === 1) {
-            const terminal = decodeRemoteActorSourceLeaveTerminal(record.parts[0]!.data());
-            if (terminal !== undefined) {
-              if (
-                (await this.spotManager?.completeFormalSourceLeaveTerminal(
-                  terminal.actorId,
-                  terminal.transferId,
-                  terminal.succeeded
-                )) !== true
-              ) {
-                throw new ZLinkConfigurationException(
-                  `Actor '${terminal.actorId}' has no matching formal transfer terminal gate.`
-                );
-              }
-              if (record.reply(Buffer.alloc(0)) !== SubmitResult.Ok) {
-                throw new ZLinkConfigurationException(
-                  `Actor '${terminal.actorId}' formal transfer terminal acknowledgement failed.`
-                );
-              }
-              return;
-            }
-          }
-          const channelRuntime = this.channelRuntime;
-          if (channelRuntime === undefined) {
-            throw new ZLinkConfigurationException(
-              'MeshNode node-direct dispatch requires the channel runtime.'
-            );
-          }
-          return await channelRuntime.dispatchMeshRoute(meshName, record, signal);
-        });
+        return this.admission.run(meshName, 'RouteMesh node dispatch', () =>
+          this.dispatchMeshNodeRecord(meshName, record, signal)
+        );
       }
+
       case ReceiveKind.SpotSend:
       case ReceiveKind.SpotRequest:
       case ReceiveKind.SpotMulticast:
@@ -2984,6 +2910,111 @@ export class ZLinkFrameworkRuntimeHost
           `MeshNode record kind '${record.kind}' does not yet have a registered framework consumer.`
         );
     }
+  }
+
+  private async dispatchMeshActorBinding(
+    meshName: string,
+    record: ReceiveRecord,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (record.kindData?.kind !== 'actorBinding') {
+      throw new ZLinkConfigurationException(
+        'MeshNode Actor binding record has no binding generation.'
+      );
+    }
+    const binding = record.kindData;
+    const replyBindingFailure = (kind: ZLinkFrameworkInternalErrorKind): void => {
+      const terminal = internalFrameworkWireReply(kind);
+      if (
+        record.replyFailure?.(terminal.terminalResult, terminal.failureCode) !== SubmitResult.Ok
+      ) {
+        throw new ZLinkConfigurationException(
+          `MeshNode Actor binding target '${binding.actor.actorId}' failure acknowledgement failed.`
+        );
+      }
+    };
+    const replyBindingSuccess = (): void => {
+      if (record.reply(Buffer.alloc(0)) !== SubmitResult.Ok) {
+        throw new ZLinkConfigurationException(
+          `MeshNode Actor binding target '${binding.actor.actorId}' acknowledgement failed.`
+        );
+      }
+    };
+    const state = this.actorManager?.getState(binding.actor.actorId);
+    const nativeActorRef = state?.nativeActorRef;
+    if (
+      state === undefined ||
+      nativeActorRef === undefined ||
+      nativeActorRef.actorId !== binding.actor.actorId ||
+      !routingIdsEqual(nativeActorRef.nodeRid, binding.actor.nodeRid)
+    ) {
+      replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
+      return;
+    }
+    if (nativeActorRef.generation !== binding.actor.generation) {
+      replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorGenerationStale);
+      return;
+    }
+    const node = state.meshName === meshName ? this.spotNodeRuntime?.meshNode(meshName) : undefined;
+    const localStatus = node?.status();
+    // ownsLocation tracks local cleanup responsibility, not Actor authority.
+    // A relocation target can exact-read committed authority without owning that cleanup.
+    if (
+      localStatus === undefined ||
+      !routingIdsEqual(localStatus.routingId, binding.actor.nodeRid) ||
+      localStatus.lifecycleGeneration !== binding.actorNodeGeneration ||
+      state.locationGeneration !== binding.authorityOwnerGeneration ||
+      state.isMoving
+    ) {
+      replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
+      return;
+    }
+    const sessionOwnerIsLocal =
+      routingIdsEqual(localStatus.routingId, binding.sessionNodeRid) &&
+      localStatus.lifecycleGeneration === binding.sessionOwnerNodeGeneration;
+    if (binding.transition === 'tombstone') {
+      const actorRef: ActorRef = {
+        actorId: binding.actor.actorId,
+        objectGeneration: binding.actor.generation,
+        meshName,
+        nodeRid: binding.actor.nodeRid
+      };
+      if (sessionOwnerIsLocal) {
+        releaseApplicationJobPermitBeforeHandler();
+        await this.streamBindingRuntime.retireRemoteBinding(
+          actorRef,
+          binding.sessionRid,
+          binding.bindingGeneration,
+          signal
+        );
+      }
+      state.retireBoundSessionBinding(binding);
+      replyBindingSuccess();
+      return;
+    }
+    const target = this.boundSessionRelay.boundSessions.resolveRemoteBoundSessionTarget(
+      binding.sessionNodeRid,
+      binding.sessionRid
+    );
+    if (target === undefined) {
+      replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
+      return;
+    }
+    const installed = state.installBoundSessionBinding({
+      ...target,
+      sessionNodeRid: binding.sessionNodeRid,
+      sessionRid: binding.sessionRid,
+      sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
+      sessionOwnerId: binding.sessionOwnerId,
+      sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
+      bindingGeneration: binding.bindingGeneration
+    });
+    if (!installed) {
+      replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
+      return;
+    }
+    replyBindingSuccess();
+    return Promise.resolve();
   }
 
   private submitLocalMeshRoute(

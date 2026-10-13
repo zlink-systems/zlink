@@ -454,7 +454,7 @@ export class ServiceStatefulRuntime {
     );
     this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
     this.registry.createEntrySpot(nodeRid);
-    raw.setServiceIngress((record) => this.ingress(record));
+    raw.setServiceIngress((record) => this.ingress(record), acceptsStatefulIngress);
   }
 
   setMailboxDropHandler(
@@ -2041,29 +2041,6 @@ export class ServiceStatefulRuntime {
   private async ingress(
     record: RawServiceIngressRecord
   ): Promise<RawServicePumpResult | undefined> {
-    // These frozen relocation controls overlap the legacy stateful command
-    // number range (30-34). They are bare infrastructure records and must
-    // fall through to RawServiceMeshRuntime's relocation ingress instead of
-    // being decoded as stateful actor/spot work.
-    if (
-      record.command === M6bServiceWireCommand.relocationReady ||
-      record.command === M6bServiceWireCommand.relocationData ||
-      record.command === M6bServiceWireCommand.replyRelay ||
-      record.command === M6bServiceWireCommand.relocationCutover
-    ) {
-      return undefined;
-    }
-    if (
-      record.command < M6bServiceWireCommand.spotSend ||
-      (record.command > M6bServiceWireCommand.instanceSpot &&
-        record.command !== M6bServiceWireCommand.userSpotCreate &&
-        record.command !== M6bServiceWireCommand.userSpotClose &&
-        record.command !== M6bServiceWireCommand.actorCreate &&
-        record.command !== M6bServiceWireCommand.messageFollow &&
-        record.command !== M6bServiceWireCommand.boundSessionReplaced)
-    ) {
-      return undefined;
-    }
     let decoded: ServiceStatefulWireRecord;
     let canonicalActorJoin: ActorJoin28 | undefined;
     try {
@@ -5955,4 +5932,31 @@ export function statefulMailboxData(
   record: ServiceMailboxRecord
 ): ServiceStatefulMailboxData | undefined {
   return record.stateful as ServiceStatefulMailboxData | undefined;
+}
+
+function acceptsStatefulIngress(command: number): boolean {
+  // These frozen relocation controls overlap the legacy stateful command
+  // number range (30-34). They are bare infrastructure records and must
+  // fall through to RawServiceMeshRuntime's relocation ingress instead of
+  // being decoded as stateful actor/spot work.
+  if (
+    command === M6bServiceWireCommand.relocationReady ||
+    command === M6bServiceWireCommand.relocationData ||
+    command === M6bServiceWireCommand.replyRelay ||
+    command === M6bServiceWireCommand.relocationCutover
+  ) {
+    return false;
+  }
+  if (
+    command < M6bServiceWireCommand.spotSend ||
+    (command > M6bServiceWireCommand.instanceSpot &&
+      command !== M6bServiceWireCommand.userSpotCreate &&
+      command !== M6bServiceWireCommand.userSpotClose &&
+      command !== M6bServiceWireCommand.actorCreate &&
+      command !== M6bServiceWireCommand.messageFollow &&
+      command !== M6bServiceWireCommand.boundSessionReplaced)
+  ) {
+    return false;
+  }
+  return true;
 }
