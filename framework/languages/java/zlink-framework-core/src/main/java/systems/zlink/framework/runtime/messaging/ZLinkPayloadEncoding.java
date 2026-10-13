@@ -1,11 +1,11 @@
 package systems.zlink.framework.runtime.messaging;
 
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.util.Objects;
@@ -27,19 +27,22 @@ public final class ZLinkPayloadEncoding {
             ZLinkMessageSerializer serializer, Object payload, String contentType) {
         Objects.requireNonNull(serializer, "serializer");
         Message message;
-        if (serializer instanceof ZLinkJsonMessageSerializer json
-                && !(payload instanceof ZLinkMessage)
-                && ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE.equals(contentType)) {
-            message = json.serializeOwned(payload);
+        if (payload instanceof ZLinkMessage declared) {
+            message = ZLinkMessagePayloads.message(declared.toEncodedPayload(serializer));
         } else {
-            ZLinkEncodedPayload encoded =
-                    payload instanceof ZLinkMessage declared
-                            ? declared.toEncodedPayload(serializer)
-                            : ZLinkCodecRegistration.serializeForContentType(
-                                    serializer, payload, contentType);
-            message = Message.from(encoded.bytes());
+            var selected =
+                    ZLinkCodecRegistration.serializerForSendingContentType(serializer, contentType);
+            message =
+                    selected instanceof ZLinkOwnedMessageSerializer owned
+                            ? owned.serializeOwned(payload)
+                            : ZLinkMessagePayloads.message(selected.serialize(payload));
         }
-        return encodedPayload(message, payload, contentType);
+        try {
+            return encodedPayload(message, payload, contentType);
+        } catch (RuntimeException | Error failure) {
+            message.close();
+            throw failure;
+        }
     }
 
     private static EncodedPayload encodedPayload(

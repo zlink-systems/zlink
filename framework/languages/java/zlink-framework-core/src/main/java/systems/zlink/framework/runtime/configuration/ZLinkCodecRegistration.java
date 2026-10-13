@@ -207,12 +207,20 @@ public final class ZLinkCodecRegistration
         return resolveReceivedSerializer(contentType, receivedSerializers(jsonFallback));
     }
 
-    public static <T> ZLinkEncodedPayload serializeForContentType(
-            ZLinkMessageSerializer serializer, T value, String contentType) {
+    public static ZLinkMessageSerializer serializerForSendingContentType(
+            ZLinkMessageSerializer serializer, String contentType) {
         if (serializer instanceof CompositeSerializer composite) {
-            return composite.serializeForContentType(value, contentType);
+            return composite.registration.serializerForContentType(contentType, composite.fallback);
         }
-        return serializer.serialize(value);
+        return serializer;
+    }
+
+    public static ZLinkMessageSerializer serializerForPayloadType(
+            ZLinkMessageSerializer serializer, Class<?> type) {
+        if (serializer instanceof CompositeSerializer composite) {
+            return composite.registration.serializerForSending(type, composite.fallback);
+        }
+        return serializer;
     }
 
     public static <T> ZLinkEncodedPayload serializeForDeclaredType(
@@ -538,10 +546,6 @@ public final class ZLinkCodecRegistration
         @Override
         public void prepare(Class<?> type) {
             registration.serializerForSending(type, fallback).prepare(type);
-        }
-
-        private <T> ZLinkEncodedPayload serializeForContentType(T value, String contentType) {
-            return registration.serializerForContentType(contentType, fallback).serialize(value);
         }
 
         private <T> ZLinkEncodedPayload serializeForDeclaredType(T value, Class<?> declaredType) {
