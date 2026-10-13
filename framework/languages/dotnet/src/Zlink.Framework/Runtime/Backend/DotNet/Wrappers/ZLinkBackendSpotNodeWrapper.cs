@@ -238,15 +238,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _node.PublishDraining();
     }
 
-    public void SetRouterHighWaterMark(ulong value)
-    {
-        _node.RouterHighWaterMark = value;
-    }
-
-    public void SetRouterReceiveHighWaterMark(ulong value)
-    {
-        _node.RouterReceiveHighWaterMark = value;
-    }
+    public void ApplyRouterSocketConfig(ZLinkSocketConfig config) =>
+        _node.RouterSocketConfig = config;
 
     public void SetRouterReceiveTimeout(TimeSpan? value)
     {

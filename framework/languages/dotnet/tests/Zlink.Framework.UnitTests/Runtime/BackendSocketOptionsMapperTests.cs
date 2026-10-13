@@ -6,6 +6,37 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class BackendSocketOptionsMapperTests
 {
     [Fact]
+    public void Apply_PreservesUnconfiguredHighWaterMarks()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var socket = context.CreateDealerSocket();
+        socket.Options.SendHighWaterMark = 12345;
+        socket.Options.ReceiveHighWaterMark = 23456;
+
+        ZLinkBackendSocketOptionsMapper.Apply(socket.Options, new ZLinkSocketConfig());
+
+        Assert.Equal(12345UL, socket.Options.SendHighWaterMark);
+        Assert.Equal(23456UL, socket.Options.ReceiveHighWaterMark);
+    }
+
+    [Fact]
+    public void Apply_PassesExplicitUnlimitedHighWaterMarks()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var socket = context.CreateDealerSocket();
+        socket.Options.SendHighWaterMark = 12345;
+        socket.Options.ReceiveHighWaterMark = 23456;
+
+        ZLinkBackendSocketOptionsMapper.Apply(
+            socket.Options,
+            new ZLinkSocketConfig { SendHighWaterMark = 0, ReceiveHighWaterMark = 0 }
+        );
+
+        Assert.Equal(0UL, socket.Options.SendHighWaterMark);
+        Assert.Equal(0UL, socket.Options.ReceiveHighWaterMark);
+    }
+
+    [Fact]
     public void Apply_LeavesExistingValues_WhenBooleanOptionsAreNotSet()
     {
         using var context = Systems.Zlink.Zlink.CreateContext();

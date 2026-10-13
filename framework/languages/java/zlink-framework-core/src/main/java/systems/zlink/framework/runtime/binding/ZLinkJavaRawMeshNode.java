@@ -67,6 +67,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration.RouterSocketConfig;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
@@ -205,8 +206,7 @@ final class ZLinkJavaRawMeshNode
     private volatile ExecutorService pump;
     private final AtomicReference<CompletableFuture<ZLinkApplicationJobQueue.Permit>>
             pendingReceiveAcquire = new AtomicReference<>();
-    private volatile long routerHighWaterMark = 16_777_216L;
-    private volatile long routerReceiveHighWaterMark = 16_777_216L;
+    private RouterSocketConfig routerSocketConfig = new RouterSocketConfig();
     private volatile Duration routerReceiveTimeout;
     private volatile int placementWeight = 100;
     private volatile ZLinkServiceNodeDescriptor.ObjectRole objectRole =
@@ -639,20 +639,8 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
-    public void setRouterHighWaterMark(long value) {
-        if (value < 0) {
-            throw new IllegalArgumentException("router high-water mark must not be negative");
-        }
-        routerHighWaterMark = value;
-    }
-
-    @Override
-    public void setRouterReceiveHighWaterMark(long value) {
-        if (value < 0) {
-            throw new IllegalArgumentException(
-                    "router receive high-water mark must not be negative");
-        }
-        routerReceiveHighWaterMark = value;
+    public void setRouterSocketConfig(RouterSocketConfig config) {
+        routerSocketConfig = Objects.requireNonNull(config, "config");
     }
 
     @Override
@@ -672,8 +660,7 @@ final class ZLinkJavaRawMeshNode
         // The receive pump is this ROUTER's one route observer (Core ROUTER §10.1).
         RouterSocket opened = port.openRouter(routingId, true);
         try {
-            opened.options().sendHwm(routerHighWaterMark);
-            opened.options().recvHwm(routerReceiveHighWaterMark);
+            ZLinkJavaSocketOptions.applyRouterHighWaterMarks(opened, routerSocketConfig);
             if (routerReceiveTimeout != null) {
                 opened.options().recvTimeout(routerReceiveTimeout);
             }

@@ -10,8 +10,6 @@ import java.util.function.Consumer;
 
 /** Configures and starts one MeshNode that {@link ZLinkMeshNodesRuntime} already owns. */
 final class ZLinkMeshNodeRuntime {
-    private static final int DEFAULT_SEND_PENDING_FRAME_LIMIT = 4096;
-
     private ZLinkMeshNodeRuntime() {}
 
     static void start(
@@ -35,17 +33,7 @@ final class ZLinkMeshNodeRuntime {
                                 ? ZLinkMeshNodeObjectRole.CLIENT
                                 : ZLinkMeshNodeObjectRole.NONE);
         node.setPlacementWeight(registration.placementWeight());
-        //  The HWM is an accounted byte count and stays 64-bit. The pending
-        //  admission capacity is a message count, so a byte HWM larger than
-        //  int range saturates instead of wrapping.
-        long routerSendHighWaterMark = registration.configureRouterSocket().sendHighWaterMark();
-        node.setRouterHighWaterMark(routerSendHighWaterMark);
-        node.setRouterReceiveHighWaterMark(
-                registration.configureRouterSocket().receiveHighWaterMark());
-        node.setRouterPendingAdmissionCapacity(
-                routerSendHighWaterMark > 0
-                        ? (int) Math.min(routerSendHighWaterMark, Integer.MAX_VALUE)
-                        : DEFAULT_SEND_PENDING_FRAME_LIMIT);
+        node.setRouterSocketConfig(registration.routerSocketConfig());
         registration
                 .configureRouterSocket()
                 .receiveTimeout()

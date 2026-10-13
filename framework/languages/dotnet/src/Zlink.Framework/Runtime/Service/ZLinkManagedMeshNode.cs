@@ -6,6 +6,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
@@ -38,6 +39,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         | PollEventFlags.PollCompletion
         | PollEventFlags.PollRoute;
     private const nuint RawSocketPollerSlot = 1;
+    private const nuint ReceiveWakePollerSlot = 2;
+    private const int ReceivePollSourceCount = 2;
+    private const ulong WakeFireCount = 1;
+
+    // TimeSpan's smallest positive unit. This one-shot notifies the owner;
+    // it does not schedule periodic receive polling.
+    private static readonly TimeSpan ReceiveWakeInterval = TimeSpan.FromTicks(1);
     private static readonly TimeSpan TransportShutdownGrace = PollInterval + PollInterval;
     private static readonly TimeSpan RelocationAckRetryInterval = TimeSpan.FromMilliseconds(100);
 
@@ -62,6 +70,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly object _socketGate = new();
     private readonly ConcurrentExclusiveSchedulerPair _routedSubmitScheduler;
     private readonly Func<ISocketMonitor, ISocketMonitor>? _decorateSocketMonitor;
+    private readonly Func<IPoller> _receivePollerFactory;
     private readonly Dictionary<ZLinkChannelName, uint> _channels = new();
     private readonly Dictionary<ulong, ZLinkMeshConnectionIntent> _peersByIntent = new();
     private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
@@ -157,6 +166,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private IAsyncDisposable? _receiveFlowRegistration;
     private ISocketMonitor? _socketMonitor;
     private IPoller? _poller;
+    private IZlinkTimer? _receiveWakeTimer;
     private CancellationTokenSource? _stop;
     private Task? _receiveLoop;
     private Task? _disposeTask;
@@ -222,7 +232,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Func<ReplySubmitOperation, SubmitResult>? nativeTerminalReplySubmitOverride = null,
         TaskScheduler? routedSubmitScheduler = null,
         Func<ISocketMonitor, ISocketMonitor>? decorateSocketMonitor = null,
-        ILogger<ZLinkManagedMeshNode>? logger = null
+        ILogger<ZLinkManagedMeshNode>? logger = null,
+        Func<IPoller>? receivePollerFactory = null
     )
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -250,13 +261,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             maxConcurrencyLevel: 1
         );
         _decorateSocketMonitor = decorateSocketMonitor;
+        _receivePollerFactory = receivePollerFactory ?? Systems.Zlink.Zlink.CreatePoller;
         _logger = logger;
     }
 
     public RoutingId RoutingId => _routingId;
     internal string MeshName => _meshName;
-    public ulong RouterHighWaterMark { get; set; } = 4_096_000;
-    public ulong RouterReceiveHighWaterMark { get; set; } = 4_096_000;
+    internal ZLinkSocketConfig RouterSocketConfig { get; set; } = new();
+    public ulong RouterHighWaterMark
+    {
+        get => RouterSocketConfig.SendHighWaterMark;
+        set => RouterSocketConfig.SendHighWaterMark = value;
+    }
+    public ulong RouterReceiveHighWaterMark
+    {
+        get => RouterSocketConfig.ReceiveHighWaterMark;
+        set => RouterSocketConfig.ReceiveHighWaterMark = value;
+    }
 
     //  Direct-transfer relocation options (spec 28 §4.2/§5.3), snapshotted
     //  from ZLinkLocationOptions at host startup.
@@ -354,8 +375,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // disable the native inbound cap instead of relying on the
                 // binding or Core default.
                 socket.Options.MaxMessageSize = -1;
-                socket.Options.SendHighWaterMark = RouterHighWaterMark;
-                socket.Options.ReceiveHighWaterMark = RouterReceiveHighWaterMark;
+                ZLinkBackendSocketOptionsMapper.ApplyHighWaterMarks(
+                    socket.Options,
+                    RouterSocketConfig
+                );
                 if (ReceiveTimeout is { } receiveTimeout)
                     socket.Options.ReceiveTimeout = receiveTimeout;
                 socket.SetRoutingId(_routingId);
@@ -388,12 +411,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
                 socketMonitor = _decorateSocketMonitor?.Invoke(nativeMonitor) ?? nativeMonitor;
 
-                poller = Systems.Zlink.Zlink.CreatePoller();
+                poller = _receivePollerFactory();
                 poller.Add(
                     socket,
                     PollEventFlags.PollIn | InfrastructurePollEvents,
                     RawSocketPollerSlot
                 );
+                _receiveWakeTimer = Systems.Zlink.Zlink.CreateTimer();
+                poller.Add(_receiveWakeTimer, ReceiveWakePollerSlot);
                 _socket = socket;
                 _receiveFlowRegistration = receiveFlowRegistration;
                 receiveFlowRegistration = null;
@@ -426,6 +451,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 cleanupFailure = async () =>
                 {
                     var failures = new ZLinkFailureCollector(error);
+                    failures.Capture(DetachReceiveWake);
                     failures.Capture(() => _poller?.Dispose());
                     await failures
                         .CaptureAsync(() =>
@@ -3203,6 +3229,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             _state = MeshNodeState.Stopped;
             _stop?.Cancel();
+            SignalReceiveOwner();
             return _receiveLoop;
         });
         if (receiveLoop is not null)
@@ -5255,42 +5282,105 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ReceiveLoop(CancellationToken cancellationToken)
     {
-        var events = new PollEvent[1];
+        var events = new PollEvent[ReceivePollSourceCount];
         var admissions = new ZLinkApplicationJobQueueLease?[ReceiveBatchSize];
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var count = _poller!.Wait(events, PollInterval);
+                    var receiveReady = false;
+                    var now = Stopwatch.GetTimestamp();
+                    DrainSocketMonitorEvents();
+                    // This loop is the socket's single route observer (Core ROUTER
+                    // §10.1). Apply selected-route changes before dispatching the
+                    // records that the same wait reported.
+                    for (var index = 0; index < count; index++)
+                    {
+                        var ready = events[index];
+                        if (
+                            ready.SourceKind == PollSourceKind.Timer
+                            && ready.Slot == ReceiveWakePollerSlot
+                        )
+                        {
+                            lock (_socketGate)
+                                _receiveWakeTimer!.Recv();
+                            receiveReady = true;
+                        }
+                        else if (
+                            ready.SourceKind == PollSourceKind.Socket
+                            && ready.Slot == RawSocketPollerSlot
+                        )
+                        {
+                            if ((ready.Revents & PollEventFlags.PollRoute) != 0)
+                                ObserveSelectedRoutes();
+                            receiveReady |= (ready.Revents & PollEventFlags.PollIn) != 0;
+                        }
+                    }
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
+                    if (receiveReady)
+                        DrainRawSocket(cancellationToken, admissions);
+                    ProcessInfrastructure(now);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (ZlinkException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception)
+                {
+                    RunState(() => _state = MeshNodeState.Error);
+                    Publish(MeshMonitorEventKind.ProtocolError);
+                }
+            }
+        }
+        finally
+        {
+            DetachReceiveWake();
+        }
+    }
+
+    private void SignalReceiveOwner()
+    {
+        lock (_socketGate)
+            SignalReceiveOwnerUnderLock();
+    }
+
+    private void SignalReceiveOwnerUnderLock() =>
+        _receiveWakeTimer?.Start(ReceiveWakeInterval, WakeFireCount);
+
+    private void DetachReceiveWake()
+    {
+        lock (_socketGate)
+        {
+            var wake = _receiveWakeTimer;
+            if (wake is null)
+                return;
+            _receiveWakeTimer = null;
             try
             {
-                if (Volatile.Read(ref _reservedRawApplicationAdmission) is not null)
-                    _poller!.Modify(_socket!, PollEventFlags.PollIn | InfrastructurePollEvents);
-                var count = _poller!.Wait(events, PollInterval);
-                var now = Stopwatch.GetTimestamp();
-                DrainSocketMonitorEvents();
-                // This loop is the socket's single route observer (Core ROUTER
-                // §10.1). Apply selected-route changes before dispatching the
-                // records that the same wait reported.
-                if (count > 0 && (events[0].Revents & PollEventFlags.PollRoute) != 0)
-                    ObserveSelectedRoutes();
-                if (count > 0 && (events[0].Revents & PollEventFlags.PollIn) != 0)
-                    DrainRawSocket(cancellationToken, admissions);
-                ProcessInfrastructure(now);
+                wake.Stop();
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            finally
             {
-                return;
-            }
-            catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (ZlinkException) when (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception)
-            {
-                RunState(() => _state = MeshNodeState.Error);
-                Publish(MeshMonitorEventKind.ProtocolError);
+                try
+                {
+                    _poller?.Remove(wake);
+                }
+                finally
+                {
+                    wake.Dispose();
+                }
             }
         }
     }
@@ -5302,33 +5392,38 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var count = ReceiveBatchSize;
         var queue = _applicationJobQueue;
-        if (queue is not null)
-        {
-            var reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
-            count = reserved is null ? 0 : 1;
-            admissions[0] = reserved;
-            count += queue.TryAcquireBatch(
-                admissions,
-                count,
-                ReceiveBatchSize - count,
-                ZLinkApplicationJobOrigin.Remote
-            );
-            if (count == 0)
-            {
-                // A full host leaves arrived records in Core. Keep this socket's
-                // completion and route observer active while its existing waiter
-                // obtains the next receive permit.
-                _poller!.Modify(_socket!, InfrastructurePollEvents);
-                using (ExecutionContext.SuppressFlow())
-                    _ = WaitForRawApplicationAdmissionAsync(queue, cancellationToken);
-                return;
-            }
-        }
-
-        var startedAt = Stopwatch.GetTimestamp();
-        long bytes = 0;
         try
         {
+            if (queue is not null)
+            {
+                var reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
+                count = 0;
+                admissions[0] = reserved;
+                if (reserved is not null)
+                {
+                    count = 1;
+                    _poller!.Modify(_socket!, PollEventFlags.PollIn | InfrastructurePollEvents);
+                }
+                count += queue.TryAcquireBatch(
+                    admissions,
+                    count,
+                    ReceiveBatchSize - count,
+                    ZLinkApplicationJobOrigin.Remote
+                );
+                if (count == 0)
+                {
+                    // A full host leaves arrived records in Core. Keep this socket's
+                    // completion and route observer active while its existing waiter
+                    // obtains the next receive permit.
+                    _poller!.Modify(_socket!, InfrastructurePollEvents);
+                    using (ExecutionContext.SuppressFlow())
+                        _ = WaitForRawApplicationAdmissionAsync(queue, cancellationToken);
+                    return;
+                }
+            }
+
+            var startedAt = Stopwatch.GetTimestamp();
+            long bytes = 0;
             for (var index = 0; index < count; index++)
             {
                 if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
@@ -5374,10 +5469,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             admission = await queue
                 .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
                 .ConfigureAwait(false);
-            if (cancellationToken.IsCancellationRequested)
-                return;
-            Interlocked.Exchange(ref _reservedRawApplicationAdmission, admission)?.Dispose();
-            admission = null;
+            lock (_socketGate)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    return;
+                Interlocked.Exchange(ref _reservedRawApplicationAdmission, admission)?.Dispose();
+                admission = null;
+                SignalReceiveOwnerUnderLock();
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (ObjectDisposedException) { }

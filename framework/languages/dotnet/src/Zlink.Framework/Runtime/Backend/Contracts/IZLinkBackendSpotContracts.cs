@@ -53,9 +53,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     void PublishDraining();
 
-    void SetRouterHighWaterMark(ulong value);
-
-    void SetRouterReceiveHighWaterMark(ulong value) { }
+    void ApplyRouterSocketConfig(ZLinkSocketConfig config) { }
 
     void SetRouterReceiveTimeout(TimeSpan? value) { }
 
