@@ -180,6 +180,16 @@ public sealed class FrameworkJsonProfileTests
     }
 
     [Theory]
+    [InlineData("{\"state\":1}")]
+    [InlineData("{\"state\":\"1\"}")]
+    public void Decoder_Rejects_Numeric_Enum_Representations(string json)
+    {
+        Assert.ThrowsAny<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<ProfileEnumMessage>(Encoding.UTF8.GetBytes(json))
+        );
+    }
+
+    [Theory]
     [InlineData("{\"signed64\":\"01\"}")]
     [InlineData("{\"signed64\":\"+1\"}")]
     [InlineData("{\"unsigned64\":\"01\"}")]
@@ -239,6 +249,12 @@ public sealed class FrameworkJsonProfileTests
     {
         Ready,
         Closed,
+    }
+
+    private sealed class ProfileEnumMessage
+    {
+        [JsonRequired]
+        public ProfileState State { get; init; }
     }
 
     private sealed class ProfileMessage
