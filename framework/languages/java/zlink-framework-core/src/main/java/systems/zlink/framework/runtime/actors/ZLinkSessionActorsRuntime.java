@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongFunction;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
@@ -347,6 +348,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private CompletionStage<Void> notifyDisconnectedAllCore(Duration timeout) {
         Objects.requireNonNull(timeout, "timeout");
         List<ZLinkSessionActor> current = List.copyOf(bound);
+        // Physical disconnect ends this Session owner's admission before Actor callbacks.
+        stopRelocationOwner(
+                new ZLinkConfigurationException(
+                        "Session disconnected while relocation state was pending"));
         return CompletableFuture.allOf(
                         current.stream()
                                 .map(actor -> notifyDisconnectedSafely(actor, timeout))
@@ -354,10 +359,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 .whenComplete(
                         (ignored, error) -> {
                             current.forEach(this::removeBinding);
-                            stopRelocationOwner(
-                                    new ZLinkConfigurationException(
-                                            "Session disconnected while relocation state was"
-                                                    + " pending"));
                         });
     }
 
@@ -704,23 +705,24 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     private CompletionStage<Void> announceBound(ZLinkBoundActor actor) {
-        return admitActorControl(
+        return submitActorControl(
                 ZLinkStreamActorControl.BOUND,
-                ZLinkStreamActorControl.bound(actor.actorSlot(), actor.actorId()));
+                ZLinkStreamActorControl.bound(actor.actorSlot(), actor.actorId()),
+                true);
     }
 
     private void announceUnbound(ZLinkBoundActor actor) {
-        sendActorControl(
-                ZLinkStreamActorControl.UNBOUND,
-                ZLinkStreamActorControl.unbound(actor.actorSlot()));
-    }
-
-    private CompletionStage<Void> sendActorControl(String name, byte[] payload) {
-        return submitActorControl(name, payload, false);
-    }
-
-    private CompletionStage<Void> admitActorControl(String name, byte[] payload) {
-        return submitActorControl(name, payload, true);
+        submitActorControl(
+                        ZLinkStreamActorControl.UNBOUND,
+                        ZLinkStreamActorControl.unbound(actor.actorSlot()),
+                        false)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                LOGGER.log(
+                                        Level.WARNING, "Actor unbound submission failed", failure);
+                            }
+                        });
     }
 
     private CompletionStage<Void> submitActorControl(
@@ -867,7 +869,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                             return new BindingCleanup(abandoned, abandonedSeal);
                         });
         if (cleanup != null) {
-            announceUnbound((ZLinkBoundActor) actor);
+            if (!inStateLane(() -> relocationStopped)) {
+                announceUnbound((ZLinkBoundActor) actor);
+            }
             failHeld(
                     cleanup.held(),
                     new ZLinkConfigurationException(

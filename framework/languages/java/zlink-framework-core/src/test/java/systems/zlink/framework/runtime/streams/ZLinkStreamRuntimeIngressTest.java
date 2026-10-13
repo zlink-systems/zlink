@@ -886,6 +886,42 @@ final class ZLinkStreamRuntimeIngressTest {
         assertLivenessCloseReason(idleStream, "idle_timeout");
     }
 
+    private static final int DISCONNECT_SHUTDOWN_STRESS_ITERATIONS = 100;
+
+    @org.junit.jupiter.api.RepeatedTest(DISCONNECT_SHUTDOWN_STRESS_ITERATIONS)
+    void clientDisposeImmediatelyFollowedByDrainDoesNotSubmitActorUnbound() throws Exception {
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        ZLinkActor actor =
+                fixture.actors()
+                        .getOrCreateLocalActor(REPLACEMENT_ACTOR, ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        ZLinkBackendActorRef actorRef = fixture.actors().currentRef(actor);
+        session.context()
+                .actors()
+                .bind(
+                        new ActorRef(
+                                actorRef.actorId(),
+                                actorRef.generation(),
+                                MESH,
+                                actorRef.nodeRid()))
+                .toCompletableFuture()
+                .join();
+
+        stream.errorHandler.handle(PEER_A, MonitorEventType.DISCONNECTED, 0, "DISCONNECTED");
+        fixture.runtime().beginDrain();
+        fixture.runtime().closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+        assertEquals(List.of("disconnected"), session.transportClosed.get(5, TimeUnit.SECONDS));
+        assertTrue(session.context().actors().bound().isEmpty());
+        assertEquals(0, stream.actorUnboundSubmissions.get());
+    }
+
     @Test
     void drainedCloseUsesServerDrainMetricReason() throws Exception {
         FakeStream stream = new FakeStream();
@@ -1899,6 +1935,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private final AtomicInteger zeroReadinessWaits = new AtomicInteger();
         private final AtomicBoolean receiveReady = new AtomicBoolean();
         private final AtomicInteger sessionClosingSends = new AtomicInteger();
+        private final AtomicInteger actorUnboundSubmissions = new AtomicInteger();
         private final CountDownLatch sessionClosingSendsLatch = new CountDownLatch(1);
         private final CompletableFuture<RoutingId> disconnectedPeer = new CompletableFuture<>();
         private final AtomicInteger disconnectCalls = new AtomicInteger();
@@ -2087,6 +2124,9 @@ final class ZLinkStreamRuntimeIngressTest {
                 ZLinkStreamHeader header,
                 List<Message> parts,
                 SendFlags flags) {
+            if (ZLinkStreamActorControl.UNBOUND.equals(header.packetName())) {
+                actorUnboundSubmissions.incrementAndGet();
+            }
             if (HEARTBEAT_PING.equals(header.packetName())) {
                 heartbeatPingAttempted.countDown();
                 if (failHeartbeatPingSend) {

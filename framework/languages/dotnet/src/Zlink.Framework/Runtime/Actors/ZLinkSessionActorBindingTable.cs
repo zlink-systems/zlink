@@ -1643,13 +1643,12 @@ internal sealed class ZLinkSessionActorBindingTable
             return null;
         });
 
-    public ValueTask UnbindAsync(
+    public ValueTask<ZLinkSessionBindingEntry?> UnbindAsync(
         string actorId,
         ZLinkSessionContext context,
-        string bindingToken,
-        Action<ZLinkSessionBindingEntry>? afterRemove = null
+        string bindingToken
     ) =>
-        _lane.RunAsync(() =>
+        _lane.RunAsync<ZLinkSessionBindingEntry?>(() =>
         {
             var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
             if (
@@ -1663,8 +1662,9 @@ internal sealed class ZLinkSessionActorBindingTable
                 DropHeldRelays(key, ZLinkMessageFlowReason.StaleTarget);
                 existing.DrainSignal?.TrySetResult();
                 existing.RouteAvailableSignal?.TrySetResult();
-                afterRemove?.Invoke(existing);
+                return existing;
             }
+            return null;
         });
 
     public ValueTask<ZLinkSessionContext?> GetContextAsync(string actorId, string bindingToken) =>
