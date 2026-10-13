@@ -1727,12 +1727,14 @@ internal abstract partial class ZLinkSpotActivation
         if (!operationAdmission.Accepted)
             return false;
 
+        var acceptedOperation = operationAdmission.CaptureOperation();
         if (
             _serial.TryRunDetached(
                 "user-spot-actor-frames",
                 async ct =>
                 {
                     using (operationAdmission.Lease)
+                    using (ZLinkFrameworkRuntime.EnterAcceptedOperation(acceptedOperation))
                         await _dispatcher
                             .DispatchActorFramesAsync(frames, _serial, ct)
                             .ConfigureAwait(false);
