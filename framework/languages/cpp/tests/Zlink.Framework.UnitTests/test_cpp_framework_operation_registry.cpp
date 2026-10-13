@@ -10,6 +10,7 @@
 #include <array>
 #include <vector>
 #include <barrier>
+#include <latch>
 #include <chrono>
 #include <fstream>
 #include <stdexcept>
@@ -76,13 +77,21 @@ void verify_completion_turn_batches ()
 
     foundation::operation_registry_t concurrent;
     std::array<std::atomic_size_t, count> delivered{};
-    std::barrier begin (5);
+    std::barrier begin (5), halfway (5);
+    std::latch consumer_entered (1), consume (1);
+    std::array<std::size_t, 4> next{};
     for (std::size_t index = 0; index < count; ++index) {
         assert (concurrent.register_operation (
           foundation::call_id_t{22, index + 1},
           foundation::operation_registry_t::clock_t::time_point::max (),
           [&, index] (foundation::operation_terminal_t terminal, auto) {
               assert (terminal == foundation::operation_terminal_t::completed);
+              if (index == 0) {
+                  consumer_entered.count_down ();
+                  consume.wait ();
+              }
+              const auto producer = index % next.size ();
+              assert (index == next[producer]++ * next.size () + producer);
               delivered[index].fetch_add (1, std::memory_order_release);
           }));
     }
@@ -90,11 +99,17 @@ void verify_completion_turn_batches ()
     for (std::size_t producer = 0; producer < 4; ++producer) {
         producers.emplace_back ([&, producer] {
             begin.arrive_and_wait ();
-            for (std::size_t index = producer; index < count; index += 4)
+            for (std::size_t index = producer; index < count; index += 4) {
+                if (index / 4 == count / 8)
+                    halfway.arrive_and_wait ();
                 assert (concurrent.complete (foundation::call_id_t{22, index + 1}, {}));
+            }
         });
     }
     begin.arrive_and_wait ();
+    consumer_entered.wait ();
+    halfway.arrive_and_wait ();
+    consume.count_down ();
     for (auto &producer : producers)
         producer.join ();
     assert (concurrent.shutdown () == 0);

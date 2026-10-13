@@ -11,6 +11,8 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <barrier>
 #include <functional>
 #include <chrono>
 #include <condition_variable>
@@ -29,6 +31,105 @@ namespace
 {
 
 using queue_t = zlink::framework::runtime::application_job_queue_t;
+
+
+// wait_for_supply forwards to wait_for_supply_batch on the packed-ledger implementation.
+// The same admission/return contract is exercised on the pre-batch owner.
+TEST (ApplicationJobQueue, WaiterRegistrationRacesHandlerCreditReturn)
+{
+    constexpr std::size_t rounds = 1024;
+    std::barrier start (3), finished (3);
+    std::unique_ptr<queue_t> queue;
+    std::vector<queue_t::permit_t> held;
+    std::optional<queue_t::permit_t> granted;
+    queue_t::waiter_t waiter;
+    std::atomic_size_t delivered{0};
+    std::thread registration ([&] {
+        for (std::size_t round = 0; round < rounds; ++round) {
+            start.arrive_and_wait ();
+            waiter = queue->wait_for_supply (
+              [&] (std::optional<queue_t::permit_t> permit) {
+                  EXPECT_TRUE (permit);
+                  granted = std::move (permit);
+                  delivered.fetch_add (1);
+              },
+              queue_t::origin_t::remote);
+            finished.arrive_and_wait ();
+        }
+    });
+    std::thread release ([&] {
+        for (std::size_t round = 0; round < rounds; ++round) {
+            start.arrive_and_wait ();
+            held.front ().release_for_handler_entry ();
+            finished.arrive_and_wait ();
+        }
+    });
+    for (std::size_t round = 0; round < rounds; ++round) {
+        zlink::framework::runtime::application_job_queue_configuration_t configuration;
+        configuration.effective_max_queued_application_jobs = 4;
+        configuration.pause_threshold_percent = 100;
+        configuration.resume_threshold_percent = 0;
+        queue = std::make_unique<queue_t> (configuration);
+        for (int index = 0; index < 4; ++index) {
+            auto permit = queue->try_reserve_supply ();
+            permit->mark_queued ();
+            held.push_back (std::move (*permit));
+        }
+        delivered.store (0);
+        start.arrive_and_wait ();
+        finished.arrive_and_wait ();
+        EXPECT_EQ (1u, delivered.load ());
+        EXPECT_EQ (0u, queue->snapshot ().capacity_waiters);
+        EXPECT_EQ (4u, queue->snapshot ().permits_in_use);
+        held.clear ();
+        granted.reset ();
+        (void) waiter.cancel ();
+    }
+    registration.join ();
+    release.join ();
+}
+
+TEST (ApplicationJobQueue, PausePublicationRacesHandlerCreditReturn)
+{
+    constexpr std::size_t rounds = 1024;
+    std::barrier start (3), finished (3);
+    std::unique_ptr<queue_t> queue;
+    std::optional<queue_t::permit_t> held, reserved;
+    std::thread reservation ([&] {
+        for (std::size_t round = 0; round < rounds; ++round) {
+            start.arrive_and_wait ();
+            reserved = queue->try_reserve_supply ();
+            finished.arrive_and_wait ();
+        }
+    });
+    std::thread release ([&] {
+        for (std::size_t round = 0; round < rounds; ++round) {
+            start.arrive_and_wait ();
+            held->release_for_handler_entry ();
+            finished.arrive_and_wait ();
+        }
+    });
+    for (std::size_t round = 0; round < rounds; ++round) {
+        zlink::framework::runtime::application_job_queue_configuration_t configuration;
+        configuration.effective_max_queued_application_jobs = 2;
+        configuration.pause_threshold_percent = 100;
+        configuration.resume_threshold_percent = 50;
+        queue = std::make_unique<queue_t> (configuration);
+        held = queue->try_reserve_supply ();
+        held->mark_queued ();
+        start.arrive_and_wait ();
+        finished.arrive_and_wait ();
+        EXPECT_TRUE (reserved);
+        const auto observed = queue->snapshot ();
+        EXPECT_EQ (1u, observed.permits_in_use);
+        EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+                   observed.pressure_state);
+        held.reset ();
+        reserved.reset ();
+    }
+    reservation.join ();
+    release.join ();
+}
 
 TEST (ApplicationJobQueue, TurnBudgetPreservesCapacityUntilEachHandlerStarts)
 {
