@@ -37,6 +37,8 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkUserSpotOperationHandler
         implements ZLinkInternalMeshNode.UserSpotOperationHandler {
     private static final int TERMINAL_REQUEST_FAILED = RequestResult.INTERNAL_ERROR.value();
+    // Schema terminal-failure-integrity pairs moving/stale failures with conflict (107).
+    // Generic activation InvalidOperation uses invalidState (111) in the failure mapper.
     private static final int TERMINAL_CONFLICT = RequestResult.CONFLICT.value();
     private static final int FAILURE_REQUEST_FAILED = (int) FRAMEWORK_ERROR_REQUEST_FAILED;
     private static final int FAILURE_SPOT_GENERATION_STALE =
