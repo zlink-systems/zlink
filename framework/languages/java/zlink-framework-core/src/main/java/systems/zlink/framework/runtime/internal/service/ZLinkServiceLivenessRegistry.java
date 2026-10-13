@@ -51,32 +51,6 @@ public final class ZLinkServiceLivenessRegistry {
         return stateLane.awaitTurn(work);
     }
 
-    private <T> T inOwnerTurn(Supplier<T> work) {
-        return stateLane.isOnLane() ? work.get() : inStateLane(work);
-    }
-
-    public PeerState admitFromOwner(RoutingId nodeRoutingId, String connectionId, long nowNanos) {
-        return inOwnerTurn(() -> admitCore(nodeRoutingId, connectionId, nowNanos));
-    }
-
-    public boolean disconnectFromOwner(RoutingId nodeRoutingId, String connectionId) {
-        return inOwnerTurn(() -> disconnectCore(nodeRoutingId, connectionId));
-    }
-
-    public Optional<Probe> acknowledgeProbeFromOwner(
-            RoutingId nodeRoutingId, String connectionId, long probeId) {
-        return inOwnerTurn(() -> acknowledgeProbeCore(nodeRoutingId, connectionId, probeId));
-    }
-
-    public boolean acknowledgeFromOwner(
-            RoutingId nodeRoutingId, String connectionId, long probeId, long nowNanos) {
-        return inOwnerTurn(() -> acknowledgeCore(nodeRoutingId, connectionId, probeId, nowNanos));
-    }
-
-    public Tick tickFromOwner(long nowNanos) {
-        return inOwnerTurn(() -> tickCore(nowNanos));
-    }
-
     public PeerState admit(RoutingId nodeRoutingId, String connectionId, long nowNanos) {
         return inStateLane(() -> admitCore(nodeRoutingId, connectionId, nowNanos));
     }
@@ -98,7 +72,7 @@ public final class ZLinkServiceLivenessRegistry {
     }
 
     public PeerState connectionFromOwner(RoutingId nodeRoutingId) {
-        return inOwnerTurn(() -> connectionOnLane(nodeRoutingId));
+        return stateLane.isOnLane() ? connectionOnLane(nodeRoutingId) : connection(nodeRoutingId);
     }
 
     private PeerState connectionOnLane(RoutingId nodeRoutingId) {

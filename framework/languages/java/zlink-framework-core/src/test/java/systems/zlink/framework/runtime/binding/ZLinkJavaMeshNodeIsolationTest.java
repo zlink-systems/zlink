@@ -9,13 +9,13 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
 import systems.zlink.framework.channels.ZLinkRouteSendHandler;
-import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
 
+import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
@@ -36,22 +36,20 @@ final class ZLinkJavaMeshNodeIsolationTest {
 
     @Test
     void blockedNodeTurnDoesNotHoldAnotherNodesSubmissionOrReceivePump() throws Exception {
+        String endpointA = endpoint();
+        String endpointB = endpoint();
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions
                 .addRouteMesh(MESH_A)
-                .listen(LOOPBACK + 0)
+                .listen(endpointA)
                 .setRoutingId(TARGET)
                 .addRouteSendHandler(Sink.class, Probe.class);
         targetOptions
                 .addRouteMesh(MESH_B)
-                .listen(LOOPBACK + 0)
+                .listen(endpointB)
                 .setRoutingId(TARGET)
                 .addRouteRequestHandler(Echo.class, Probe.class, String.class);
         try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions)) {
-            String endpointA =
-                    target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH_A).endpoint();
-            String endpointB =
-                    target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH_B).endpoint();
             var sourceOptions = new DefaultZLinkFrameworkOptions();
             for (String mesh : new String[] {MESH_A, MESH_B}) {
                 var node =
@@ -147,6 +145,12 @@ final class ZLinkJavaMeshNodeIsolationTest {
                 .requestToNode(MESH_B, target, new Probe(value))
                 .submit(String.class)
                 .toCompletableFuture();
+    }
+
+    private static String endpoint() throws Exception {
+        try (var socket = new ServerSocket(0)) {
+            return LOOPBACK + socket.getLocalPort();
+        }
     }
 
     private static void awaitSourceTurnWait(AtomicReference<Thread> caller) throws Exception {

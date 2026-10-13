@@ -50,7 +50,11 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                     ZLinkJavaRawMeshNode.class.getDeclaredMethod(
                             "dispatchAdmission", ZLinkJavaRawServicePort.Inbound.class, int.class);
             admission.setAccessible(true);
-            var lane = source.sourceTransportLane();
+            var laneField = ZLinkJavaRawMeshNode.class.getDeclaredField("descriptorStateLane");
+            laneField.setAccessible(true);
+            var lane =
+                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                            laneField.get(source);
             var observed = new AtomicInteger();
             var initial = new CompletableFuture<Void>();
             var rejected = new CompletableFuture<Void>();
@@ -255,7 +259,11 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                 source.setPlacementWeight(2);
                 changed.get(1, TimeUnit.SECONDS);
                 // Complete the same owner boundary used by observer publication.
-                var lane = source.sourceTransportLane();
+                var laneField = ZLinkJavaRawMeshNode.class.getDeclaredField("descriptorStateLane");
+                laneField.setAccessible(true);
+                var lane =
+                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                                laneField.get(source);
                 lane.runAsync(() -> null).toCompletableFuture().get(1, TimeUnit.SECONDS);
                 assertEquals(1, targetCount.get());
             }

@@ -170,6 +170,12 @@ final class ZLinkJavaRawMeshNode
     private final long preStartBindingGenerationSeed = positiveRandomLong();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ZLinkStateLane transportStateLane = new ZLinkStateLane();
+    // Descriptor mutation and deferred-ready state are one C2 group.
+    private final ZLinkStateLane descriptorStateLane = new ZLinkStateLane();
+    // Lazy SpotNode construction is a separate C1 registry state.
+    private final ZLinkStateLane spotNodeStateLane = new ZLinkStateLane();
+    // User operation slots and their retention sweep form one C2 group.
+    private final ZLinkStateLane userSpotTerminalStateLane = new ZLinkStateLane();
     private final ZLinkServiceM6AWireCodec wire = new ZLinkServiceM6AWireCodec();
     private final ZLinkServiceM6BWireCodec statefulWire = new ZLinkServiceM6BWireCodec();
     private final ZLinkServiceLivenessRegistry liveness;
@@ -551,7 +557,7 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public void setChannelWeight(String channelName, int weight) {
-        inSourceTurn(
+        inDescriptorStateLane(
                 () -> {
                     setChannelWeightCore(channelName, weight);
                     return null;
@@ -600,7 +606,7 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public void setPlacementWeight(int weight) {
-        inSourceTurn(
+        inDescriptorStateLane(
                 () -> {
                     setPlacementWeightCore(weight);
                     return null;
@@ -748,7 +754,7 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public void deferServiceReadyPublication() {
-        inSourceTurn(
+        inDescriptorStateLane(
                 () -> {
                     requireCreated();
                     deferServiceReadyPublication = true;
@@ -758,7 +764,7 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public void markServiceReady() {
-        inSourceTurn(
+        inDescriptorStateLane(
                 () -> {
                     markServiceReadyCore();
                     return null;
@@ -794,7 +800,7 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public void markServiceDraining() {
-        inSourceTurn(
+        inDescriptorStateLane(
                 () -> {
                     ZLinkServiceNodeDescriptor current = localDescriptor;
                     if (current != null
@@ -814,10 +820,10 @@ final class ZLinkJavaRawMeshNode
 
     private void publishLocalDescriptor(ZLinkServiceNodeDescriptor updated) {
         localDescriptor = updated;
-        topology.publishLocalFromOwner(updated);
+        topology.publishLocal(updated);
         signalStateChanged();
         byte[] update = wire.encodeAdmission(ServiceWireConstants.COMMAND_UPDATE, updated);
-        for (ZLinkServiceTopologyRegistry.Peer peer : topology.peersFromOwner()) {
+        for (ZLinkServiceTopologyRegistry.Peer peer : topology.peers()) {
             trySendAdmissionControl(
                     peer.descriptor().nodeRoutingId(), List.of(update), "descriptor-update");
         }
@@ -1085,7 +1091,7 @@ final class ZLinkJavaRawMeshNode
         // Enter after the publishing turn. Callbacks may enter another owner
         // and must never occupy the shared deadline executor.
         CompletableFuture.completedStage(null)
-                .thenComposeAsync(unused -> transportStateLane.runAsync(() -> null))
+                .thenComposeAsync(unused -> descriptorStateLane.runAsync(() -> null))
                 .thenRunAsync(signal)
                 .whenComplete(
                         (unused, failure) -> {
@@ -1119,7 +1125,7 @@ final class ZLinkJavaRawMeshNode
         long started = System.nanoTime();
         Runnable inspect =
                 () ->
-                        transportStateLane
+                        descriptorStateLane
                                 .runAsync(
                                         () -> {
                                             if (admitted.isDone()) return null;
@@ -1256,9 +1262,7 @@ final class ZLinkJavaRawMeshNode
                 Math.toIntExact(
                         topology == null
                                 ? 0
-                                : topology.peersFromOwner().stream()
-                                        .filter(this::isReadyPeer)
-                                        .count()),
+                                : topology.peers().stream().filter(this::isReadyPeer).count()),
                 0,
                 0,
                 0,
@@ -1345,7 +1349,7 @@ final class ZLinkJavaRawMeshNode
         List<MeshPeerEntry> admittedInboundPeers =
                 topology == null
                         ? List.of()
-                        : topology.peersFromOwner().stream()
+                        : topology.peers().stream()
                                 .filter(
                                         entry ->
                                                 manualPeers.stream()
@@ -1490,7 +1494,7 @@ final class ZLinkJavaRawMeshNode
                 });
         ZLinkServiceTopologyRegistry current = topology;
         if (current != null) {
-            current.peersFromOwner().forEach(peer -> peers.add(peer.descriptor().nodeRoutingId()));
+            current.peers().forEach(peer -> peers.add(peer.descriptor().nodeRoutingId()));
         }
         peers.remove(routingId);
         return List.copyOf(peers);
@@ -1507,7 +1511,7 @@ final class ZLinkJavaRawMeshNode
         ZLinkServiceTopologyRegistry current = topology;
         return current == null
                 ? 0
-                : current.peersFromOwner().stream()
+                : current.peers().stream()
                         .filter(
                                 peer ->
                                         peer.descriptor().state()
@@ -1537,7 +1541,7 @@ final class ZLinkJavaRawMeshNode
         ZLinkMeshApplicationReceiver receiver =
                 Objects.requireNonNull(value, "applicationReceiver");
         ZLinkJavaRawSpotNode current =
-                inSourceTurn(
+                inSpotNodeStateLane(
                         () -> {
                             applicationReceiver = receiver;
                             return spotNode;
@@ -1558,7 +1562,7 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public ZLinkInternalSpotNode spotNode() {
-        return inSourceTurn(this::spotNodeCore);
+        return inSpotNodeStateLane(this::spotNodeCore);
     }
 
     private ZLinkInternalSpotNode spotNodeCore() {
@@ -1621,7 +1625,7 @@ final class ZLinkJavaRawMeshNode
         current.peerFromOwner(peerRoutingId)
                 .ifPresent(
                         peer -> {
-                            if (current.setChannelReadyFromOwner(
+                            if (current.setChannelReady(
                                     peerRoutingId, peer.connectionId(), isReadyPeer(peer))) {
                                 signalStateChanged(peerRoutingId);
                             }
@@ -1884,7 +1888,7 @@ final class ZLinkJavaRawMeshNode
         List<ZLinkServiceTopologyRegistry.Peer> targets =
                 topology == null
                         ? List.of()
-                        : topology.peersFromOwner().stream()
+                        : topology.peers().stream()
                                 .filter(
                                         peer ->
                                                 isReadyLogicalMulticastTarget(
@@ -4564,34 +4568,21 @@ final class ZLinkJavaRawMeshNode
 
     private void startPump() {
         RouterSocket pumpSocket = requireStarted();
-        // The platform waiter serves the receive role; ready records run on the node owner.
+        // 수신 pump는 platform thread다. 가상 thread로 두면 blocking 수신에서 지연이 쌓인다.
+        // 같은 커밋을 두 변형으로 잰 1-run 비교(1024 B, .artifacts/vt-compare/):
+        //   send-saturation  가상 14,356 msg/s·지연 125.5 ms → platform 67,712 msg/s·지연 0.247 ms
+        //   request-serial   가상  1,928 ops/s·지연 0.518 ms → platform  2,233 ops/s·지연 0.447 ms
+        // 이 pump는 한 socket을 blocking으로 기다리는 전용 실행 단위이므로 가상 thread의
+        // 이점(대기 중 carrier 반납)이 없고 비용만 남는다. Issue #75에 근거를 남겼다.
         pump =
                 Executors.newSingleThreadExecutor(
                         Thread.ofPlatform().name("zlink-jvm-raw-mesh-" + meshName).factory());
-        var receivePoller = port.receivePoller(pumpSocket);
-        pump.execute(() -> pumpTurn(pumpSocket, receivePoller));
+        pump.execute(() -> pumpTurn(pumpSocket));
     }
 
-    private void pumpTurn(RouterSocket pumpSocket, ZLinkJavaSocketReceivePoller receivePoller) {
+    private void pumpTurn(RouterSocket pumpSocket) {
         if (closed.get()) return;
-        // Readiness waits belong to the receive role, outside the mutable-state turn.
-        int ready = receivePoller.waitForReady(ingressWaitTimeout);
-        port.inStateLane(
-                () -> {
-                    receiveReadyTurn(pumpSocket, ready);
-                    return null;
-                });
-        if (!closed.get()) {
-            try {
-                pump.execute(() -> pumpTurn(pumpSocket, receivePoller));
-            } catch (RejectedExecutionException stopped) {
-                if (!closed.get()) throw stopped;
-            }
-        }
-    }
-
-    private void receiveReadyTurn(RouterSocket pumpSocket, int ready) {
-        if (closed.get()) return;
+        int ready = port.waitForReady(pumpSocket, ingressWaitTimeout);
         long now = System.nanoTime();
         // The existing pump remains this ROUTER's one route observer.
         if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
@@ -4603,6 +4594,13 @@ final class ZLinkJavaRawMeshNode
         if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0) {
             drainIngressBatch(pumpSocket);
         }
+        if (!closed.get()) {
+            try {
+                pump.execute(() -> pumpTurn(pumpSocket));
+            } catch (RejectedExecutionException stopped) {
+                if (!closed.get()) throw stopped;
+            }
+        }
     }
 
     private void drainIngressBatch(RouterSocket pumpSocket) {
@@ -4611,15 +4609,6 @@ final class ZLinkJavaRawMeshNode
     }
 
     private void drainIngressBatch(RouterSocket pumpSocket, ZLinkApplicationJobQueue.Permit grant) {
-        port.inStateLane(
-                () -> {
-                    drainIngressBatchOnOwner(pumpSocket, grant);
-                    return null;
-                });
-    }
-
-    private void drainIngressBatchOnOwner(
-            RouterSocket pumpSocket, ZLinkApplicationJobQueue.Permit grant) {
         long startedAt = System.nanoTime();
         long receivedBytes = 0;
         int count = 0;
@@ -6916,7 +6905,7 @@ final class ZLinkJavaRawMeshNode
             String connectionId = routeConnectionId(inbound.routeGeneration());
             var previousPeer = topology.peerFromOwner(inbound.source());
             ZLinkServiceTopologyRegistry.AdmissionResult admitted =
-                    topology.admitFromOwner(descriptor, connectionId);
+                    topology.admit(descriptor, connectionId);
             if (admitted != ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED) {
                 if (topology.peerFromOwner(inbound.source()).isEmpty()) {
                     boolean newlyRejected = rejectedPeers.add(inbound.source());
@@ -6946,9 +6935,8 @@ final class ZLinkJavaRawMeshNode
                                     Collectors.toUnmodifiableMap(
                                             ZLinkServiceNodeDescriptor.Channel::name,
                                             ZLinkServiceNodeDescriptor.Channel::weight)));
-            var receipt =
-                    liveness.admitFromOwner(inbound.source(), connectionId, System.nanoTime());
-            topology.bindLivenessFromOwner(inbound.source(), receipt);
+            var receipt = liveness.admit(inbound.source(), connectionId, System.nanoTime());
+            topology.bindLiveness(inbound.source(), receipt);
             receipt.recordReceived(System.nanoTime());
             if (command == ServiceWireConstants.COMMAND_ADMIT) {
                 markAdmissionControlReady(inbound.source(), connectionId, command);
@@ -6983,12 +6971,12 @@ final class ZLinkJavaRawMeshNode
     }
 
     /**
-     * Submits the current local descriptor in the node owner turn. publishLocalDescriptor reads and
-     * submits a new revision in the same turn, so a route never receives a lower revision after a
-     * higher one (wire-protocol §4 DescriptorRevision ordering).
+     * Submits the current local descriptor in a descriptor lane turn. publishLocalDescriptor reads
+     * and submits a new revision in the same lane, so a route never receives a lower revision after
+     * a higher one (wire-protocol §4 DescriptorRevision ordering).
      */
     private void sendLocalDescriptor(RoutingId target, int command, String reason) {
-        inSourceTurn(
+        inDescriptorStateLane(
                 () ->
                         trySendAdmissionControl(
                                 target,
@@ -7051,7 +7039,7 @@ final class ZLinkJavaRawMeshNode
             ZLinkServiceWireFrame record = new ZLinkServiceWireCodec().decode(inbound.frames());
             long probeId = ByteBuffer.wrap(record.frames().getFirst()).getLong();
             if (command == ServiceWireConstants.COMMAND_LIVENESS_PROBE) {
-                if (liveness.acknowledgeProbeFromOwner(
+                if (liveness.acknowledgeProbe(
                                 inbound.source(),
                                 routeConnectionId(inbound.routeGeneration()),
                                 probeId)
@@ -7072,7 +7060,7 @@ final class ZLinkJavaRawMeshNode
                     }
                 }
             } else {
-                liveness.acknowledgeFromOwner(
+                liveness.acknowledge(
                         inbound.source(),
                         routeConnectionId(inbound.routeGeneration()),
                         probeId,
@@ -7270,7 +7258,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     private void tickLiveness(long nowNanos) {
-        ZLinkServiceLivenessRegistry.Tick tick = liveness.tickFromOwner(nowNanos);
+        ZLinkServiceLivenessRegistry.Tick tick = liveness.tick(nowNanos);
         for (ZLinkServiceLivenessRegistry.Probe probe : tick.probes()) {
             try {
                 sendLiveness(
@@ -7336,11 +7324,11 @@ final class ZLinkJavaRawMeshNode
 
     /** Ends the peer's logical admission on the route it was admitted on. */
     private boolean disconnectAdmitted(RoutingId peer, String connectionId) {
-        if (connectionId.isEmpty() || !topology.disconnectFromOwner(peer, connectionId)) {
+        if (connectionId.isEmpty() || !topology.disconnect(peer, connectionId)) {
             return false;
         }
         admissionControlReadyConnections.remove(peer, connectionId);
-        liveness.disconnectFromOwner(peer, connectionId);
+        liveness.disconnect(peer, connectionId);
         return true;
     }
 
@@ -7401,8 +7389,8 @@ final class ZLinkJavaRawMeshNode
     }
 
     private CompletionStage<Void> runDurableTurn(Runnable command) {
-        if (!transportStateLane.isOnLane())
-            return transportStateLane.runNowOrQueue(
+        if (!descriptorStateLane.isOnLane())
+            return descriptorStateLane.runNowOrQueue(
                     () -> {
                         command.run();
                         return null;
@@ -7655,7 +7643,7 @@ final class ZLinkJavaRawMeshNode
 
     private UserSpotTerminalAdmission admitUserSpotOperation(
             UserSpotOperationKey key, byte[] fingerprint, long deadlineUnixMs) {
-        return inSourceTurn(
+        return inUserSpotTerminalStateLane(
                 () -> {
                     long now = currentTimeMillis.getAsLong();
                     long nowNanos = nanoTime.getAsLong();
@@ -7685,6 +7673,41 @@ final class ZLinkJavaRawMeshNode
                     userSpotTerminals.put(key, created);
                     return new UserSpotTerminalAdmission(created, true, false, false);
                 });
+    }
+
+    private <T> T inDescriptorStateLane(Supplier<T> work) {
+        try {
+            return descriptorStateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            return rethrowStateFailure(failure);
+        }
+    }
+
+    private <T> T inSpotNodeStateLane(Supplier<T> work) {
+        try {
+            return spotNodeStateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            return rethrowStateFailure(failure);
+        }
+    }
+
+    private <T> T inUserSpotTerminalStateLane(Supplier<T> work) {
+        try {
+            return userSpotTerminalStateLane.runAsync(work).toCompletableFuture().join();
+        } catch (CompletionException failure) {
+            return rethrowStateFailure(failure);
+        }
+    }
+
+    private static <T> T rethrowStateFailure(CompletionException failure) {
+        Throwable cause = failure.getCause();
+        if (cause instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        if (cause instanceof Error error) {
+            throw error;
+        }
+        throw failure;
     }
 
     private static byte[] fingerprint(byte[] canonicalCommand) {

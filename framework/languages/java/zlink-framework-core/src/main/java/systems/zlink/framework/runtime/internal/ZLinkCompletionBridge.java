@@ -1,7 +1,5 @@
 package systems.zlink.framework.runtime.internal;
 
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
-
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -10,24 +8,6 @@ import java.util.function.Consumer;
 /** Bridges caller cancellation to waiter stages and disposes results the caller cannot accept. */
 public final class ZLinkCompletionBridge {
     private ZLinkCompletionBridge() {}
-
-    /** Publishes a private terminal outside its owner; cancellation still reaches that terminal. */
-    public static <T> CompletionStage<T> publishOutsideOwner(CompletableFuture<T> result) {
-        if (result.isDone() && ZLinkStateLane.current() == null) return result;
-        var published = new CompletableFuture<T>();
-        result.whenComplete(
-                (value, error) -> {
-                    Runnable publish =
-                            () -> {
-                                if (error == null) published.complete(value);
-                                else published.completeExceptionally(error);
-                            };
-                    if (ZLinkStateLane.current() == null) publish.run();
-                    else CompletableFuture.runAsync(publish);
-                });
-        forwardCancellation(published, result);
-        return published;
-    }
 
     /** Preserves direct failures at existing synchronous state-registration boundaries. */
     public static <T> T await(CompletionStage<T> completion) {

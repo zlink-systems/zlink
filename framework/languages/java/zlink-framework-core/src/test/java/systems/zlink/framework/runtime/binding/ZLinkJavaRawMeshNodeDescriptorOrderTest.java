@@ -25,7 +25,7 @@ class ZLinkJavaRawMeshNodeDescriptorOrderTest {
      * but submitted after its UPDATE reached the peer as a lower revision, the peer rejected it as
      * stale (wire-protocol §4 DescriptorRevision ordering), and the HELLO sender never recorded the
      * completed admission, so readyPeerCount stayed short by one. The response is therefore read
-     * and submitted in the node owner turn that also orders descriptor publication.
+     * and submitted in the descriptor lane turn that also orders descriptor publication.
      */
     @Test
     void admissionResponseIsOrderedWithPendingDescriptorPublication() throws Exception {
@@ -46,7 +46,7 @@ class ZLinkJavaRawMeshNodeDescriptorOrderTest {
             target.start();
             source.start();
 
-            ZLinkStateLane descriptorLane = target.sourceTransportLane();
+            ZLinkStateLane descriptorLane = descriptorLane(target);
             var blocked = new CountDownLatch(1);
             descriptorLane.runAsync(
                     () -> {
@@ -78,6 +78,12 @@ class ZLinkJavaRawMeshNodeDescriptorOrderTest {
         } finally {
             release.countDown();
         }
+    }
+
+    private static ZLinkStateLane descriptorLane(ZLinkJavaRawMeshNode node) throws Exception {
+        Field field = ZLinkJavaRawMeshNode.class.getDeclaredField("descriptorStateLane");
+        field.setAccessible(true);
+        return (ZLinkStateLane) field.get(node);
     }
 
     private static void awaitLatch(CountDownLatch latch) {

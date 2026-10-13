@@ -43,35 +43,6 @@ public final class ZLinkServiceTopologyRegistry {
         return stateLane.awaitTurn(work);
     }
 
-    private <T> T inOwnerTurn(java.util.function.Supplier<T> work) {
-        return stateLane.isOnLane() ? work.get() : inStateLane(work);
-    }
-
-    public void publishLocalFromOwner(ZLinkServiceNodeDescriptor descriptor) {
-        inOwnerTurn(
-                () -> {
-                    publishLocalOnLane(descriptor);
-                    return null;
-                });
-    }
-
-    public AdmissionResult admitFromOwner(
-            ZLinkServiceNodeDescriptor descriptor, String connectionId) {
-        return inOwnerTurn(() -> admitOnLane(descriptor, connectionId));
-    }
-
-    public boolean disconnectFromOwner(RoutingId nodeRoutingId, String connectionId) {
-        return inOwnerTurn(() -> disconnectOnLane(nodeRoutingId, connectionId));
-    }
-
-    public List<Peer> peersFromOwner() {
-        return inOwnerTurn(this::peersOnLane);
-    }
-
-    public ZLinkServiceNodeDescriptor localDescriptorFromOwner() {
-        return inOwnerTurn(() -> local);
-    }
-
     public ZLinkServiceNodeDescriptor localDescriptor() {
         return inStateLane(() -> local);
     }
@@ -205,20 +176,15 @@ public final class ZLinkServiceTopologyRegistry {
 
     public void bindLiveness(
             RoutingId nodeRoutingId, ZLinkServiceLivenessRegistry.PeerState liveness) {
-        inStateLane(() -> bindLivenessOnLane(nodeRoutingId, liveness));
-    }
-
-    public void bindLivenessFromOwner(
-            RoutingId nodeRoutingId, ZLinkServiceLivenessRegistry.PeerState liveness) {
-        inOwnerTurn(() -> bindLivenessOnLane(nodeRoutingId, liveness));
-    }
-
-    private Void bindLivenessOnLane(
-            RoutingId nodeRoutingId, ZLinkServiceLivenessRegistry.PeerState liveness) {
-        Peer peer = peers.get(nodeRoutingId);
-        if (peer != null)
-            peers.put(nodeRoutingId, new Peer(peer.descriptor(), peer.connectionId(), liveness));
-        return null;
+        inStateLane(
+                () -> {
+                    Peer peer = peers.get(nodeRoutingId);
+                    if (peer != null)
+                        peers.put(
+                                nodeRoutingId,
+                                new Peer(peer.descriptor(), peer.connectionId(), liveness));
+                    return null;
+                });
     }
 
     public Optional<Peer> peer(RoutingId nodeRoutingId) {
@@ -226,7 +192,7 @@ public final class ZLinkServiceTopologyRegistry {
     }
 
     public Optional<Peer> peerFromOwner(RoutingId nodeRoutingId) {
-        return inOwnerTurn(() -> peerOnLane(nodeRoutingId));
+        return stateLane.isOnLane() ? peerOnLane(nodeRoutingId) : peer(nodeRoutingId);
     }
 
     private Optional<Peer> peerOnLane(RoutingId nodeRoutingId) {
@@ -268,19 +234,18 @@ public final class ZLinkServiceTopologyRegistry {
 
     public Optional<Peer> selectReadyChannel(
             String channelName, BiConsumer<String, ChannelSelectionFailure> onUnavailable) {
-        return selectReadyChannel(channelName, onUnavailable, this::inStateLane);
+        return selectReadyChannel(channelName, onUnavailable, false);
     }
 
     public Optional<Peer> selectReadyChannelFromOwner(
             String channelName, BiConsumer<String, ChannelSelectionFailure> onUnavailable) {
-        return selectReadyChannel(channelName, onUnavailable, this::inOwnerTurn);
+        return selectReadyChannel(channelName, onUnavailable, stateLane.isOnLane());
     }
 
     private Optional<Peer> selectReadyChannel(
             String channelName,
             BiConsumer<String, ChannelSelectionFailure> onUnavailable,
-            java.util.function.Function<java.util.function.Supplier<Optional<Peer>>, Optional<Peer>>
-                    turn) {
+            boolean ownerTurn) {
         String requiredChannelName = requireChannelName(channelName);
         ChannelSelectionFailure[] failure =
                 onUnavailable == null ? null : new ChannelSelectionFailure[1];
@@ -295,7 +260,7 @@ public final class ZLinkServiceTopologyRegistry {
                                         : plan.unavailableReason;
                     return peer;
                 };
-        Optional<Peer> selected = turn.apply(selection);
+        Optional<Peer> selected = ownerTurn ? selection.get() : inStateLane(selection);
         if (failure != null && failure[0] != null)
             onUnavailable.accept(requiredChannelName, failure[0]);
         return selected;
@@ -324,11 +289,6 @@ public final class ZLinkServiceTopologyRegistry {
     public boolean setChannelReady(RoutingId nodeRoutingId, String connectionId, boolean ready) {
         Objects.requireNonNull(nodeRoutingId, "nodeRoutingId");
         return inStateLane(() -> setChannelReadyOnLane(nodeRoutingId, connectionId, ready));
-    }
-
-    public boolean setChannelReadyFromOwner(
-            RoutingId nodeRoutingId, String connectionId, boolean ready) {
-        return inOwnerTurn(() -> setChannelReadyOnLane(nodeRoutingId, connectionId, ready));
     }
 
     private boolean setChannelReadyOnLane(
@@ -360,7 +320,9 @@ public final class ZLinkServiceTopologyRegistry {
     }
 
     public boolean hasSelectableChannelFromOwner(String channelName) {
-        return inOwnerTurn(() -> hasSelectableChannelOnLane(requireChannelName(channelName)));
+        return stateLane.isOnLane()
+                ? hasSelectableChannelOnLane(requireChannelName(channelName))
+                : hasSelectableChannel(channelName);
     }
 
     private boolean hasSelectableChannelOnLane(String channelName) {

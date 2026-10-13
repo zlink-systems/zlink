@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.binding;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -19,31 +18,6 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkJavaSourceTransportOwnerTest {
-    @Test
-    void receiveManagementReusesNodeOwnerTurn() throws Exception {
-        try (var context = systems.zlink.contracts.core.Zlink.createContext();
-                var node = new ZLinkJavaRawMeshNode(context, "management-owner")) {
-            var field = ZLinkJavaRawMeshNode.class.getDeclaredField("liveness");
-            field.setAccessible(true);
-            var liveness =
-                    (systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry)
-                            field.get(node);
-            var tick = ZLinkJavaRawMeshNode.class.getDeclaredMethod("tickLiveness", long.class);
-            tick.setAccessible(true);
-            node.sourceTransportLane()
-                    .awaitTurn(
-                            () -> {
-                                try {
-                                    tick.invoke(node, System.nanoTime());
-                                } catch (ReflectiveOperationException failure) {
-                                    throw new java.util.concurrent.CompletionException(failure);
-                                }
-                                return null;
-                            });
-            assertEquals(0, liveness.size());
-        }
-    }
-
     @Test
     void nodeTurnStartsNativeSubmissionOnTheSameOwner() throws Exception {
         var nativeOwner = new AtomicReference<ZLinkStateLane>();
