@@ -121,7 +121,10 @@ class reply_probe_t final
         if (_error != 0)
             throw zlink::request_error_t (zlink::request_result_t::timed_out, _error);
         std::vector<zlink::message_t> parts;
-        parts.push_back (zlink::message_t::from (std::vector<std::uint8_t> (4096, 0x5a)));
+        constexpr std::size_t retained_reply_bytes = 4096;
+        constexpr std::uint8_t retained_reply_fill = 0x5a;
+        parts.push_back (zlink::message_t::from (
+          std::vector<std::uint8_t> (retained_reply_bytes, retained_reply_fill)));
         storage = parts.front ().data ();
         return parts;
     }
