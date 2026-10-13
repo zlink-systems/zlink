@@ -173,8 +173,8 @@ Java 바인딩은 low-level socket recv API와 poller 기반 수신 경계를 �
 - framework나 많은 client session을 처리하는 runtime은 blocking recv를 handler 실행 thread에
   직접 올리지 않는다. runtime은 `Poller`로 readiness를 기다린 뒤 ready socket에 대해
   `RecvFlags.DONT_WAIT` recv를 수행한다.
-- application handler는 native wait thread가 아니라 framework가 설정한 handler executor 뒤에서
-  실행된다. virtual thread를 사용한다면 이 handler executor 경계에서 사용한다.
+- application handler의 실행 turn과 실행 자원 배치는 Framework의 execution 계약이 정한다. native
+  wait·receive 처리는 binding의 public poller 계약을 따른다.
 - 별도 public dispatcher API는 제공하지 않는다. 기존 `Poller`, socket `recv(..., DONT_WAIT)`,
   framework 내부 수신 루프로 충분하며, bindings public 계약에 framework 실행 정책을 섞지 않는다.
 - `Poller`는 socket과 같은 형태로 monitor를 source로 받는다(공통 spec "`Poller`의 monitor source"):

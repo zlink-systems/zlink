@@ -54,7 +54,7 @@ The two libraries used for verification don't overlap in role.
 | --- | --- | --- |
 | What it verifies | The management/gateway HTTP API | A STREAM server node |
 | When to use it | Things that **finish with a single request-response exchange**, like creating a room, querying, or admin commands | Things that require a live connection, including confirmation of **server-initiated pushes** |
-| Representative call | `Post(...).Body(...).Fetch<T>()` | `connect` · `request` · `wait_for` · `ExpectNone` |
+| Representative call | `Post(...).Body(...).Fetch<T>()` | `connect()` · `request()` · `wait_for()` · `ExpectNone()` |
 
 Most scenarios chain the two together — create a target over HTTP, then connect to STREAM
 using the endpoint returned in that response.
