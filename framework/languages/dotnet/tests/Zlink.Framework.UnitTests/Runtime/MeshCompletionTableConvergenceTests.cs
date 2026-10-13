@@ -7,6 +7,75 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshCompletionTableConvergenceTests
 {
     [Fact]
+    public async Task AcceptedCompletionBatchDoesNotReacquireTheProducerMonitor()
+    {
+        var dispatcher = new ZLinkCompletionDispatcher();
+        var gate = typeof(ZLinkCompletionDispatcher)
+            .GetField(
+                "_gate",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+            )!
+            .GetValue(dispatcher)!;
+        var blockerEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var firstEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var releaseBlocker = new ManualResetEventSlim();
+        using var releaseFirst = new ManualResetEventSlim();
+        try
+        {
+            dispatcher.Post(
+                new CallbackWork(() =>
+                {
+                    blockerEntered.SetResult();
+                    releaseBlocker.Wait();
+                })
+            );
+            await blockerEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            dispatcher.Post(
+                new CallbackWork(() =>
+                {
+                    firstEntered.SetResult();
+                    releaseFirst.Wait();
+                })
+            );
+            dispatcher.Post(new CallbackWork(() => secondCompleted.SetResult()));
+            releaseBlocker.Set();
+            await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            var progressed = await Task.Run(() =>
+            {
+                lock (gate)
+                {
+                    releaseFirst.Set();
+                    return secondCompleted.Task.Wait(TimeSpan.FromSeconds(3));
+                }
+            });
+            await secondCompleted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.True(
+                progressed,
+                "Already accepted completions must drain without a per-item producer lock."
+            );
+        }
+        finally
+        {
+            releaseBlocker.Set();
+            releaseFirst.Set();
+        }
+    }
+
+    private sealed class CallbackWork(Action callback) : ZLinkCompletionDispatcher.WorkItem
+    {
+        internal override void Execute() => callback();
+
+        internal override void Completed(Exception? failure) { }
+    }
+
+    [Fact]
     public async Task ImmediateSendUsesTheRegisteredDispatcherNode()
     {
         var table = new ZLinkMeshCompletionTable();

@@ -35,11 +35,13 @@ internal sealed class ZLinkCompletionDispatcher
         lock (_gate)
         {
             if (_tail is null)
+            {
                 _head = work;
+                Monitor.Pulse(_gate);
+            }
             else
                 _tail.Next = work;
             _tail = work;
-            Monitor.Pulse(_gate);
         }
     }
 
@@ -54,12 +56,22 @@ internal sealed class ZLinkCompletionDispatcher
                 while (_head is null)
                     Monitor.Wait(_gate);
                 work = _head;
-                _head = work.Next;
-                work.Next = null;
-                if (_head is null)
-                    _tail = null;
+                _head = null;
+                _tail = null;
             }
 
+            DrainBatch(work);
+        }
+    }
+
+    private static void DrainBatch(WorkItem? work)
+    {
+        while (work is not null)
+        {
+            // Detach only the already accepted chain. Work posted by a callback
+            // belongs to the next turn, after all predecessors in this batch.
+            var next = work.Next;
+            work.Next = null;
             Exception? failure = null;
             try
             {
@@ -80,6 +92,7 @@ internal sealed class ZLinkCompletionDispatcher
                 // lane and strand every later terminal callback.
                 TryLogFailure("mesh-completion-accounting", exception);
             }
+            work = next;
         }
     }
 
