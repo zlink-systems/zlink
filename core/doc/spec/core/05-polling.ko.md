@@ -54,6 +54,11 @@ readiness를 기다리는 방법은 두 가지다.
 | timer | fire count를 받을 수 있음 | 미지원 | `zlink_timer_recv()`로 drain |
 | FD | platform readable | platform writable | platform `POLLPRI`는 `ZLINK_POLLPRI`, 그 밖의 platform 오류 bit는 `ZLINK_POLLERR`로 변환 |
 
+**`ZLINK_OPT_EVENTS`는 raw socket의 `ZLINK_POLLIN`·`ZLINK_POLLOUT`을 위 표와 같은 판정으로
+돌려준다.** 다른 bit(`ZLINK_POLLCOMPLETION` 등)는 돌려주지 않는다. 조회는 poller의 readiness 판정과
+같은 내부 진행(prefetch, 구독 필터링, packet 조립)을 할 수 있지만, application이 받을 record를
+소비하거나 버리지 않는다. 조회한 뒤 수신하면 조회하지 않았을 때와 같은 record를 받는다.
+
 여러 peer를 가진 raw socket의 `ZLINK_POLLOUT`은 socket 전체의 집계 readiness다.
 이 event는 writable해진 routing ID나 transport pair를 식별하지 않으며, 다른 peer의
 여유 때문에 설 수 있다. 따라서 특정 target의 nonblocking submit이
