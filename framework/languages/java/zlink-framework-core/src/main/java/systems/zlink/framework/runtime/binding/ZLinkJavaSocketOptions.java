@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.Socket;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration.RouterSocketConfig;
 
 import java.time.Duration;
 
@@ -24,5 +25,14 @@ final class ZLinkJavaSocketOptions {
         configureFrameworkSocket(socket);
         socket.options().handover(true);
         return socket;
+    }
+
+    static void applyRouterHighWaterMarks(RouterSocket socket, RouterSocketConfig config) {
+        if (config.configuredSendHighWaterMark() != null) {
+            socket.options().sendHwm(config.configuredSendHighWaterMark());
+        }
+        if (config.configuredReceiveHighWaterMark() != null) {
+            socket.options().recvHwm(config.configuredReceiveHighWaterMark());
+        }
     }
 }

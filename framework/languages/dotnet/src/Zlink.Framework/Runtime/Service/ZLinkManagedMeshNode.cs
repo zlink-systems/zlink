@@ -6,6 +6,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
@@ -255,8 +256,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     public RoutingId RoutingId => _routingId;
     internal string MeshName => _meshName;
-    public ulong RouterHighWaterMark { get; set; } = 4_096_000;
-    public ulong RouterReceiveHighWaterMark { get; set; } = 4_096_000;
+    internal ZLinkSocketConfig RouterSocketConfig { get; set; } = new();
+    public ulong RouterHighWaterMark
+    {
+        get => RouterSocketConfig.SendHighWaterMark;
+        set => RouterSocketConfig.SendHighWaterMark = value;
+    }
+    public ulong RouterReceiveHighWaterMark
+    {
+        get => RouterSocketConfig.ReceiveHighWaterMark;
+        set => RouterSocketConfig.ReceiveHighWaterMark = value;
+    }
 
     //  Direct-transfer relocation options (spec 28 §4.2/§5.3), snapshotted
     //  from ZLinkLocationOptions at host startup.
@@ -354,8 +364,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // disable the native inbound cap instead of relying on the
                 // binding or Core default.
                 socket.Options.MaxMessageSize = -1;
-                socket.Options.SendHighWaterMark = RouterHighWaterMark;
-                socket.Options.ReceiveHighWaterMark = RouterReceiveHighWaterMark;
+                ZLinkBackendSocketOptionsMapper.ApplyHighWaterMarks(
+                    socket.Options,
+                    RouterSocketConfig
+                );
                 if (ReceiveTimeout is { } receiveTimeout)
                     socket.Options.ReceiveTimeout = receiveTimeout;
                 socket.SetRoutingId(_routingId);

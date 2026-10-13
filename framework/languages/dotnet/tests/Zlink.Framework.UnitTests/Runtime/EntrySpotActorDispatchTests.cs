@@ -13252,9 +13252,9 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public void SetMailboxBudgets(ulong messageBudget, ulong byteBudget) { }
 
-        public void SetRouterHighWaterMark(ulong value)
+        public void ApplyRouterSocketConfig(ZLinkSocketConfig config)
         {
-            RouterHighWaterMark = value;
+            RouterHighWaterMark = config.SendHighWaterMark;
         }
 
         public void ConnectPeer(string endpoint) { }

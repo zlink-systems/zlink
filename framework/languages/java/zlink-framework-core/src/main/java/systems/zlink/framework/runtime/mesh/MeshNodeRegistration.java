@@ -440,6 +440,10 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         return routerSocket;
     }
 
+    public RouterSocketConfig routerSocketConfig() {
+        return routerSocket;
+    }
+
     @Override
     public ZLinkMeshPeerConnections peerConnections() {
         return new PeerConnections();
@@ -998,30 +1002,45 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         }
     }
 
-    private static final class RouterSocketConfig implements ZLinkMeshNodeSocketConfig {
+    public static final class RouterSocketConfig implements ZLinkMeshNodeSocketConfig {
         // HWM is an accounted byte count, so it has to be 64-bit.
-        private long sendHighWaterMark = 4_096_000L;
-        private long receiveHighWaterMark = 4_096_000L;
+        private Long sendHighWaterMark;
+        private Long receiveHighWaterMark;
         private Duration receiveTimeout;
 
         @Override
         public long sendHighWaterMark() {
-            return sendHighWaterMark;
+            return sendHighWaterMark == null ? 0L : sendHighWaterMark;
         }
 
         @Override
         public void setSendHighWaterMark(long value) {
+            if (value < 0) {
+                throw new IllegalArgumentException("router high-water mark must not be negative");
+            }
             sendHighWaterMark = value;
         }
 
         @Override
         public long receiveHighWaterMark() {
-            return receiveHighWaterMark;
+            return receiveHighWaterMark == null ? 0L : receiveHighWaterMark;
         }
 
         @Override
         public void setReceiveHighWaterMark(long value) {
+            if (value < 0) {
+                throw new IllegalArgumentException(
+                        "router receive high-water mark must not be negative");
+            }
             receiveHighWaterMark = value;
+        }
+
+        public Long configuredSendHighWaterMark() {
+            return sendHighWaterMark;
+        }
+
+        public Long configuredReceiveHighWaterMark() {
+            return receiveHighWaterMark;
         }
 
         @Override
