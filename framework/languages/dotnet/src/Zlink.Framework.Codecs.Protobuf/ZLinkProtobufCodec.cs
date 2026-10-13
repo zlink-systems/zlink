@@ -91,18 +91,18 @@ public sealed class ZLinkProtobufCodec
 
         public unsafe Systems.Zlink.Message SerializePart(object value, Type type)
         {
-            if (value is not IMessage protobuf || !typeof(IMessage).IsAssignableFrom(type))
-                throw new InvalidOperationException(
-                    $"Protobuf codec cannot serialize payload type '{type}'."
-                );
-
+            var protobuf = RequireMessage(value, type);
             var part = Systems.Zlink.Message.Allocate(protobuf.CalculateSize());
             try
             {
-                // Use the IMessage writer for both current and legacy generated
-                // messages. WriteTo(Span) only accepts IBufferMessage and breaks
-                // the existing IMessage contract. The stream writes into the
-                // final native owner; protobuf owns its fixed-size writer buffer.
+                if (protobuf is IBufferMessage)
+                {
+                    protobuf.WriteTo(part.AsSpan());
+                    return part;
+                }
+
+                // Legacy IMessage implementations require CodedOutputStream.
+                // Keep its stream adapter confined to that compatibility path.
                 byte empty = 0;
                 fixed (byte* storage = part.AsSpan())
                 {
@@ -129,12 +129,16 @@ public sealed class ZLinkProtobufCodec
 
         public ZLinkEncodedPayload Serialize(object value, Type type)
         {
+            return ZLinkEncodedPayload.FromOwned(RequireMessage(value, type).ToByteArray());
+        }
+
+        private static IMessage RequireMessage(object value, Type type)
+        {
             if (value is not IMessage protobuf || !typeof(IMessage).IsAssignableFrom(type))
                 throw new InvalidOperationException(
                     $"Protobuf codec cannot serialize payload type '{type}'."
                 );
-
-            return ZLinkEncodedPayload.From(protobuf.ToByteArray());
+            return protobuf;
         }
 
         public object? Deserialize(ZLinkEncodedPayload payload, Type type)

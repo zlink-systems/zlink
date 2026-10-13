@@ -8,6 +8,65 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class ProtobufNativePayloadTests
 {
+    private const int AllocationPayloadSize = 1024;
+    private const int AllocationIterations = 1024;
+    private const int AllocationWarmupIterations = 256;
+
+    [Fact]
+    public void Buffered_message_encoding_allocates_only_the_final_native_owner()
+    {
+        const int iterations = AllocationIterations;
+        var codecs = Codecs();
+        var value = new BytesValue { Value = ByteString.CopyFrom(new byte[AllocationPayloadSize]) };
+        var size = value.CalculateSize();
+        for (var index = 0; index < AllocationWarmupIterations; index++)
+        {
+            using var direct = Message.Allocate(size);
+            value.WriteTo(direct.AsSpan());
+            using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(BytesValue), codecs);
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            using var direct = Message.Allocate(size);
+            value.WriteTo(direct.AsSpan());
+        }
+        var directBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(BytesValue), codecs);
+        }
+        var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(directBytes, encodedBytes);
+    }
+
+    [Fact]
+    public void Public_serialization_transfers_the_protobuf_buffer_without_a_second_copy()
+    {
+        const int iterations = AllocationIterations;
+        var codecs = Codecs();
+        Assert.True(codecs.TryGetSerializer("application/x-protobuf", out var serializer));
+        var value = new BytesValue { Value = ByteString.CopyFrom(new byte[AllocationPayloadSize]) };
+        for (var index = 0; index < AllocationWarmupIterations; index++)
+        {
+            _ = ZLinkEncodedPayload.FromOwned(value.ToByteArray());
+            _ = serializer.Serialize(value, typeof(BytesValue));
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+            _ = ZLinkEncodedPayload.FromOwned(value.ToByteArray());
+        var directBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+            _ = serializer.Serialize(value, typeof(BytesValue));
+        var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(
+            encodedBytes <= directBytes,
+            $"Public serialization allocated {encodedBytes} bytes; owned buffer control allocated {directBytes} bytes."
+        );
+    }
+
     [Fact]
     public void Envelope_encode_does_not_allocate_a_managed_payload_sized_buffer()
     {
