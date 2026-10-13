@@ -748,6 +748,13 @@ function buildOperationCases(schema) {
   const largePayloadRecipe = payloadRecipe(payloadMiB);
   const largerPayloadRecipe = payloadRecipe(payload16MiB);
   const logicalBytes = encodeGoldenBody(logical.name, logicalFixture.decoded);
+  const emptySessionBindings = structuredClone(logicalFixture.decoded);
+  emptySessionBindings.sessionBindings = [];
+  const emptySessionBindingBytes = encodeGoldenBody(logical.name, emptySessionBindings);
+  const duplicateSessionBindings = structuredClone(logicalFixture.decoded);
+  duplicateSessionBindings.sessionBindings.push(structuredClone(duplicateSessionBindings.sessionBindings[0]));
+  const unorderedSessionBindings = structuredClone(logicalFixture.decoded);
+  unorderedSessionBindings.sessionBindings.unshift({ ...unorderedSessionBindings.sessionBindings[0], participantId: "2" });
   const logicalByteChunks = [...logicalBytes].map((byte) =>
     Buffer.from([byte]),
   );
@@ -1314,6 +1321,13 @@ function buildOperationCases(schema) {
     ),
   ];
   const additionalBoundaryCases = [
+    ...[
+    boundaryCase("vector", "accept", "empty-session-binding-vector", surface(logical.name, logical.body.$ref), emptySessionBindingBytes, { directions: ["encode", "decode"] }),
+    boundaryCase("vector", "reject", "duplicate-session-binding-participant", surface(logical.name, logical.body.$ref), encodeGoldenBody(logical.name, duplicateSessionBindings), { directions: ["decode"] }),
+    boundaryCase("vector", "reject", "unordered-session-binding-participants", surface(logical.name, logical.body.$ref), encodeGoldenBody(logical.name, unorderedSessionBindings), { directions: ["decode"] }),
+    boundaryCase("vector", "reject", "truncated-session-binding-count", surface(logical.name, logical.body.$ref), emptySessionBindingBytes.subarray(0, -1), { directions: ["decode"] }),
+    boundaryCase("vector", "reject", "truncated-session-binding-entry", surface(logical.name, logical.body.$ref), logicalBytes.subarray(0, -1), { directions: ["decode"] }),
+    ].map((entry) => ({ ...entry, name: `${entry.name}-${entry.rule}` })),
     logicalStreamCase(
       "logical-stream-await-final",
       "whole-root-non-final-then-empty-final",
