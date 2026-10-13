@@ -915,7 +915,9 @@ class framework_driver_t final : public driver_t
             timespec time{};
             if (clock_gettime (clock, &time) != 0)
                 throw std::runtime_error ("benchmark thread CPU clock is unavailable");
-            return static_cast<double> (time.tv_sec) + static_cast<double> (time.tv_nsec) / 1e9;
+            return std::chrono::duration<double> (std::chrono::seconds (time.tv_sec)
+                                                  + std::chrono::nanoseconds (time.tv_nsec))
+              .count ();
         };
         double seconds = read (*_application_cpu_clock);
         if (_continuation_cpu_clock && *_continuation_cpu_clock != *_application_cpu_clock)
@@ -945,16 +947,15 @@ class framework_driver_t final : public driver_t
     {
         decoded_header_t header;
         return decode_payload (reply.body ().data (), reply.body ().size (), &header)
-               && header.run_id == _run_id && header.phase == phase
-               && header.payload_size == size && reply.body ().size () == size
-               && header.seq == seq;
+               && header.run_id == _run_id && header.phase == phase && header.payload_size == size
+               && reply.body ().size () == size && header.seq == seq;
     }
 
     fw::task_t<void> run_serial (clock_t_::time_point deadline,
-                                size_t size,
-                                phase_t phase,
-                                counters_t &counters,
-                                latency_sampler_t *latency)
+                                 size_t size,
+                                 phase_t phase,
+                                 counters_t &counters,
+                                 latency_sampler_t *latency)
     {
         while (clock_t_::now () < deadline) {
             const auto sent = now_ns ();
@@ -967,9 +968,11 @@ class framework_driver_t final : public driver_t
                 if (!_continuation_cpu_clock) {
                     clockid_t clock;
                     if (pthread_getcpuclockid (pthread_self (), &clock) != 0)
-                        throw std::runtime_error ("benchmark continuation CPU clock is unavailable");
+                        throw std::runtime_error (
+                          "benchmark continuation CPU clock is unavailable");
                     _continuation_cpu_clock = clock;
                 }
+                close_window (deadline);
                 if (valid_reply (reply, size, phase, seq)) {
                     ++counters.completed;
                     if (latency)
@@ -980,10 +983,10 @@ class framework_driver_t final : public driver_t
                 }
             }
             catch (const std::exception &error) {
+                close_window (deadline);
                 counters.record_exception (error);
             }
             counters.leave ();
-            close_window (deadline);
         }
         close_window (deadline);
     }
@@ -1479,7 +1482,8 @@ int main (int argc, char **argv)
         options.drain_bound_ms = std::stoi (arg_value (argc, argv, "--drain-bound-ms", "30000"));
         if (options.warmup_seconds <= 0 || options.warmup_segments < 1
             || options.request_timeout_ms <= 0
-            || options.request_timeout_ms > options.drain_bound_ms || options.drain_bound_ms != 30000)
+            || options.request_timeout_ms > options.drain_bound_ms
+            || options.drain_bound_ms != 30000)
             throw std::runtime_error ("invalid warmup, timeout or settle bound");
         options.output_file = arg_value (argc, argv, "--output-file", "cells.json");
         source_t source (std::move (options));
