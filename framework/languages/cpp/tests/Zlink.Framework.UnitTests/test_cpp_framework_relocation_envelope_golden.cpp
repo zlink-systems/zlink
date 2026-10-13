@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 // Golden conformance pin for the relocation-envelope-v1 logical stream
 // (28-relocation-flow.md §4.2). This test consumes

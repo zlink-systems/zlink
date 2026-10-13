@@ -51,8 +51,11 @@ Packages to add when you need them:
 | `@zlink-systems/stream-connector` | When building an external client (a game client, mobile) ([STREAM](guide/server/23-stream.en.md)) |
 | `@zlink-systems/http-client` | When the server calls out over HTTP ([HTTP Client guide](guide/http-client/README.en.md)) |
 
-The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
-`@zlink-systems/http-client` is Apache-2.0. There is no cost to building and selling a service.
+`framework` uses [zlink License 1.0](../../../LICENSE). Versions before 1.0.0 are
+free regardless of machine count; starting with 1.0.0, one server machine is
+free and each additional machine requires a paid license. Releases through
+0.30.0 remain under FSL-1.1-ALv2. `core` and `bindings` use MPL-2.0, and
+`@zlink-systems/http-client` uses Apache-2.0.
 
 ## 2. Shared contract
 

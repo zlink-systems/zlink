@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 // MeshNode §5.1 "Pending activation": a relocation target's Restore holds one activation
 // admission in the MeshNode's record until the target commit or abort, and the record's limit
 // rejects new activations while it is full.

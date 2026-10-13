@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // §10.9 actor-no-bind-request-echo. Question: what a global ActorId request costs (address lookup and remote request) when it

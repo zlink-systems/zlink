@@ -6,7 +6,7 @@
 > 연결·상태·라우팅을 함께 관리해야 하는 서비스를 위한 플랫폼입니다.
 
 [![Build](https://github.com/zlink-systems/zlink/actions/workflows/build.yml/badge.svg)](https://github.com/zlink-systems/zlink/actions/workflows/build.yml)
-[![License: MPL-2.0 / FSL-1.1 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.ko.md)
+[![License: MPL-2.0 / zlink License 1.0 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.ko.md)
 
 | | |
 |---|---|
@@ -184,13 +184,12 @@ Framework 샘플은 개별 API 호출이 아니라 완결된 애플리케이션 
 | 범위 | 라이선스 |
 |---|---|
 | `core/`, `bindings/` | [Mozilla Public License 2.0](./LICENSE) |
-| `framework/` | [Functional Source License 1.1, ALv2 Future License](./framework/LICENSE) |
+| `framework/` | [zlink License 1.0 한국어 번역](./framework/LICENSE.ko.md) ([영문 정본](./framework/LICENSE)) |
 | 언어별 Framework `http-client` 패키지 | Apache License 2.0 |
 
-**1.0.0부터 `framework/`는 zlink License로 바뀝니다.** 서버 한 대는 계속 무료이고, 추가 머신마다 유료 라이선스가 필요합니다.
-1.0.0 전 릴리스는 지금 라이선스를 그대로 유지하며 머신 수와 관계없이 무료입니다.
+`framework/`는 zlink License 1.0을 따릅니다. 1.0.0 전 버전은 머신 수와 관계없이 무료입니다. 1.0.0부터는 서버 한 대가 무료이고, 추가 머신마다 유료 라이선스가 필요합니다. 0.30.0 이하 릴리스는 FSL-1.1-ALv2를 유지합니다.
 
-상세 조건, 2년 후 Apache License 2.0 전환 정책, 재배포 고지는
+상세 조건과 재배포 고지는
 [라이선스 가이드](./doc/license/README.ko.md)와
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)를 참고하세요.
 

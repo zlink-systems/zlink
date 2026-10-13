@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // Perf spec §5.1, §5.2: the role config a server executable reads (one file, `--config`), the endpoint manifest the

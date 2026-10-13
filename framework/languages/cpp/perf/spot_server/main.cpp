@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 // The Spot role of §10.3-§10.8. Which scenario runs is the role config's `scenario`; each scenario header states its own
 // measured operation.

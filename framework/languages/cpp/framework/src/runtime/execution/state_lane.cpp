@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"

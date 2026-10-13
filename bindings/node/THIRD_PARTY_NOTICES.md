@@ -130,15 +130,16 @@ This repository uses three licenses, split by layer:
 - `core/` and `bindings/` (per-language native bindings) are licensed under
   MPL-2.0. See `LICENSE`.
 - `framework/` (the higher-level framework built on top of the bindings) is
-  licensed under FSL-1.1-ALv2 (Functional Source License 1.1, Apache-2.0
-  Future License). See `framework/LICENSE`.
+  licensed under zlink License 1.0. Versions before 1.0.0 are free regardless
+  of machine count; starting with 1.0.0, one server machine is free and each
+  additional machine requires a paid license. Releases through 0.30.0 remain
+  under FSL-1.1-ALv2. See `framework/LICENSE` for the full license text.
 - Each language's `http-client` package under `framework/` (a thin wrapper
   over that platform's commonly used HTTP client library — .NET's
   `System.Net.Http`, Java/Kotlin's `java.net.http`, Node's `undici`, C++'s
-  Boost.Beast) is licensed under Apache License 2.0 instead of FSL, because
-  it wraps a permissively-licensed library rather than any zlink-original
-  transport. The .NET and Node packages declare this directly in their own
-  manifest; the Java and Kotlin packages receive it from the shared Gradle
+  Boost.Beast) is licensed under Apache License 2.0 because it wraps a
+  permissively licensed library. The .NET and Node packages declare this in
+  their manifests; the Java and Kotlin packages receive it from the shared Gradle
   publish configuration; the C++ package ships the license text alongside
   its sources.
 

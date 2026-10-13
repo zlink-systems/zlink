@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // Actor echo objects shared by the CS (§10.1, §10.2) and Actor (§10.9, §10.10) Object Servers, and the STREAM session

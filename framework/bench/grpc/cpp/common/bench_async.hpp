@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 // A single-threaded coroutine driver for the raw ZLink rows.
 //
 // The C++ binding's request terminal is `async()` (an awaitable) or `submit()`

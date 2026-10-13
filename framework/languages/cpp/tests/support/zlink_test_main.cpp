@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 // The test harness owns main so that test registration and RUN_ALL_TESTS
 // resolve to the same GoogleTest instance.

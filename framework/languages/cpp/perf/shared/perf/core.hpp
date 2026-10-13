@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // Perf spec §12, §15.2, §15.3: the application DTOs, the decimal-string number forms, the monotonic clock, the payload

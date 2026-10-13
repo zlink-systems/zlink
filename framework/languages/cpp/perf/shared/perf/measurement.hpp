@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // Perf spec §4, §13, §14, §15.4: the cohort accounting of one owner process. Application counters only: no socket

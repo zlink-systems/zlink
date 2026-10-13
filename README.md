@@ -6,7 +6,7 @@
 > framework — for services that manage connections, state, and routing together.
 
 [![Build](https://github.com/zlink-systems/zlink/actions/workflows/build.yml/badge.svg)](https://github.com/zlink-systems/zlink/actions/workflows/build.yml)
-[![License: MPL-2.0 / FSL-1.1 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.md)
+[![License: MPL-2.0 / zlink License 1.0 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.md)
 
 | | |
 |---|---|
@@ -197,15 +197,17 @@ Licensing differs by repository layer.
 | Scope | License |
 |---|---|
 | `core/`, `bindings/` | [Mozilla Public License 2.0](./LICENSE) |
-| `framework/` | [Functional Source License 1.1, ALv2 Future License](./framework/LICENSE) |
+| `framework/` | [zlink License 1.0](./framework/LICENSE) |
 | Language-specific Framework `http-client` packages | Apache License 2.0 |
 
-**From 1.0.0, `framework/` moves to the zlink License:** one machine stays free, and each extra machine needs a paid license.
-Releases before 1.0.0 keep their current license and stay free on any number of machines.
+`framework/` uses the zlink License 1.0. Versions before 1.0.0 are free
+regardless of machine count. Starting with 1.0.0, one server machine is free
+and each additional machine requires a paid license. Releases through 0.30.0
+remain under FSL-1.1-ALv2.
 
 See the [license guide](./doc/license/README.md) and
-[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for detailed terms, the
-two-year Apache License 2.0 conversion policy, and redistribution notices.
+[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for detailed terms and
+redistribution notices.
 
 Based on [libzmq](https://github.com/zeromq/libzmq) — Copyright (c) 2007-2024
 Contributors as noted in [`core/AUTHORS`](./core/AUTHORS).

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include "runtime/mesh/mesh_node_host_service.hpp"

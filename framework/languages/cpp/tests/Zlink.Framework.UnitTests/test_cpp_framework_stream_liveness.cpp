@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/streams/session_liveness.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
 #include <zlink/framework/contracts/streams/stream.hpp>

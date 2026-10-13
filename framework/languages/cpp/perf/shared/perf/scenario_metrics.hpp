@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // The §14 family keys a scenario fills beside the shared echo counters (driver.*, spot.*, worker.*, messages.admitted...).

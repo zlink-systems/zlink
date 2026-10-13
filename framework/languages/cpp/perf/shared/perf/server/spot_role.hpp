@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // What every Spot role of §10.3-§10.8 shares: an automatic RouteMesh Object Server hosting this cell's User Spots as

@@ -12,7 +12,7 @@ English | [한국어](README.ko.md)
 | `guide/` | Application developers (library users) | **Intent, purpose, usage** — why the API exists, when to use which pattern, practical examples. No internal implementation details |
 | `internals/` | Core library maintainers | **Internal architecture** — socket wiring, data flow, thread model, protocol encoding. Diagram-heavy for understanding before reading code |
 | `building/` | Build/release engineers | Build, test, packaging instructions |
-| `license/` | Anyone evaluating adoption, legal reviewers | **License policy** — why this repo uses three licenses (MPL-2.0 / FSL-1.1-ALv2 / Apache-2.0), what each permits, where the canonical texts live |
+| `license/` | Anyone evaluating adoption, legal reviewers | **License policy** — MPL-2.0 covers `core/` and `bindings/`, zlink License 1.0 covers `framework/`, and Apache-2.0 covers `http-client`; pre-1.0.0 framework versions are free on any number of machines, 1.0.0 onward includes one free server machine, and releases through 0.30.0 remain under FSL-1.1-ALv2 |
 
 **Key rule**: guide does not explain internals. If a guide topic needs
 internal context, link to the internals document instead.
@@ -111,4 +111,4 @@ language-specific rules.
 
 | Document | Description |
 |----------|-------------|
-| [README.md](license/README.md) | Why this repository uses three licenses (MPL-2.0 / FSL-1.1-ALv2 / Apache-2.0), what each tier permits, and where the canonical texts live |
+| [README.md](license/README.md) | License terms for `core/`, `bindings/`, `framework/`, and `http-client`, including machine limits by framework version and the FSL terms retained by releases through 0.30.0 |

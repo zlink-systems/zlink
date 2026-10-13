@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/mesh/route_mesh_runtime_service.hpp"
 #include "runtime/diagnostics/topology_projection.hpp"
