@@ -131,7 +131,7 @@ public sealed record BenchServerSnapshot(
     double P99Micros,
     double CpuSeconds,
     double WorkingSetMb,
-    long AllocatedBytes = 0
+    long AllocatedBytes
 )
 {
     public bool Ready => true;
@@ -141,5 +141,5 @@ public sealed record BenchServerSnapshot(
     public long Received => ActiveMessages;
     public long CurrentInFlight => 0;
     public long PeakInFlight => 0;
-    public static BenchServerSnapshot Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static BenchServerSnapshot Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
