@@ -342,7 +342,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     parts: MessageLike | readonly MessageLike[],
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    onAdmitted?: () => void
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.InstanceSpotRequest,
@@ -351,7 +352,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         encodeMultipartApplicationFrame(parts),
         deadlineUnixMs,
         sourceSpotId,
-        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
+        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
+        onAdmitted
       )
     );
   }
@@ -685,12 +687,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number }
+    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToNode(
       String(targetRid),
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options?.onAdmitted
     );
     return this.observeCompletion(pending.id, OperationKind.NodeRequest, pending.promise);
   }
@@ -705,12 +708,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number }
+    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options?.onAdmitted
     );
     return this.observeCompletion(pending.id, OperationKind.ChannelRequest, pending.promise);
   }
@@ -1173,7 +1177,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>,
-    instanceIntent = false
+    instanceIntent = false,
+    onAdmitted?: () => void
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.InstanceSpotRequest,
@@ -1183,7 +1188,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         timeoutMs,
         sourceSpotId,
         metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
-        instanceIntent
+        instanceIntent,
+        onAdmitted
       )
     );
   }
@@ -1328,7 +1334,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestToActor(
     actor: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number }
+    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorRequest,
@@ -1337,7 +1343,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         this.peerGeneration(String(actor.nodeRid)),
         actor.generation,
         encodeMultipart(parts),
-        options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+        options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        undefined,
+        undefined,
+        options?.onAdmitted
       )
     );
   }
@@ -1360,7 +1369,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     source: ZLinkBackendActorRef,
     target: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number }
+    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorRequest,
@@ -1370,7 +1379,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         target.generation,
         encodeMultipart(parts),
         options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-        source
+        source,
+        undefined,
+        options?.onAdmitted
       )
     );
   }
@@ -1443,7 +1454,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     source: ServiceSpotState,
     target: ServiceDirectSpotRouteFence,
     parts: MessageLike | readonly MessageLike[],
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.SpotRequest,
@@ -1451,7 +1463,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         source.ref.spotId,
         target,
         encodeMultipart(parts),
-        timeoutMs
+        timeoutMs,
+        onAdmitted
       )
     );
   }
@@ -1719,7 +1732,11 @@ class RawServiceSpot implements ServiceSpot {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly flags?: number; readonly timeoutMs?: number }
+    options?: {
+      readonly flags?: number;
+      readonly timeoutMs?: number;
+      readonly onAdmitted?: () => void;
+    }
   ): MeshOperationId {
     this.requireOpen();
     return this.backend.requestToChannel(channelName, parts, options);
@@ -1755,6 +1772,7 @@ class RawServiceSpot implements ServiceSpot {
     parts: MessageLike | readonly MessageLike[],
     options?: {
       readonly timeoutMs?: number;
+      readonly onAdmitted?: () => void;
       readonly routeFence?: ServiceDirectSpotRouteFence;
       readonly entrySpot?: boolean;
     }
@@ -1773,7 +1791,8 @@ class RawServiceSpot implements ServiceSpot {
       this.state,
       routeFence,
       parts,
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options?.onAdmitted
     );
   }
 

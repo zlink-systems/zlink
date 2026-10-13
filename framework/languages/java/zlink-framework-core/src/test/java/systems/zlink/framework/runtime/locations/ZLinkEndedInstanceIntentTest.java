@@ -9,8 +9,12 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locations.*;
+import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
+import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -23,10 +27,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkEndedInstanceIntentTest {
+    private static final RoutingId TARGET_RID = RoutingId.from("new-instance");
+    private static final String MESH_NAME = "mesh";
+    private static final int PEER_OBSERVATION_CAPACITY = 1;
     private static final AtomicInteger factories = new AtomicInteger();
 
     @ParameterizedTest
@@ -57,6 +65,53 @@ final class ZLinkEndedInstanceIntentTest {
         recreateEndedSpot(backend, ZLinkPlacementObjectKind.INSTANCE_SPOT, true, requestDisabled);
     }
 
+    private static void awaitTargetPeer(ZLinkFrameworkRuntime source) throws Exception {
+        var ready = new CompletableFuture<Void>();
+        var observer =
+                new Flow.Subscriber<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>() {
+                    private Flow.Subscription subscription;
+
+                    @Override
+                    public void onSubscribe(Flow.Subscription subscription) {
+                        this.subscription = subscription;
+                        subscription.request(Long.MAX_VALUE);
+                    }
+
+                    @Override
+                    public void onNext(ZLinkObservedStatus<ZLinkMeshNodeSnapshot> observed) {
+                        if (observed.status().peers().stream()
+                                .anyMatch(
+                                        peer ->
+                                                peer.nodeRid().equals(TARGET_RID)
+                                                        && peer.state() == ZLinkPeerState.READY))
+                            ready.complete(null);
+                    }
+
+                    @Override
+                    public void onError(Throwable failure) {
+                        ready.completeExceptionally(failure);
+                    }
+
+                    @Override
+                    public void onComplete() {
+                        ready.completeExceptionally(
+                                new AssertionError("peer observation ended before READY"));
+                    }
+
+                    void cancel() {
+                        if (subscription != null) subscription.cancel();
+                    }
+                };
+        try {
+            source.routeMeshRuntime()
+                    .observe(MESH_NAME, PEER_OBSERVATION_CAPACITY)
+                    .subscribe(observer);
+            ready.get(10, TimeUnit.SECONDS);
+        } finally {
+            observer.cancel();
+        }
+    }
+
     private static void recreateEndedSpot(
             String backend,
             ZLinkPlacementObjectKind kind,
@@ -80,7 +135,7 @@ final class ZLinkEndedInstanceIntentTest {
         var rid = RoutingId.from("ended-instance");
         var descriptor =
                 new ZLinkMeshNodeDescriptor(
-                        "mesh",
+                        MESH_NAME,
                         rid,
                         1,
                         1,
@@ -124,7 +179,8 @@ final class ZLinkEndedInstanceIntentTest {
                                                         "intent",
                                                         new byte[32],
                                                         1,
-                                                        new ZLinkMeshNodeDescriptorKey("mesh", rid),
+                                                        new ZLinkMeshNodeDescriptorKey(
+                                                                MESH_NAME, rid),
                                                         1,
                                                         owner,
                                                         new byte[] {1},
@@ -144,7 +200,7 @@ final class ZLinkEndedInstanceIntentTest {
                                         "ended-instance-spot",
                                         owner.ownerId(),
                                         owner.leaseGeneration(),
-                                        "mesh",
+                                        MESH_NAME,
                                         rid,
                                         1)
                         : new ZLinkServiceAuthorityPayloadCodec()
@@ -154,7 +210,7 @@ final class ZLinkEndedInstanceIntentTest {
                                         "ended-instance-spot",
                                         owner.ownerId(),
                                         owner.leaseGeneration(),
-                                        "mesh",
+                                        MESH_NAME,
                                         rid,
                                         1);
         assertEquals(
@@ -174,9 +230,9 @@ final class ZLinkEndedInstanceIntentTest {
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
         var server =
-                options.addRouteMesh("mesh")
+                options.addRouteMesh(MESH_NAME)
                         .listen("tcp://127.0.0.1:0")
-                        .setRoutingId(RoutingId.from("new-instance"))
+                        .setRoutingId(TARGET_RID)
                         .objects()
                         .server()
                         .addEntrySpot(Entry.class);
@@ -204,11 +260,15 @@ final class ZLinkEndedInstanceIntentTest {
                     .toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
             var sourceOptions = new DefaultZLinkFrameworkOptions();
+            sourceOptions
+                    .configureDispatch()
+                    .messageFlow(
+                            systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
             sourceOptions.addLocationStore(runtimeStore);
             sourceOptions.addRelocationStore(new InMemoryRelocationStore());
             var sourceMesh =
                     sourceOptions
-                            .addRouteMesh("mesh")
+                            .addRouteMesh(MESH_NAME)
                             .listen("tcp://127.0.0.1:0")
                             .setRoutingId(RoutingId.from("instance-client"));
             if (requestingNodeDisabled == null) sourceMesh.objects().client();
@@ -238,6 +298,7 @@ final class ZLinkEndedInstanceIntentTest {
                     ZLinkFrameworkRuntimeTestAccess.startupCompletion(client)
                             .toCompletableFuture()
                             .get(10, TimeUnit.SECONDS);
+                if (client != null) awaitTargetPeer(client);
                 if (kind == ZLinkPlacementObjectKind.USER_SPOT) {
                     var creation =
                             (client == null ? runtime : client)
@@ -277,7 +338,7 @@ final class ZLinkEndedInstanceIntentTest {
                                 .route()
                                 .requestToSpot("ended-instance-spot", new Probe("hello"))
                                 .instanceSpot("room")
-                                .inMesh("mesh")
+                                .inMesh(MESH_NAME)
                                 .timeout(Duration.ofSeconds(10))
                                 .submit(Reply.class)
                                 .toCompletableFuture();
@@ -308,8 +369,7 @@ final class ZLinkEndedInstanceIntentTest {
                 // The reply precedes the target's durable first-operation cleanup.
                 var current = observed.ready.toCompletableFuture().get(10, TimeUnit.SECONDS);
                 assertEquals(reply.generation(), current.objectGeneration());
-                assertEquals(
-                        RoutingId.from("new-instance"), current.allocation().descriptor().rid());
+                assertEquals(TARGET_RID, current.allocation().descriptor().rid());
                 assertTrue(
                         new ZLinkServiceAuthorityPayloadCodec()
                                 .decode(current.payload())

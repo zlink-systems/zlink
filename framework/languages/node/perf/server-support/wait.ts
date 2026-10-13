@@ -16,7 +16,7 @@ export async function until(
   }
 }
 
-// Request streams submit continuously without waiting for earlier replies; one sweep yields to the event loop.
+// Each request starts after the previous admission; replies are observed separately.
 export async function runRequestStreams(
   streams: number,
   canIssue: () => boolean,
@@ -26,7 +26,11 @@ export async function runRequestStreams(
   if (streams <= 0) return;
   let stream = 0;
   while (canIssue()) {
-    void issue(stream).catch(onError);
+    try {
+      await issue(stream);
+    } catch (error) {
+      onError(error);
+    }
     if (++stream === streams) {
       stream = 0;
       await new Promise<void>((resolve) => setImmediate(resolve));

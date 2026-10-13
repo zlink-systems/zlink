@@ -1536,6 +1536,40 @@ final class EntrySpotActorDispatchTests {
     }
 
     private static final class TestSpotNode implements ZLinkInternalSpotNode {
+        @Override
+        public java.util.concurrent.CompletionStage<ZLinkBackendReceived> requestToNode(
+                systems.zlink.contracts.core.RoutingId targetNodeRid,
+                byte[] metadata,
+                java.util.List<systems.zlink.contracts.messaging.Message> parts,
+                java.time.Duration timeout,
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                        operations,
+                java.util.UUID operationId,
+                java.util.concurrent.CompletableFuture<Void> requestAdmission) {
+            return systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory.acceptedRequest(
+                    java.util.concurrent.CompletableFuture.failedFuture(
+                            new UnsupportedOperationException(
+                                    "MeshNode node request is unavailable")),
+                    requestAdmission);
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<ZLinkBackendReceived> requestToChannel(
+                String channelName,
+                byte[] metadata,
+                java.util.List<systems.zlink.contracts.messaging.Message> parts,
+                java.time.Duration timeout,
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                        operations,
+                java.util.UUID operationId,
+                java.util.concurrent.CompletableFuture<Void> requestAdmission) {
+            return systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory.acceptedRequest(
+                    java.util.concurrent.CompletableFuture.failedFuture(
+                            new UnsupportedOperationException(
+                                    "MeshNode channel request is unavailable")),
+                    requestAdmission);
+        }
+
         private RoutingId routingId = RoutingId.from("entry-node");
         private final TestSpot entrySpot = new TestSpot();
         private final List<ReplyRecord> noBindReplies = new CopyOnWriteArrayList<>();
@@ -1664,12 +1698,12 @@ final class EntrySpotActorDispatchTests {
             throw new UnsupportedOperationException();
         }
 
-        @Override
         public CompletionStage<List<Message>> requestToActor(
                 ZLinkBackendActorRef actor,
                 List<Message> parts,
                 SendFlags flags,
-                Duration timeout) {
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
             throw new UnsupportedOperationException();
         }
 
@@ -1774,13 +1808,14 @@ final class EntrySpotActorDispatchTests {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override
         public CompletionStage<ZLinkBackendReceived> requestToSpot(
                 RoutingId targetNodeRid,
                 String spotId,
                 long spotGeneration,
+                byte[] metadata,
                 List<Message> parts,
-                Duration timeout) {
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
             CompletableFuture<ZLinkBackendReceived> result = new CompletableFuture<>();
             long requestSequence = routeRequestSequence.getAndIncrement();
             routes.add(
@@ -1803,7 +1838,43 @@ final class EntrySpotActorDispatchTests {
             handler.handle(
                     new ZLinkBackendSpotDispatchInfo(
                             ZLinkBackendSpotDispatchEvent.ROUTED_READABLE, List.of()));
-            return result;
+            return ZLinkTestAdmissionFactory.acceptedRequest(result, requestAdmission);
+        }
+
+        public CompletionStage<ZLinkBackendReceived> requestToSpot(
+                RoutingId targetNodeRid,
+                String spotId,
+                long spotGeneration,
+                byte[] metadata,
+                List<Message> parts,
+                Duration timeout,
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                        operations,
+                java.util.UUID operationId,
+                CompletableFuture<Void> requestAdmission) {
+            CompletableFuture<ZLinkBackendReceived> result = new CompletableFuture<>();
+            long requestSequence = routeRequestSequence.getAndIncrement();
+            routes.add(
+                    new ZLinkBackendReceived(
+                            ZLinkBackendRequestResult.OK,
+                            Optional.of(RoutingId.from("message-follow-source")),
+                            Optional.of("message-follow-source-spot"),
+                            Optional.of(requestSequence),
+                            new byte[0],
+                            copyParts(parts),
+                            replyParts ->
+                                    result.complete(
+                                            new ZLinkBackendReceived(
+                                                    ZLinkBackendRequestResult.OK,
+                                                    Optional.of(RoutingId.from("entry-node")),
+                                                    Optional.of(routingId),
+                                                    Optional.of(requestSequence),
+                                                    copyParts(replyParts))),
+                            () -> {}));
+            handler.handle(
+                    new ZLinkBackendSpotDispatchInfo(
+                            ZLinkBackendSpotDispatchEvent.ROUTED_READABLE, List.of()));
+            return ZLinkTestAdmissionFactory.acceptedRequest(result, requestAdmission);
         }
 
         @Override

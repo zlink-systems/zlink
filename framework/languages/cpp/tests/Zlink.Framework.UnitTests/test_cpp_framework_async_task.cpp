@@ -26,8 +26,174 @@
 #include <stop_token>
 #include <thread>
 
+static_assert (requires (zlink::framework::request_call_t<int> &call) {
+    call.async ().admitted ();
+});
+static_assert (requires (zlink::framework::channel_request_call_t &call) {
+    call.async<int> ().admitted ();
+});
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::request_call_t<int> &> ().yield ()),
+                 zlink::framework::task_t<int>>);
+
 namespace
 {
+
+zlink::framework::request_task_t<int>
+retain_request_owner (std::shared_ptr<int> owner, zlink::framework::request_task_t<int> child)
+{
+    const auto reply = co_await zlink::framework::detail::request_submission (std::move (child));
+    co_return reply + *owner;
+}
+
+zlink::framework::request_task_t<int> staged_request (zlink::framework::task_t<void> acceptance,
+                                                      zlink::framework::task_t<int> reply)
+{
+    co_await acceptance;
+    co_await zlink::framework::detail::request_admitted_t{};
+    co_return co_await reply;
+}
+
+bool verify_request_admission_stages ()
+{
+    using namespace zlink::framework;
+    task_completion_source_t<void> first_admission, second_admission;
+    task_completion_source_t<int> first_reply, second_reply;
+    auto first = staged_request (first_admission.task (), first_reply.task ());
+    auto second = staged_request (second_admission.task (), second_reply.task ());
+    auto admitted = first.admitted ();
+    auto other_admitted = second.admitted ();
+    if (admitted.await_ready () || first.await_ready () || other_admitted.await_ready ())
+        return false;
+    first_admission.complete (result_t<void>::success ());
+    if (!admitted.await_ready () || !admitted.result () || first.await_ready ()
+        || other_admitted.await_ready () || second.await_ready ())
+        return false;
+    first_reply.complete (result_t<int>::success (42));
+    if (first.result ().value () != 42 || second.await_ready ())
+        return false;
+    const auto cancelled = detail::make_cancellation_exception ("admission cancelled");
+    second_admission.complete (detail::result_access_t::failure<void> (cancelled));
+    if (!other_admitted.await_ready () || !second.await_ready ()
+        || other_admitted.result ().exception () != second.result ().exception ())
+        return false;
+    task_completion_source_t<void> expired_admission;
+    task_completion_source_t<int> expired_reply;
+    auto expired = staged_request (expired_admission.task (), expired_reply.task ());
+    expired_admission.complete (detail::boundary_failure<void> (detail::boundary_error_t::timed_out,
+                                                                "admission deadline expired"));
+    auto expired_stage = expired.admitted ();
+    if (!expired_stage.await_ready () || !expired.await_ready ()
+        || expired_stage.result ().exception () != expired.result ().exception ())
+        return false;
+
+    // The local owner accepts the call while its handler reply remains pending.
+    task_completion_source_t<int> local_reply;
+    request_call_t<int> local ("local.request", [&] (const auto &, auto, const auto &) {
+        auto accepted = std::make_shared<task_completion_source_t<void>> ();
+        accepted->complete (result_t<void>::success ());
+        return request_task_t<int> (local_reply.task (), std::move (accepted));
+    });
+    auto local_result = local.async ();
+    auto local_admitted = local_result.admitted ();
+    if (!local_admitted.await_ready () || !local_admitted.result () || local_result.await_ready ())
+        return false;
+    local_reply.complete (result_t<int>::success (7));
+    if (local_result.result ().value () != 7)
+        return false;
+
+    // Admission failure closes the reply even if its physical terminal is later.
+    auto rejected = std::make_shared<task_completion_source_t<void>> ();
+    task_completion_source_t<int> late_reply;
+    request_task_t<int> rejection (late_reply.task (), rejected);
+    auto rejected_stage = rejection.admitted ();
+    const auto cause = detail::make_cancellation_exception ("source admission cancelled");
+    rejected->complete (detail::result_access_t::failure<void> (cause));
+    if (!rejection.await_ready () || !rejected_stage.await_ready ()
+        || rejection.result ().exception () != rejected_stage.result ().exception ())
+        return false;
+    auto owner = std::make_shared<int> (1);
+    const std::weak_ptr<int> retained = owner;
+    auto parent = retain_request_owner (owner, std::move (rejection));
+    owner.reset ();
+    if (!parent.await_ready () || parent.result ().exception () != cause || retained.expired ())
+        return false;
+    late_reply.complete (result_t<int>::success (99));
+    return retained.expired () && parent.result ().exception () == cause;
+}
+
+// A configured request terminal can perform an infrastructure lookup before
+// submitting its application request. These are distinct admission facts.
+zlink::framework::request_task_t<int>
+request_after_lookup (zlink::framework::request_task_t<int> lookup,
+                      zlink::framework::task_t<void> application_acceptance,
+                      zlink::framework::task_t<int> application_reply)
+{
+    (void) co_await lookup;
+    co_await application_acceptance;
+    co_await zlink::framework::detail::request_admitted_t{};
+    co_return co_await application_reply;
+}
+
+bool verify_lookup_admission_isolation ()
+{
+    using namespace zlink::framework;
+    task_completion_source_t<void> lookup_acceptance, acceptance;
+    task_completion_source_t<int> lookup_reply, reply;
+    request_call_t<int> call ("lookup.then.request", [&] (const auto &, auto, const auto &) {
+        return request_after_lookup (
+          staged_request (lookup_acceptance.task (), lookup_reply.task ()), acceptance.task (),
+          reply.task ());
+    });
+    auto pending = call.async ();
+    auto admitted = pending.admitted ();
+    lookup_acceptance.complete (result_t<void>::success ());
+    const bool isolated_at_lookup_admission = !admitted.await_ready () && !pending.await_ready ();
+    lookup_reply.complete (result_t<int>::success (1));
+    const bool isolated_at_lookup_reply = !admitted.await_ready () && !pending.await_ready ();
+    acceptance.complete (result_t<void>::success ());
+    const bool accepted_before_reply =
+      admitted.await_ready () && admitted.result () && !pending.await_ready ();
+    reply.complete (result_t<int>::success (42));
+    if (!isolated_at_lookup_admission || !isolated_at_lookup_reply)
+        std::cerr << "infrastructure request completed application admitted before submission\n";
+    return isolated_at_lookup_admission && isolated_at_lookup_reply && accepted_before_reply
+           && pending.result ().value () == 42;
+}
+
+bool verify_reply_success_completes_admission ()
+{
+    using namespace zlink::framework;
+    task_completion_source_t<int> physical;
+    auto source = std::make_shared<task_completion_source_t<void>> ();
+    request_task_t<int> pending (physical.task (), source);
+    auto admitted = pending.admitted ();
+    physical.complete (result_t<int>::success (42));
+    if (!admitted.await_ready ()) {
+        std::cerr << "successful reply left request admitted pending\n";
+        return false;
+    }
+    const auto first = admitted.result ().exception ();
+    task_completion_source_t<int> late_reply;
+    auto rejected = std::make_shared<task_completion_source_t<void>> ();
+    request_task_t<int> failed (late_reply.task (), rejected);
+    auto failed_admission = failed.admitted ();
+    const auto cancellation = detail::make_cancellation_exception ("admission already failed");
+    rejected->complete (detail::result_access_t::failure<void> (cancellation));
+    late_reply.complete (result_t<int>::success (99));
+    if (failed.result ().exception () != cancellation
+        || failed_admission.result ().exception () != cancellation)
+        return false;
+    request_task_t<int> immediate (result_t<int>::success (7));
+    auto immediate_admission = immediate.admitted ();
+    if (!immediate_admission.await_ready () || !immediate_admission.result ()
+        || immediate.result ().value () != 7)
+        return false;
+    source->complete (detail::result_access_t::failure<void> (
+      detail::make_cancellation_exception ("late admission failure")));
+    return admitted.result () && admitted.result ().exception () == first
+           && pending.result ().value () == 42;
+}
 
 thread_local int native_await_ambient_value = 0;
 thread_local bool inside_native_completion = false;
@@ -996,12 +1162,14 @@ bool verify_yield_continuation_owned_by_spot_queue (bool close_before_reply)
     std::promise<void> submitted;
     yield_resume_probe_t probe;
     std::optional<task_t<void>> handler;
-    request_call_t<int> call ("test.yield.leave",
-                              [&] (const std::string &, std::chrono::milliseconds,
-                                   const request_call_t<int>::metadata_map_t &) {
-                                  submitted.set_value ();
-                                  return reply.task ();
-                              });
+    request_call_t<int> call (
+      "test.yield.leave", [&] (const std::string &, std::chrono::milliseconds,
+                               const request_call_t<int>::metadata_map_t &) {
+          submitted.set_value ();
+          auto admitted = std::make_shared<task_completion_source_t<void>> ();
+          admitted->complete (result_t<void>::success ());
+          return request_task_t<int> (reply.task (), std::move (admitted));
+      });
     queue.post_async (
       "yielding-leave",
       [&] (auto complete) {
@@ -1039,6 +1207,12 @@ bool verify_yield_continuation_owned_by_spot_queue (bool close_before_reply)
 
 int main (int argc, char **argv)
 {
+    const bool lookup_isolated = verify_lookup_admission_isolation ();
+    const bool reply_admits = verify_reply_success_completes_admission ();
+    if (!lookup_isolated || !reply_admits)
+        return 34;
+    if (!verify_request_admission_stages ())
+        return 33;
     if (!verify_cancellation_contract ())
         return 90;
 

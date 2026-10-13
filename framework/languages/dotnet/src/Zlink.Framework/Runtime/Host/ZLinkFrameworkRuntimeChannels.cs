@@ -104,7 +104,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         bool usesClientServerClientPath;
@@ -131,7 +132,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 throw;
             }
             var reply = await clientRuntime
-                .RequestAsync(parts, timeout, cancellationToken)
+                .RequestAsync(parts, timeout, cancellationToken, requestAdmission: requestAdmission)
                 .ConfigureAwait(false);
             return new ZLinkBackendRouteReceived(reply, null, null, null, null);
         }
@@ -168,7 +169,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 parts,
                 timeout,
                 cancellationToken,
-                metadata
+                metadata,
+                requestAdmission: requestAdmission
             )
             .ConfigureAwait(false);
     }
@@ -431,7 +433,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
         Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
-            null
+            null,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         try
@@ -463,7 +466,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                         timeout,
                         cancellationToken,
                         metadata,
-                        readyRoute
+                        readyRoute,
+                        requestAdmission: requestAdmission
                     )
                     .ConfigureAwait(false);
             }

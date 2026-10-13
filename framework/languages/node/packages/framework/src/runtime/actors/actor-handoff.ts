@@ -776,7 +776,8 @@ export class ZLinkActorHandoffCoordinator {
     fallbackActorRef?: ActorRef,
     deadlineUnixMs?: number,
     messageFollowOrigin?: ZLinkMessageFollowOrigin,
-    provisionalReplay?: ZLinkActorHandoffDispatch
+    provisionalReplay?: ZLinkActorHandoffDispatch,
+    onAdmitted?: () => void
   ): Promise<unknown> | undefined {
     const incomingContext = actorMessageFollowContext(fallbackActorRef);
     const originalDeadlineUnixMs =
@@ -871,6 +872,7 @@ export class ZLinkActorHandoffCoordinator {
         });
       });
       releaseApplicationJobPermitForDurableHandoff();
+      onAdmitted?.();
       if (handoff.prefixRelease !== undefined) {
         try {
           this.admitPendingPrefix(actorId, handoff, handoff.prefixRelease);
@@ -916,7 +918,7 @@ export class ZLinkActorHandoffCoordinator {
               incomingContext,
               messageFollowOrigin
             );
-            return this.enqueueMessageFollow(followRoute, actorId, packet);
+            return this.enqueueMessageFollow(followRoute, actorId, packet, onAdmitted);
           }
           this.options.onMarker?.('message_follow_rejected', actorId);
           return Promise.reject(actorLocationStale(actorId));
@@ -973,7 +975,7 @@ export class ZLinkActorHandoffCoordinator {
       context,
       messageFollowOrigin
     );
-    return this.enqueueMessageFollow(followRoute, actorId, packet);
+    return this.enqueueMessageFollow(followRoute, actorId, packet, onAdmitted);
   }
 
   snapshot(actorId: string): readonly ZLinkActorHandoffPacket[] {
@@ -1440,7 +1442,8 @@ export class ZLinkActorHandoffCoordinator {
   private enqueueMessageFollow(
     entry: MessageFollowRoute,
     actorId: string,
-    packet: ZLinkActorHandoffPacket
+    packet: ZLinkActorHandoffPacket,
+    onAdmitted?: () => void
   ): Promise<unknown> {
     const context = packet.messageFollowContext;
     const duplicate = entry.operations.get(context.operationId);
@@ -1453,6 +1456,7 @@ export class ZLinkActorHandoffCoordinator {
         this.options.onMarker?.('message_follow_rejected', actorId);
         return Promise.reject(actorLocationStale(actorId));
       }
+      onAdmitted?.();
       return duplicate.result;
     }
     const bytes = packetBytes(packet);
@@ -1474,6 +1478,7 @@ export class ZLinkActorHandoffCoordinator {
       replyRouteId: context.replyRouteId,
       result
     });
+    onAdmitted?.();
     entry.tail = entry.tail.then(async () => {
       try {
         resolve(await this.relayMessageFollow(actorId, entry, packet));

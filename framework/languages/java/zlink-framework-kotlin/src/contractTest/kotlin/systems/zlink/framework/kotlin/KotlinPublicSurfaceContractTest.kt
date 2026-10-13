@@ -133,10 +133,20 @@ class KotlinPublicSurfaceContractTest {
         wrapperTypes
             .flatMap { it.declaredMethods.asList() }
             .forEach { method ->
-                assertFalse(
-                    method.returnType.name.startsWith("systems.zlink.framework.channels.ZLink"),
-                    "Java call return leaked from ${method.declaringClass.simpleName}.${method.name}",
-                )
+                if (
+                    method.declaringClass == ZLinkKotlinRequestCall::class.java &&
+                        method.name == "submit"
+                ) {
+                    assertEquals(
+                        systems.zlink.framework.channels.ZLinkRequestStage::class.java,
+                        method.returnType,
+                    )
+                } else {
+                    assertFalse(
+                        method.returnType.name.startsWith("systems.zlink.framework.channels.ZLink"),
+                        "Java call return leaked from ${method.declaringClass.simpleName}.${method.name}",
+                    )
+                }
                 assertFalse(
                     method.parameterTypes.any {
                         it.name.startsWith("systems.zlink.framework.channels.ZLink")
@@ -159,6 +169,7 @@ class KotlinPublicSurfaceContractTest {
                 "instanceSpot" to 2,
                 "inMesh" to 1,
                 "timeout" to 1,
+                "submit" to 1,
                 "await" to 1,
                 "yield" to 1,
             ),

@@ -31,11 +31,18 @@ export class ZLinkRouterSocketSpotRouteTransport {
     codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
     flags: ZLinkBackendSendFlags,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     const router = this.sockets.routeRouter(target.routerChannelId);
     void flags;
-    const operation = router.requestToSpot(target.targetNodeRid, target.spotId, parts, timeoutMs);
+    const operation = router.requestToSpot(
+      target.targetNodeRid,
+      target.spotId,
+      parts,
+      timeoutMs,
+      onAdmitted
+    );
     const replyParts = await awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);
     });
@@ -51,14 +58,16 @@ export class ZLinkRouterSocketSpotRouteTransport {
     target: ZLinkSpotRouteTarget,
     request: Message,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<readonly Message[]> {
     const router = this.sockets.routeRouter(target.routerChannelId);
     const operation = router.requestToSpot(
       target.targetNodeRid,
       target.spotId,
       [request],
-      timeoutMs
+      timeoutMs,
+      onAdmitted
     );
     return await awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);

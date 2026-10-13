@@ -56,7 +56,8 @@ final class ZLinkChannelCallRuntime {
                 List<Message> parts,
                 Duration timeout,
                 ZLinkServiceOperationRegistry operations,
-                UUID operationId);
+                UUID operationId,
+                CompletableFuture<Void> requestAdmission);
     }
 
     private final ZLinkMessageFlowTracer flow;
@@ -128,12 +129,20 @@ final class ZLinkChannelCallRuntime {
     }
 
     CompletionStage<ZLinkBackendReceived> requestClient(
-            ZLinkBackendDealerSocket client, List<Message> requestParts, Duration timeout) {
+            ZLinkBackendDealerSocket client,
+            List<Message> requestParts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         return preserveCurrentFlow(
                 submit(
                         ZLinkServiceOperationIds.next(),
                         timeout,
-                        () -> client.request(requestParts, timeout, client.receiveAdmission()),
+                        () ->
+                                client.request(
+                                        requestParts,
+                                        timeout,
+                                        client.receiveAdmission(),
+                                        requestAdmission),
                         ZLinkBackendReceived::close));
     }
 
@@ -142,12 +151,13 @@ final class ZLinkChannelCallRuntime {
             ZLinkBackendRouterSocket router,
             RoutingId target,
             List<Message> requestParts,
-            Duration timeout) {
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         return preserveCurrentFlow(
                 submit(
                         operationId,
                         timeout,
-                        () -> router.request(target, requestParts, timeout),
+                        () -> router.request(target, requestParts, timeout, requestAdmission),
                         ZLinkBackendReceived::close));
     }
 
@@ -157,14 +167,21 @@ final class ZLinkChannelCallRuntime {
             String channelName,
             byte[] metadata,
             List<Message> requestParts,
-            Duration timeout) {
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         if (operations.isClosed()) {
             return CompletableFuture.failedFuture(closedFailure());
         }
         try {
             return preserveCurrentFlow(
                     node.requestToChannel(
-                            channelName, metadata, requestParts, timeout, operations, operationId));
+                            channelName,
+                            metadata,
+                            requestParts,
+                            timeout,
+                            operations,
+                            operationId,
+                            requestAdmission));
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
@@ -176,14 +193,21 @@ final class ZLinkChannelCallRuntime {
             RoutingId target,
             byte[] metadata,
             List<Message> requestParts,
-            Duration timeout) {
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         if (operations.isClosed()) {
             return CompletableFuture.failedFuture(closedFailure());
         }
         try {
             return preserveCurrentFlow(
                     node.requestToNode(
-                            target, metadata, requestParts, timeout, operations, operationId));
+                            target,
+                            metadata,
+                            requestParts,
+                            timeout,
+                            operations,
+                            operationId,
+                            requestAdmission));
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
@@ -288,7 +312,8 @@ final class ZLinkChannelCallRuntime {
             long authorityOwnerGeneration,
             long ownerLeaseGeneration,
             List<Message> parts,
-            Duration timeout) {
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         return requestToSpot(
                 channelName,
                 targetNode,
@@ -298,7 +323,8 @@ final class ZLinkChannelCallRuntime {
                 ownerLeaseGeneration,
                 parts,
                 timeout,
-                ZLinkServiceOperationIds.next());
+                ZLinkServiceOperationIds.next(),
+                requestAdmission);
     }
 
     CompletionStage<List<Message>> requestToSpot(
@@ -310,7 +336,8 @@ final class ZLinkChannelCallRuntime {
             long ownerLeaseGeneration,
             List<Message> parts,
             Duration timeout,
-            UUID operationId) {
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
         if (operations.isClosed()) {
             return CompletableFuture.failedFuture(closedFailure());
         }
@@ -325,7 +352,8 @@ final class ZLinkChannelCallRuntime {
                     parts,
                     timeout,
                     operations,
-                    operationId);
+                    operationId,
+                    requestAdmission);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }

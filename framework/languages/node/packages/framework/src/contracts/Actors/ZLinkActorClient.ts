@@ -1,4 +1,5 @@
 import type { ActorId } from '../Common';
+import type { ZLinkRequest } from '../Handlers/Attributes';
 
 export interface ZLinkActorClient {
   sendToActor(actorId: ActorId, message: unknown): ZLinkActorSendCall;
@@ -13,6 +14,6 @@ export interface ZLinkActorSendCall {
 export interface ZLinkActorRequestCall {
   metadata(key: string, value: string): this;
   timeout(timeoutMs: number): this;
-  submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+  submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply>;
   yield<TReply>(signal?: AbortSignal): Promise<TReply>;
 }

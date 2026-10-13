@@ -673,7 +673,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     sourceRoute.actor(),
                                     requestParts,
                                     SendFlags.DONT_WAIT,
-                                    Duration.ofSeconds(3));
+                                    Duration.ofSeconds(3),
+                                    null);
             pendingReply.whenComplete(
                     (replies, error) ->
                             receivedAll.completeExceptionally(
@@ -1043,6 +1044,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     info.actorMessages().forEach(ZLinkBackendActorReceived::close);
                                     return CompletableFuture.failedFuture(dispatchFailure);
                                 }
+
+                                @Override
+                                public CompletionStage<Void> handleActor(
+                                        List<ZLinkBackendActorReceived> messages,
+                                        CompletableFuture<Void> admission) {
+                                    messages.forEach(ZLinkBackendActorReceived::close);
+                                    return CompletableFuture.failedFuture(dispatchFailure);
+                                }
                             });
 
             var route =
@@ -1104,7 +1113,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 actor,
                                 List.of(payload),
                                 SendFlags.DONT_WAIT,
-                                Duration.ofSeconds(1));
+                                Duration.ofSeconds(1),
+                                null);
             }
             ExecutionException requestFailure =
                     assertThrows(
@@ -1328,8 +1338,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         nodeRid,
                                         targetRid.toString(),
                                         target.lifecycleGeneration(),
+                                        null,
                                         List.of(request),
-                                        Duration.ofSeconds(1))
+                                        Duration.ofSeconds(1),
+                                        null)
                                 .toCompletableFuture();
             }
 
@@ -1360,8 +1372,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         nodeRid,
                                         targetRid.toString(),
                                         target.lifecycleGeneration(),
+                                        null,
                                         List.of(request),
-                                        Duration.ofMillis(20))
+                                        Duration.ofMillis(20),
+                                        null)
                                 .toCompletableFuture();
             }
 
@@ -1474,7 +1488,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                             List.of(header, message),
                                             Duration.ofSeconds(2),
                                             caller,
-                                            operationId)
+                                            operationId,
+                                            null)
                                     .toCompletableFuture();
                 }
                 ZLinkBackendReceived pending = firstRequest.get(2, TimeUnit.SECONDS);
@@ -1512,8 +1527,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         leftRid,
                                         targetRid.toString(),
                                         staleGeneration,
+                                        null,
                                         List.of(message),
-                                        Duration.ofSeconds(2))
+                                        Duration.ofSeconds(2),
+                                        null)
                                 .toCompletableFuture();
             }
             try (ZLinkBackendReceived received = reply.get(2, TimeUnit.SECONDS)) {
@@ -1539,8 +1556,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         leftRid,
                                         targetRid.toString(),
                                         target.lifecycleGeneration(),
+                                        null,
                                         List.of(message),
-                                        Duration.ofSeconds(2))
+                                        Duration.ofSeconds(2),
+                                        null)
                                 .toCompletableFuture();
             }
             try (ZLinkBackendReceived received = stale.get(2, TimeUnit.SECONDS)) {
@@ -1632,7 +1651,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         target.lifecycleGeneration(),
                                         requestMetadata,
                                         List.of(head, body),
-                                        Duration.ofSeconds(2))
+                                        Duration.ofSeconds(2),
+                                        null)
                                 .toCompletableFuture();
             }
             try (ZLinkBackendReceived received = requested.get(2, TimeUnit.SECONDS);
@@ -1694,7 +1714,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         actor,
                                         List.of(request),
                                         SendFlags.DONT_WAIT,
-                                        Duration.ofSeconds(1))
+                                        Duration.ofSeconds(1),
+                                        null)
                                 .toCompletableFuture()
                                 .get(1, TimeUnit.SECONDS);
             }
@@ -1747,7 +1768,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         actor,
                                         List.of(payload),
                                         SendFlags.DONT_WAIT,
-                                        Duration.ofSeconds(2));
+                                        Duration.ofSeconds(2),
+                                        null);
             }
             var received = accepted.get(1, TimeUnit.SECONDS);
             node.spotNode()
@@ -1853,7 +1875,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         actor,
                                         List.of(request),
                                         SendFlags.DONT_WAIT,
-                                        Duration.ofSeconds(2));
+                                        Duration.ofSeconds(2),
+                                        null);
             }
             try {
                 List<systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived>
@@ -1892,7 +1915,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         staleAddress,
                                         List.of(request),
                                         SendFlags.DONT_WAIT,
-                                        Duration.ofSeconds(2))
+                                        Duration.ofSeconds(2),
+                                        null)
                                 .toCompletableFuture()
                                 .get(2, TimeUnit.SECONDS);
             }
@@ -2890,7 +2914,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
 
                                     @Override
                                     public CompletionStage<Void> handleRoute(
-                                            ZLinkBackendReceived received) {
+                                            ZLinkBackendReceived received,
+                                            java.util.concurrent.CompletableFuture<Void>
+                                                    requestAdmission) {
                                         return admission.enqueue(
                                                 () -> {
                                                     acceptedRoute.set(received);
@@ -2924,7 +2950,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         null,
                                         new byte[0],
                                         List.of(packet, payload),
-                                        Duration.ofSeconds(10))
+                                        Duration.ofSeconds(10),
+                                        null)
                                 .toCompletableFuture();
                 queued.get(2, TimeUnit.SECONDS);
                 ZLinkBackendSpot spot = spots.localSpot(spotId);
@@ -2994,7 +3021,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                         }
 
                         @Override
-                        public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
+                        public CompletionStage<Void> handleRoute(
+                                ZLinkBackendReceived received,
+                                java.util.concurrent.CompletableFuture<Void> requestAdmission) {
                             return admission.enqueue(
                                     () -> CompletableFuture.completedFuture(null), null);
                         }
@@ -3011,7 +3040,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         null,
                                         new byte[0],
                                         List.of(packet, payload),
-                                        Duration.ofSeconds(10))
+                                        Duration.ofSeconds(10),
+                                        null)
                                 .toCompletableFuture();
                 ExecutionException failure =
                         assertThrows(
@@ -3039,7 +3069,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     }
 
                     @Override
-                    public CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
+                    public CompletionStage<Void> handleRoute(
+                            ZLinkBackendReceived received,
+                            java.util.concurrent.CompletableFuture<Void> requestAdmission) {
                         return admission.enqueue(
                                 () -> {
                                     acceptedRoute.complete(received);
@@ -3072,7 +3104,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             parts -> reply.set(parts.getFirst().toUtf8String()),
                             () -> {},
                             "application/json");
-            spot.enqueueRoute(received);
+            spot.enqueueRoute(received, null);
             acceptedRoute.join();
             admission.sealClosingAdmission();
             ZLinkBackendReceived late =
@@ -3093,7 +3125,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     assertThrows(
                                                     java.util.concurrent.CompletionException.class,
                                                     () ->
-                                                            spot.enqueueRoute(late)
+                                                            spot.enqueueRoute(late, null)
                                                                     .toCompletableFuture()
                                                                     .join())
                                             .getCause())

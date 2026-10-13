@@ -123,7 +123,8 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
                                 actor,
                                 List.of(payload),
                                 systems.zlink.contracts.sockets.SendFlags.DONT_WAIT,
-                                Duration.ofSeconds(5));
+                                Duration.ofSeconds(5),
+                                null);
             }
             entered.get(1, TimeUnit.SECONDS);
             var drain = spots.awaitPendingActorRequests().toCompletableFuture();

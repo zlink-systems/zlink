@@ -234,6 +234,9 @@ public sealed class MeshApplicationWorkerTests
             },
             runner
         );
+        var handlerRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var state = pump.RegisterSpot("local-spot");
         pump.SetDispatchHandler("local-spot", info => (DispatchAsync(info), null));
         async ValueTask DispatchAsync(ZLinkBackendSpotDispatchInfo info)
@@ -244,6 +247,7 @@ public sealed class MeshApplicationWorkerTests
                 Assert.NotNull(received.ApplicationJobAdmission);
                 await received.ApplicationJobAdmission.ReleaseForHandlerStartAsync();
                 Assert.Equal(0UL, jobs.GetStatus().QueuedApplicationJobs);
+                await handlerRelease.Task;
                 Assert.Equal(SubmitResult.Ok, received.Reply(received.Parts));
             }
         }
@@ -253,7 +257,8 @@ public sealed class MeshApplicationWorkerTests
         );
         using var payload = Message.From(new byte[16]);
         pump.EnsureStarted();
-        var request = node.RequestToSpotDirectAsync(
+        var request = ZLinkRequestAdmission.Run<ZLinkBackendRouteReceived>(admission =>
+            node.RequestToSpotDirectAsync(
                 "",
                 rid,
                 "local-spot",
@@ -262,12 +267,17 @@ public sealed class MeshApplicationWorkerTests
                 SendFlags.None,
                 default,
                 TimeSpan.FromSeconds(5),
-                CancellationToken.None
+                CancellationToken.None,
+                requestAdmission: admission
             )
-            .AsTask();
-        Assert.False(request.IsCompleted);
+        );
+        Assert.False(request.Admitted.IsCompleted);
+        Assert.False(request.Reply.IsCompleted);
         held.Dispose();
-        using var reply = await request.WaitAsync(TimeSpan.FromSeconds(5));
+        await request.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(request.Reply.IsCompleted);
+        handlerRelease.SetResult();
+        using var reply = await request.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(16, reply.Parts[0].Size);
         await pump.DisposeAsync();
         await runner.StopAsync();

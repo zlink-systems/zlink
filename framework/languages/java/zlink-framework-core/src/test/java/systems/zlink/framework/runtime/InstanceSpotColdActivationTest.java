@@ -390,7 +390,8 @@ final class InstanceSpotColdActivationTest {
                                         null,
                                         envelope.metadataFrame(),
                                         parts,
-                                        Duration.ofSeconds(5))
+                                        Duration.ofSeconds(5),
+                                        null)
                                 .toCompletableFuture();
                 var held = captured.get(5, TimeUnit.SECONDS);
                 assertTrue(

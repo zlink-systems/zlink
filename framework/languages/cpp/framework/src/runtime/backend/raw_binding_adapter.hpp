@@ -68,6 +68,51 @@ request_submission_stages_t submit_request_once (
     return {std::move (admission), std::move (submission.reply), caller_deadline};
 }
 
+inline result_t<raw_request_completion_t> raw_request_failure_result (
+  const std::exception &error,
+  raw_request_failure_phase_t phase = raw_request_failure_phase_t::completion_terminal)
+{
+    if (const auto *request = dynamic_cast<const zlink::request_error_t *> (&error))
+        return result_t<raw_request_completion_t>::success (raw_request_completion_t{
+          request->result (),
+          {},
+          raw_request_failure_t{phase, std::nullopt, request->internal_errno ()}});
+    if (const auto *submit = dynamic_cast<const zlink::submit_error_t *> (&error))
+        return result_t<raw_request_completion_t>::success (raw_request_completion_t{
+          runtime::messaging::map_submit_request_result (
+            submit->result (), phase == raw_request_failure_phase_t::completion_terminal),
+          {},
+          raw_request_failure_t{phase, submit->result (), submit->internal_errno ()}});
+    if (detail::is_cancellation_exception (error))
+        return detail::result_access_t::failure<raw_request_completion_t> (
+          std::current_exception ());
+    return result_t<raw_request_completion_t>::failure (framework_error_kind_t::internal_failure,
+                                                        error.what ());
+}
+
+inline result_t<void>
+raw_request_admission_failure (const result_t<raw_request_completion_t> &result)
+{
+    return result ? detail::result_access_t::failure<void> (
+                      runtime::messaging::map_request_result_exception (result.value ().terminal,
+                                                                        "request admission"))
+                  : detail::result_access_t::failure<void> (result.exception ());
+}
+
+inline void observe_raw_request_admission_failure (
+  task_t<raw_request_completion_t> &reply,
+  const std::shared_ptr<task_completion_source_t<void>> &admitted)
+{
+    if (!admitted)
+        return;
+    detail::observe_task_terminal (reply, [admitted] (const auto &result) {
+        if (!result)
+            admitted->complete (raw_request_admission_failure (result));
+        else if (result.value ().terminal != zlink::request_result_t::ok)
+            admitted->complete (raw_request_admission_failure (result));
+    });
+}
+
 // A successful binding receive owns native parts until close(). This guard
 // pairs that terminal release with the receive even when ownership transfer or
 // metadata validation throws.
@@ -108,7 +153,8 @@ inline raw_message_t copy_binding_parts (const std::vector<zlink::message_t> &pa
 inline binding_completion_observer_t observe_request_completion (
   request_submission_stages_t stages,
   std::shared_ptr<task_completion_source_t<raw_request_completion_t>> source,
-  runtime::mesh::service_liveness_registry_t::connection_t admission = {})
+  runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+  std::shared_ptr<task_completion_source_t<void>> admitted = {})
 {
     try {
         std::exception_ptr admission_error;
@@ -120,6 +166,19 @@ inline binding_completion_observer_t observe_request_completion (
                 admission_error = std::current_exception ();
             }
         }
+        if (admitted) {
+            if (admission_error) {
+                try {
+                    std::rethrow_exception (admission_error);
+                }
+                catch (const std::exception &error) {
+                    admitted->complete (
+                      raw_request_admission_failure (raw_request_failure_result (error)));
+                }
+            } else {
+                admitted->complete (result_t<void>::success ());
+            }
+        }
         auto reply = co_await std::move (stages.reply);
         if (admission)
             admission->record_received (
@@ -129,28 +188,8 @@ inline binding_completion_observer_t observe_request_completion (
         source->complete (result_t<raw_request_completion_t>::success (
           raw_request_completion_t{zlink::request_result_t::ok, copy_binding_parts (reply)}));
     }
-    catch (const zlink::request_error_t &error) {
-        source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
-          error.result (),
-          {},
-          raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, std::nullopt,
-                                error.internal_errno ()}}));
-    }
-    catch (const zlink::submit_error_t &error) {
-        const auto result = runtime::messaging::map_submit_request_result (error.result (), true);
-        source->complete (result_t<raw_request_completion_t>::success (raw_request_completion_t{
-          result,
-          {},
-          raw_request_failure_t{raw_request_failure_phase_t::completion_terminal, error.result (),
-                                error.internal_errno ()}}));
-    }
     catch (const std::exception &error) {
-        source->complete (result_t<raw_request_completion_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ()));
-    }
-    catch (...) {
-        source->complete (result_t<raw_request_completion_t>::failure (
-          framework_error_kind_t::internal_failure, "raw route request completion failed"));
+        source->complete (raw_request_failure_result (error));
     }
 }
 

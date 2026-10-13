@@ -81,7 +81,9 @@ public final class SpotTerminalProbe
             Map<String, String> metadata,
             Duration timeout,
             SpotTransportAddress readyRoute,
-            SpotTransportAddressResolver resolver) {
+            SpotTransportAddressResolver resolver,
+            CompletableFuture<Void> requestAdmission) {
+        if (requestAdmission != null) requestAdmission.complete(null);
         CompletionStage<List<Message>> submitted;
         if (readyRoute == null) coordinatorCalls++;
         if (readyRoute != null || !missing) {

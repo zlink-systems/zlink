@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
@@ -10,6 +11,7 @@ import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
@@ -21,6 +23,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
@@ -203,7 +206,8 @@ final class ZLinkSpotRoutedOutbound {
             String contentType,
             ZLinkApplicationMetadata metadata,
             Duration timeout,
-            Class<TReply> replyType) {
+            Class<TReply> replyType,
+            CompletableFuture<Void> requestAdmission) {
         trace(
                 ZLinkMessageFlowOutcome.SENT,
                 ZLinkDispatchMessageKind.REQUEST,
@@ -212,18 +216,21 @@ final class ZLinkSpotRoutedOutbound {
                 spotId);
         ZLinkInternalSpotNode routerNode = localRouterNode.apply(routerChannelId);
         if (routerNode != null) {
-            return directOutbound
-                    .request(
-                            routerNode.entrySpot(),
-                            targetNodeRid,
-                            spotId,
-                            spotGeneration,
-                            payload,
-                            packetName,
-                            contentType,
-                            timeout)
-                    .metadata(metadata.values())
-                    .submit(replyType);
+            var submitted =
+                    directOutbound
+                            .request(
+                                    routerNode.entrySpot(),
+                                    targetNodeRid,
+                                    spotId,
+                                    spotGeneration,
+                                    payload,
+                                    packetName,
+                                    contentType,
+                                    timeout)
+                            .metadata(metadata.values())
+                            .submit(replyType);
+            ZLinkRequestStages.forwardAdmission(requestAdmission, submitted.admitted());
+            return submitted;
         }
         if (!metadata.values().isEmpty()) {
             throw new UnsupportedOperationException(
@@ -239,7 +246,13 @@ final class ZLinkSpotRoutedOutbound {
                         captureOutboundFlow());
         try {
             return channels.requestToSpotViaRouterChannel(
-                            routerChannelId, targetNodeRid, spotId, spotGeneration, parts, timeout)
+                            routerChannelId,
+                            targetNodeRid,
+                            spotId,
+                            spotGeneration,
+                            parts,
+                            timeout,
+                            requestAdmission)
                     .thenApply(
                             replyParts -> {
                                 trace(
@@ -447,6 +460,8 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
 }
 
 final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
+    private CompletableFuture<Void> requestAdmission;
+
     private final AtomicBoolean submitGate;
     private final ZLinkSpotRoutedOutbound outbound;
     private final String routerChannelId;
@@ -618,11 +633,16 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
     }
 
     @Override
-    public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+    public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
-        if (duplicate != null) {
-            return duplicate;
-        }
+        if (duplicate != null)
+            return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
+        requestAdmission = new CompletableFuture<>();
+        return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
+    }
+
+    private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
+
         systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                 .rejectSameSpotWait(spotId);
         return ZLinkSerialExecutionQueue.manageCurrent(
@@ -636,7 +656,8 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
                         contentType,
                         metadata,
                         timeout,
-                        replyType));
+                        replyType,
+                        requestAdmission));
     }
 
     @Override

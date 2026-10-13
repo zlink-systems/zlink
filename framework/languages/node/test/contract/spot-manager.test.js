@@ -4247,9 +4247,9 @@ test('spot outbound requestToChannel completion runs on the spot serial executor
       return {
         packetName() { return this; },
         timeout() { return this; },
-        async submit() {
+        submit() {
           events.push(`request:${channelName}:${request}`);
-          return 'reply';
+          return Object.assign(Promise.resolve('reply'), { admitted: Promise.resolve() });
         }
       };
     },

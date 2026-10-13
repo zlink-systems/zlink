@@ -336,7 +336,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         instanceSpot: call.instanceSpot,
         timeoutMs: deadline.requireRemaining(),
         signal: deadline.signal,
-        metadata: call.metadata
+        metadata: call.metadata,
+        onAdmitted: call.onAdmitted
       }),
       deadline.signal
     );
@@ -416,7 +417,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           encoded,
           deadlineUnixMs,
           call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
-          call.metadata
+          call.metadata,
+          call.onAdmitted
         ),
       deadline.signal
     );

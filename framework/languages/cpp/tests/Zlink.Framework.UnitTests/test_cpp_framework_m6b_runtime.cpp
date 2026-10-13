@@ -2,6 +2,7 @@
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
+#include "../support/request_admission_fixture.hpp"
 
 #include "metric_test_reader.hpp"
 #include "test_completion_poller_driver.hpp"
@@ -1707,7 +1708,7 @@ class recording_actor_client_t final : public zlink::framework::actor_client_t
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
     }
 
-    zlink::framework::task_t<zlink::framework::message_t>
+    zlink::framework::request_task_t<zlink::framework::message_t>
     request_erased (zlink::framework::actor_id_t,
                     std::string,
                     zlink::framework::message_t,
@@ -1716,8 +1717,8 @@ class recording_actor_client_t final : public zlink::framework::actor_client_t
     {
         request_submissions.fetch_add (1);
         if (delay_next_request.exchange (false))
-            return delayed_request.task ();
-        return zlink::framework::task_t<zlink::framework::message_t> (
+            return zlink::framework::test::accepted_request_task (delayed_request.task ());
+        return zlink::framework::request_task_t<zlink::framework::message_t> (
           zlink::framework::result_t<zlink::framework::message_t>::success (
             zlink::framework::message_t{}));
     }
@@ -2183,7 +2184,7 @@ void verify_same_gate_request_rejected_before_submission ()
       "SameGate",
       [&submissions] (const auto &, auto, const auto &) {
           submissions.fetch_add (1);
-          return task_t<int> (result_t<int>::success (1));
+          return request_task_t<int> (result_t<int>::success (1));
       },
       [] (bool) {
           return result_t<void>::failure (
@@ -6171,7 +6172,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
            const std::optional<runtime::spot_address_t> &cached_route, std::string, std::type_index,
            std::function<serialized_payload_t (serializer_registry_t &)>,
            std::chrono::milliseconds timeout,
-           std::map<std::string, std::string>) -> task_t<zlink::message_t> {
+           std::map<std::string, std::string>) -> request_task_t<zlink::message_t> {
           // The same activation header the app builds for a cached or a cold route.
           auto header = replay_instance_request;
           header.operation = {123, ready_case_operation++};
@@ -6214,6 +6215,8 @@ void verify_remote_user_spot_create_close_terminal_once ()
           if (!submitted)
               completion->complete (result_t<zlink::message_t>::failure (
                 framework_error_kind_t::unavailable, "activation was not admitted"));
+          if (submitted)
+              co_await detail::request_admitted_t{};
           co_return co_await output;
       });
     auto instance_route = builder.route_client (serializers);

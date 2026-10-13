@@ -166,10 +166,23 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
+            byte[] metadata,
             List<Message> parts,
-            Duration timeout) {
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
         return owner.requestToSpot(
-                this, targetNodeRid, spotId, spotGeneration, new byte[0], parts, timeout);
+                this,
+                targetNodeRid,
+                spotId,
+                spotGeneration,
+                metadata,
+                parts,
+                timeout,
+                operations,
+                operationId,
+                requestAdmission);
     }
 
     @Override
@@ -180,8 +193,7 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
             byte[] metadata,
             List<Message> parts,
             Duration timeout,
-            ZLinkServiceOperationRegistry operations,
-            UUID operationId) {
+            CompletableFuture<Void> requestAdmission) {
         return owner.requestToSpot(
                 this,
                 targetNodeRid,
@@ -190,20 +202,7 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
                 metadata,
                 parts,
                 timeout,
-                operations,
-                operationId);
-    }
-
-    @Override
-    public CompletionStage<ZLinkBackendReceived> requestToSpot(
-            RoutingId targetNodeRid,
-            String spotId,
-            long spotGeneration,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout) {
-        return owner.requestToSpot(
-                this, targetNodeRid, spotId, spotGeneration, metadata, parts, timeout);
+                requestAdmission);
     }
 
     @Override
@@ -227,18 +226,11 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
         return topics.contains(topic);
     }
 
-    CompletionStage<Void> enqueueRoute(ZLinkBackendReceived received) {
-        return enqueueRoute(received, null);
-    }
-
     CompletionStage<Void> enqueueRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
         if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
-            CompletionStage<Void> direct =
-                    admission == null
-                            ? async.handleRoute(received)
-                            : async.handleRoute(received, admission);
+            CompletionStage<Void> direct = async.handleRoute(received, admission);
             if (direct != null) {
                 return direct;
             }
@@ -279,10 +271,11 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
         return true;
     }
 
-    CompletionStage<Void> enqueueActor(List<ZLinkBackendActorReceived> messages) {
+    CompletionStage<Void> enqueueActor(
+            List<ZLinkBackendActorReceived> messages, CompletableFuture<Void> requestAdmission) {
         ZLinkBackendSpotDispatchHandler handler = dispatchHandler;
         if (handler instanceof ZLinkInternalAsyncSpotDispatchHandler async) {
-            CompletionStage<Void> direct = async.handleActor(messages);
+            CompletionStage<Void> direct = async.handleActor(messages, requestAdmission);
             if (direct != null) {
                 return direct;
             }
@@ -294,6 +287,7 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
                         new IllegalStateException("target Spot is closed"));
             }
         }
+        if (requestAdmission != null) requestAdmission.complete(null);
         return raise(ZLinkBackendSpotDispatchEvent.ACTOR_READABLE, messages);
     }
 

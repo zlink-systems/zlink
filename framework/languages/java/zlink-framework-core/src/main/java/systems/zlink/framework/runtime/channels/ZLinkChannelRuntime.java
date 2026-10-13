@@ -928,7 +928,11 @@ public final class ZLinkChannelRuntime
                                 ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
                                 Integer.MAX_VALUE));
         try (Message message = Message.from(hello)) {
-            dealer.request(List.of(message), defaultRequestTimeout(channelName))
+            dealer.request(
+                            List.of(message),
+                            defaultRequestTimeout(channelName),
+                            dealer.receiveAdmission(),
+                            null)
                     .whenComplete(
                             (reply, failure) -> {
                                 if (failure != null) {
@@ -1275,7 +1279,8 @@ public final class ZLinkChannelRuntime
                         requireRouteRouter(channelName),
                         target,
                         requestParts,
-                        effectiveTimeout)
+                        effectiveTimeout,
+                        null)
                 .whenComplete(
                         (reply, failure) -> {
                             requestParts.forEach(Message::close);
@@ -1398,9 +1403,16 @@ public final class ZLinkChannelRuntime
             RoutingId targetNodeRid,
             String targetSpotId,
             List<Message> spotParts,
-            Duration timeout) {
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         return requestToSpotViaRouterChannel(
-                routerChannelId, targetNodeRid, targetSpotId, 0L, spotParts, timeout);
+                routerChannelId,
+                targetNodeRid,
+                targetSpotId,
+                0L,
+                spotParts,
+                timeout,
+                requestAdmission);
     }
 
     public CompletionStage<List<Message>> requestToSpotViaRouterChannel(
@@ -1409,7 +1421,8 @@ public final class ZLinkChannelRuntime
             String targetSpotId,
             long targetSpotGeneration,
             List<Message> spotParts,
-            Duration timeout) {
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
         return callRuntime.requestToSpot(
                 routerChannelId,
                 targetNodeRid,
@@ -1418,7 +1431,8 @@ public final class ZLinkChannelRuntime
                 0L,
                 0L,
                 spotParts,
-                timeout);
+                timeout,
+                requestAdmission);
     }
 
     private CompletionStage<List<Message>> requestToSpotViaRouterChannel(
@@ -1431,7 +1445,8 @@ public final class ZLinkChannelRuntime
             List<Message> spotParts,
             Duration timeout,
             ZLinkServiceOperationRegistry operations,
-            UUID operationId) {
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
         Objects.requireNonNull(timeout, "timeout");
         return sockets.submitToSpot(
                 routerChannelId,
@@ -1452,7 +1467,8 @@ public final class ZLinkChannelRuntime
                                         targetSpotId,
                                         copyMessages(spotParts),
                                         effectiveTimeout,
-                                        result);
+                                        result,
+                                        requestAdmission);
                                 return result;
                             },
                             Message::closeAll);
@@ -1469,7 +1485,8 @@ public final class ZLinkChannelRuntime
                             spotParts,
                             effectiveTimeout,
                             operations,
-                            operationId);
+                            operationId,
+                            requestAdmission);
                 });
     }
 

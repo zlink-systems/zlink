@@ -20,6 +20,7 @@ import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.actors.ZLinkActorRequestCall;
 import systems.zlink.framework.actors.ZLinkActorSendCall;
 import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.configuration.ZLinkFrameworkOptions;
@@ -258,7 +259,7 @@ final class LocationContractTest {
                 ZLinkActorRequestCall.class,
                 ZLinkActorRequestCall.class.getMethod("timeout", Duration.class).getReturnType());
         assertEquals(
-                CompletionStage.class,
+                ZLinkRequestStage.class,
                 ZLinkActorRequestCall.class.getMethod("submit", Class.class).getReturnType());
         assertNoPublicMethod(ZLinkActorRequestCall.class, "await", Class.class);
         assertNoPublicMethod(ZLinkActorSendCall.class, "submit", Class.class);

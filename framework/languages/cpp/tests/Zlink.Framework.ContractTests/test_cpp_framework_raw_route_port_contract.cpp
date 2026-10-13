@@ -308,9 +308,15 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
     }
     assert (blocked_send);
     const auto caller_deadline = std::chrono::steady_clock::now () + raw_request_capacity_timeout;
+    auto acceptance = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     auto pending = zlink::framework::runtime::messaging::with_request_deadline (
-      port.request (target_rid.to_bytes (), request_parts (), raw_route_fixture_timeout),
+      zlink::framework::request_task_t<backend::raw_request_completion_t> (
+        port.request (target_rid.to_bytes (), request_parts (), raw_route_fixture_timeout, {},
+                      acceptance),
+        acceptance),
       caller_deadline);
+    auto admitted = acceptance->task ();
+    assert (!admitted.await_ready ());
     std::atomic_int terminal_count{0};
     zlink::framework::detail::observe_task_completion (pending, [&] (const auto &settled) {
         assert (!settled
@@ -327,6 +333,8 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
     assert (!pending.result ());
     assert (pending.result ().error_kind ()
             == zlink::framework::framework_error_kind_t::deadline_exceeded);
+    assert (admitted.await_ready ());
+    assert (admitted.result ().exception () == pending.result ().exception ());
     assert (terminal_count.load (std::memory_order_acquire) == 1);
     port.close ();
     target_port.close ();
@@ -467,7 +475,12 @@ void verify_binding_completion_bypasses_handler_executor ()
     assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
 
     backend::raw_route_port_t source_port (source), target_port (target);
-    auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
+    auto acceptance = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    auto pending =
+      source_port.request (target_rid.to_bytes (), request_parts (), 2s, {}, acceptance);
+    auto admitted = acceptance->task ();
+    assert (admitted.await_ready () && admitted.result ());
+    assert (!pending.await_ready ());
     std::atomic_int observed_count{0};
     zlink::framework::detail::observe_task_completion (pending, [&] (const auto &settled) {
         assert (settled && settled.value ().terminal == zlink::request_result_t::ok);

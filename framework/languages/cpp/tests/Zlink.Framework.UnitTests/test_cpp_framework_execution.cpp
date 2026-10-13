@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/request_admission_fixture.hpp"
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -1204,7 +1205,7 @@ class reentry_probe_actor_client_t final : public zlink::framework::actor_client
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
     }
 
-    zlink::framework::task_t<zlink::framework::message_t>
+    zlink::framework::request_task_t<zlink::framework::message_t>
     request_erased (zlink::framework::actor_id_t,
                     std::string,
                     zlink::framework::message_t,
@@ -1212,7 +1213,7 @@ class reentry_probe_actor_client_t final : public zlink::framework::actor_client
                     const zlink::framework::actor_request_call_t::metadata_map_t &) override
     {
         ++request_calls;
-        return zlink::framework::task_t<zlink::framework::message_t> (
+        return zlink::framework::request_task_t<zlink::framework::message_t> (
           zlink::framework::result_t<zlink::framework::message_t>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "same-Actor request reached transport"));
@@ -1238,7 +1239,9 @@ run_request_turn_probe (std::shared_ptr<zlink::framework::task_completion_source
         order->push_back (1);
     }
     zlink::framework::request_call_t<int> call (
-      "TurnProbe", [reply] (const auto &, auto, const auto &) { return reply->task (); });
+      "TurnProbe", [reply] (const auto &, auto, const auto &) {
+          return zlink::framework::test::accepted_request_task (reply->task ());
+      });
     int value = 0;
     if (release_turn)
         value = co_await call.yield ();
@@ -2345,7 +2348,9 @@ zlink::framework::task_t<void> run_spot_wide_actor_yield_probe (
     state->record ("actor-a:start");
     state->first_started.set ();
     zlink::framework::request_call_t<int> call (
-      "YieldProbe", [reply] (const auto &, auto, const auto &) { return reply->task (); });
+      "YieldProbe", [reply] (const auto &, auto, const auto &) {
+          return zlink::framework::test::accepted_request_task (reply->task ());
+      });
     const auto value = co_await call.yield ();
     if (value != 7)
         throw std::runtime_error ("yield probe reply mismatch");
@@ -2443,8 +2448,9 @@ zlink::framework::task_t<zlink::message_t> run_spot_wide_yield_idle_eviction_pro
 {
     probe->handler_entered.set ();
     zlink::framework::request_call_t<int> call (
-      "YieldIdleEvictionProbe",
-      [reply = probe->reply] (const auto &, auto, const auto &) { return reply->task (); });
+      "YieldIdleEvictionProbe", [reply = probe->reply] (const auto &, auto, const auto &) {
+          return zlink::framework::test::accepted_request_task (reply->task ());
+      });
     const auto value = co_await call.yield ();
     if (value != 7)
         throw std::runtime_error ("yield idle-eviction probe reply mismatch");
@@ -8256,7 +8262,8 @@ int main (int argc, char **argv)
     zlink::framework::request_call_t<int> unsupported_yield (
       "UnsupportedYield", [&unsupported_submit_count] (const auto &, auto, const auto &) {
           unsupported_submit_count.fetch_add (1);
-          return zlink::framework::task_t<int> (zlink::framework::result_t<int>::success (1));
+          return zlink::framework::request_task_t<int> (
+            zlink::framework::result_t<int>::success (1));
       });
     const auto unsupported_yield_result = unsupported_yield.yield ().result ();
     if (unsupported_yield_result

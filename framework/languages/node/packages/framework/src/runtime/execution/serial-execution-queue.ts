@@ -9,6 +9,7 @@ import {
 export type ZLinkSerialWorkLane = 'application' | 'lifecycle';
 
 export interface ZLinkSerialWorkOptions {
+  readonly onAdmitted?: () => void;
   readonly lane?: ZLinkSerialWorkLane;
   readonly payloadBytes?: number;
   readonly metadataBytes?: number;
@@ -269,6 +270,7 @@ export class ZLinkSerialExecutionQueue {
       release();
       throw error;
     }
+    options.onAdmitted?.();
     this.scheduleDrain();
     return result;
   }

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include <zlink/framework/contracts/dispatch/request_task.hpp>
 
 #include "runtime/channels/channel_pending_requests.hpp"
 #include "runtime/channels/route_connection_set.hpp"
@@ -35,7 +36,7 @@ class route_channel_runtime_t
       std::function<result_t<void> (const zlink::routing_id_t &,
                                     const std::optional<std::string> &,
                                     const runtime::messaging::message_parts_t &)>;
-    using request_backend_t = std::function<result_t<runtime::messaging::message_parts_t> (
+    using request_backend_t = std::function<request_task_t<runtime::messaging::message_parts_t> (
       const zlink::routing_id_t &,
       const std::optional<std::string> &,
       const runtime::messaging::message_parts_t &,
@@ -101,7 +102,8 @@ class route_channel_runtime_t
     result_t<runtime::messaging::message_parts_t>
     request_reply_parts (const zlink::routing_id_t &target_node_rid,
                          runtime::messaging::message_parts_t parts,
-                         std::chrono::milliseconds timeout);
+                         std::chrono::milliseconds timeout,
+                         std::shared_ptr<task_completion_source_t<void>> admitted = {});
 
     result_t<void> submit_spot_send_parts (const zlink::routing_id_t &target_node_rid,
                                            const std::string &target_spot_id,
@@ -115,7 +117,8 @@ class route_channel_runtime_t
     request_reply_spot_parts (const zlink::routing_id_t &target_node_rid,
                               const std::string &target_spot_id,
                               runtime::messaging::message_parts_t parts,
-                              std::chrono::milliseconds timeout);
+                              std::chrono::milliseconds timeout,
+                              std::shared_ptr<task_completion_source_t<void>> admitted = {});
 
     result_t<void> complete_request (std::uint64_t request_seq);
     void set_send_backend (send_backend_t backend);

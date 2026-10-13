@@ -5,12 +5,14 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.channels.ZLinkPublishCall;
 import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
@@ -404,6 +406,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
     }
 
     private final class DeferredSpotRequestCall implements ZLinkSpotRequestCall {
+        private CompletableFuture<Void> requestAdmission;
+
         private final AtomicBoolean submitGate;
         private final String target;
         private final Message payload;
@@ -584,12 +588,17 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         }
 
         @Override
-        public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+        public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
             rejectAfterRelocationReady("Spot request submit");
             CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
-            if (duplicate != null) {
-                return duplicate;
-            }
+            if (duplicate != null)
+                return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
+            requestAdmission = new CompletableFuture<>();
+            return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
+        }
+
+        private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
+
             systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                     .rejectSameSpotWait(target);
             long started =
@@ -669,7 +678,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                             metadata.values(),
                             timeout,
                             null,
-                            resolver)
+                            resolver,
+                            requestAdmission)
                     .thenApply(
                             parts -> {
                                 try {
@@ -710,7 +720,9 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                     contentType,
                                     timeout);
             try {
-                return call.metadata(metadata.values()).submit(replyType);
+                var submitted = call.metadata(metadata.values()).submit(replyType);
+                ZLinkRequestStages.forwardAdmission(requestAdmission, submitted.admitted());
+                return submitted;
             } catch (RuntimeException failure) {
                 transportPayload.close();
                 throw failure;

@@ -47,15 +47,17 @@ async function createFrameworkTransport(options) {
     abortOnError: false
   });
   const client = app.get(ZLINK_ROUTE_CLIENT, { strict: false });
+  const requestSubmission = (_stream, body) => {
+    const request = client.requestToNode(
+      contract.MESH_NAME,
+      contract.SERVER_ROUTING_ID,
+      new contract.BenchPayload(body)
+    ).timeout(options.requestTimeoutMs).submit();
+    return { admitted: request.admitted, reply: request.then(reply => toBuffer(reply.body)) };
+  };
   return {
-    request: async (_stream, body) => {
-      const reply = await client.requestToNode(
-        contract.MESH_NAME,
-        contract.SERVER_ROUTING_ID,
-        new contract.BenchPayload(body)
-      ).timeout(options.requestTimeoutMs).submit();
-      return toBuffer(reply.body);
-    },
+    requestSubmission,
+    request: (_stream, body) => requestSubmission(_stream, body).reply,
     send: async (_stream, body) => {
       await client.sendToNode(
         contract.MESH_NAME,

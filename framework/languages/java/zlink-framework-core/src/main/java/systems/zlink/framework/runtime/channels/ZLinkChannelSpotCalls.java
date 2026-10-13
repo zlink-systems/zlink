@@ -2,11 +2,13 @@ package systems.zlink.framework.runtime.channels;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
@@ -310,6 +312,8 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
 }
 
 final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
+    private CompletableFuture<Void> requestAdmission;
+
     private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
@@ -550,11 +554,16 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
     }
 
     @Override
-    public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+    public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
-        if (duplicate != null) {
-            return duplicate;
-        }
+        if (duplicate != null)
+            return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
+        requestAdmission = new CompletableFuture<>();
+        return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
+    }
+
+    private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
+
         long started =
                 ZLinkRequestMetrics.durationEnabled()
                         ? runtime.nanoTime()
@@ -667,7 +676,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         metadata.values(),
                         timeout,
                         readyRoute,
-                        resolver)
+                        resolver,
+                        requestAdmission)
                 .thenApply(
                         parts -> {
                             try {
@@ -699,7 +709,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         address.ownerLeaseGeneration(),
                         requestParts,
                         timeout,
-                        operationId)
+                        operationId,
+                        requestAdmission)
                 .handle(
                         (replyParts, failure) -> {
                             try {

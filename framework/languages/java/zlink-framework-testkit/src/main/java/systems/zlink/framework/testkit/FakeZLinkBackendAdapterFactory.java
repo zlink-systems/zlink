@@ -572,6 +572,26 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
     private static final class FakeMeshNode extends FakeBackendObject
             implements ZLinkInternalMeshNode {
         @Override
+        public java.util.concurrent.CompletionStage<
+                        java.util.List<systems.zlink.contracts.messaging.Message>>
+                requestInstanceSpot(
+                        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                                        .InstanceRoute
+                                route,
+                        String stableType,
+                        String sourceSpotId,
+                        byte[] metadata,
+                        java.util.List<systems.zlink.contracts.messaging.Message> parts,
+                        java.time.Duration timeout,
+                        CompletableFuture<Void> requestAdmission) {
+            return requestReply(
+                    CompletableFuture.failedFuture(
+                            new UnsupportedOperationException(
+                                    "Remote Instance Spot request is unavailable")),
+                    requestAdmission);
+        }
+
+        @Override
         public String advertisedEndpoint() {
             return status().localEndpoint();
         }
@@ -758,16 +778,26 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
         @Override
         public CompletionStage<ZLinkBackendReceived> request(
-                List<Message> parts, Duration timeout) {
+                List<Message> parts,
+                Duration timeout,
+                Runnable receiveAdmission,
+                CompletableFuture<Void> requestAdmission) {
             record("request." + firstPart(parts));
             Message reply = jsonStringMessage("reply");
             try {
-                return CompletableFuture.completedFuture(
-                        new ZLinkBackendReceived(
-                                Optional.empty(),
-                                Optional.empty(),
-                                Optional.empty(),
-                                List.of(Message.from(reply))));
+                return requestReply(
+                        CompletableFuture.completedFuture(
+                                        new ZLinkBackendReceived(
+                                                Optional.empty(),
+                                                Optional.empty(),
+                                                Optional.empty(),
+                                                List.of(Message.from(reply))))
+                                .whenComplete(
+                                        (received, failure) -> {
+                                            if (failure == null && receiveAdmission != null)
+                                                receiveAdmission.run();
+                                        }),
+                        requestAdmission);
             } finally {
                 reply.close();
             }
@@ -876,7 +906,10 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
         @Override
         public CompletionStage<ZLinkBackendReceived> request(
-                RoutingId routingId, List<Message> parts, Duration timeout) {
+                RoutingId routingId,
+                List<Message> parts,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
             record("request." + routingId + "." + firstPart(parts));
             if (isRoutedActorJoinRequest(parts)) {
                 ZLinkActorSpotRoutePackets.TransferRequest request =
@@ -919,23 +952,35 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                     joinedPayload.close();
                     rejectedPayload.close();
                 }
-                return CompletableFuture.completedFuture(
-                        new ZLinkBackendReceived(
-                                Optional.empty(), Optional.empty(), Optional.empty(), routeReply));
+                return requestReply(
+                        CompletableFuture.completedFuture(
+                                new ZLinkBackendReceived(
+                                        Optional.empty(),
+                                        Optional.empty(),
+                                        Optional.empty(),
+                                        routeReply)),
+                        requestAdmission);
             }
             if (isRoutedBoundSessionSendRequest(parts)) {
-                return CompletableFuture.completedFuture(
-                        new ZLinkBackendReceived(
-                                Optional.empty(), Optional.empty(), Optional.empty(), List.of()));
+                return requestReply(
+                        CompletableFuture.completedFuture(
+                                new ZLinkBackendReceived(
+                                        Optional.empty(),
+                                        Optional.empty(),
+                                        Optional.empty(),
+                                        List.of())),
+                        requestAdmission);
             }
             Message reply = jsonStringMessage("reply");
             try {
-                return CompletableFuture.completedFuture(
-                        new ZLinkBackendReceived(
-                                Optional.empty(),
-                                Optional.empty(),
-                                Optional.empty(),
-                                List.of(Message.from(reply))));
+                return requestReply(
+                        CompletableFuture.completedFuture(
+                                new ZLinkBackendReceived(
+                                        Optional.empty(),
+                                        Optional.empty(),
+                                        Optional.empty(),
+                                        List.of(Message.from(reply)))),
+                        requestAdmission);
             } finally {
                 reply.close();
             }
@@ -1011,6 +1056,40 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
     private static final class FakeSpotNode extends FakeBackendObject
             implements ZLinkInternalSpotNode {
+        @Override
+        public CompletionStage<ZLinkBackendReceived> requestToNode(
+                RoutingId target,
+                byte[] metadata,
+                List<Message> parts,
+                Duration timeout,
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                        operations,
+                java.util.UUID operationId,
+                CompletableFuture<Void> requestAdmission) {
+            return requestReply(
+                    CompletableFuture.failedFuture(
+                            new UnsupportedOperationException(
+                                    "MeshNode node request is unavailable")),
+                    requestAdmission);
+        }
+
+        @Override
+        public CompletionStage<ZLinkBackendReceived> requestToChannel(
+                String target,
+                byte[] metadata,
+                List<Message> parts,
+                Duration timeout,
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                        operations,
+                java.util.UUID operationId,
+                CompletableFuture<Void> requestAdmission) {
+            return requestReply(
+                    CompletableFuture.failedFuture(
+                            new UnsupportedOperationException(
+                                    "MeshNode channel request is unavailable")),
+                    requestAdmission);
+        }
+
         private int nextSpotId = 1;
         private final List<FakeSpot> spots;
         private final FakeZLinkBackendAdapterFactory owner;
@@ -1300,9 +1379,12 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                 ZLinkBackendActorRef actor,
                 List<Message> parts,
                 SendFlags flags,
-                Duration timeout) {
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
             record("requestToActor." + actor.actorId() + "." + firstPart(parts));
-            return CompletableFuture.completedFuture(List.of(jsonStringMessage("actor-reply")));
+            return requestReply(
+                    CompletableFuture.completedFuture(List.of(jsonStringMessage("actor-reply"))),
+                    requestAdmission);
         }
 
         @Override
@@ -1377,7 +1459,8 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                 RoutingId targetNodeRid,
                 String targetSpotId,
                 List<Message> parts,
-                Duration timeout) {
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
             record(
                     "bridge.request."
                             + channelName
@@ -1405,8 +1488,10 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                                         accepted ? request.coreMembershipEpoch() + 1 : 0L,
                                         0L,
                                         accepted ? joinedPayload : rejectedPayload);
-                        return CompletableFuture.completedFuture(
-                                joinReplyParts.stream().map(Message::from).toList());
+                        return requestReply(
+                                CompletableFuture.completedFuture(
+                                        joinReplyParts.stream().map(Message::from).toList()),
+                                requestAdmission);
                     }
                     joinReply =
                             ZLinkActorSpotRoutePackets.encodeJoinReply(
@@ -1416,7 +1501,9 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                                             request.actorId(),
                                             request.actorGeneration()),
                                     rejectedPayload);
-                    return CompletableFuture.completedFuture(List.of(Message.from(joinReply)));
+                    return requestReply(
+                            CompletableFuture.completedFuture(List.of(Message.from(joinReply))),
+                            requestAdmission);
                 } finally {
                     if (joinReply != null) {
                         joinReply.close();
@@ -1429,11 +1516,13 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                 }
             }
             if (isRoutedBoundSessionSendRequest(parts)) {
-                return CompletableFuture.completedFuture(List.of());
+                return requestReply(CompletableFuture.completedFuture(List.of()), requestAdmission);
             }
             Message reply = jsonStringMessage("reply");
             try {
-                return CompletableFuture.completedFuture(List.of(Message.from(reply)));
+                return requestReply(
+                        CompletableFuture.completedFuture(List.of(Message.from(reply))),
+                        requestAdmission);
             } finally {
                 reply.close();
             }
@@ -1459,6 +1548,33 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
     }
 
     private static final class FakeSpot extends FakeBackendObject implements ZLinkBackendSpot {
+        @Override
+        public CompletionStage<ZLinkBackendReceived> requestToSpot(
+                RoutingId targetNodeRid,
+                String spotId,
+                long spotGeneration,
+                byte[] metadata,
+                List<Message> parts,
+                Duration timeout,
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                        operations,
+                java.util.UUID operationId,
+                CompletableFuture<Void> requestAdmission) {
+            return operations.submit(
+                    operationId,
+                    timeout,
+                    () ->
+                            requestToSpot(
+                                    targetNodeRid,
+                                    spotId,
+                                    spotGeneration,
+                                    metadata,
+                                    parts,
+                                    timeout,
+                                    requestAdmission),
+                    ZLinkBackendReceived::close);
+        }
+
         private final FakeZLinkBackendAdapterFactory owner;
         private String routingId;
         private final Deque<ZLinkBackendActorJoinRequest> actorJoins = new ArrayDeque<>();
@@ -1698,28 +1814,25 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                 RoutingId targetNodeRid,
                 String spotId,
                 long spotGeneration,
+                byte[] metadata,
                 List<Message> parts,
-                Duration timeout) {
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            owner.captureApplicationMetadata(metadata);
+
             record("requestToSpot." + targetNodeRid + "." + spotId + "." + firstPart(parts));
             List<Message> replyParts =
                     owner.nextSpotRequestReplyParts == null
                             ? List.of(jsonStringMessage("reply"))
                             : owner.nextSpotRequestReplyParts.stream().map(Message::from).toList();
-            return CompletableFuture.completedFuture(
-                    new ZLinkBackendReceived(
-                            Optional.empty(), Optional.empty(), Optional.empty(), replyParts));
-        }
-
-        @Override
-        public CompletionStage<ZLinkBackendReceived> requestToSpot(
-                RoutingId targetNodeRid,
-                String spotId,
-                long spotGeneration,
-                byte[] metadata,
-                List<Message> parts,
-                Duration timeout) {
-            owner.captureApplicationMetadata(metadata);
-            return requestToSpot(targetNodeRid, spotId, spotGeneration, parts, timeout);
+            return requestReply(
+                    CompletableFuture.completedFuture(
+                            new ZLinkBackendReceived(
+                                    Optional.empty(),
+                                    Optional.empty(),
+                                    Optional.empty(),
+                                    replyParts)),
+                    requestAdmission);
         }
 
         @Override
@@ -2021,5 +2134,16 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
     private static List<Message> copyMessages(List<Message> parts) {
         return parts.stream().map(Message::from).toList();
+    }
+
+    private static <T> CompletionStage<T> requestReply(
+            CompletionStage<T> reply, CompletableFuture<Void> admission) {
+        if (admission != null)
+            reply.whenComplete(
+                    (ignored, failure) -> {
+                        if (failure == null) admission.complete(null);
+                        else admission.completeExceptionally(failure);
+                    });
+        return reply;
     }
 }

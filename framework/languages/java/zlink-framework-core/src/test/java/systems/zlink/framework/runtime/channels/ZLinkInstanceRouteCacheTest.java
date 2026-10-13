@@ -113,7 +113,7 @@ final class ZLinkInstanceRouteCacheTest {
                                             case "metricMeshName" -> "mesh";
                                             case "send", "request" -> {
                                                 assertEquals(
-                                                        method.getName().equals("request") ? 10 : 9,
+                                                        method.getName().equals("request") ? 11 : 9,
                                                         args.length);
                                                 var ready =
                                                         assertInstanceOf(
@@ -149,7 +149,8 @@ final class ZLinkInstanceRouteCacheTest {
                                 parts,
                                 timeout,
                                 registry,
-                                operation) -> CompletableFuture.failedFuture(terminal));
+                                operation,
+                                requestAdmission) -> CompletableFuture.failedFuture(terminal));
         try {
             for (int i = 0; i < 2; i++) {
                 try (var payload = Message.from(new byte[] {1})) {

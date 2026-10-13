@@ -371,9 +371,11 @@ public sealed class StreamContracts
             return this;
         }
 
-        public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
+        public Zlink.Framework.Contracts.Channels.ZLinkRequest<TReply> Async<TReply>(
+            CancellationToken cancellationToken = default
+        )
         {
-            return ValueTask.FromResult((TReply)reply);
+            return new(ValueTask.CompletedTask, ValueTask.FromResult((TReply)reply));
         }
 
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default)

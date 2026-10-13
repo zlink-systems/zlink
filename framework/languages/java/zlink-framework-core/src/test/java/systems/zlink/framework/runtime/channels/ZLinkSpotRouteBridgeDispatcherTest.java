@@ -11,6 +11,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 
@@ -145,15 +146,15 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
             return sendAdmission;
         }
 
-        @Override
         public CompletionStage<List<Message>> request(
                 String channelName,
                 RoutingId targetNodeRid,
                 String targetSpotId,
                 List<Message> parts,
-                Duration timeout) {
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
             requestAttempts.incrementAndGet();
-            return requestReply;
+            return ZLinkTestAdmissionFactory.acceptedRequest(requestReply, requestAdmission);
         }
 
         @Override

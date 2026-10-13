@@ -1212,7 +1212,7 @@ int main ()
           protobuf_strict_decode_succeeded = decoded.value () == "direct-protobuf";
           const auto reply =
             protobuf_serializers.get<google::protobuf::StringValue> ().serialize (decoded);
-          return zlink::framework::task_t<zlink::message_t> (
+          return zlink::framework::request_task_t<zlink::message_t> (
             zlink::framework::result_t<zlink::message_t>::success (
               zlink::framework::detail::encoded_payload_to_raw (reply)));
       });
@@ -1254,7 +1254,7 @@ int main ()
       },
       [cancellation] (std::string, std::string, zlink::message_t, std::chrono::milliseconds,
                       std::map<std::string, std::string>) {
-          return zlink::framework::task_t<zlink::message_t> (
+          return zlink::framework::request_task_t<zlink::message_t> (
             zlink::framework::detail::result_access_t::failure<zlink::message_t> (cancellation));
       });
     const auto cancelled_request = cancellation_client_builder.message_bus ()
@@ -3281,7 +3281,7 @@ int main ()
                       std::uint64_t target_spot_generation,
                       zlink::framework::runtime::messaging::message_parts_t parts,
                       std::chrono::milliseconds timeout)
-        -> zlink::framework::task_t<
+        -> zlink::framework::request_task_t<
           zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>> {
           const auto header = envelope_codec.decode_header (parts);
           const auto body = envelope_codec.decode_body (parts);
@@ -3302,6 +3302,7 @@ int main ()
           auto reply_header = header.value ();
           reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
           reply_t reply{353};
+          co_await zlink::framework::detail::request_admitted_t{};
           co_return zlink::framework::
             result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
               envelope_codec.encode_parts (reply_header, std::type_index (typeid (reply_t)), &reply,
@@ -3324,7 +3325,7 @@ int main ()
       },
       [] (const zlink::routing_id_t &, zlink::framework::runtime::messaging::message_parts_t,
           std::chrono::milliseconds)
-        -> zlink::framework::task_t<
+        -> zlink::framework::request_task_t<
           zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>> {
           co_return zlink::framework::
             result_t<zlink::framework::runtime::messaging::message_parts_t>::failure (
@@ -3380,13 +3381,13 @@ int main ()
           if (!cached_route || cached_route->mesh_name != "commerce"
               || cached_route->node_rid.to_string () != "cart-node"
               || cached_route->spot_id != "cart-17") {
-              return zlink::framework::task_t<zlink::message_t> (
+              return zlink::framework::request_task_t<zlink::message_t> (
                 zlink::framework::result_t<zlink::message_t>::failure (
                   zlink::framework::framework_error_kind_t::internal_failure,
                   "Ready Instance route was not retained"));
           }
           ++ready_instance_request_count;
-          return zlink::framework::task_t<zlink::message_t> (
+          return zlink::framework::request_task_t<zlink::message_t> (
             zlink::framework::result_t<zlink::message_t>::success (
               zlink::framework::detail::encoded_payload_to_raw (
                 serializers.get<reply_t> ().serialize (reply_t{617}))));
@@ -3406,13 +3407,14 @@ int main ()
       },
       [&] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
            zlink::framework::runtime::messaging::message_parts_t parts, std::chrono::milliseconds)
-        -> zlink::framework::task_t<
+        -> zlink::framework::request_task_t<
           zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>> {
           ++activation_request_count;
           const auto header = envelope_codec.decode_header (parts);
           auto reply_header = header.value ();
           reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
           reply_t reply{617};
+          co_await zlink::framework::detail::request_admitted_t{};
           co_return zlink::framework::
             result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
               envelope_codec.encode_parts (reply_header, std::type_index (typeid (reply_t)), &reply,
@@ -3458,7 +3460,7 @@ int main ()
       [&retry_stale_attempts, &retry_fresh_attempts, &envelope_codec, &serializers] (
         const zlink::routing_id_t &, const std::string &target_spot_id, std::uint64_t,
         zlink::framework::runtime::messaging::message_parts_t parts, std::chrono::milliseconds)
-        -> zlink::framework::task_t<
+        -> zlink::framework::request_task_t<
           zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>> {
           if (target_spot_id == "stale-spot") {
               ++retry_stale_attempts;
@@ -3478,6 +3480,7 @@ int main ()
           auto reply_header = header.value ();
           reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
           reply_t reply{454};
+          co_await zlink::framework::detail::request_admitted_t{};
           co_return zlink::framework::
             result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
               envelope_codec.encode_parts (reply_header, std::type_index (typeid (reply_t)), &reply,

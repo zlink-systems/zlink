@@ -40,7 +40,7 @@ fun main(args: Array<String>) {
                     } else if (options.implementation == "grpc-kotlin") {
                         "one platform submit thread; uncapped coroutine set; grpc-kotlin coroutine stub"
                     } else {
-                        "one platform submit thread; uncapped coroutine set; zlink-framework-kotlin suspend awaitReply"
+                        "one platform submit thread; admission-paced requests; uncapped coroutine replies"
                     }
                 val metadata =
                     linkedMapOf<String, Any>(
@@ -52,7 +52,7 @@ fun main(args: Array<String>) {
                             if (trigger.pattern() == "send-saturation") {
                                 "zlink-framework-kotlin submit await"
                             } else {
-                                "zlink-framework-kotlin awaitReply"
+                                "zlink-framework-kotlin typed submit; suspend reply await"
                             },
                         "serverProcesses" to "Java target B binaries on the Java port band",
                     )

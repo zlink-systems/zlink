@@ -75,7 +75,8 @@ task_t<zlink::submit_result_t> raw_dealer_port_t::send_result (const raw_message
 task_t<raw_request_completion_t>
 raw_dealer_port_t::request (const raw_message_t &parts,
                             std::chrono::milliseconds timeout,
-                            runtime::mesh::service_liveness_registry_t::connection_t admission)
+                            runtime::mesh::service_liveness_registry_t::connection_t admission,
+                            std::shared_ptr<task_completion_source_t<void>> admitted)
 {
     if (parts.empty () || timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("raw dealer request requires parts and timeout");
@@ -83,12 +84,16 @@ raw_dealer_port_t::request (const raw_message_t &parts,
     const auto deadline = std::chrono::steady_clock::now () + timeout;
     auto messages = materialize_binding_parts (parts);
     auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
+    auto observation = source->task ();
+    observe_raw_request_admission_failure (observation, admitted);
     std::optional<request_submission_stages_t> stages;
     try {
         {
             std::lock_guard lock (*_socket_mutex);
             if (!_socket) {
-                co_return raw_request_completion_t{zlink::request_result_t::terminated, {}};
+                source->complete (result_t<raw_request_completion_t>::success (
+                  raw_request_completion_t{zlink::request_result_t::terminated, {}}));
+                co_return co_await source->task ();
             }
             auto operation = std::move (_socket->request ()).message (messages[0]);
             for (std::size_t index = 1; index < messages.size (); ++index) {
@@ -99,15 +104,15 @@ raw_dealer_port_t::request (const raw_message_t &parts,
         }
     }
     catch (const zlink::submit_error_t &error) {
-        co_return raw_request_completion_t{
-          runtime::messaging::map_submit_request_result (error.result (), false),
-          {},
-          raw_request_failure_t{raw_request_failure_phase_t::initial_admission, error.result (),
-                                error.internal_errno ()}};
+        source->complete (
+          raw_request_failure_result (error, raw_request_failure_phase_t::initial_admission));
+        co_return source->task ().result ().value ();
     }
     const auto caller_deadline = stages->caller_deadline;
-    observe_request_completion (std::move (*stages), source, std::move (admission));
-    co_return co_await runtime::messaging::with_request_deadline (source->task (), caller_deadline);
+    observe_request_completion (std::move (*stages), source, std::move (admission), admitted);
+    auto output = runtime::messaging::with_request_deadline (source->task (), caller_deadline);
+    observe_raw_request_admission_failure (output, admitted);
+    co_return co_await output;
 }
 
 std::optional<raw_message_t> raw_dealer_port_t::try_receive ()

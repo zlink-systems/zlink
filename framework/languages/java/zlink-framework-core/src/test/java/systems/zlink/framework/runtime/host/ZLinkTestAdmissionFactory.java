@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.host;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -34,13 +35,25 @@ public final class ZLinkTestAdmissionFactory {
                 (submission, cleanup) -> {
                     try {
                         return submission.get()
-                                ? java.util.concurrent.CompletableFuture.completedFuture(null)
-                                : java.util.concurrent.CompletableFuture.failedFuture(
+                                ? CompletableFuture.completedFuture(null)
+                                : CompletableFuture.failedFuture(
                                         new IllegalStateException(
                                                 "one-way submission was not admitted"));
                     } finally {
                         cleanup.run();
                     }
                 };
+    }
+
+    /** Completes a fake request's admission when its reply is sent. */
+    public static <T> CompletionStage<T> acceptedRequest(
+            CompletionStage<T> reply, CompletableFuture<Void> admission) {
+        if (admission != null)
+            reply.whenComplete(
+                    (ignored, failure) -> {
+                        if (failure == null) admission.complete(null);
+                        else admission.completeExceptionally(failure);
+                    });
+        return reply;
     }
 }

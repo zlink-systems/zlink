@@ -599,17 +599,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 new UnsupportedOperationException("Remote Instance Spot send is unavailable"));
     }
 
-    default CompletionStage<List<Message>> requestInstanceSpot(
-            ZLinkServiceM6BWireCodec.InstanceRoute route,
-            String stableType,
-            String sourceSpotId,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout) {
-        return CompletableFuture.failedFuture(
-                new UnsupportedOperationException("Remote Instance Spot request is unavailable"));
-    }
-
     interface UserSpotOperationHandler {
         CompletionStage<UserSpotCreateResponse> create(UserSpotCreateRequest request);
 
@@ -863,4 +852,13 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             Objects.requireNonNull(storeVersion, "storeVersion");
         }
     }
+
+    CompletionStage<List<Message>> requestInstanceSpot(
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
+            String stableType,
+            String sourceSpotId,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission);
 }

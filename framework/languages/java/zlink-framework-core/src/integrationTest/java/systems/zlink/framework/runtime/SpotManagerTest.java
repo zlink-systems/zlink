@@ -81,8 +81,10 @@ final class SpotManagerTest {
                                             targetRid,
                                             entry.spotId(),
                                             entry.lifecycleGeneration(),
+                                            null,
                                             java.util.List.of(request),
-                                            Duration.ofSeconds(5))
+                                            Duration.ofSeconds(5),
+                                            null)
                                     .toCompletableFuture()
                                     .get(5, TimeUnit.SECONDS)) {
                 assertEquals("entry:hello", response.parts().getFirst().toUtf8String());

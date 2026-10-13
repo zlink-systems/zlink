@@ -21,6 +21,10 @@ export function ZLinkHandlerGroup(groupName: string): ClassDecorator {
   return classDecorator({ kind: 'handlerGroup', groupName });
 }
 
+export interface ZLinkRequest<TReply> extends Promise<TReply> {
+  readonly admitted: Promise<void>;
+}
+
 export function ZLinkRequest(packetName?: string): MethodDecorator {
   return methodDecorator({ kind: 'request', packetName });
 }

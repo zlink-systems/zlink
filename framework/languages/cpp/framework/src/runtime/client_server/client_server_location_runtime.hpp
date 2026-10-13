@@ -128,12 +128,12 @@ class client_server_location_runtime_t final : public client_server_runtime_t
                        std::string content_type,
                        zlink::message_t message,
                        std::map<std::string, std::string> metadata);
-    task_t<zlink::message_t> request (const std::string &channel_name,
-                                      std::string packet_name,
-                                      std::string content_type,
-                                      zlink::message_t message,
-                                      std::chrono::milliseconds timeout,
-                                      std::map<std::string, std::string> metadata);
+    request_task_t<zlink::message_t> request (const std::string &channel_name,
+                                              std::string packet_name,
+                                              std::string content_type,
+                                              zlink::message_t message,
+                                              std::chrono::milliseconds timeout,
+                                              std::map<std::string, std::string> metadata);
     task_t<std::shared_ptr<raw_client_server_client_t>>
     select_ready (std::string channel_name,
                   std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);

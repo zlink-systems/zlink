@@ -934,3 +934,77 @@ for (const [phase, expectedKind] of [
     );
   });
 }
+
+
+test('Actor route infrastructure admission cannot complete the user request admission', async () => {
+  const { submitBindingRequest } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+  let releaseRoute;
+  let admitUser;
+  let replyUser;
+  const routeGate = new Promise(resolve => { releaseRoute = resolve; });
+  const userAdmission = new Promise(resolve => { admitUser = resolve; });
+  const userReply = new Promise(resolve => { replyUser = resolve; });
+  const bindingOperation = submission => ({
+    message() { return this; },
+    submit() { return submission; }
+  });
+  let userBinding;
+  const unusedStore = {};
+  const resolver = new framework.ZLinkStoreLocationResolvers({
+    stores: {
+      authorityStore: { async readAuthority() {
+        // The real common binding consumer runs inside the stock route resolver's
+        // authority-store lookup. It does not submit the user's Actor packet.
+        await submitBindingRequest(bindingOperation({
+          result: SubmitResult.Ok, admitted: Promise.resolve(), reply: Promise.resolve([])
+        }), [], undefined);
+        await routeGate;
+        return {
+          kind: 'snapshot', allocation: {
+            objectKind: 'actor', state: 'active', stableType: 'Player',
+            descriptor: { meshName: 'play-mesh', rid: 'node-a' }, descriptorLifecycleGeneration: 7n
+          }, payload: Buffer.alloc(0), objectGeneration: 1n, ownerId: 'owner-a',
+          ownerLeaseGeneration: 3n, authorityOwnerGeneration: 4n, storeVersion: { value: 'v1' }
+        };
+      } }, locationStore: unusedStore, peerStore: unusedStore, spotStore: unusedStore,
+      actorStore: unusedStore, routeStore: unusedStore
+    },
+    leaseTracker: { async remainingOwnerTokenLeaseMs() { return 10000; } }
+  });
+  const client = createActorClient({
+    locationResolver: () => resolver,
+    nodeProvider: () => ({ requestToActor(_actor, _parts, options) {
+      userBinding = submitBindingRequest(bindingOperation({
+        result: SubmitResult.Backpressured, admitted: userAdmission, reply: userReply
+      }), [], undefined, undefined, options.onAdmitted);
+      return operationId;
+    } }),
+    completionTableProvider: () => ({ async submit(start) {
+      start();
+      return { terminalResult: RequestResult.Ok, failureErrno: 0, parts: await userBinding };
+    } })
+  });
+  const pending = client.requestToActor('actor-1', new ActorAsk('ping')).submit();
+  let admitted = false;
+  let replied = false;
+  void pending.admitted.then(() => { admitted = true; });
+  void pending.then(() => { replied = true; });
+  try {
+    await new Promise(setImmediate);
+    assert.equal(userBinding, undefined);
+    assert.equal(admitted, false, 'infrastructure admission must not complete the user stage');
+    releaseRoute();
+    await new Promise(setImmediate);
+    assert.ok(userBinding);
+    assert.equal(admitted, false);
+    admitUser();
+    await new Promise(setImmediate);
+    assert.equal(admitted, true);
+    assert.equal(replied, false);
+  } finally {
+    releaseRoute();
+    admitUser();
+    replyUser(createReplyParts('pong'));
+    assert.equal(await pending, 'pong');
+  }
+});

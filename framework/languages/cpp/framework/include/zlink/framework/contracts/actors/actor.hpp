@@ -288,23 +288,29 @@ class actor_request_call_t
     actor_request_call_t &timeout (std::chrono::milliseconds timeout);
     actor_request_call_t &metadata (std::string key, std::string value);
 
-    template <typename TReply> task_t<TReply> async ()
+    template <typename TReply> request_task_t<TReply> async ()
     {
-        auto reply = co_await start (false);
-        co_return reply.template decode<TReply> (serializers ());
+        return decode_reply<TReply> (start (false), &serializers ());
     }
 
     template <typename TReply> task_t<TReply> yield ()
     {
-        auto reply = co_await start (true);
-        co_return reply.template decode<TReply> (serializers ());
+        return decode_reply<TReply> (start (true), &serializers ());
     }
 
-    task_t<message_t> async_message ();
+    request_task_t<message_t> async_message ();
     task_t<message_t> yield_message ();
 
   private:
-    task_t<message_t> start (bool release_turn);
+    template <typename TReply>
+    static request_task_t<TReply> decode_reply (request_task_t<message_t> pending,
+                                                serializer_registry_t *serializers)
+    {
+        auto reply = co_await detail::request_submission (std::move (pending));
+        co_return reply.template decode<TReply> (*serializers);
+    }
+
+    request_task_t<message_t> start (bool release_turn);
     serializer_registry_t &serializers () const;
 
     actor_client_t *_client;
@@ -342,7 +348,7 @@ class actor_client_t
                                       std::string packet_name,
                                       message_t message,
                                       const actor_send_call_t::metadata_map_t &metadata) = 0;
-    virtual task_t<message_t>
+    virtual request_task_t<message_t>
     request_erased (actor_id_t actor_id,
                     std::string packet_name,
                     message_t request,
@@ -858,10 +864,10 @@ class session_actor_t
     task_t<void> relay_internal (detail::stream_header_t header,
                                  std::uint64_t relay_sequence,
                                  const zlink::message_t &payload);
-    task_t<zlink::message_t> relay_request_internal (detail::stream_header_t header,
-                                                     std::uint64_t relay_sequence,
-                                                     zlink::message_t payload,
-                                                     std::chrono::milliseconds timeout);
+    request_task_t<zlink::message_t> relay_request_internal (detail::stream_header_t header,
+                                                             std::uint64_t relay_sequence,
+                                                             zlink::message_t payload,
+                                                             std::chrono::milliseconds timeout);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     actor_ref_t _ref;
@@ -932,7 +938,8 @@ class session_actor_manager_t
                                                     std::string actor_id,
                                                     std::optional<zlink::message_t> request);
     zlink::message_t serialize_request (std::type_index request_type, const void *request) const;
-    task_t<session_actor_t> bind_current_session (actor_ref_t actor_ref, bool reuse_current);
+    request_task_t<session_actor_t> bind_current_session (actor_ref_t actor_ref,
+                                                          bool reuse_current);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     std::shared_ptr<detail::session_actor_binding_context_t> _binding_context;

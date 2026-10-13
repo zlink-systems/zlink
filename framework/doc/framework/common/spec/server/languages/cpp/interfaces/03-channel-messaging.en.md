@@ -688,11 +688,18 @@ public:
 };
 
 template <typename TReply>
+class request_task_t : public task_t<TReply> {
+public:
+ // As a task_t<TReply>, co_await yields the reply. admitted() is the Submit §2 admission stage.
+ task_t<void> admitted();
+};
+
+template <typename TReply>
 class request_call_t {
 public:
  request_call_t &timeout(std::chrono::milliseconds timeout);
  request_call_t &metadata(std::string key, std::string value);
- task_t<TReply> async();
+ request_task_t<TReply> async();
  TReply submit();   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
  task_t<TReply> yield();
 };
@@ -703,7 +710,7 @@ public:
  channel_request_call_t &metadata(std::string key, std::string value);
 
  template <typename TReply>
- task_t<TReply> async();
+ request_task_t<TReply> async();
 
  template <typename TReply>
  TReply submit();   // synchronous blocking; InvalidOperation in a runtime execution context (F2-a)
@@ -1027,7 +1034,7 @@ public:
  spot_request_call_t &in_mesh(std::string mesh_name);
 
  template <typename TReply>
- task_t<TReply> async();
+ request_task_t<TReply> async();
 
  template <typename TReply>
  task_t<TReply> yield();

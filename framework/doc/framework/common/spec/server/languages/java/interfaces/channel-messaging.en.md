@@ -6,12 +6,14 @@ ChannelName selects the send path within a process. The payload
 type of the RouteMesh/ClientServer/fanout builder, typed handler, and
 client call projects the common contract's role distinction into Java
 generics. A one-way operation provides async `submit()` and synchronous blocking
-`submit_sync()`, and a request operation's `submit(...)` waits until the terminal reply
-and also provides synchronous `submit_sync(...)`. The synchronous `submit_sync` family is
+`submit_sync()`, and a request operation's `submit(...)` returns a `ZLinkRequestStage` that waits
+for the terminal reply and whose `admitted()` is the admission stage
+([Submit and completion §2](../../../01-execution/01-submit-and-completion.en.md#request-admitted-stage)).
+It also provides synchronous `submit_sync(...)`. The synchronous `submit_sync` family is
 application-thread only and fails immediately with `InvalidOperation` when called from a
 runtime execution context such as a handler turn, Spot turn, or state lane
 ([Submit And Completion §4 F2-a](../../../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary)).
-The framework public terminator does not expose backpressure (F1).
+The framework public terminator does not expose a `Backpressured` status (F1).
 
 **`submit_sync` is a `default` interface method.** The implementation is the same for every
 call type — check the context, then await the same async terminator. Rewriting it per call type
@@ -249,11 +251,14 @@ public interface systems.zlink.framework.channels.ZLinkPublishMessageContext ext
 public interface systems.zlink.framework.channels.ZLinkFanoutHandler<TMessage> {
  public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TMessage, systems.zlink.framework.channels.ZLinkPublishMessageContext);
 }
+public interface systems.zlink.framework.channels.ZLinkRequestStage<TReply> extends java.util.concurrent.CompletionStage<TReply> {
+ public abstract java.util.concurrent.CompletionStage<java.lang.Void> admitted();
+}
 public interface systems.zlink.framework.channels.ZLinkRequestCall {
  public default systems.zlink.framework.channels.ZLinkRequestCall metadata(java.lang.String, java.lang.String);
  public default systems.zlink.framework.channels.ZLinkRequestCall metadata(java.util.Map<java.lang.String, java.lang.String>);
  public abstract systems.zlink.framework.channels.ZLinkRequestCall timeout(java.time.Duration);
- public abstract <TReply> java.util.concurrent.CompletionStage<TReply> submit(java.lang.Class<TReply>);
+ public abstract <TReply> systems.zlink.framework.channels.ZLinkRequestStage<TReply> submit(java.lang.Class<TReply>);
  public default <TReply> TReply submit_sync(java.lang.Class<TReply>);   // blocking; InvalidOperation in a runtime context
  public abstract <TReply> java.util.concurrent.CompletionStage<TReply> yield(java.lang.Class<TReply>);
 }

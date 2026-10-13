@@ -65,26 +65,32 @@ public final class FrameworkStack implements AutoCloseable {
                 context, route, options.runId, Duration.ofMillis(options.requestTimeoutMs));
     }
 
-    public BenchOperation request() {
+    public BenchRequestOperation request() {
         return (payloadSize, phase, sequence) -> {
             BenchPayload message = payload(payloadSize, phase, sequence);
-            return route.requestToNode(BenchContract.MESH_NAME, SERVER, message)
-                    .timeout(timeout)
-                    .submit(BenchPayload.class)
-                    .toCompletableFuture()
-                    .thenAccept(
-                            reply -> {
-                                BenchMetricHeader.Decoded decoded =
-                                        reply == null
-                                                ? null
-                                                : BenchMetricHeader.decode(
-                                                        reply.getBody().asReadOnlyByteBuffer());
-                                if (!BenchMetricHeader.isExpected(
-                                        decoded, runId, phase, payloadSize, sequence)) {
-                                    throw new IllegalStateException(
-                                            "framework reply header mismatch");
-                                }
-                            });
+            var submitted =
+                    route.requestToNode(BenchContract.MESH_NAME, SERVER, message)
+                            .timeout(timeout)
+                            .submit(BenchPayload.class);
+            var replyCompletion =
+                    submitted
+                            .toCompletableFuture()
+                            .thenAccept(
+                                    reply -> {
+                                        BenchMetricHeader.Decoded decoded =
+                                                reply == null
+                                                        ? null
+                                                        : BenchMetricHeader.decode(
+                                                                reply.getBody()
+                                                                        .asReadOnlyByteBuffer());
+                                        if (!BenchMetricHeader.isExpected(
+                                                decoded, runId, phase, payloadSize, sequence)) {
+                                            throw new IllegalStateException(
+                                                    "framework reply header mismatch");
+                                        }
+                                    });
+            return new BenchRequestOperation.Submission(
+                    submitted.admitted().toCompletableFuture(), replyCompletion);
         };
     }
 

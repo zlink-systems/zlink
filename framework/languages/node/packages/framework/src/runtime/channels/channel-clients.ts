@@ -1,4 +1,6 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
+import { createZLinkRequest } from '../messaging/request-result';
+import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 import type {
   ZLinkChannelClient,
   ZLinkChannelRequestCall,
@@ -193,7 +195,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   requestToNode(meshName: string, targetNodeRid: string, request: unknown): ZLinkRequestCall {
     return new DefaultZLinkRequestCall(
       () => this.requireMesh(meshName),
-      (packetName, timeoutMs, metadata, signal) =>
+      (packetName, timeoutMs, metadata, signal, onAdmitted) =>
         this.requireTransport().request(
           meshName,
           targetNodeRid,
@@ -201,7 +203,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
           request,
           timeoutMs,
           signal,
-          metadata
+          metadata,
+          onAdmitted
         ),
       this.defaultRequestTimeout(meshName)
     );
@@ -233,7 +236,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   requestToChannel(channelName: string, request: unknown): ZLinkChannelRequestCall {
     return new DefaultZLinkRequestCall(
       () => this.requireChannelRoute(channelName),
-      (packetName, timeoutMs, metadata, signal) => {
+      (packetName, timeoutMs, metadata, signal, onAdmitted) => {
         const route = this.requireChannelRoute(channelName);
         if (route.kind === 'route-mesh') {
           return this.requireTransport().requestToChannel(
@@ -243,7 +246,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
             request,
             timeoutMs,
             signal,
-            metadata
+            metadata,
+            onAdmitted
           );
         }
         return this.requireChannelTransport().request(
@@ -252,7 +256,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
           request,
           timeoutMs,
           signal,
-          metadata
+          metadata,
+          onAdmitted
         );
       },
       this.defaultRequestTimeoutForChannel(channelName)
@@ -279,11 +284,12 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
       () => {
         this.requireSpotTransport();
       },
-      (_packetName, timeoutMs, metadata, signal) =>
+      (_packetName, timeoutMs, metadata, signal, onAdmitted) =>
         requestToSpotHandle(this.requireSpotTransport(), spot, request, {
           timeoutMs,
           signal,
           metadata,
+          onAdmitted,
           spotRouterChannelIdForMesh: this.spotRouterChannelIdForMesh
         }),
       this.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
@@ -471,7 +477,8 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
       packetName: string | undefined,
       timeoutMs: number | undefined,
       metadata: ReadonlyMap<string, string>,
-      signal?: AbortSignal
+      signal?: AbortSignal,
+      onAdmitted?: () => void
     ) => Promise<TReply>,
     private readonly defaultRequestTimeoutMs?: number
   ) {}
@@ -494,15 +501,18 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
     return this;
   }
 
-  async submit<TReply>(signal?: AbortSignal): Promise<TReply> {
-    throwIfAborted(signal);
-    this.validate();
-    return this.submitter<TReply>(
-      undefined,
-      this.timeoutMs ?? this.defaultRequestTimeoutMs,
-      new Map(this.selectedMetadata),
-      signal
-    );
+  submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply> {
+    return createZLinkRequest((onAdmitted) => {
+      throwIfAborted(signal);
+      this.validate();
+      return this.submitter<TReply>(
+        undefined,
+        this.timeoutMs ?? this.defaultRequestTimeoutMs,
+        new Map(this.selectedMetadata),
+        signal,
+        onAdmitted
+      );
+    });
   }
 
   async yield<TReply>(signal?: AbortSignal): Promise<TReply> {

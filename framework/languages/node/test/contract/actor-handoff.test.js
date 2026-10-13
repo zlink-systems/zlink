@@ -198,7 +198,7 @@ function contextRef(parts, options = {}) {
   );
 }
 
-function harness(messageFollowDurationMs = 30) {
+function harness(messageFollowDurationMs = 30, requestReply) {
   const followed = [];
   const messageFollowPayloads = [];
   const markers = [];
@@ -227,6 +227,7 @@ function harness(messageFollowDurationMs = 30) {
       followed.push(Buffer.from(payload.payload, 'base64').toString());
     },
     async requestToSpot() {
+      if (requestReply !== undefined) return requestReply();
       return { ok: true };
     }
   };
@@ -2303,3 +2304,68 @@ test('Message Follow rejects ambiguous legacy keys across embedded NUL boundarie
   );
   parts.forEach((part) => part.close());
 });
+
+for (const phase of ['captured', 'relay']) {
+  test(`public Actor ${phase} admission completes at handoff queue acceptance before reply`, async () => {
+    let releaseRelay;
+    const relayReply = new Promise((resolve) => {
+      releaseRelay = resolve;
+    });
+    const { coordinator } = harness(30, () => relayReply);
+    coordinator.begin('actor-1', 1n);
+    if (phase === 'relay') {
+      coordinator.snapshot('actor-1');
+      coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+    }
+    const client = new framework.DefaultZLinkActorClient({
+      nodeProvider: () => ({
+        requestToActor() {
+          assert.fail('handoff must own this request');
+        }
+      }),
+      locationResolver: () => ({
+        resolveDirectActorRoute: async () => ({
+          kind: 'ready',
+          route: {
+            meshName: 'mesh',
+            actorId: 'actor-1',
+            actorRef: { ...actorRef(), nodeRid: zlink.RoutingId.from('source-node') },
+            ownerNodeRid: 'source-node',
+            ownerNodeGeneration: 1n,
+            spotKind: framework.ZLinkSpotKind.Entry,
+            spotId: 'source-spot',
+            spotGeneration: 1n,
+            authorityOwnerGeneration: 1n,
+            ownerId: 'source-owner',
+            ownerLeaseGeneration: 1n
+          }
+        })
+      }),
+      handoffCapture: (_mesh, actorId, parts, returnResponse, ref, _deadline, onAdmitted) =>
+        coordinator.capture('local', actorId, parts, returnResponse, undefined, ref, undefined, undefined, undefined, onAdmitted)
+    });
+    class Query {}
+    const pending = client.requestToActor('actor-1', new Query()).submit();
+    let admitted = false;
+    let replied = false;
+    void pending.admitted.then(() => {
+      admitted = true;
+    });
+    void pending.then(
+      () => {
+        replied = true;
+      },
+      () => undefined
+    );
+    const terminal = assert.rejects(pending);
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(admitted, true);
+      assert.equal(replied, false);
+    } finally {
+      if (phase === 'captured') coordinator.failPending('actor-1', new Error('test terminal'));
+      else releaseRelay({ ok: false, error: 'test terminal' });
+      await terminal;
+    }
+  });
+}

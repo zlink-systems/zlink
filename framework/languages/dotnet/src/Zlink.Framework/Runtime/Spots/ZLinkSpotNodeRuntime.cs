@@ -362,7 +362,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         bool request,
         ulong deadlineUnixMs,
         ReadOnlyMemory<byte>? metadata,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         var activationTarget =
@@ -381,12 +382,15 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             request ? operationId.Low : 0,
             deadlineUnixMs
         );
-        if (request)
-            return activationTarget.ActivateAsync(operation, metadata, payload, cancellationToken);
-
-        // Local transport admission completes before target activation and first dispatch.
+        cancellationToken.ThrowIfCancellationRequested();
         using var admission = _runtime.EnterOperation();
         var backgroundOperation = _runtime.RetainOperationForBackgroundWork();
+        var reply = request
+            ? new TaskCompletionSource<InstanceSpotActivationTerminal>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            )
+            : null;
+        // Local relay acceptance precedes target activation and first dispatch.
         try
         {
             if (
@@ -395,15 +399,29 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     async shutdownToken =>
                     {
                         using var ownership = backgroundOperation;
-                        var terminal = await activationTarget
-                            .ActivateAsync(operation, metadata, payload, shutdownToken)
-                            .ConfigureAwait(false);
-                        if (terminal.Result != RequestResult.Ok)
-                            throw ZLinkRequestFailureMapper.CreateCompletionException(
-                                terminal.Result,
-                                (int)terminal.FailureCode,
-                                "Local Instance Spot activation"
-                            );
+                        try
+                        {
+                            var terminal = await activationTarget
+                                .ActivateAsync(
+                                    operation,
+                                    metadata,
+                                    payload,
+                                    request ? cancellationToken : shutdownToken
+                                )
+                                .ConfigureAwait(false);
+                            if (reply is not null)
+                                reply.TrySetResult(terminal);
+                            else if (terminal.Result != RequestResult.Ok)
+                                throw ZLinkRequestFailureMapper.CreateCompletionException(
+                                    terminal.Result,
+                                    (int)terminal.FailureCode,
+                                    "Local Instance Spot activation"
+                                );
+                        }
+                        catch (Exception error) when (reply is not null)
+                        {
+                            reply.TrySetException(error);
+                        }
                     }
                 )
             )
@@ -417,13 +435,16 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             backgroundOperation.Dispose();
             throw;
         }
-        return ValueTask.FromResult(
-            new InstanceSpotActivationTerminal(
-                RequestResult.Ok,
-                ServiceWireConstants.FrameworkErrorCode.None,
-                Array.Empty<ReadOnlyMemory<byte>>()
-            )
-        );
+        requestAdmission?.Complete();
+        return reply is not null
+            ? new ValueTask<InstanceSpotActivationTerminal>(reply.Task)
+            : ValueTask.FromResult(
+                new InstanceSpotActivationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    Array.Empty<ReadOnlyMemory<byte>>()
+                )
+            );
     }
 
     internal async ValueTask<(
@@ -724,7 +745,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
-        bool durable = false
+        bool durable = false,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         try
@@ -736,7 +758,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     timeout,
                     cancellationToken,
                     metadata,
-                    durable
+                    durable,
+                    requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
         }

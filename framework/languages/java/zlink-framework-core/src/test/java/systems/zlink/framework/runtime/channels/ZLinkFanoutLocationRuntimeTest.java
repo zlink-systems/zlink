@@ -426,7 +426,8 @@ final class ZLinkFanoutLocationRuntimeTest {
                                         parts,
                                         timeout,
                                         operations,
-                                        operationId) ->
+                                        operationId,
+                                        requestAdmission) ->
                                         CompletableFuture.completedFuture(List.of()));
                 try {
                     long startedNanos = System.nanoTime();

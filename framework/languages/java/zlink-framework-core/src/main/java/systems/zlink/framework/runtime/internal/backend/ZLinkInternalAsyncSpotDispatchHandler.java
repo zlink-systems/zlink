@@ -11,10 +11,6 @@ import java.util.concurrent.CompletionStage;
 public interface ZLinkInternalAsyncSpotDispatchHandler extends ZLinkBackendSpotDispatchHandler {
     CompletionStage<Void> handleAsync(ZLinkBackendSpotDispatchInfo info);
 
-    default CompletionStage<Void> handleRoute(ZLinkBackendReceived received) {
-        return null;
-    }
-
     default CompletionStage<Void> handleRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         return null;
@@ -28,12 +24,13 @@ public interface ZLinkInternalAsyncSpotDispatchHandler extends ZLinkBackendSpotD
         return null;
     }
 
-    default CompletionStage<Void> handleActor(List<ZLinkBackendActorReceived> messages) {
-        return null;
-    }
-
     @Override
     default void handle(ZLinkBackendSpotDispatchInfo info) {
         handleAsync(info);
+    }
+
+    default CompletionStage<Void> handleActor(
+            List<ZLinkBackendActorReceived> messages, CompletableFuture<Void> requestAdmission) {
+        return null;
     }
 }

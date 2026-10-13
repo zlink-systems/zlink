@@ -1653,7 +1653,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                                         List.of(encodedHeader, body),
                                         Duration.ofSeconds(2),
                                         caller,
-                                        id)
+                                        id,
+                                        null)
                                 .toCompletableFuture();
                 try (var record = incoming.get(2, TimeUnit.SECONDS)) {
                     assertEquals(1, caller.pendingCount());
@@ -1717,7 +1718,13 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 completed =
                         right.spotNode()
                                 .requestToNode(
-                                        leftRid, List.of(packet, payload), Duration.ofSeconds(2))
+                                        leftRid,
+                                        null,
+                                        List.of(packet, payload),
+                                        Duration.ofSeconds(2),
+                                        null,
+                                        null,
+                                        null)
                                 .toCompletableFuture();
             }
 
@@ -1846,7 +1853,13 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                         requester
                                 .spotNode()
                                 .requestToNode(
-                                        replierRid, List.of(packet, payload), Duration.ofSeconds(2))
+                                        replierRid,
+                                        null,
+                                        List.of(packet, payload),
+                                        Duration.ofSeconds(2),
+                                        null,
+                                        null,
+                                        null)
                                 .toCompletableFuture()
                                 .get(2, TimeUnit.SECONDS)) {
                     assertEquals(ZLinkBackendRequestResult.OK, reply.result());

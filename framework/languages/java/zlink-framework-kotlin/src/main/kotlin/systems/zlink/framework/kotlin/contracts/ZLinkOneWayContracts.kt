@@ -24,6 +24,8 @@ interface ZLinkKotlinSubmissionCall {
 }
 
 interface ZLinkKotlinRequestCall<TReply : Any> {
+    fun submit(): systems.zlink.framework.channels.ZLinkRequestStage<TReply>
+
     fun metadata(key: String, value: String): ZLinkKotlinRequestCall<TReply>
 
     fun timeout(timeout: Duration): ZLinkKotlinRequestCall<TReply>
@@ -131,6 +133,8 @@ interface ZLinkKotlinSpotSendCall {
 }
 
 interface ZLinkKotlinSpotRequestCall<TReply : Any> {
+    fun submit(): systems.zlink.framework.channels.ZLinkRequestStage<TReply>
+
     fun metadata(key: String, value: String): ZLinkKotlinSpotRequestCall<TReply>
 
     fun instanceSpot(): ZLinkKotlinSpotRequestCall<TReply>

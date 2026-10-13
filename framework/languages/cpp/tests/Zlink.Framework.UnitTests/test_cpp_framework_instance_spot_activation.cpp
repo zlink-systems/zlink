@@ -641,7 +641,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
           EXPECT_EQ ("commerce", cached_route->mesh_name);
           EXPECT_EQ ("cart-node", cached_route->node_rid.to_string ());
           ++ready_requests;
-          return zlink::framework::task_t<zlink::message_t> (
+          return zlink::framework::request_task_t<zlink::message_t> (
             zlink::framework::result_t<zlink::message_t>::success (
               zlink::framework::detail::encoded_payload_to_raw (
                 serializers.get<reply_t> ().serialize (reply_t{71}))));
@@ -663,12 +663,13 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       },
       [&] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
            zlink::framework::runtime::messaging::message_parts_t parts, std::chrono::milliseconds)
-        -> zlink::framework::task_t<
+        -> zlink::framework::request_task_t<
           zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>> {
           ++requests;
           auto header = envelopes.decode_header (parts).value ();
           header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
           reply_t reply{71};
+          co_await zlink::framework::detail::request_admitted_t{};
           co_return zlink::framework::
             result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
               envelopes.encode_parts (header, reply, serializers));
@@ -852,7 +853,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingWithoutIntentDoesNotActivate)
       },
       [&] (const auto &, const auto &, const auto &, auto, auto, auto, auto, auto) {
           ++activations;
-          return zlink::framework::task_t<zlink::message_t> (
+          return zlink::framework::request_task_t<zlink::message_t> (
             zlink::framework::result_t<zlink::message_t>::failure (
               zlink::framework::framework_error_kind_t::internal_failure, "must not activate"));
       });
@@ -882,7 +883,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ActivationKeepsSubmissionStartAcross
           co_return fw::result_t<void>::success ();
       },
       [] (const auto &, const auto &, const auto &, auto, auto, auto, auto, auto) {
-          return fw::task_t<zlink::message_t> (fw::result_t<zlink::message_t>::failure (
+          return fw::request_task_t<zlink::message_t> (fw::result_t<zlink::message_t>::failure (
             fw::framework_error_kind_t::internal_failure, "unused request activation"));
       });
     const auto before = std::chrono::system_clock::now ();
@@ -1015,7 +1016,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingRequestUsesDefaultTimeoutForC
       [&observed_timeout] (const auto &, const auto &, const auto &, auto, auto, auto,
                            std::chrono::milliseconds timeout, auto) {
           observed_timeout = timeout;
-          return zlink::framework::task_t<zlink::message_t> (
+          return zlink::framework::request_task_t<zlink::message_t> (
             zlink::framework::result_t<zlink::message_t>::failure (
               zlink::framework::framework_error_kind_t::internal_failure,
               "activation probe completed"));
@@ -1380,7 +1381,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
             "simulated cold activation rejection");
       },
       [] (const auto &, const auto &, const auto &, auto, auto, auto, auto, auto) {
-          return zlink::framework::task_t<zlink::message_t> (
+          return zlink::framework::request_task_t<zlink::message_t> (
             zlink::framework::result_t<zlink::message_t>::failure (
               zlink::framework::framework_error_kind_t::internal_failure, "unused"));
       });
@@ -1425,7 +1426,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
         const zlink::framework::detail::spot_activation_intent_t &intent,
         const std::optional<zlink::framework::runtime::spot_address_t> &cached_route, std::string,
         std::type_index, auto, std::chrono::milliseconds,
-        auto) -> zlink::framework::task_t<zlink::message_t> {
+        auto) -> zlink::framework::request_task_t<zlink::message_t> {
           EXPECT_EQ ("player-alice", std::string (spot_id));
           EXPECT_EQ (std::optional<std::string> ("gamequest"), intent.mesh_name);
           EXPECT_EQ (std::optional<std::string> ("player-quest"), intent.stable_type);
@@ -1439,6 +1440,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
           ++cold_activations;
           /* Models OnInitialize replaying the durable event stream before the
            * activation-owned first request is dispatched. */
+          co_await zlink::framework::detail::request_admitted_t{};
           co_return zlink::framework::result_t<zlink::message_t>::success (
             zlink::framework::detail::encoded_payload_to_raw (
               serializers.get<reply_t> ().serialize (reply_t{3})));
@@ -1457,7 +1459,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
       [&direct_requests, &envelopes, &replies] (const zlink::routing_id_t &, const std::string &,
                                                 std::uint64_t, messaging::message_parts_t parts,
                                                 std::chrono::milliseconds)
-        -> zlink::framework::task_t<zlink::framework::result_t<messaging::message_parts_t>> {
+        -> zlink::framework::request_task_t<
+          zlink::framework::result_t<messaging::message_parts_t>> {
           ++direct_requests;
           const auto request_header = envelopes.decode_header (parts);
           if (!request_header) {
@@ -1470,6 +1473,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
                                          zlink::framework::detail::make_framework_origin_exception (
                                            zlink::framework::framework_error_kind_t::shutting_down,
                                            "spot serial queue is closed or stopping"));
+          co_await zlink::framework::detail::request_admitted_t{};
           co_return zlink::framework::result_t<messaging::message_parts_t>::success (
             replies.reply_raw_envelope (error_header, zlink::message_t::from ("")));
       });
@@ -1571,7 +1575,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorit
           },
           [&] (const auto &, const auto &, const std::optional<spot_address_t> &cached_route,
                std::string, std::type_index, auto, std::chrono::milliseconds,
-               auto) -> zlink::framework::task_t<zlink::message_t> {
+               auto) -> zlink::framework::request_task_t<zlink::message_t> {
+              co_await zlink::framework::detail::request_admitted_t{};
               cached_routes.push_back (cached_route.has_value ());
               if (cached_route)
                   co_return zlink::framework::detail::result_access_t::failure<zlink::message_t> (
