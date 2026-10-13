@@ -12,7 +12,7 @@ English | [한국어](README.ko.md)
 | `guide/` | Application developers (library users) | **Intent, purpose, usage** — why the API exists, when to use which pattern, practical examples. No internal implementation details |
 | `internals/` | Core library maintainers | **Internal architecture** — socket wiring, data flow, thread model, protocol encoding. Diagram-heavy for understanding before reading code |
 | `building/` | Build/release engineers | Build, test, packaging instructions |
-| `license/` | Anyone evaluating adoption, legal reviewers | **License policy** — why this repo uses three licenses (MPL-2.0 / FSL-1.1-ALv2 / Apache-2.0), what each permits, where the canonical texts live |
+| `license/` | Anyone evaluating adoption, legal reviewers | **License policy** — MPL-2.0 covers `core/` and `bindings/`, zlink License 1.0 covers the server Framework runtime, and Apache-2.0 covers client connectors, all shared C++ `common/include/` headers, copied sample/tutorial/quickstart code including `shared_sample/`, and `http-client`; pre-1.0.0 server Framework versions are free on any number of machines, 1.0.0 onward includes one free server machine, and releases through 0.30.0 remain under FSL-1.1-ALv2 |
 
 **Key rule**: guide does not explain internals. If a guide topic needs
 internal context, link to the internals document instead.
@@ -27,7 +27,7 @@ internal context, link to the internals document instead.
 | **Binding Users** | [guide/bindings/README.ko.md](../bindings/doc/guide/README.ko.md) (Korean) | C++/Java/.NET/Node.js/Python bindings |
 | **Library Developers** | [internals/architecture.md](../core/doc/spec/core/systems/01-architecture.en.md) | Internal architecture and implementation details |
 | **Build/Release Engineers** | [building/build-guide.md](building/build-guide.md) | Building, testing, and packaging |
-| **Adopters / Legal Reviewers** | [license/README.md](license/README.md) | License policy across `core`/`bindings`/`framework`/`http-client` |
+| **Adopters / Legal Reviewers** | [license/README.md](license/README.md) | License policy across `core`/`bindings`, server Framework runtime, client connectors and copied examples, and `http-client` |
 
 ---
 
@@ -111,4 +111,4 @@ language-specific rules.
 
 | Document | Description |
 |----------|-------------|
-| [README.md](license/README.md) | Why this repository uses three licenses (MPL-2.0 / FSL-1.1-ALv2 / Apache-2.0), what each tier permits, and where the canonical texts live |
+| [README.md](license/README.md) | License terms for `core/`, `bindings/`, server Framework runtime, client connectors and copied sample/tutorial/quickstart code, and `http-client`, including server machine limits by version and the FSL terms retained by releases through 0.30.0 |

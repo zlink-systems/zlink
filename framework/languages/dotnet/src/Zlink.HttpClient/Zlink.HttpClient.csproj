@@ -8,8 +8,8 @@
         <IsPackable>true</IsPackable>
         <PackageLicenseFile></PackageLicenseFile>
         <!-- Overrides Directory.Build.props: this package wraps System.Net.Http rather
-             than any zlink-original transport, so it ships under Apache-2.0 instead of
-             the framework-wide FSL. -->
+             than any zlink-original transport, so it uses Apache-2.0 instead of the
+             framework-wide zlink License 1.0. -->
         <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
         <Authors>zlink</Authors>
         <RepositoryUrl>https://github.com/zlink-systems/zlink</RepositoryUrl>

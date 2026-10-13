@@ -27,4 +27,4 @@ vcpkg_cmake_config_fixup(
   PACKAGE_NAME zlink_stream_connector_cpp
   CONFIG_PATH lib/cmake/zlink_stream_connector_cpp)
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
-vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")
+vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/framework/languages/cpp/http-client/LICENSE")

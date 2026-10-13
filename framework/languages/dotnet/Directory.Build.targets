@@ -14,8 +14,8 @@
     <!--
         Skip projects that override PackageLicenseExpression (e.g. Apache-2.0
         for http-client, which wraps a standard library instead of any
-        zlink-original transport). They opt out of the framework-wide FSL
-        file entirely.
+        zlink-original transport). They opt out of the framework-wide
+        zlink License 1.0 file entirely.
     -->
     <ItemGroup Condition="'$(IsPackable)' == 'true' and '$(TargetFramework)' == '' and '$(PackageLicenseExpression)' == ''">
         <None Include="$(MSBuildThisFileDirectory)../../LICENSE" Pack="true" PackagePath="" Visible="false" />

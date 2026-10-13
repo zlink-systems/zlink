@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import {
   BORDER_BAND,
   WORLD_SIZE,

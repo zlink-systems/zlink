@@ -152,4 +152,5 @@ not a game:
 
 ## License
 
-FSL-1.1-ALv2. See `LICENSE`.
+This package is licensed under Apache-2.0. The full license text is included in
+[`LICENSE.md`](LICENSE.md).

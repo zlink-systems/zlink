@@ -50,8 +50,15 @@ npm install @zlink-systems/nestjs      # DI·모듈 등록
 | `@zlink-systems/stream-connector` | 외부 client(게임 client·모바일)를 만들 때([STREAM](guide/server/23-stream.ko.md)) |
 | `@zlink-systems/http-client` | 서버에서 HTTP를 호출할 때([HTTP Client 가이드](guide/http-client/README.ko.md)) |
 
-라이선스는 계층마다 다르다 — core·binding은 MPL-2.0, framework는 FSL-1.1-ALv2,
-`@zlink-systems/http-client`는 Apache-2.0이다. 서비스를 만들어 파는 데 드는 비용은 없다.
+서버 Framework runtime은 [zlink License 1.0](../../../LICENSE)([한국어 번역](../../../LICENSE.ko.md))을
+따릅니다. 1.0.0 전 버전은 머신 수와 관계없이 무료이며, 1.0.0부터는 서버 한 대가 무료이고
+추가 머신마다 유료 라이선스가 필요합니다. 0.30.0 이하 릴리스는 FSL-1.1-ALv2를 유지합니다.
+
+client connector와 `samples/`, `tutorial/`, `quickstart/`,
+`framework/languages/shared_sample/`의 복사 사용 예제 코드는 Apache-2.0을
+따릅니다. connector 테스트, performance gate 소스와 connector e2e fixture는
+zlink License 1.0을 따릅니다.
+`core`와 `bindings`는 MPL-2.0, `@zlink-systems/http-client`는 Apache-2.0을 따릅니다.
 
 ## 2. 공유 계약
 

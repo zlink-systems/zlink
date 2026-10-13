@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 module zlink.framework.json.internal {
     requires systems.zlink;
     requires com.fasterxml.jackson.databind;

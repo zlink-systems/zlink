@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The wire contract from scenario §6, mirrored from the language-neutral definition.
 // The field names are the contract: every language server encodes exactly these.
 // Only the messages the browser exchanges appear here — server-internal messages

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 // The Session receiver roles of §11.1 (STREAM only: no Object Server, Actor, Store or automatic discovery) and §10.2
 // (an Object Client node; the Actors live in the separate Actor process).

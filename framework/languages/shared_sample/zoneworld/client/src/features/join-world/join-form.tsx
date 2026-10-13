@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { useState } from 'preact/hooks';
 
 export function JoinForm({ onJoin, busy }: { onJoin: (playerId: string) => Promise<void>; busy: boolean }) {

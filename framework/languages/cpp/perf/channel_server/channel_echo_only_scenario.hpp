@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // §11.2 channel-echo-only. Question: what the same request costs over RouteMesh and over ClientServer. Roles: HTTP

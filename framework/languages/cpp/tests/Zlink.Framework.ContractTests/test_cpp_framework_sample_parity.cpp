@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "../../samples/Bingo/Server/Configuration/sample_names.hpp"
 #include "../../samples/Bingo/Server/Configuration/sample_topology.hpp"

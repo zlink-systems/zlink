@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/stream_connector_throwing.hpp>
 #include <zlink/stream_e2e_client/coroutine.hpp>
 

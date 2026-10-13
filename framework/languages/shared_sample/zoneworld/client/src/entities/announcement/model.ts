@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { signal } from '@preact/signals';
 import type { WorldAnnounceNotify } from '../../shared/api/contracts';
 

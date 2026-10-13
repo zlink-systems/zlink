@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Build and verify the normalized ZoneWorld golden package from captured .NET artifacts."""
 
 from __future__ import annotations

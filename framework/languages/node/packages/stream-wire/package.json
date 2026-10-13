@@ -1,7 +1,7 @@
 {
   "name": "@zlink-systems/stream-wire",
   "version": "0.30.0",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/zlink-systems/zlink.git",

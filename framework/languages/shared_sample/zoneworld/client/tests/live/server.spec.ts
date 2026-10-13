@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { expect, test } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 

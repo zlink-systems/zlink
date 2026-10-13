@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Run one .NET ZoneWorld lane and capture its Redis state without modifying the runner.
 
 The runner provisions a scoped Redis container and removes it during cleanup.  This tool

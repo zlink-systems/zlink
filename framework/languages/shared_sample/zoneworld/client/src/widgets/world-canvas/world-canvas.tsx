@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { useEffect, useRef } from 'preact/hooks';
 import type { PlayerModel } from '../../entities/player/model';
 import { isAdjacentZone, isBorderBand } from '../../entities/zone/model';

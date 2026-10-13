@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 // RouteMesh admission follows the Core selected route (#1087 FW01):
 // Core ROUTER §10.1 owns which pipe carries a RID; the framework observes the
