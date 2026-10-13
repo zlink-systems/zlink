@@ -79,7 +79,7 @@ final class ZLinkChannelSocketRegistry {
     private final Map<String, ZLinkBackendPublisherSocket> publishers = new HashMap<>();
     private final Map<String, RoutingId> publisherRoutingIds = new HashMap<>();
     private final Map<String, ZLinkBackendSubscriberSocket> subscribers = new HashMap<>();
-    private final Map<String, RouteRouterRecord> routeRouters = new HashMap<>();
+    private volatile Map<String, RouteRouterRecord> routeRouters = Map.of();
     private final Map<String, ClientServerConnection> clientServerConnections = new HashMap<>();
     private final Map<String, ZLinkClientServerServerDescriptor> clientServerServerDescriptors =
             new HashMap<>();
@@ -87,7 +87,7 @@ final class ZLinkChannelSocketRegistry {
     private final Map<String, Object> routeSocketLocks = new HashMap<>();
     private final Map<String, ZLinkBackendSpotRouteBridge> spotRouteBridges =
             new ConcurrentHashMap<>();
-    private final Map<String, ZLinkInternalSpotNode> spotRouterNodes = new ConcurrentHashMap<>();
+    private volatile Map<String, ZLinkInternalSpotNode> spotRouterNodes = Map.of();
     private final List<ZLinkBackendObject> ownedSockets = new ArrayList<>();
     private final Map<String, Map<RoutingId, ClientServerServerPeer>> clientServerServerPeers =
             new HashMap<>();
@@ -208,7 +208,9 @@ final class ZLinkChannelSocketRegistry {
         registerReceiveFlow(socket);
         inStateLane(
                 () -> {
-                    routeRouters.put(channelName, new RouteRouterRecord(socket, List.of()));
+                    var routers = new HashMap<>(routeRouters);
+                    routers.put(channelName, new RouteRouterRecord(socket, List.of()));
+                    routeRouters = Map.copyOf(routers);
                     routeSocketLocks.put(channelName, new Object());
                     ownedSockets.add(socket);
                     return null;
@@ -225,9 +227,11 @@ final class ZLinkChannelSocketRegistry {
                                     record.socket().lastEndpoint(), null);
                     List<String> endpoints = new ArrayList<>(record.boundEndpoints());
                     endpoints.add(boundEndpoint);
-                    routeRouters.put(
+                    var routers = new HashMap<>(routeRouters);
+                    routers.put(
                             channelName,
                             new RouteRouterRecord(record.socket(), List.copyOf(endpoints)));
+                    routeRouters = Map.copyOf(routers);
                     return null;
                 });
     }
@@ -325,7 +329,12 @@ final class ZLinkChannelSocketRegistry {
             BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> meshSubmit,
             java.util.function.Consumer<Throwable> rejectedSubmission) {
         long started = requestNanoTime.getAsLong();
-        return selectAndSubmit(
+        return selectAndSubmitNode(
+                channelName,
+                timeoutOverride,
+                defaultTimeout,
+                started,
+                meshSubmit,
                 () -> {
                     ChannelRegistration registration = registrations.get(channelName);
                     Duration timeout =
@@ -486,7 +495,12 @@ final class ZLinkChannelSocketRegistry {
             BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> nodeSubmit,
             java.util.function.Consumer<Throwable> rejectedSubmission) {
         long started = defaultTimeout == null ? 0 : requestNanoTime.getAsLong();
-        return selectAndSubmit(
+        return selectAndSubmitNode(
+                channelName,
+                timeoutOverride,
+                defaultTimeout,
+                started,
+                nodeSubmit,
                 () -> {
                     Duration timeout =
                             requestTimeoutCore(channelName, timeoutOverride, defaultTimeout);
@@ -588,13 +602,73 @@ final class ZLinkChannelSocketRegistry {
                         : defaultTimeout;
     }
 
+    private <T> CompletionStage<T> selectAndSubmitNode(
+            String channelName,
+            Duration timeoutOverride,
+            Duration defaultTimeout,
+            long started,
+            BiFunction<ZLinkInternalSpotNode, Duration, CompletionStage<T>> nodeSubmit,
+            Supplier<Supplier<CompletionStage<T>>> selection,
+            java.util.function.Consumer<Throwable> rejectedSubmission) {
+        // These are the published registration tables themselves, not a second routing cache.
+        // Node admission, registration and native submit remain on the selected node owner.
+        var node = spotRouterNodes.get(channelName);
+        var registration = registrations.get(channelName);
+        if (node == null
+                || routeRouters.containsKey(channelName)
+                || registration != null
+                        && registration.kind() == ChannelKind.CLIENT_SERVER
+                        && registration.clientEnabled()) {
+            return selectAndSubmit(selection, rejectedSubmission);
+        }
+        ZLinkFlowContext.State flow = ZLinkFlowContext.current();
+        try {
+            return nodeSubmission(
+                            node,
+                            () -> {
+                                try (var ignored =
+                                        flow == null
+                                                ? ZLinkFlowContext.suppress()
+                                                : ZLinkFlowContext.enter(flow)) {
+                                    requireSubmissionOpen();
+                                    Duration timeout =
+                                            requestTimeoutCore(
+                                                    channelName, timeoutOverride, defaultTimeout);
+                                    return nodeSubmit.apply(
+                                            node,
+                                            systems.zlink.framework.runtime.internal.calls
+                                                    .ZLinkRequestCalls.remainingTimeout(
+                                                    timeout, started, requestNanoTime.getAsLong()));
+                                }
+                            })
+                    .get();
+        } catch (RuntimeException | Error failure) {
+            return rejectedSubmissionStage(flow, rejectedSubmission, failure);
+        }
+    }
+
+    private void requireSubmissionOpen() {
+        if (closing.getAsBoolean())
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN, "channel runtime is shutting down");
+    }
+
+    private <T> CompletionStage<T> rejectedSubmissionStage(
+            ZLinkFlowContext.State flow,
+            java.util.function.Consumer<Throwable> rejectedSubmission,
+            Throwable failure) {
+        Throwable cause =
+                failure instanceof CompletionException && failure.getCause() != null
+                        ? failure.getCause()
+                        : failure;
+        rejectSubmission(flow, rejectedSubmission, cause);
+        return java.util.concurrent.CompletableFuture.failedFuture(cause);
+    }
+
     private <T> Supplier<CompletionStage<T>> nodeSubmission(
             ZLinkInternalSpotNode node, Supplier<CompletionStage<T>> submission) {
-        var owner = node.sourceTransportLane();
-        if (owner == null || owner == stateLane) {
-            var submitted = submission.get();
-            return () -> submitted;
-        }
+        var nodeOwner = node.sourceTransportLane();
+        var owner = nodeOwner == null ? stateLane : nodeOwner;
         return () -> owner.isOnLane() ? submission.get() : owner.awaitTurn(submission);
     }
 
@@ -613,14 +687,12 @@ final class ZLinkChannelSocketRegistry {
                             flow == null
                                     ? ZLinkFlowContext.suppress()
                                     : ZLinkFlowContext.enter(flow)) {
-                        if (closing.getAsBoolean())
-                            throw new ZLinkFrameworkException(
-                                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
-                                    "channel runtime is shutting down");
+                        requireSubmissionOpen();
                         return selection.get();
                     } catch (RuntimeException | Error failure) {
-                        rejectSubmission(flow, rejectedSubmission, failure);
-                        return () -> java.util.concurrent.CompletableFuture.failedFuture(failure);
+                        CompletionStage<T> rejected =
+                                rejectedSubmissionStage(flow, rejectedSubmission, failure);
+                        return () -> rejected;
                     }
                 };
         try {
@@ -631,12 +703,7 @@ final class ZLinkChannelSocketRegistry {
                 return submission.get();
             }
         } catch (RuntimeException | Error failure) {
-            Throwable cause =
-                    failure instanceof CompletionException && failure.getCause() != null
-                            ? failure.getCause()
-                            : failure;
-            rejectSubmission(flow, rejectedSubmission, cause);
-            return java.util.concurrent.CompletableFuture.failedFuture(cause);
+            return rejectedSubmissionStage(flow, rejectedSubmission, failure);
         }
     }
 
@@ -1836,7 +1903,9 @@ final class ZLinkChannelSocketRegistry {
     void registerSpotRouterNode(String channelName, ZLinkInternalSpotNode node) {
         inStateLane(
                 () -> {
-                    spotRouterNodes.put(channelName, node);
+                    var nodes = new HashMap<>(spotRouterNodes);
+                    nodes.put(channelName, node);
+                    spotRouterNodes = Map.copyOf(nodes);
                     return null;
                 });
     }

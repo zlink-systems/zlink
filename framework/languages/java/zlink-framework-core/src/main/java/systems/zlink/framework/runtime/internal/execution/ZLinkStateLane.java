@@ -71,11 +71,11 @@ public final class ZLinkStateLane {
     }
 
     public <T> CompletionStage<T> runAsync(Supplier<T> work) {
-        return publishOutsideLane(submit(work, false));
+        return ZLinkCompletionBridge.publishOutsideOwner(submit(work, false));
     }
 
     public <T> CompletionStage<T> runNowOrQueue(Supplier<T> work) {
-        return publishOutsideLane(submit(work, true));
+        return ZLinkCompletionBridge.publishOutsideOwner(submit(work, true));
     }
 
     /** Synchronous registration boundary; its private result cannot acquire dependents. */
@@ -123,16 +123,6 @@ public final class ZLinkStateLane {
         return result;
     }
 
-    private static <T> CompletionStage<T> publishOutsideLane(CompletableFuture<T> result) {
-        // No caller can observe the private result before submission returns.
-        // A completed turn needs no completion task; a pending turn must still
-        // publish outside the lane so a dependent can reenter it and wait.
-        if (result.isDone()) {
-            return result;
-        }
-        return result.handleAsync((value, error) -> result.join());
-    }
-
     /** Returns null when the owner is busy; a returned stage has already run its turn. */
     public <T> CompletionStage<T> tryRunNow(Supplier<T> work) {
         Objects.requireNonNull(work, "work");
@@ -147,17 +137,20 @@ public final class ZLinkStateLane {
     }
 
     private <T> WorkItem completeWork(Supplier<T> work, CompletableFuture<T> result) {
-        return () -> {
-            try {
-                result.complete(callWithCurrent(this, work));
-            } catch (RuntimeException | Error error) {
-                result.completeExceptionally(
-                        error instanceof CompletionException
-                                ? error
-                                : new CompletionException(error));
-            }
-            return TURN_FINISHED;
-        };
+        return () ->
+                callWithCurrent(
+                        this,
+                        () -> {
+                            try {
+                                result.complete(work.get());
+                            } catch (RuntimeException | Error error) {
+                                result.completeExceptionally(
+                                        error instanceof CompletionException
+                                                ? error
+                                                : new CompletionException(error));
+                            }
+                            return TURN_FINISHED;
+                        });
     }
 
     private boolean tryRunInline(WorkItem turn) {

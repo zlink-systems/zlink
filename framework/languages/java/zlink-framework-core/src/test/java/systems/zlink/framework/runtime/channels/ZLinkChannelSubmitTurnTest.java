@@ -40,6 +40,35 @@ final class ZLinkChannelSubmitTurnTest {
             new IllegalStateException("test terminal");
 
     @Test
+    void publishedNodeSubmissionDoesNotWaitForRegistryTurn() throws Exception {
+        try (Fixture f = new Fixture();
+                var workers = Executors.newVirtualThreadPerTaskExecutor()) {
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var calls = new AtomicInteger();
+            f.sockets.registerSpotRouterNode(
+                    "orders", f.node(calls, new AtomicReference<>(), () -> {}));
+            var held =
+                    f.lane.runAsync(
+                            () -> {
+                                entered.countDown();
+                                await(release);
+                                return null;
+                            });
+            try {
+                await(entered);
+                var submitted = workers.submit(() -> f.request().submit(String.class));
+                assertTerminal(submitted.get(2, TimeUnit.SECONDS));
+                assertEquals(1, calls.get());
+                assertFalse(held.toCompletableFuture().isDone());
+            } finally {
+                release.countDown();
+                held.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
     void buildersUseTheRegistrationNodeAndDefaultTimeoutAtSubmit() throws Exception {
         try (Fixture f = new Fixture()) {
             AtomicInteger oldCalls = new AtomicInteger();

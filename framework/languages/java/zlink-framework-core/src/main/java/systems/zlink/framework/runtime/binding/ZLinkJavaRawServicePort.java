@@ -374,6 +374,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         return receivePoller == null ? 0 : receivePoller.waitForReady(timeout);
     }
 
+    /** The receive role retains this socket's one poller across its waits and owner turns. */
+    ZLinkJavaSocketReceivePoller receivePoller(RouterSocket router) {
+        return inStateLane(() -> receivePollerOnLane(router));
+    }
+
     Optional<Inbound> receiveNow(RouterSocket router) {
         return inStateLane(() -> receiveOnLane(router));
     }

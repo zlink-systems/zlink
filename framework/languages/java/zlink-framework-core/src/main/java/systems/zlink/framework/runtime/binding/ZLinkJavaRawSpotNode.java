@@ -61,7 +61,6 @@ import java.util.logging.Logger;
 final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private static final Logger LOGGER = Logger.getLogger(ZLinkJavaRawSpotNode.class.getName());
     private final ZLinkJavaRawMeshNode owner;
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, ZLinkJavaRawSpot> spots = new ConcurrentHashMap<>();
     private final Map<String, ZLinkBackendActorRef> actors = new ConcurrentHashMap<>();
     private final Map<String, String> actorSpots = new ConcurrentHashMap<>();
@@ -101,22 +100,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     ZLinkJavaRawSpotNode(ZLinkJavaRawMeshNode owner) {
         this.owner = owner;
         this.instanceSpots =
-                new ZLinkJavaInstanceSpotRegistry(stateLane, owner::executeApplication);
+                new ZLinkJavaInstanceSpotRegistry(
+                        owner.sourceTransportLane(), owner::executeApplication);
     }
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return owner.inSourceTurn(work);
     }
 
     @Override

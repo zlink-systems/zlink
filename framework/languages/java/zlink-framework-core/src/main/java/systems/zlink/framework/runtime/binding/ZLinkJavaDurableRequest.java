@@ -82,7 +82,8 @@ final class ZLinkJavaDurableRequest {
         try {
             registration = observe.apply(() -> request.post(request::sourceChanged));
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            return ZLinkCompletionBridge.publishOutsideOwner(
+                    CompletableFuture.failedFuture(failure));
         }
         var deadline =
                 ZLinkProcessExecutionLanes.deadlines()
@@ -117,7 +118,7 @@ final class ZLinkJavaDurableRequest {
                                     if (request.pending != null)
                                         request.pending.toCompletableFuture().cancel(false);
                                 }));
-        return request.completion;
+        return ZLinkCompletionBridge.publishOutsideOwner(request.completion);
     }
 
     private void post(Runnable action) {

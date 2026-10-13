@@ -107,34 +107,35 @@ final class ZLinkJavaInstanceSpotRegistry {
                             "Instance Spot stable type does not match authority"));
         }
         ActivationOperation candidate = new ActivationOperation();
-        return ingressLane
-                .runAsync(() -> activations.put(spotId, candidate))
-                .thenComposeAsync(
-                        current -> {
-                            CompletionStage<Activation> result =
-                                    activateRegistered(
-                                            spotId,
-                                            selected,
-                                            deadlineUnixMs,
-                                            generation,
-                                            restoreFirst,
-                                            candidate,
-                                            current);
-                            CompletableFuture.allOf(
-                                            current == null
-                                                    ? CompletableFuture.completedFuture(null)
-                                                    : current.terminal,
-                                            result.handle((value, failure) -> null)
-                                                    .toCompletableFuture())
-                                    .whenComplete(
-                                            (value, failure) -> {
-                                                if (candidate.isCompletedExceptionally())
-                                                    activations.remove(spotId, candidate);
-                                                candidate.terminal.complete(null);
-                                            });
-                            return result;
-                        },
-                        applicationExecutor);
+        CompletionStage<ActivationOperation> registration =
+                ingressLane.isOnLane()
+                        ? CompletableFuture.completedFuture(activations.put(spotId, candidate))
+                        : ingressLane.runNowOrQueue(() -> activations.put(spotId, candidate));
+        return registration.thenComposeAsync(
+                current -> {
+                    CompletionStage<Activation> result =
+                            activateRegistered(
+                                    spotId,
+                                    selected,
+                                    deadlineUnixMs,
+                                    generation,
+                                    restoreFirst,
+                                    candidate,
+                                    current);
+                    CompletableFuture.allOf(
+                                    current == null
+                                            ? CompletableFuture.completedFuture(null)
+                                            : current.terminal,
+                                    result.handle((value, failure) -> null).toCompletableFuture())
+                            .whenComplete(
+                                    (value, failure) -> {
+                                        if (candidate.isCompletedExceptionally())
+                                            activations.remove(spotId, candidate);
+                                        candidate.terminal.complete(null);
+                                    });
+                    return result;
+                },
+                applicationExecutor);
     }
 
     private CompletionStage<Activation> activateRegistered(
