@@ -105,19 +105,20 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
     ZLinkFrameworkRuntime runtime,
     string channelName,
     TMessage message
-) : ZLinkCallMetadata, IZLinkSendCall
+) : IZLinkSendCall
 {
+    private ZLinkCallMetadata? _metadata;
     private ZLinkOneWayCallGate _submission = new("Channel send");
 
     public IZLinkSendCall Metadata(string key, string value)
     {
-        base.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkSendCall Metadata(ZLinkMessageMetadata metadata)
     {
-        base.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -140,7 +141,10 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
             channelName,
             ZLinkMessageNameResolver.ResolveFromMessage(message)
         );
-        var selected = base.EncodeChannel(runtime.IsClientServerClientChannel(channelName));
+        var selected = ZLinkCallMetadata.EncodeChannel(
+            _metadata,
+            runtime.IsClientServerClientChannel(channelName)
+        );
         header = header with { Metadata = selected.Header };
         metadata = selected.Frame;
         return ZLinkClientCallCodec.EncodeEnvelopeParts(
@@ -155,8 +159,9 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
     ZLinkFrameworkRuntime runtime,
     string channelName,
     TRequest request
-) : ZLinkCallMetadata, IZLinkRequestCall
+) : IZLinkRequestCall
 {
+    private ZLinkCallMetadata? _metadata;
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
     private TimeSpan? _timeout;
 
@@ -169,13 +174,13 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
 
     public IZLinkRequestCall Metadata(string key, string value)
     {
-        base.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkRequestCall Metadata(ZLinkMessageMetadata metadata)
     {
-        base.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -217,7 +222,8 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
             : null;
         try
         {
-            var (headerMetadata, metadata) = base.EncodeChannel(
+            var (headerMetadata, metadata) = ZLinkCallMetadata.EncodeChannel(
+                _metadata,
                 runtime.IsClientServerClientChannel(channelName)
             );
             var header = ZLinkClientCallCodec.CreateEnvelope(
@@ -266,20 +272,21 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
     string meshName,
     RoutingId targetNodeRid,
     TMessage message
-) : ZLinkCallMetadata, IZLinkSendCall
+) : IZLinkSendCall
 {
+    private ZLinkCallMetadata? _metadata;
     private readonly string _messageName = ZLinkMessageNameResolver.ResolveFromMessage(message);
     private ZLinkOneWayCallGate _submission = new("MeshNode send");
 
     public IZLinkSendCall Metadata(string key, string value)
     {
-        base.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkSendCall Metadata(ZLinkMessageMetadata metadata)
     {
-        base.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -296,7 +303,12 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
             runtime.EnsureKnownRouteMeshPeer(meshName, targetNodeRid, $"packet '{_messageName}'");
             handedOff = true;
             var result = await nodeRuntime
-                .SendToNodeAsync(targetNodeRid, parts, cancellationToken, base.Encode())
+                .SendToNodeAsync(
+                    targetNodeRid,
+                    parts,
+                    cancellationToken,
+                    ZLinkCallMetadata.Encode(_metadata)
+                )
                 .ConfigureAwait(false);
             ZLinkOneWaySubmitOutcome.EnsureAccepted(result, "Node send");
             if (runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
@@ -343,8 +355,9 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
     RoutingId targetNodeRid,
     TRequest request,
     bool durable = false
-) : ZLinkCallMetadata, IZLinkRequestCall
+) : IZLinkRequestCall
 {
+    private ZLinkCallMetadata? _metadata;
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
     private TimeSpan? _timeout;
 
@@ -357,13 +370,13 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
 
     public IZLinkRequestCall Metadata(string key, string value)
     {
-        base.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkRequestCall Metadata(ZLinkMessageMetadata metadata)
     {
-        base.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -436,7 +449,7 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
                     parts,
                     timeout,
                     cancellationToken,
-                    base.Encode(),
+                    ZLinkCallMetadata.Encode(_metadata),
                     durable,
                     requestAdmission: requestAdmission
                 )
@@ -468,19 +481,20 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
     ZLinkResolvedSpotHandle target,
     TMessage message,
     bool instanceIntent = false
-) : ZLinkCallMetadata, IZLinkSendCall
+) : IZLinkSendCall
 {
+    private ZLinkCallMetadata? _metadata;
     private ZLinkOneWayCallGate _submission = new("Spot send");
 
     public IZLinkSendCall Metadata(string key, string value)
     {
-        base.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkSendCall Metadata(ZLinkMessageMetadata metadata)
     {
-        base.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -513,7 +527,7 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
                     snapshot.OwnerLeaseGeneration,
                     parts,
                     cancellationToken,
-                    base.Encode(),
+                    ZLinkCallMetadata.Encode(_metadata),
                     ZLinkServiceWireCodec.CreateInstanceReadyRoute(snapshot, instanceIntent)
                 )
                 .ConfigureAwait(false);
@@ -537,8 +551,9 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
     ZLinkResolvedSpotHandle target,
     TRequest request,
     bool instanceIntent = false
-) : ZLinkCallMetadata, IZLinkRequestCall
+) : IZLinkRequestCall
 {
+    private ZLinkCallMetadata? _metadata;
     private readonly ZLinkApplicationExecutionScope? _executionScope =
         ZLinkApplicationExecutionContext.Current;
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
@@ -553,13 +568,13 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
 
     public IZLinkRequestCall Metadata(string key, string value)
     {
-        base.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkRequestCall Metadata(ZLinkMessageMetadata metadata)
     {
-        base.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -635,7 +650,7 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
                         parts,
                         timeout,
                         cancellationToken,
-                        base.Encode(),
+                        ZLinkCallMetadata.Encode(_metadata),
                         ZLinkServiceWireCodec.CreateInstanceReadyRoute(snapshot, instanceIntent),
                         requestAdmission: requestAdmission
                     )

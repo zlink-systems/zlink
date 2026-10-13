@@ -8,20 +8,21 @@ internal sealed class ZLinkCurrentSpotPublishCall<TEvent>(
     string channelName,
     string topic,
     TEvent message
-) : ZLinkCallMetadata, IZLinkPublishCall
+) : IZLinkPublishCall
 {
+    private ZLinkCallMetadata? _metadata;
     private ZLinkOneWayCallGate _submission = new("Spot publish");
     private readonly string _messageName = ZLinkMessageNameResolver.ResolveFromMessage(message);
 
     public IZLinkPublishCall Metadata(string key, string value)
     {
-        base.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkPublishCall Metadata(ZLinkMessageMetadata metadata)
     {
-        base.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -46,7 +47,7 @@ internal sealed class ZLinkCurrentSpotPublishCall<TEvent>(
                 topic,
                 parts,
                 cancellationToken,
-                base.Encode(),
+                ZLinkCallMetadata.Encode(_metadata),
                 () => ZLinkMessageParts.DisposeAll(parts),
                 activation.ErrorSink
             )
@@ -69,20 +70,21 @@ internal sealed class ZLinkExternalSpotPublishCall<TEvent>(
     string channelName,
     string topic,
     TEvent message
-) : ZLinkCallMetadata, IZLinkPublishCall
+) : IZLinkPublishCall
 {
+    private ZLinkCallMetadata? _metadata;
     private ZLinkOneWayCallGate _submission = new("Logical Multicast publish");
     private readonly string _messageName = ZLinkMessageNameResolver.ResolveFromMessage(message);
 
     public IZLinkPublishCall Metadata(string key, string value)
     {
-        base.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkPublishCall Metadata(ZLinkMessageMetadata metadata)
     {
-        base.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -96,7 +98,7 @@ internal sealed class ZLinkExternalSpotPublishCall<TEvent>(
         );
         var bundle = runtime.GetSpotPublisherBundle(channelName);
         var packetName = _messageName;
-        var metadata = base.Encode();
+        var metadata = ZLinkCallMetadata.Encode(_metadata);
         var parts = ZLinkSpotPublishEnvelope.EncodeParts(
             channelName,
             packetName,

@@ -43,7 +43,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         string actorId,
         string packetName,
         TMessage message,
-        ZLinkCallMetadata metadata,
+        ZLinkCallMetadata? metadata,
         ResolvedActorRoute? fixedRoute = null
     )
     {
@@ -111,7 +111,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         string packetName,
         TRequest request,
         TimeSpan? timeout,
-        ZLinkCallMetadata metadata,
+        ZLinkCallMetadata? metadata,
         CancellationToken cancellationToken,
         ResolvedActorRoute? fixedRoute = null,
         ZLinkRequestAdmission? requestAdmission = null
@@ -366,7 +366,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ZLinkCallMetadata? callMetadata = null
     )
     {
-        var metadata = callMetadata?.ToStreamMetadata() ?? ZlinkStreamMetadata.Empty;
+        var metadata = ZLinkCallMetadata.ToStreamMetadata(callMetadata);
         var flags = requestSeq is null
             ? ZlinkStreamHeaderFlags.None
             : ZlinkStreamHeaderFlags.HasRequestSeq;
@@ -512,19 +512,20 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ZLinkActorClient client,
         string actorId,
         TMessage message
-    ) : ZLinkCallMetadata, IZLinkActorSendCall
+    ) : IZLinkActorSendCall
     {
+        private ZLinkCallMetadata? _metadata;
         private ZLinkOneWayCallGate _submission = new("Actor send");
 
         public IZLinkActorSendCall Metadata(string key, string value)
         {
-            base.Set(key, value);
+            ZLinkCallMetadata.Set(ref _metadata, key, value);
             return this;
         }
 
         public IZLinkActorSendCall Metadata(ZLinkMessageMetadata metadata)
         {
-            base.Merge(metadata);
+            ZLinkCallMetadata.Merge(ref _metadata, metadata);
             return this;
         }
 
@@ -536,7 +537,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                     actorId,
                     ZLinkMessageNameResolver.ResolveFromMessage(message),
                     message,
-                    this
+                    _metadata
                 )
                 .EnsureAcceptedAsync("Actor send", ZLinkFrameworkErrorKind.NotFound);
         }
@@ -547,8 +548,9 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         string actorId,
         TRequest request,
         ResolvedActorRoute? fixedRoute = null
-    ) : ZLinkCallMetadata, IZLinkActorRequestCall
+    ) : IZLinkActorRequestCall
     {
+        private ZLinkCallMetadata? _metadata;
         private readonly ZLinkApplicationExecutionScope? _executionScope =
             ZLinkApplicationExecutionContext.Current;
         private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
@@ -563,13 +565,13 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
 
         public IZLinkActorRequestCall Metadata(string key, string value)
         {
-            base.Set(key, value);
+            ZLinkCallMetadata.Set(ref _metadata, key, value);
             return this;
         }
 
         public IZLinkActorRequestCall Metadata(ZLinkMessageMetadata metadata)
         {
-            base.Merge(metadata);
+            ZLinkCallMetadata.Merge(ref _metadata, metadata);
             return this;
         }
 
@@ -607,7 +609,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                 ZLinkMessageNameResolver.ResolveFromMessage(request),
                 request,
                 _timeout,
-                this,
+                _metadata,
                 cancellationToken,
                 fixedRoute,
                 requestAdmission: requestAdmission
