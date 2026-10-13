@@ -778,12 +778,13 @@ int zlink::socket_base_t::getsockopt (int option_, void *optval_, size_t *optval
         {
             socket_public_api_lock_scope_t guard (lifecycle);
             static_cast<mailbox_t *> (_mailbox)->drain_primary_signaler ();
-            const int events_rc = process_commands (0, false, false, NULL, true);
-            if (events_rc != 0 && (errno == EINTR || errno == ETERM))
+            const int requested_events = ZLINK_POLLIN | ZLINK_POLLOUT;
+            uint32_t events = 0;
+            const int events_rc = get_events_internal (requested_events, &events, true);
+            if (events_rc != 0)
                 return -1;
-
-            errno_assert (events_rc == 0);
-            return do_getsockopt<int> (optval_, optvallen_, has_out () ? ZLINK_POLLOUT : 0);
+            return do_getsockopt<int> (optval_, optvallen_,
+                                       static_cast<int> (events & requested_events));
         }
     }
 
