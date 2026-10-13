@@ -101,7 +101,7 @@ sequenceDiagram
 | E2 resolve | Picks one target from the candidate list and selection order prepared at change time. Candidate replacement and selection are decided in one order on the selector owner's state lane — ownership of the selection state (candidate list, accumulators, cursor), the way that order is built, and the fallback that runs the selection procedure when the cycle search reached its bound are owned by [Channel Messaging "The Candidate List and Selection Order Are Prepared in Advance Whenever State Changes"](../02-channel-transport/02-channel-messaging.en.md#the-candidate-list-and-selection-order-are-prepared-in-advance-whenever-state-changes). The normal path of a prepared selection order only looks up the target and advances the cursor, and requests no **additional** turn on the topology, liveness or port owner's lane to do so. What this page requires is that selection finishes in constant time within one turn of the selector owner — when the caller is not already on that lane, the one switch into that turn is part of the normal path. | the selector owner's turn | No per-request scan of peers, no repeated filtering or sorting, no waiting on another owner's lane. |
 | E3 register | For every operation whose terminal completion may arrive later — request and send alike — registers the pending entry and the completion-dispatcher slot. For a request it also creates `OperationId` and `ReplyRouteId` and registers the reply route, as in [Submit And Completion "10"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation). Registration never fails for want of a free slot ([Submit And Completion "11"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation)), and registration and close are serialised by the same operation owner. The race for terminal authority is owned by the atomic take-out in [Submit And Completion "10"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation); this document only requires that the take-out happens where the completion notification arrives and adds no extra round trip to an owner turn (E5). Registration completes before the transport submit ([State Ownership And Lanes "Completion Before Return"](06-state-ownership-and-lanes.en.md#completion-before-return)), and the registered slot is held until the callback returns. Beyond the required owner turn no separate registration queue and no additional lane round trip is created. The state class and lifetime of the pending entry and the registered dispatcher slot are defined by [Submit And Completion "11"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation) and [State Ownership And Lanes "4"](06-state-ownership-and-lanes.en.md#4-state-classifications-and-how-to-tell-them-apart). What this page requires is that registration finishes in constant time within one turn of the operation owner. | the operation owner's turn | A completion is never processed before its registration, and no timer object is created per request — the deadline is a field of the entry and expiry is checked by the management work of §4.2 or a timer wheel. |
 | E4 submit | Starts the binding's asynchronous request/send operation **once** and receives the result object (`result` and `admitted`, plus `reply` for a request). The Framework decides immediately from `result` and consumes `admitted` only when `result == BACKPRESSURED` (§15). It starts within the same turn that decided the E3 registration, so the caller may rely on the registration being complete before it observes the return of the submit. The Framework keeps no send queue of its own. | the same turn as E3 | HWM waiting and retries after the operation started belong to Core and the binding ([Submit And Completion "5"](01-submit-and-completion.en.md#5-backpressure-and-error-classification)); the Framework never creates a second operation. One result-object allocation is added, but the number of execution-resource switches (hops) does not change. |
-| E5 complete | Where the binding reports completion (reply, error, timeout, local admission), decides terminal authority once through the atomic take-out of [Submit And Completion "10"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation) and hands the result to the dispatcher slot registered in E3. The caller continuation runs in a **new execution turn** after the current completion handling and the lane-current scope have ended ([Submit And Completion "11"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation)). | binding completion resource → completion dispatcher | The only execution-resource switch the Framework introduces is that one dispatcher turn. No host mailbox or dispatch thread sits between the completion notification and the dispatcher. |
+| E5 complete | Where the binding reports completion (reply, error, timeout, local admission), decides terminal authority once through the atomic take-out of [Submit And Completion "10"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation) and hands the result to the dispatcher slot registered in E3. The caller continuation runs in a **new execution turn** after the current completion handling and the lane-current scope have ended ([Submit And Completion "11"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation)). §4.4 decides which resource runs that turn. | binding completion resource → the execution resource chosen by §4.4 | The Framework introduces **at most one** execution-resource switch (§4.4). No host mailbox or dispatch thread sits between the completion notification and the dispatcher. |
 
 **Execution-resource switches on the source path are counted separately over two intervals.** An
 execution-resource switch is a point where a message or its completion enters a queue and is taken out
@@ -110,8 +110,8 @@ binding submit of E4 — the only switches allowed are entries into the required
 on the normal path: caller → the selector owner's turn (E2), → the operation owner's turn (E3 and E4).
 When both owners are the same there is at most one, and when the caller is already on that lane the
 entry is not counted. Over the completion interval — from "the binding's completion notification
-arrived" to "the first instruction of the caller continuation" — the Framework introduces exactly one
-switch, the dispatcher turn of E5. Owner turns run FIFO, so a caller that submits 100 requests back to
+arrived" to "the first instruction of the caller continuation" — the Framework introduces at most one
+switch, the one that comes from the placement of §4.4. Owner turns run FIFO, so a caller that submits 100 requests back to
 back gets all 100 into the binding in submit order.
 
 The Send completion boundary is defined by
@@ -119,7 +119,7 @@ The Send completion boundary is defined by
 E5 delivers that completion even when admission is pending after the E4 call returns.
 With immediate admission, E5 takes out the E3 entry within the same call, decides the result and hands
 it to the dispatcher slot; when admission is pending on HWM, a later completion takes the same E5 path.
-Either way the caller continuation runs in a new dispatcher turn. The continuation of a caller that released its gate with `Yield` runs
+Either way the caller continuation runs in a new turn, and §4.4 decides the resource that runs it. The continuation of a caller that released its gate with `Yield` runs
 after the gate is re-acquired as in [Handler Turn "3"](02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield);
 that re-acquisition is not part of the switch count.
 
@@ -180,7 +180,7 @@ sequenceDiagram
                     I->>Q: I4 decode the header only, enqueue to the owner queue (atomic section, a move)
                 end
             end
-            I->>W: I4 for each owner whose empty queue became non-empty: add to the ready set, wake a worker
+            I->>W: I4 for each owner whose empty queue became non-empty: add to the ready set (resource per §4.4)
         end
     end
     I->>I: M management work once per turn
@@ -193,10 +193,10 @@ sequenceDiagram
 | I1 permit | Before claiming ordinary records, acquires this turn's permit budget from the host-shared permit in the order of [Application Job Queue "3"](04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order). The budget is the smaller of the per-turn limit (64) and the remaining permits. Without a permit it stops ordinary receive, while handling of supply identified pre-receive as a terminal completion, management deadlines, permit returns and shutdown notifications keep progressing. | Never receives without a permit, and with zero permits the completions of already started operations and the management work never stall. |
 | I2 claim | Claims records from Core/binding continuously within the budget, applying whichever of permit, count (at most 64), byte and elapsed-time limits is reached first and keeping the cursor ([Application Job Queue "4"](04-application-job-queue-and-backpressure.en.md#4-reading-multiple-items-from-the-socket-implementation)). Never ends the turn after one record. | Wake-up and read are not repeated once per queued record. |
 | I3 classify | Decodes only the header of each record. Control records — liveness probes and ACKs, topology — are handled internally here and their permit returned; they are never put on an application handler queue. For application records the payload is not decoded; only the owner is determined. | A claimed control record never waits behind the application workers' backlog (§4.2). |
-| I4 commit | Enqueues the application record to its owner queue — the atomic check-and-enqueue section of ["Do Not Separate the Admission Decision from Enqueueing"](04-application-job-queue-and-backpressure.en.md#do-not-separate-the-admission-decision-from-enqueueing-implementation). The record is moved, not copied. Each owner whose empty queue became non-empty is added to the ready set and a worker is woken. | The execution-resource switch the Framework introduces is this worker wake-up. When one turn fills the queues of several owners, each owner is woken once. |
+| I4 commit | Enqueues the application record to its owner queue — the atomic check-and-enqueue section of ["Do Not Separate the Admission Decision from Enqueueing"](04-application-job-queue-and-backpressure.en.md#do-not-separate-the-admission-decision-from-enqueueing-implementation). The record is moved, not copied. Each owner whose empty queue became non-empty is added to the ready set. §4.4 decides the resource that runs that owner's turn. | The Framework introduces at most one execution-resource switch per owner (§4.4). |
 
-**In the receive turn the execution-resource switch the Framework introduces is the worker wake-up of
-I4** — a shape in which one record moves through three queues, "receive loop → separate mailbox →
+**In the receive turn the Framework introduces at most one execution-resource switch, the one that
+comes from the placement of §4.4 after I4** — a shape in which one record moves through three queues, "receive loop → separate mailbox →
 dispatch pump → new task per record", is a violation. A language whose receive context belongs to the
 transport and therefore needs a mailbox ([Application Job Queue "5"](04-application-job-queue-and-backpressure.en.md#5-separating-receipt-handling-from-state-change-implementation))
 makes that mailbox the owner queue itself; it never dequeues after receive to move records into
@@ -294,6 +294,41 @@ Internal check — that ready-set transitions (empty → non-empty) match worker
 per-record dispatch task or supervisor registration exists between W1 and W4, are white-box invariants
 verified by tracing.
 
+### 4.4 Placing the execution resource — handing off the receive role
+
+The caller continuation of E5 and the handler turn after I4 run in a **new execution turn**. A new
+turn does not mean another thread. One rule decides which execution resource runs that turn.
+
+- **An execution resource that holds no receive role** may run the turn itself once the current
+  processing — the completion decision or the receive turn, its call stack, locks and the lane-current
+  scope — has returned. The receive role is the work of an ingress owner: I0–I4 and the management
+  work of §4.2. Driving the binding poller that receives the E5 completion notification is part of it.
+- **An execution resource that holds the receive role** runs the turn itself only after it has handed
+  that role to another execution resource. The receiving resource is an existing execution resource of
+  the same runtime that is idle now and can start the next receive turn at once. The handing side
+  decides, in one step, both the use of that resource and the transfer of the receive role. When no such
+  resource exists, the current resource keeps the receive role, and the turn stays in the owner queue
+  and the completion dispatcher, where another execution resource (a worker) runs it.
+
+The rule does not change the following.
+
+| Contract kept | How this placement keeps it |
+|---|---|
+| Separation of progress areas ([Handler Turn "1"](02-handler-turn-and-execution-gate.en.md#1-separating-queue-from-gate)) | A resource that could not hand off the receive role runs no application work. After the hand-off, receive, completion and management progress belong to the receiving resource. |
+| Order and execution authority | The turn run directly is the head turn of its owner queue, and it goes through the gate acquisition of W1 and the permit release of W3 as before. It neither skips the queue nor bypasses the gate. |
+| The receive turn as the unit | The hand-off is decided once, at the boundary where a receive turn ends. There is no hand-off per record; the continuous claims of I2 and the per-turn management work stay. |
+| Number of execution resources | No execution resource is created and no limit is raised for the hand-off. Nothing waits to confirm that the receiving resource actually started. At most one resource drives receive on a socket at a time. |
+
+With this placement the Framework introduces no execution-resource switch when the hand-off succeeds,
+and one switch — to the existing worker or dispatcher — when no resource can take the role. Waking the
+receiving resource is a cost of the next receive turn and does not add to this turn's latency. A runtime
+with a single execution resource (the Node event loop) has no resource to hand off to and always takes
+the existing path.
+
+Internal check conditions — the number of successful and failed hand-offs, the number of resources
+driving receive on one socket (at most 1), and an execution-resource high-water at or below the existing
+limit before and after hand-offs are white-box invariants checked by trace.
+
 ## 5. Target selection and reply path per API
 
 The three APIs share E1–E5, I0–I4 with M, and W1–W5. They differ only in what E2 reads and on which
@@ -323,7 +358,7 @@ execution resource differs per language.
 **Language discretion** — which kind of execution resource (OS thread, thread-pool work item, virtual
 thread, event-loop turn) implements the ingress owner and the workers is the language's decision.
 Whatever the kind, the observable result is the same — the non-occupying wait of I0, the continuous
-claims of I2, the switch of I4, the batched processing of W1–W5 — and the checks are §7 and the internal
+claims of I2, the placement of §4.4, the batched processing of W1–W5 — and the checks are §7 and the internal
 check conditions of each stage.
 
 - Thread-based runtimes (C++, .NET, Java) implement I0 as a blocking wait.

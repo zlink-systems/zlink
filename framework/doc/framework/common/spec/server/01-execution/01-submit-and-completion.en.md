@@ -437,6 +437,11 @@ The order is as follows.
 3. Enqueue the callback on the dispatcher.
 4. Run the callback on a new execution turn.
 
+**A new execution turn does not mean another thread.** The condition of a new turn is that it starts
+only after steps 1–3, their call stack and the lane-current scope have all returned.
+[Messaging Hot Path "4.4"](08-messaging-hot-path.en.md#44-placing-the-execution-resource--handing-off-the-receive-role)
+decides which execution resource runs that turn.
+
 **Putting a completion callback on the dispatcher cannot fail.** The dispatcher has no limit.
 Nothing rejects a request for lack of a slot, and nothing throws away the completion of a
 call already accepted.
@@ -459,8 +464,8 @@ host has **received** and that waits for a handler. The two count different thin
 are never merged
 ([§1](04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities)).
 
-The dispatcher uses a process-shared lane instead of creating a thread per callback,
-and shutdown drains every accepted callback.
+The dispatcher does not create a thread per callback, and shutdown drains every accepted
+callback.
 
 An exception from one callback does not stop
 later callbacks from running.
