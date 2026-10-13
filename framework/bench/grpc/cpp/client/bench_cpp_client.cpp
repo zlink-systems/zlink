@@ -33,6 +33,7 @@
 #include <vector>
 
 #include <sys/stat.h>
+#include <pthread.h>
 
 using namespace zlink_cpp_bench;
 using clock_t_ = std::chrono::steady_clock;
@@ -179,6 +180,7 @@ class driver_t
     static constexpr int unlimited_request_window = 0;
     virtual ~driver_t () = default;
     virtual int request_window () const = 0;
+    virtual double submit_cpu_seconds () { return thread_cpu_seconds_self (); }
     std::function<void ()> boundary;
     void close_window (clock_t_::time_point deadline)
     {
@@ -878,6 +880,8 @@ class framework_driver_t final : public driver_t
     {
         if (_command)
             run_tasks<void> (deadline, size, phase, counters, latency);
+        else if (_window == 1)
+            run_serial (deadline, size, phase, counters, latency).result ().value ();
         else
             run_tasks<payload_t> (deadline, size, phase, counters, latency);
     }
@@ -899,6 +903,26 @@ class framework_driver_t final : public driver_t
         fw::route_client_t *&_client;
     };
 
+    double submit_cpu_seconds () override
+    {
+        if (!_application_cpu_clock) {
+            clockid_t clock;
+            if (pthread_getcpuclockid (pthread_self (), &clock) != 0)
+                throw std::runtime_error ("benchmark application CPU clock is unavailable");
+            _application_cpu_clock = clock;
+        }
+        const auto read = [] (clockid_t clock) {
+            timespec time{};
+            if (clock_gettime (clock, &time) != 0)
+                throw std::runtime_error ("benchmark thread CPU clock is unavailable");
+            return static_cast<double> (time.tv_sec) + static_cast<double> (time.tv_nsec) / 1e9;
+        };
+        double seconds = read (*_application_cpu_clock);
+        if (_continuation_cpu_clock && *_continuation_cpu_clock != *_application_cpu_clock)
+            seconds += read (*_continuation_cpu_clock);
+        return seconds;
+    }
+
     payload_t make_payload (size_t size, phase_t phase)
     {
         payload_t payload;
@@ -915,6 +939,53 @@ class framework_driver_t final : public driver_t
             return _client->request_to_node ("bench", _target_node, std::move (payload))
               .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
               .async<payload_t> ();
+    }
+
+    bool valid_reply (const payload_t &reply, size_t size, phase_t phase, uint64_t seq) const
+    {
+        decoded_header_t header;
+        return decode_payload (reply.body ().data (), reply.body ().size (), &header)
+               && header.run_id == _run_id && header.phase == phase
+               && header.payload_size == size && reply.body ().size () == size
+               && header.seq == seq;
+    }
+
+    fw::task_t<void> run_serial (clock_t_::time_point deadline,
+                                size_t size,
+                                phase_t phase,
+                                counters_t &counters,
+                                latency_sampler_t *latency)
+    {
+        while (clock_t_::now () < deadline) {
+            const auto sent = now_ns ();
+            auto payload = make_payload (size, phase);
+            const auto seq = _seq - 1;
+            counters.enter ();
+            ++counters.submitted;
+            try {
+                auto reply = co_await submit<payload_t> (std::move (payload));
+                if (!_continuation_cpu_clock) {
+                    clockid_t clock;
+                    if (pthread_getcpuclockid (pthread_self (), &clock) != 0)
+                        throw std::runtime_error ("benchmark continuation CPU clock is unavailable");
+                    _continuation_cpu_clock = clock;
+                }
+                if (valid_reply (reply, size, phase, seq)) {
+                    ++counters.completed;
+                    if (latency)
+                        latency->add_us (static_cast<double> (now_ns () - sent) / 1000.0);
+                } else {
+                    ++counters.header_failures;
+                    counters.record_error ("ValidationError", "Framework reply header mismatch");
+                }
+            }
+            catch (const std::exception &error) {
+                counters.record_exception (error);
+            }
+            counters.leave ();
+            close_window (deadline);
+        }
+        close_window (deadline);
     }
 
     template <typename T>
@@ -994,12 +1065,7 @@ class framework_driver_t final : public driver_t
                 if constexpr (!std::is_void_v<T>) {
                     if (valid) {
                         const auto &reply = result.value ();
-                        decoded_header_t header;
-                        valid =
-                          decode_payload (reply.body ().data (), reply.body ().size (), &header)
-                          && header.run_id == _run_id && header.phase == phase
-                          && header.payload_size == size && reply.body ().size () == size
-                          && header.seq == item.seq;
+                        valid = valid_reply (reply, size, phase, item.seq);
                         if (!valid)
                             ++counters.header_failures;
                     }
@@ -1037,6 +1103,8 @@ class framework_driver_t final : public driver_t
     zlink::routing_id_t _target_node = zlink::routing_id_t::from ("bench-server");
     fw::route_client_t *_client = nullptr;
     bool _readiness_error_reported = false;
+    std::optional<clockid_t> _application_cpu_clock;
+    std::optional<clockid_t> _continuation_cpu_clock;
     uint32_t _run_id = static_cast<uint32_t> (now_ns ());
     uint64_t _seq = 0;
 };
@@ -1260,7 +1328,7 @@ class source_t
         if (!target_before)
             throw std::runtime_error ("target stats unavailable before phase");
         const auto cpu_before = process_cpu_seconds_self ();
-        const auto submit_before = thread_cpu_seconds_self ();
+        const auto submit_before = _driver->submit_cpu_seconds ();
         const auto start = clock_t_::now ();
         const auto deadline = start + std::chrono::milliseconds (duration);
         long long completed_at_close = 0;
@@ -1270,7 +1338,7 @@ class source_t
             elapsed = std::chrono::duration<double> (clock_t_::now () - start).count ();
             completed_at_close = _counters.completed;
             cell.client_cores = (process_cpu_seconds_self () - cpu_before) / elapsed;
-            cell.submit_thread_cores = (thread_cpu_seconds_self () - submit_before) / elapsed;
+            cell.submit_thread_cores = (_driver->submit_cpu_seconds () - submit_before) / elapsed;
             cell.non_submit_cores = std::max (0.0, cell.client_cores - cell.submit_thread_cores);
             cell.client_cpu_percent = cell.client_cores / logical_cores () * 100;
             cell.client_memory_mb = rss_mb ();
@@ -1340,6 +1408,8 @@ class source_t
              ? "one application thread; async unary CompletionQueue; one stub per logical stream"
            : _options.implementation == "zlink-cpp"
              ? "one application thread; coroutine slots and binding completion poller"
+           : _options.pattern == "request-serial"
+             ? "one logical coroutine; Framework public request await"
              : "one application thread; Framework task completion notifications"}};
         value["completed_at_close"] = completed_at_close;
         value["active_elapsed_ms"] = elapsed * 1000;
@@ -1408,7 +1478,8 @@ int main (int argc, char **argv)
           std::stoi (arg_value (argc, argv, "--request-timeout-ms", "30000"));
         options.drain_bound_ms = std::stoi (arg_value (argc, argv, "--drain-bound-ms", "30000"));
         if (options.warmup_seconds <= 0 || options.warmup_segments < 1
-            || options.request_timeout_ms <= 0 || options.drain_bound_ms != 30000)
+            || options.request_timeout_ms <= 0
+            || options.request_timeout_ms > options.drain_bound_ms || options.drain_bound_ms != 30000)
             throw std::runtime_error ("invalid warmup, timeout or settle bound");
         options.output_file = arg_value (argc, argv, "--output-file", "cells.json");
         source_t source (std::move (options));
