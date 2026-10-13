@@ -126,7 +126,7 @@ final class ZLinkChannelSubmitTurnTest {
     }
 
     @Test
-    void requestAndSendStartBindingInTheRegistryTurnIncludingAnExistingTurn() throws Exception {
+    void requestAndSendStartBindingInTheNodeTurnIncludingAnExistingTurn() throws Exception {
         for (boolean alreadyOnLane : new boolean[] {false, true}) {
             try (Fixture f = new Fixture()) {
                 AtomicInteger calls = new AtomicInteger();
@@ -135,18 +135,22 @@ final class ZLinkChannelSubmitTurnTest {
                         f.node(
                                 calls,
                                 new AtomicReference<>(),
-                                () -> assertSame(f.lane, ZLinkStateLane.current())));
+                                () -> assertSame(f.operationLane, ZLinkStateLane.current())));
                 ZLinkRequestCall request = f.request();
                 ZLinkSendCall send = f.send();
                 CompletionStage<String> reply =
                         alreadyOnLane
-                                ? f.lane.runAsync(() -> request.submit(String.class))
+                                ? f.operationLane
+                                        .runAsync(() -> request.submit(String.class))
                                         .toCompletableFuture()
                                         .join()
                                 : request.submit(String.class);
                 CompletionStage<Void> admission =
                         alreadyOnLane
-                                ? f.lane.runAsync(send::submit).toCompletableFuture().join()
+                                ? f.operationLane
+                                        .runAsync(send::submit)
+                                        .toCompletableFuture()
+                                        .join()
                                 : send.submit();
                 assertTerminal(reply);
                 admission.toCompletableFuture().join();
@@ -156,7 +160,7 @@ final class ZLinkChannelSubmitTurnTest {
     }
 
     @Test
-    void nodeReplacementCannotInterleaveBetweenSelectionAndBindingSubmit() throws Exception {
+    void nodeReplacementDoesNotChangeTheAlreadySelectedOperationOwner() throws Exception {
         for (boolean request : new boolean[] {false, true}) {
             try (Fixture f = new Fixture();
                     var workers = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -170,7 +174,7 @@ final class ZLinkChannelSubmitTurnTest {
                                 oldCalls,
                                 new AtomicReference<>(),
                                 () -> {
-                                    assertSame(f.lane, ZLinkStateLane.current());
+                                    assertSame(f.operationLane, ZLinkStateLane.current());
                                     bindingEntered.countDown();
                                     await(releaseBinding);
                                 }));
@@ -191,13 +195,14 @@ final class ZLinkChannelSubmitTurnTest {
                                                             newCalls,
                                                             new AtomicReference<>(),
                                                             () -> {})));
-                    awaitQueued(f.lane);
-                    assertFalse(replacement.isDone());
+                    // Hot-path §3 separates selector and operation turns. Replacing
+                    // the registration must progress while the selected owner is busy.
+                    replacement.get(5, TimeUnit.SECONDS);
+                    assertFalse(submission.isDone());
                     releaseBinding.countDown();
                     CompletionStage<?> completion = submission.get(5, TimeUnit.SECONDS);
                     if (request) assertTerminal(completion);
                     else completion.toCompletableFuture().join();
-                    replacement.get(5, TimeUnit.SECONDS);
                     assertTerminal(f.request().submit(String.class));
                     assertEquals(1, oldCalls.get());
                     assertEquals(1, newCalls.get());
@@ -313,6 +318,7 @@ final class ZLinkChannelSubmitTurnTest {
     private static final class Fixture implements AutoCloseable {
         final ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
         final ZLinkStateLane lane = (ZLinkStateLane) field(sockets, "stateLane");
+        final ZLinkStateLane operationLane = new ZLinkStateLane();
         final java.util.concurrent.ScheduledExecutorService scheduler =
                 Executors.newSingleThreadScheduledExecutor();
         final ZLinkChannelCallRuntime runtime;
@@ -364,6 +370,9 @@ final class ZLinkChannelSubmitTurnTest {
                             getClass().getClassLoader(),
                             new Class<?>[] {ZLinkInternalSpotNode.class},
                             (proxy, method, args) -> {
+                                if (method.getName().equals("sourceTransportLane")) {
+                                    return operationLane;
+                                }
                                 if (method.getName().equals("name")) {
                                     return "orders";
                                 }
@@ -397,6 +406,7 @@ final class ZLinkChannelSubmitTurnTest {
         public void close() {
             runtime.beginClose();
             scheduler.shutdownNow();
+            operationLane.closeAsync().toCompletableFuture().join();
             lane.closeAsync().toCompletableFuture().join();
         }
     }

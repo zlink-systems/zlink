@@ -457,10 +457,7 @@ public final class ZLinkChannelRuntime
         this.timeoutExecutor = timeoutExecutor;
         this.sockets =
                 new ZLinkChannelSocketRegistry(
-                        registration.applicationJobQueue(),
-                        nanoTime,
-                        () -> !running,
-                        context == null ? null : context.sourceTransportLane());
+                        registration.applicationJobQueue(), nanoTime, () -> !running);
         this.clientServerRuntime = new ZLinkClientServerRuntimeView(sockets, () -> hostState.get());
         this.fanoutRuntime =
                 new ZLinkFanoutRuntimeView(

@@ -169,6 +169,7 @@ final class ZLinkJavaRawMeshNode
     private final AtomicLong nextCorrelation = new AtomicLong(1);
     private final long preStartBindingGenerationSeed = positiveRandomLong();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final ZLinkStateLane transportStateLane = new ZLinkStateLane();
     // Descriptor mutation and deferred-ready state are one C2 group.
     private final ZLinkStateLane descriptorStateLane = new ZLinkStateLane();
     // Lazy SpotNode construction is a separate C1 registry state.
@@ -249,17 +250,6 @@ final class ZLinkJavaRawMeshNode
                 ZLinkServiceLivenessRegistry.DEFAULT_PEER_TIMEOUT);
     }
 
-    ZLinkJavaRawMeshNode(Context context, String meshName, ZLinkStateLane transportStateLane) {
-        this(
-                context,
-                meshName,
-                System::currentTimeMillis,
-                System::nanoTime,
-                ZLinkServiceLivenessRegistry.DEFAULT_PROBE_INTERVAL,
-                ZLinkServiceLivenessRegistry.DEFAULT_PEER_TIMEOUT,
-                transportStateLane);
-    }
-
     ZLinkJavaRawMeshNode(Context context, String meshName, LongSupplier currentTimeMillis) {
         this(
                 context,
@@ -291,32 +281,11 @@ final class ZLinkJavaRawMeshNode
             LongSupplier nanoTime,
             Duration livenessProbeInterval,
             Duration livenessPeerTimeout) {
-        this(
-                context,
-                meshName,
-                currentTimeMillis,
-                nanoTime,
-                livenessProbeInterval,
-                livenessPeerTimeout,
-                new ZLinkStateLane());
-    }
-
-    private final ZLinkStateLane transportStateLane;
-
-    private ZLinkJavaRawMeshNode(
-            Context context,
-            String meshName,
-            LongSupplier currentTimeMillis,
-            LongSupplier nanoTime,
-            Duration livenessProbeInterval,
-            Duration livenessPeerTimeout,
-            ZLinkStateLane transportStateLane) {
         if (meshName == null || meshName.isBlank()) {
             throw new IllegalArgumentException("meshName is required");
         }
         this.meshName = meshName;
         this.messageMetrics = ZLinkMeshMessageMetrics.forMesh(meshName);
-        this.transportStateLane = Objects.requireNonNull(transportStateLane, "transportStateLane");
         this.port = new ZLinkJavaRawServicePort(context, transportStateLane);
         this.currentTimeMillis = Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
@@ -328,6 +297,14 @@ final class ZLinkJavaRawMeshNode
                 new ZLinkServiceLivenessRegistry(
                         livenessProbeInterval, livenessPeerTimeout, transportStateLane);
         this.port.setReceiveSource(liveness::connectionFromOwner);
+    }
+
+    ZLinkStateLane sourceTransportLane() {
+        return transportStateLane;
+    }
+
+    <T> T inSourceTurn(java.util.function.Supplier<T> submission) {
+        return port.inStateLane(submission);
     }
 
     @Override

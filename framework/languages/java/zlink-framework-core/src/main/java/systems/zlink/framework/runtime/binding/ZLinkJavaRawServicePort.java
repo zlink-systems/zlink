@@ -474,7 +474,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         return receivePollers.get(router);
     }
 
-    private <T> T inStateLane(Supplier<T> work) {
+    <T> T inStateLane(Supplier<T> work) {
         return stateLane.isOnLane() ? work.get() : stateLane.awaitTurn(work);
     }
 

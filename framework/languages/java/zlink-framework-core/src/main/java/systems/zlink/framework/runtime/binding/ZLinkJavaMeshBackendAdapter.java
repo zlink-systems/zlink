@@ -8,7 +8,6 @@ final class ZLinkJavaMeshBackendAdapter implements ZLinkMeshBackendAdapter {
     @Override
     public ZLinkInternalMeshNode createMeshNode(ZLinkBackendContext context, String meshName) {
         var source = (ZLinkJavaContext) context;
-        return new ZLinkJavaRawMeshNode(
-                source.nativeContext(), meshName, source.sourceTransportLane());
+        return new ZLinkJavaRawMeshNode(source.nativeContext(), meshName);
     }
 }

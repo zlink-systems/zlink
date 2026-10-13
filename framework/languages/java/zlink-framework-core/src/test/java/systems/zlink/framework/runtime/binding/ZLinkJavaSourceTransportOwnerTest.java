@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkJavaSourceTransportOwnerTest {
     @Test
-    void selectorTurnStartsNativeSubmissionOnTheSameOwner() throws Exception {
+    void nodeTurnStartsNativeSubmissionOnTheSameOwner() throws Exception {
         var nativeOwner = new AtomicReference<ZLinkStateLane>();
         RouterSocket router =
                 (RouterSocket)
@@ -57,7 +57,9 @@ final class ZLinkJavaSourceTransportOwnerTest {
             field.setAccessible(true);
             var port = (ZLinkJavaRawServicePort) field.get(node);
             var socket = port.openRouter(RoutingId.from("owner-source"));
-            var selectedOwner = context.sourceTransportLane();
+            var ownerField = ZLinkJavaRawMeshNode.class.getDeclaredField("transportStateLane");
+            ownerField.setAccessible(true);
+            var selectedOwner = (ZLinkStateLane) ownerField.get(node);
             selectedOwner
                     .runNowOrQueue(
                             () -> {
