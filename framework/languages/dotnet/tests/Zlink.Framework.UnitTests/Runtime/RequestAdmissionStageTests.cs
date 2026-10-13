@@ -7,6 +7,38 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class RequestAdmissionStageTests
 {
+    [Fact]
+    public void Immediate_reply_observation_allocates_only_the_admission_source()
+    {
+        const int iterations = 1024;
+        const int warmupIterations = 256;
+        const int replyValue = 7;
+        Func<ZLinkRequestAdmission, ValueTask<int>> execute = static _ =>
+            ValueTask.FromResult(replyValue);
+        for (var index = 0; index < warmupIterations; index++)
+        {
+            new ZLinkRequestAdmission().Complete();
+            _ = ZLinkRequestAdmission.Run(execute);
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+            new ZLinkRequestAdmission().Complete();
+        var sourceBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var admitted = true;
+        var replies = 0;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            var request = ZLinkRequestAdmission.Run(execute);
+            admitted &= request.Admitted.IsCompletedSuccessfully;
+            replies += request.Reply.GetAwaiter().GetResult();
+        }
+        var observedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(admitted);
+        Assert.Equal(replyValue * iterations, replies);
+        Assert.Equal(sourceBytes, observedBytes);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
