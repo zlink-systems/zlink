@@ -21,9 +21,26 @@ export interface ZLinkRemoteActorSourceLeaveTerminal {
   readonly succeeded: boolean;
 }
 
+const JSON_OBJECT_START = '{'.charCodeAt(0);
+const JSON_SPACE = ' '.charCodeAt(0);
+const JSON_TAB = '\t'.charCodeAt(0);
+const JSON_LINE_FEED = '\n'.charCodeAt(0);
+const JSON_CARRIAGE_RETURN = '\r'.charCodeAt(0);
+
 export function decodeRemoteActorSourceLeaveTerminal(
   payload: Buffer
 ): ZLinkRemoteActorSourceLeaveTerminal | undefined {
+  // A SourceLeave terminal is a JSON object. Binary channel frames and JSON
+  // primitives cannot be terminals, so do not materialize or parse them.
+  let offset = 0;
+  while (
+    payload[offset] === JSON_SPACE ||
+    payload[offset] === JSON_TAB ||
+    payload[offset] === JSON_LINE_FEED ||
+    payload[offset] === JSON_CARRIAGE_RETURN
+  )
+    offset++;
+  if (payload[offset] !== JSON_OBJECT_START) return undefined;
   let decoded: unknown;
   try {
     decoded = JSON.parse(payload.toString());

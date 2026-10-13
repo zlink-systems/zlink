@@ -88,6 +88,10 @@ test('generic channel send writes one valid multipart application frame before s
     connectToRoutingId() {}, disconnectRid() {}, close() {}, localEndpoint: () => 'inproc://source-node',
     monitor: () => ({ statusReady: () => true, drain: () => 0, close() {} }),
     receive: () => undefined, send: async (_target, parts) => { sentParts = parts; },
+    submitSend: (_target, parts) => {
+      sentParts = parts;
+      return { result: SubmitResult.Ok, admitted: Promise.resolve() };
+    },
     request: async (_target, parts) => [
       encodeReplyHeader(decodeNodeRequestHeader(parts[0])), replyFrame
     ]

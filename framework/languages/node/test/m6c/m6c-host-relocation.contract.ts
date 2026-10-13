@@ -2594,12 +2594,13 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     deliveries: Promise<void>[]
   ) => {
     const part = Message.from(bytes);
-    const delivery = runtime
-      .tryHandleControl('mesh-a', {
+    const delivery = Promise.resolve(
+      runtime.tryHandleControl('mesh-a', {
         kind: ReceiveKind.NodeSend,
         sourceNodeRid,
         parts: [part]
       } as never)
+    )
       .then(() => undefined)
       .catch((error) => {
         deliveryErrors.push(error);
@@ -2653,8 +2654,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           () => finish(() => reject(new Error('in-memory infrastructure request timed out'))),
           requestOptions?.timeoutMs ?? 30_000
         );
-        const delivery = targetRuntime
-          .tryHandleControl('mesh-a', {
+        const delivery = Promise.resolve(
+          targetRuntime.tryHandleControl('mesh-a', {
             kind: ReceiveKind.NodeRequest,
             sourceNodeRid: 'source',
             parts,
@@ -2669,6 +2670,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
               return result;
             }
           } as never)
+        )
           .then(() => undefined)
           .catch((error) => {
             deliveryErrors.push(error);

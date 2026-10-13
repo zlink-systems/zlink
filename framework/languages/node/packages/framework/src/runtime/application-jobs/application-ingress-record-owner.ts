@@ -16,7 +16,7 @@ export interface IngressRecordPort {
  * ordinary Framework-owned ingress record closes after the last child terminal.
  */
 export class ApplicationIngressRecordOwner {
-  private readonly stop = new AbortController();
+  private stop?: AbortController;
   private closed = false;
 
   private constructor(private readonly shared: SharedIngressRecordState) {}
@@ -46,16 +46,27 @@ export class ApplicationIngressRecordOwner {
     return job;
   }
 
-  async acquire(
+  acquire(
+    domain: ApplicationJobRecordDomain,
+    signal?: AbortSignal
+  ): ApplicationJobRecordLease | Promise<ApplicationJobRecordLease> {
+    try {
+      this.requireOpen();
+      const initial = this.shared.takeInitialPermit(domain);
+      if (initial !== undefined) return initial;
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    return this.acquireAdditional(domain, signal);
+  }
+
+  private async acquireAdditional(
     domain: ApplicationJobRecordDomain,
     signal?: AbortSignal
   ): Promise<ApplicationJobRecordLease> {
-    this.requireOpen();
-    const initial = this.shared.takeInitialPermit(domain);
-    if (initial !== undefined) return initial;
-
-    const waitSignal =
-      signal === undefined ? this.stop.signal : AbortSignal.any([this.stop.signal, signal]);
+    const stop = (this.stop ??= new AbortController());
+    const waitSignal = signal === undefined ? stop.signal : AbortSignal.any([stop.signal, signal]);
     let permit: ApplicationJobPermitPort;
     try {
       permit = await this.shared.acquirePermit(waitSignal);
@@ -74,7 +85,7 @@ export class ApplicationIngressRecordOwner {
     if (this.closed) return;
     this.closed = true;
     // The queue forwards this reason; only a rejected acquisition constructs the error.
-    this.stop.abort(ownerClosedError);
+    this.stop?.abort(ownerClosedError);
     this.shared.releaseOwner();
   }
 
@@ -86,14 +97,12 @@ export class ApplicationIngressRecordOwner {
 /** Queue-permit child of one shared raw ingress record. */
 export class ApplicationJobRecordLease implements ApplicationJobPermitPort {
   private ingressClosed = false;
-  private permitReleased = false;
   private processingTerminal = false;
-  private detachedForHandlerTurn = false;
-  private jobReleased = false;
+  detachedForHandlerTurn = false;
 
   constructor(
     private readonly shared: SharedIngressRecordState,
-    private readonly permit: ApplicationJobPermitPort
+    private permit: ApplicationJobPermitPort | undefined
   ) {}
 
   get origin(): ApplicationJobOrigin {
@@ -110,12 +119,12 @@ export class ApplicationJobRecordLease implements ApplicationJobPermitPort {
   }
 
   releaseBeforeHandler(): void {
-    this.releasePermit(() => this.permit.releaseBeforeHandler());
+    this.permit?.releaseBeforeHandler();
   }
 
   releaseAfterInternalProcessing(): void {
     this.processingTerminal = true;
-    this.releasePermit(() => this.permit.releaseAfterInternalProcessing());
+    this.permit?.releaseAfterInternalProcessing();
     this.releaseJobIfTerminal();
   }
 
@@ -129,16 +138,15 @@ export class ApplicationJobRecordLease implements ApplicationJobPermitPort {
     this.releaseJobIfTerminal();
   }
 
-  private releasePermit(release: () => void): void {
-    if (this.permitReleased) return;
-    this.permitReleased = true;
-    release();
-  }
-
   private releaseJobIfTerminal(): void {
-    if (this.jobReleased || !this.ingressClosed || !this.processingTerminal) return;
-    this.jobReleased = true;
-    this.shared.releaseJob();
+    const permit = this.permit;
+    if (permit === undefined || !this.ingressClosed || !this.processingTerminal) return;
+    this.permit = undefined;
+    try {
+      this.shared.releaseJob();
+    } finally {
+      permit.releaseStorage?.();
+    }
   }
 }
 
@@ -210,6 +218,7 @@ class SharedIngressRecordState {
     try {
       this.initialPermit?.releaseAfterInternalProcessing();
     } finally {
+      this.initialPermit?.releaseStorage?.();
       this.initialPermit = undefined;
       this.record.close();
     }

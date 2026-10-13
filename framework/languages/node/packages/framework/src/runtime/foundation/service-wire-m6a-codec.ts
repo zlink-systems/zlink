@@ -71,8 +71,7 @@ export function encodeNodeRequestHeader(correlation: bigint): Buffer {
   return withU64(prefix(M6aServiceWireCommand.nodeRequest), correlation, 'correlation');
 }
 
-export function decodeNodeRequestHeader(frame: Uint8Array): bigint {
-  const header = decodeHeader(frame);
+export function decodeNodeRequestHeader(frame: Uint8Array, header = decodeHeader(frame)): bigint {
   if (
     header.command !== M6aServiceWireCommand.nodeRequest ||
     header.flags !== 0 ||
@@ -87,8 +86,7 @@ export function encodeChannelSendHeader(channelName: string): Buffer {
   return concat(prefix(M6aServiceWireCommand.channelSend), encodeText8(channelName, 'channelName'));
 }
 
-export function decodeChannelSendHeader(frame: Uint8Array): string {
-  const header = decodeHeader(frame);
+export function decodeChannelSendHeader(frame: Uint8Array, header = decodeHeader(frame)): string {
   if (header.command !== M6aServiceWireCommand.channelSend || header.flags !== 0) {
     fail('Invalid channelSend header.');
   }
@@ -105,11 +103,13 @@ export function encodeChannelRequestHeader(correlation: bigint, channelName: str
   );
 }
 
-export function decodeChannelRequestHeader(frame: Uint8Array): {
+export function decodeChannelRequestHeader(
+  frame: Uint8Array,
+  header = decodeHeader(frame)
+): {
   readonly correlation: bigint;
   readonly channelName: string;
 } {
-  const header = decodeHeader(frame);
   if (header.command !== M6aServiceWireCommand.channelRequest || header.flags !== 0) {
     fail('Invalid channelRequest header.');
   }

@@ -190,7 +190,7 @@ export interface ZLinkBackendMeshNode {
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
     options?: { flags?: number }
-  ): Promise<SubmitResult>;
+  ): SubmitResult | Promise<SubmitResult>;
   /**
    * Sends service-wire infrastructure frames directly to a peer. Relocation
    * Prepare may add NODE-INTERNAL sideband frames after its canonical frame.

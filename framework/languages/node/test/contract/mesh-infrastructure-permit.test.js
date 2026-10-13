@@ -110,6 +110,7 @@ test('ActorBinding tombstone returns the ingress permit before remote binding re
     retireBoundSessionBinding() {}
   };
   const host = {
+    dispatchMeshActorBinding: ZLinkFrameworkRuntimeHost.prototype.dispatchMeshActorBinding,
     actorManager: { getState: () => state },
     spotNodeRuntime: {
       meshNode: () => ({ status: () => ({ routingId: 'node-a', lifecycleGeneration: 2n }) })

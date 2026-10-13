@@ -409,8 +409,8 @@ function createProviderResolver(
       }
     }
   }
-  function prepareHandler(type: Type): void {
-    registeredNestHandlerFactory(factories, type, moduleRef);
+  function prepareHandler(type: Type): (() => unknown) | undefined {
+    return registeredNestHandlerFactory(factories, type, moduleRef).scopeFree;
   }
   for (const type of types) prepareHandler(type);
   function createHandler<T>(
@@ -439,6 +439,7 @@ function createProviderResolver(
       return await creationModuleRef.create(type as unknown as import('@nestjs/common').Type<T>);
     }
   };
+  let freeScopeStorage: NestHandlerScopeStorage | undefined;
   framework.registerIntegrationHandlerInstanceScopeFactory(resolver, {
     prepare: prepareHandler,
     create(context?: import('@zlink-systems/framework').ZLinkMessageContext) {
@@ -447,9 +448,10 @@ function createProviderResolver(
       if (context !== undefined && currentContextId === undefined) {
         moduleRef.registerRequestByContextId({ zlinkContext: context }, contextId);
       }
-      const instances = new Map<Type, Promise<unknown>>();
-      const dependencies = new Map<unknown, unknown>();
-      const owned: unknown[] = [];
+      const storage = freeScopeStorage ?? new NestHandlerScopeStorage();
+      freeScopeStorage = storage.next;
+      storage.next = undefined;
+      const { instances, dependencies, owned } = storage;
       let disposed = false;
       return {
         resolve<T>(type: Type<T>): Promise<T> {
@@ -489,6 +491,8 @@ function createProviderResolver(
             owned.length = 0;
             instances.clear();
             dependencies.clear();
+            storage.next = freeScopeStorage;
+            freeScopeStorage = storage;
           }
         }
       };
@@ -542,11 +546,18 @@ export function registeredNestHandlerFactory<T>(
   return factory as NestHandlerFactory<T>;
 }
 
-export type NestHandlerFactory<T = unknown> = (
+class NestHandlerScopeStorage {
+  readonly instances = new Map<Type, Promise<unknown>>();
+  readonly dependencies = new Map<unknown, unknown>();
+  readonly owned: unknown[] = [];
+  next?: NestHandlerScopeStorage;
+}
+
+export type NestHandlerFactory<T = unknown> = ((
   moduleRef: ModuleRef,
   contextId: import('@nestjs/core').ContextId,
   dependencies: Map<unknown, unknown>
-) => T | Promise<T>;
+) => T | Promise<T>) & { readonly scopeFree?: () => T };
 
 export function prepareNestHandlerFactory<T>(
   type: Type<T>,
@@ -573,7 +584,8 @@ export function prepareNestHandlerFactory<T>(
   }));
   const Constructor = type as unknown as new (...args: unknown[]) => T;
   if (parameters.length === 0 && properties.length === 0) {
-    return () => new Constructor();
+    const activate = () => new Constructor();
+    return Object.assign(activate, { scopeFree: activate });
   }
   return (moduleRef, contextId, dependencies) => {
     const create = (arguments_: unknown[]) =>

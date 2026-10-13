@@ -9,7 +9,7 @@ export interface ZLinkHandlerInstanceScope {
 }
 
 interface ZLinkHandlerInstanceScopeFactory {
-  prepare?(type: Type): void;
+  prepare?(type: Type): void | (() => unknown);
   create(context?: ZLinkMessageContext): ZLinkHandlerInstanceScope;
 }
 
@@ -42,15 +42,19 @@ export function registerHandlerInstanceScopeFactory(
   });
 }
 
-export function prepareHandlerInstance(
+export function prepareHandlerInstance<T>(
   providerResolver: ZLinkProviderResolver | undefined,
-  type: Type
-): void {
-  const factory =
-    providerResolver === undefined
-      ? undefined
-      : (providerResolver as unknown as Record<PropertyKey, unknown>)[HANDLER_SCOPE_FACTORY];
-  if (isHandlerInstanceScopeFactory(factory)) factory.prepare?.(type);
+  type: Type<T>
+): (() => T) | undefined {
+  if (providerResolver === undefined) return () => new type();
+  const factory = (providerResolver as unknown as Record<PropertyKey, unknown>)[
+    HANDLER_SCOPE_FACTORY
+  ];
+  if (isHandlerInstanceScopeFactory(factory)) {
+    const activate = factory.prepare?.(type);
+    if (activate !== undefined) return activate as () => T;
+  }
+  return undefined;
 }
 
 export async function runInHandlerInstanceScope<T>(
@@ -347,6 +351,11 @@ function startOutsideLifecycleInvocation<T>(work: () => T): T {
 }
 
 export async function disposeOwnedInstance(instance: unknown): Promise<void> {
+  const cleanup = handlerInstanceCleanup(instance);
+  if (cleanup !== undefined) await cleanup.call(instance);
+}
+
+export function handlerInstanceCleanup(instance: unknown): (() => unknown) | undefined {
   if (instance === null || instance === undefined) return;
   const value = instance as {
     dispose?: () => unknown;
@@ -354,12 +363,13 @@ export async function disposeOwnedInstance(instance: unknown): Promise<void> {
     onModuleDestroy?: () => unknown;
   };
   if (typeof value.dispose === 'function') {
-    await value.dispose();
+    return value.dispose;
   } else if (typeof value.close === 'function') {
-    await value.close();
+    return value.close;
   } else if (typeof value.onModuleDestroy === 'function') {
-    await value.onModuleDestroy();
+    return value.onModuleDestroy;
   }
+  return undefined;
 }
 
 export async function disposeOwnedInstances(instances: readonly unknown[]): Promise<void> {

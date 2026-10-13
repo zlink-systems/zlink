@@ -1,4 +1,5 @@
 import type { Message } from '../../contracts/Common/Message';
+import { ZLinkBufferMessage } from '../backend/runtime-message';
 import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-values';
 import { randomUUID } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
@@ -69,6 +70,24 @@ export interface ZLinkChannelEnvelope {
 export interface ZLinkChannelEnvelopeCodecRegistry {
   readonly serializers: ReadonlyMap<string, ZLinkMessageSerializer>;
 }
+
+interface PreparedChannelHeader {
+  readonly bytes: Buffer;
+  readonly correlationOffset: number;
+  readonly deadlineOffset: number;
+}
+
+type PreparedHeaderVariants = Map<ZLinkChannelMessageKind, Map<boolean, PreparedChannelHeader>>;
+const preparedChannelHeaders = new WeakMap<
+  ReadonlyMap<string, ZLinkMessageSerializer>,
+  Map<string, Map<string, Map<string, PreparedHeaderVariants>>>
+>();
+const CHANNEL_CORRELATION_FIELD = ',"correlationId":';
+const CHANNEL_DEADLINE_FIELD = ',"deadline":';
+const CHANNEL_CORRELATION_TEXT_LENGTH = 32;
+const PREPARED_CHANNEL_CORRELATION = '0'.repeat(CHANNEL_CORRELATION_TEXT_LENGTH);
+const PREPARED_CHANNEL_DEADLINE = '2000-01-01T00:00:00.000Z';
+const CHANNEL_CORRELATION_TEXT = /^[0-9a-f]{32}$/;
 
 export function newChannelCorrelationId(): string {
   return randomUUID().replaceAll('-', '');
@@ -147,7 +166,8 @@ export function encodeChannelEnvelopePartsAtDeadline(
       undefined,
       applicationMetadataRecord(metadata),
       flow?.flowId,
-      flow?.flowOrigin
+      flow?.flowOrigin,
+      codecs
     ),
     encoded.message
   ];
@@ -215,7 +235,8 @@ export function encodeChannelReplyParts(
       undefined,
       EMPTY_APPLICATION_METADATA,
       request.flowId,
-      request.flowOrigin
+      request.flowOrigin,
+      codecs
     ),
     encoded.message
   ];
@@ -325,7 +346,8 @@ export function decodeChannelReply<TReply>(
     return undefined as TReply;
   }
   if (header.contentType === BINARY_CONTENT_TYPE) {
-    return Buffer.from(parts[1].data()) as TReply;
+    const part = parts[1];
+    return (part instanceof ZLinkBufferMessage ? part.data() : Buffer.from(part.data())) as TReply;
   }
   if (serializer !== undefined) {
     return serializer.deserialize<TReply>(
@@ -517,8 +539,47 @@ function encodeChannelHeader(
   source: string | null | undefined,
   metadata: Readonly<Record<string, string>>,
   flowId: string | undefined,
-  flowOrigin: ZLinkFlowOrigin | undefined
+  flowOrigin: ZLinkFlowOrigin | undefined,
+  codecs?: ZLinkChannelEnvelopeCodecRegistry
 ): Buffer {
+  if (
+    codecs !== undefined &&
+    metadata === EMPTY_APPLICATION_METADATA &&
+    flowId === undefined &&
+    flowOrigin === undefined &&
+    topic === null &&
+    source === undefined &&
+    ((kind === ZLinkChannelMessageKind.Command &&
+      correlationId === null &&
+      deadline === null &&
+      errorCode === null &&
+      errorMessage === null) ||
+      (kind === ZLinkChannelMessageKind.Request &&
+        correlationId !== null &&
+        CHANNEL_CORRELATION_TEXT.test(correlationId) &&
+        deadline !== null &&
+        deadline.length === PREPARED_CHANNEL_DEADLINE.length &&
+        errorCode === null &&
+        errorMessage === null) ||
+      (kind === ZLinkChannelMessageKind.Response &&
+        correlationId !== null &&
+        CHANNEL_CORRELATION_TEXT.test(correlationId) &&
+        deadline === null &&
+        errorCode === undefined &&
+        errorMessage === undefined))
+  ) {
+    return preparedChannelHeader(
+      codecs,
+      kind,
+      channelName,
+      messageName,
+      contentType,
+      correlationId,
+      deadline,
+      errorCode,
+      errorMessage
+    );
+  }
   // The wire has a fixed field order. Measure escaped UTF-8 first, then write
   // each field once into the only header Buffer: no header object, whole JSON
   // string, or post-encode byte copy exists on the outbound path.
@@ -560,6 +621,63 @@ function encodeChannelHeader(
   return result;
 }
 
+function preparedChannelHeader(
+  codecs: ZLinkChannelEnvelopeCodecRegistry,
+  kind: ZLinkChannelMessageKind,
+  channelName: string,
+  messageName: string,
+  contentType: string,
+  correlationId: string | null,
+  deadline: string | null,
+  errorCode: string | null | undefined,
+  errorMessage: string | null | undefined
+): Buffer {
+  let channels = preparedChannelHeaders.get(codecs.serializers);
+  if (channels === undefined)
+    preparedChannelHeaders.set(codecs.serializers, (channels = new Map()));
+  let packets = channels.get(channelName);
+  if (packets === undefined) channels.set(channelName, (packets = new Map()));
+  let contentTypes = packets.get(messageName);
+  if (contentTypes === undefined) packets.set(messageName, (contentTypes = new Map()));
+  let kinds = contentTypes.get(contentType);
+  if (kinds === undefined) contentTypes.set(contentType, (kinds = new Map()));
+  let deadlines = kinds.get(kind);
+  if (deadlines === undefined) kinds.set(kind, (deadlines = new Map()));
+  const hasDeadline = deadline !== null;
+  let prepared = deadlines.get(hasDeadline);
+  if (prepared === undefined) {
+    const bytes = encodeChannelHeader(
+      kind,
+      channelName,
+      messageName,
+      contentType,
+      correlationId === null ? null : PREPARED_CHANNEL_CORRELATION,
+      hasDeadline ? PREPARED_CHANNEL_DEADLINE : null,
+      null,
+      errorCode,
+      errorMessage,
+      undefined,
+      EMPTY_APPLICATION_METADATA,
+      undefined,
+      undefined
+    );
+    prepared = {
+      bytes,
+      correlationOffset:
+        bytes.indexOf(CHANNEL_CORRELATION_FIELD) + CHANNEL_CORRELATION_FIELD.length + 1,
+      deadlineOffset: bytes.indexOf(CHANNEL_DEADLINE_FIELD) + CHANNEL_DEADLINE_FIELD.length + 1
+    };
+    deadlines.set(hasDeadline, prepared);
+  }
+  if (correlationId === null) return prepared.bytes;
+  const bytes = Buffer.alloc(prepared.bytes.byteLength);
+  prepared.bytes.copy(bytes);
+  bytes.write(correlationId, prepared.correlationOffset, CHANNEL_CORRELATION_TEXT_LENGTH, 'ascii');
+  if (deadline !== null)
+    bytes.write(deadline, prepared.deadlineOffset, PREPARED_CHANNEL_DEADLINE.length, 'ascii');
+  return bytes;
+}
+
 function writeChannelHeader(
   writer: ChannelHeaderWriter,
   kind: ZLinkChannelMessageKind,
@@ -586,9 +704,9 @@ function writeChannelHeader(
   writer.string(messageName);
   writer.append(',"contentType":');
   writer.string(contentType);
-  writer.append(',"correlationId":');
+  writer.append(CHANNEL_CORRELATION_FIELD);
   writer.nullableString(correlationId);
-  writer.append(',"deadline":');
+  writer.append(CHANNEL_DEADLINE_FIELD);
   writer.nullableString(deadline);
   writer.append(',"topic":');
   writer.nullableString(topic);

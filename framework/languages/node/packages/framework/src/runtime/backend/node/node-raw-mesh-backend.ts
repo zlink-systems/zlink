@@ -636,16 +636,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.requireRuntime().isPeerRouteReady(String(targetRid), lifecycleGeneration);
   }
 
-  async sendToNode(
+  sendToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[]
-  ): Promise<SubmitResultValue> {
-    return (await this.requireRuntime().sendToNode(
+  ): SubmitResultValue | Promise<SubmitResultValue> {
+    const submitted = this.requireRuntime().sendToNode(
       String(targetRid),
       encodeMultipartApplicationFrame(parts)
-    ))
-      ? SubmitResult.Ok
-      : SubmitResult.NotConnected;
+    );
+    return submitted instanceof Promise
+      ? submitted.then(nodeSendResult)
+      : nodeSendResult(submitted);
   }
 
   async sendInfrastructureControl(
@@ -1840,6 +1841,10 @@ class RawServiceSpot implements ServiceSpot {
   private requireOpen(): void {
     if (this.closed) throw new Error(`Spot '${this.routingId}' is closed.`);
   }
+}
+
+function nodeSendResult(submitted: boolean): SubmitResultValue {
+  return submitted ? SubmitResult.Ok : SubmitResult.NotConnected;
 }
 
 function requireDirectSpotRouteFence(

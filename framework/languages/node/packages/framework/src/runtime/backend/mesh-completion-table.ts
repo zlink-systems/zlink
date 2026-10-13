@@ -5,7 +5,7 @@ import type {
   ReceiveKindData,
   ReceiveRecord
 } from '../foundation/service-runtime-contracts';
-import { operationIdentityKey } from '../foundation/operation-identity';
+import { operationIdentityKey, validateOperationIdentity } from '../foundation/operation-identity';
 
 export interface ZLinkMeshCompletionDiagnostic {
   readonly kind: 'unknownOrLate';
@@ -21,10 +21,23 @@ export interface ZLinkMeshCompletion {
   readonly parts: Message[];
 }
 
-interface PendingCompletion {
-  readonly resolve: (completion: ZLinkMeshCompletion) => void;
-  readonly reject: (error: unknown) => void;
-  readonly removeAbort?: () => void;
+const COMPLETION_SLOT_BLOCK_SIZE = 64;
+const COMPLETION_HASH_BUCKETS_PER_SLOT = 2;
+const COMPLETION_HASH_WORD_SCALE = 0x1_0000;
+const COMPLETION_HASH_MULTIPLIER = 0x9e37_79b1;
+const COMPLETION_ABORT_OPTIONS = Object.freeze({ once: true });
+
+class CompletionSlot {
+  generation = 0;
+  next = -1;
+  high?: bigint;
+  low?: bigint;
+  hashNext = -1;
+  resolve?: (completion: ZLinkMeshCompletion) => void;
+  reject?: (error: unknown) => void;
+  signal?: AbortSignal;
+
+  constructor(readonly abort: () => void) {}
 }
 
 export type ZLinkMeshCompletionTerminal = Pick<ReceiveRecord, 'operationId' | 'terminalResult'>;
@@ -34,12 +47,97 @@ export type ZLinkMeshCompletionHandler = (
 ) => void;
 
 export class ZLinkMeshCompletionTable {
-  private readonly pending = new Map<string | symbol, PendingCompletion>();
+  private buckets = new Int32Array(0);
+  private readonly slots: CompletionSlot[] = [];
+  private free = -1;
+  private activeCount = 0;
   private disposed = false;
 
-  constructor(
-    private readonly onDiagnostic?: (diagnostic: ZLinkMeshCompletionDiagnostic) => void
-  ) {}
+  constructor(private readonly onDiagnostic?: (diagnostic: ZLinkMeshCompletionDiagnostic) => void) {
+    this.prepareSlots();
+  }
+
+  private prepareSlots(): void {
+    const start = this.slots.length;
+    for (let index = start; index < start + COMPLETION_SLOT_BLOCK_SIZE; index++) {
+      const slot = new CompletionSlot(() => {
+        const reject = slot.reject;
+        const signal = slot.signal;
+        if (reject === undefined) return;
+        this.releaseSlot(index);
+        reject(signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+      });
+      slot.next = this.free;
+      this.slots.push(slot);
+      this.free = index;
+    }
+    const minimumBuckets = this.slots.length * COMPLETION_HASH_BUCKETS_PER_SLOT;
+    this.buckets = new Int32Array(2 ** Math.ceil(Math.log2(minimumBuckets))).fill(-1);
+    for (let index = 0; index < this.slots.length; index++) {
+      const slot = this.slots[index]!;
+      if (slot.high === undefined) continue;
+      this.indexSlot(index);
+    }
+  }
+
+  private bucket(high: bigint, low: bigint): number {
+    const highWord = Number(high);
+    const lowWord = Number(low);
+    // Bucket selection may collide; the stored 128-bit identity is compared exactly.
+    const hash =
+      Math.imul(
+        highWord ^ Math.trunc(highWord / COMPLETION_HASH_WORD_SCALE),
+        COMPLETION_HASH_MULTIPLIER
+      ) ^
+      lowWord ^
+      Math.trunc(lowWord / COMPLETION_HASH_WORD_SCALE);
+    return hash & (this.buckets.length - 1);
+  }
+
+  private indexSlot(index: number): void {
+    const slot = this.slots[index]!;
+    const bucket = this.bucket(slot.high!, slot.low!);
+    slot.hashNext = this.buckets[bucket]!;
+    this.buckets[bucket] = index;
+  }
+
+  private findSlot(operationId: MeshOperationId): number {
+    validateOperationIdentity(operationId);
+    for (
+      let index = this.buckets[this.bucket(operationId.high, operationId.low)]!;
+      index !== -1;
+      index = this.slots[index]!.hashNext
+    ) {
+      const slot = this.slots[index]!;
+      if (slot.high === operationId.high && slot.low === operationId.low) return index;
+    }
+    return -1;
+  }
+
+  private releaseSlot(index: number): void {
+    const slot = this.slots[index]!;
+    if (slot.high !== undefined) {
+      const bucket = this.bucket(slot.high, slot.low!);
+      let previous = -1;
+      let current = this.buckets[bucket]!;
+      while (current !== index) {
+        previous = current;
+        current = this.slots[current]!.hashNext;
+      }
+      if (previous === -1) this.buckets[bucket] = slot.hashNext;
+      else this.slots[previous]!.hashNext = slot.hashNext;
+    }
+    slot.signal?.removeEventListener('abort', slot.abort);
+    slot.high = undefined;
+    slot.low = undefined;
+    slot.hashNext = -1;
+    slot.signal = undefined;
+    slot.resolve = undefined;
+    slot.reject = undefined;
+    slot.next = this.free;
+    this.free = index;
+    this.activeCount--;
+  }
 
   /**
    * Reserves the dispatcher slot before transport submission. The backend
@@ -56,37 +154,30 @@ export class ZLinkMeshCompletionTable {
       );
     }
     return new Promise((resolve, reject) => {
-      let key: string | symbol = Symbol();
-      const abort = () => {
-        this.pending.delete(key);
-        reject(signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
-      };
-      if (signal?.aborted === true) {
-        abort();
-        return;
-      }
-      signal?.addEventListener('abort', abort, { once: true });
-      const entry: PendingCompletion = {
-        resolve,
-        reject,
-        removeAbort:
-          signal === undefined ? undefined : () => signal.removeEventListener('abort', abort)
-      };
-      this.pending.set(key, entry);
+      if (this.free === -1) this.prepareSlots();
+      const index = this.free;
+      const slot = this.slots[index]!;
+      this.free = slot.next;
+      const generation = ++slot.generation;
+      slot.resolve = resolve;
+      slot.reject = reject;
+      slot.signal = signal;
+      this.activeCount++;
       try {
+        signal?.addEventListener('abort', slot.abort, COMPLETION_ABORT_OPTIONS);
         const operationId = operation();
-        // dispose/abort can consume the reserved slot during submission.
-        if (!this.pending.delete(key)) return;
-        key = operationIdentityKey(operationId);
-        if (this.pending.has(key)) {
-          throw new Error(`Mesh operation '${key}' is already pending.`);
+        // A reentrant abort may release and reuse this slot during submission.
+        if (slot.generation !== generation || slot.resolve !== resolve) return;
+        if (this.findSlot(operationId) !== -1) {
+          throw new Error(
+            `Mesh operation '${operationIdentityKey(operationId)}' is already pending.`
+          );
         }
-        this.pending.set(key, entry);
+        slot.high = operationId.high;
+        slot.low = operationId.low;
+        this.indexSlot(index);
       } catch (error) {
-        // Remove only this submission's slot; a duplicate identity retains
-        // the original waiter.
-        if (this.pending.get(key) === entry) this.pending.delete(key);
-        entry.removeAbort?.();
+        if (slot.generation === generation && slot.resolve === resolve) this.releaseSlot(index);
         reject(error);
       }
     });
@@ -99,9 +190,8 @@ export class ZLinkMeshCompletionTable {
   complete(record: ReceiveRecord): void;
   complete(record: ZLinkMeshCompletionTerminal, materialize: () => ReceiveRecord): void;
   complete(record: ZLinkMeshCompletionTerminal, materialize?: () => ReceiveRecord): void {
-    const key = operationIdentityKey(record.operationId);
-    const pending = this.pending.get(key);
-    if (pending === undefined) {
+    const index = this.findSlot(record.operationId);
+    if (index === -1) {
       this.onDiagnostic?.({
         kind: 'unknownOrLate',
         operationId: Object.freeze({ ...record.operationId }),
@@ -109,14 +199,16 @@ export class ZLinkMeshCompletionTable {
       });
       return;
     }
-    this.pending.delete(key);
-    pending.removeAbort?.();
+    const slot = this.slots[index]!;
+    const resolve = slot.resolve!;
+    const reject = slot.reject!;
+    this.releaseSlot(index);
     try {
-      pending.resolve(
+      resolve(
         retainCompletion(materialize === undefined ? (record as ReceiveRecord) : materialize())
       );
     } catch (error) {
-      pending.reject(error);
+      reject(error);
     }
   }
 
@@ -125,28 +217,29 @@ export class ZLinkMeshCompletionTable {
       return;
     }
     this.disposed = true;
-    const pending = [...this.pending.values()];
-    this.pending.clear();
-    for (const entry of pending) {
-      entry.removeAbort?.();
-    }
-    for (const entry of pending) {
-      entry.reject(reason);
+    for (let index = 0; index < this.slots.length; index++) {
+      const reject = this.slots[index]!.reject;
+      if (reject === undefined) continue;
+      this.releaseSlot(index);
+      reject(reason);
     }
   }
 
   get pendingCount(): number {
-    return this.pending.size;
+    return this.activeCount;
   }
 }
 
 function retainCompletion(record: ReceiveRecord): ZLinkMeshCompletion {
+  const parts = retainCompletionParts(record.parts);
+  // The retention pass verifies every part is already a managed runtime message.
+  if (parts === record.parts) return record as unknown as ZLinkMeshCompletion;
   return {
     terminalResult: record.terminalResult,
     failureErrno: record.failureErrno,
     operationKind: record.operationKind,
     kindData: record.kindData,
-    parts: retainCompletionParts(record.parts)
+    parts
   };
 }
 

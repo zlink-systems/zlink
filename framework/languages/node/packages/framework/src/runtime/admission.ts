@@ -86,12 +86,25 @@ export class ZLinkRuntimeAdmissionGate {
     );
   }
 
-  async run<T>(meshName: string, operation: string, work: () => Promise<T>): Promise<T> {
-    const claim = this.claim(meshName, operation);
+  run<T>(meshName: string, operation: string, work: () => T | Promise<T>): Promise<T> {
+    let claim: ZLinkApplicationWorkClaim | undefined;
     try {
-      return await work();
-    } finally {
-      claim.close();
+      claim = this.claim(meshName, operation);
+      const result = work();
+      const close = claim.close;
+      return Promise.resolve(result).then(
+        (value) => {
+          close();
+          return value;
+        },
+        (error) => {
+          close();
+          throw error;
+        }
+      );
+    } catch (error) {
+      claim?.close();
+      return Promise.reject(error);
     }
   }
 
