@@ -849,21 +849,30 @@ internal readonly record struct SourceResultSnapshot(
 
 internal sealed record ClientErrorSummary(string Type, string Message, long Count);
 
-internal readonly record struct ResourceSample(TimeSpan CpuStart)
+internal readonly record struct ResourceSample(TimeSpan CpuStart, long AllocatedStart)
 {
-    public static ResourceSample Start() => new(Process.GetCurrentProcess().TotalProcessorTime);
+    public static ResourceSample Start() =>
+        new(
+            Process.GetCurrentProcess().TotalProcessorTime,
+            GC.GetTotalAllocatedBytes(precise: true)
+        );
 
     public ResourceResult Finish()
     {
         var process = Process.GetCurrentProcess();
         return new ResourceResult(
             Math.Max(0, (process.TotalProcessorTime - CpuStart).TotalSeconds),
-            process.WorkingSet64 / 1024.0 / 1024.0
+            process.WorkingSet64 / 1024.0 / 1024.0,
+            GC.GetTotalAllocatedBytes(precise: true) - AllocatedStart
         );
     }
 }
 
-internal readonly record struct ResourceResult(double CpuSeconds, double WorkingSetMb);
+internal readonly record struct ResourceResult(
+    double CpuSeconds,
+    double WorkingSetMb,
+    long AllocatedBytes
+);
 
 internal sealed record ActiveSnapshot(ResourceResult Source, BenchServerSnapshot Target);
 
@@ -936,7 +945,9 @@ internal sealed record BenchCell(
     long completed_at_close,
     IReadOnlyList<ClientErrorSummary> client_error_summary,
     long client_error_other_count,
-    long warmup_abandoned
+    long warmup_abandoned,
+    long client_allocated_bytes,
+    long server_allocated_bytes
 )
 {
     public double active_elapsed_ms => trigger.durationMs;
@@ -977,7 +988,9 @@ internal sealed record BenchCell(
             result.CompletedAtClose,
             result.ErrorSummary,
             result.OtherErrors,
-            result.WarmupAbandoned
+            result.WarmupAbandoned,
+            result.ClientAllocatedBytes,
+            result.ServerAllocatedBytes
         );
 }
 
@@ -1114,7 +1127,9 @@ internal sealed record BenchResult(
     long? ServerReceivedAtClose,
     long CompletedAtClose,
     IReadOnlyList<ClientErrorSummary> ErrorSummary,
-    long OtherErrors
+    long OtherErrors,
+    long ClientAllocatedBytes,
+    long ServerAllocatedBytes
 )
 {
     public string Pattern => Scenario[(Implementation.Length + 1)..];

@@ -169,7 +169,9 @@ internal static class BenchMeasurement
             receivedAtClose,
             snapshot.CompletedAtClose,
             snapshot.ErrorSummary,
-            snapshot.OtherErrors
+            snapshot.OtherErrors,
+            sourceResources.AllocatedBytes,
+            boundary.Target.AllocatedBytes
         );
     }
 
