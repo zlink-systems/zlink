@@ -71,7 +71,7 @@ try
     }
     else
         throw new ArgumentException($"Unknown mode: {mode}");
-    Console.WriteLine("mmorpg-seamless=completed");
+    Console.WriteLine("mmo-seamless=completed");
     return 0;
 }
 catch (Exception error)

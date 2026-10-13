@@ -31,6 +31,13 @@ Run commands from this project root:
 dotnet build server/MyGame.sln
 ```
 
+On Windows, set `DOTNET_SYSTEM_NET_DISABLEIPV6=1` in the current PowerShell session before building:
+
+```powershell
+$env:DOTNET_SYSTEM_NET_DISABLEIPV6 = "1"
+dotnet build server/MyGame.sln
+```
+
 The solution includes all server roles and the C# e2e client. It can also be opened directly in Visual Studio or Rider.
 
 ## Local e2e

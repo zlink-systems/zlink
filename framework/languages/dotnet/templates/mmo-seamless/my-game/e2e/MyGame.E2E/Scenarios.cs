@@ -7,6 +7,7 @@ namespace MyGame.E2E;
 internal static class Scenarios
 {
     private static readonly string[] Order = ["cross", "border", "reconnect", "update"];
+    internal static IReadOnlyList<string> All => Order;
 
     public static string[] Select(string? requested, bool hasOrchestrator)
     {

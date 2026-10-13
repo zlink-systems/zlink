@@ -12,10 +12,17 @@
 | `id` | string | 랜딩 구성도의 topology ID. 예: `mmo-seamless`. |
 | `name` | string | 프로젝트 이름. Initializr가 프로젝트 생성 시 `my-game`을 바꾼다. |
 | `language` | string | 서버 언어. 이 템플릿은 `dotnet`이다. |
+| `run` | object | 형식 v1의 필수 필드. 빌드·e2e 명령과 순서가 있는 e2e 시나리오 ID를 둔다. |
 | `nodes` | array | 외부 client와 인프라를 포함한 구성도 참여자. |
 | `channels` | array | application node가 소유하는 channel 등록. |
 | `spots` | array | 고정 logical Spot과 요청에 따라 만드는 Spot 종류. |
 | `edges` | array | 표시 순서의 방향 있는 연결. |
+
+## Run
+
+형식 v1은 `run.commands`와 `run.scenarios`를 필수로 둔다. `commands`에는 `sh`와 `powershell` 키만 둔다. 각 값은 비어 있지 않은 문자열 배열이어야 한다. 구조 검사는 이 형식만 확인하며 명령을 실행하거나 문자열 내용을 대조하지 않는다. 배열에는 프로젝트 README의 Build, 기본 Local e2e, 시나리오 선택 명령을 둔다.
+
+`scenarios`는 실행 순서의 e2e 시나리오 ID 배열이다. 프로젝트의 `Scenarios.cs`에 정의된 목록과 원소 및 순서가 같아야 한다. 이 템플릿의 목록은 `cross`, `border`, `reconnect`, `update`다.
 
 ## Node
 
@@ -58,4 +65,4 @@ Edge마다 존재하는 node ID인 `from`, `to`와 비어 있지 않은 `label`�
 
 모든 e2e 실행은 node 기동 전에 요청한 구성을 검증한다. 검사기 자기 시험은 `--check-structure`에서만 실행한다. 구성 요소를 추가하고 배열 순서를 바꾼 정상 입력은 통과해야 하며, 의도적으로 불일치한 입력은 거부해야 한다. JSON 파싱 통과만으로 판정하지 않는다.
 
-참조 산출물: [MMORPG 심리스 월드](mmorpg-seamless/my-game/zlink.structure.json).
+참조 산출물: [MMO 심리스 월드](mmo-seamless/my-game/zlink.structure.json).

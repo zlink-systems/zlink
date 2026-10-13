@@ -5,6 +5,8 @@ namespace MyGame.E2E;
 
 internal static class StructureCheck
 {
+    private static readonly string[] CommandShells = ["sh", "powershell"];
+
     private static void Require(bool condition, string message)
     {
         if (!condition)
@@ -20,6 +22,43 @@ internal static class StructureCheck
         )
             return text;
         throw new InvalidDataException($"Missing or invalid {name}.");
+    }
+
+    private static JsonObject Object(JsonNode? node, string name) =>
+        node as JsonObject ?? throw new InvalidDataException($"Missing or invalid {name} object.");
+
+    private static string[] Strings(JsonNode? node, string name)
+    {
+        if (node is not JsonArray values || values.Count == 0)
+            throw new InvalidDataException($"Missing or invalid {name} array.");
+        var strings = new string[values.Count];
+        for (var index = 0; index < values.Count; index++)
+        {
+            if (
+                values[index] is not JsonValue value
+                || !value.TryGetValue<string>(out var text)
+                || string.IsNullOrWhiteSpace(text)
+            )
+                throw new InvalidDataException($"Missing or invalid {name} string.");
+            strings[index] = text;
+        }
+        return strings;
+    }
+
+    private static void ValidateRun(JsonObject document)
+    {
+        var run = Object(document["run"], "run");
+        var commands = Object(run["commands"], "run.commands");
+        Require(
+            commands.Count == CommandShells.Length && CommandShells.All(commands.ContainsKey),
+            "run.commands must define sh and powershell."
+        );
+        foreach (var shell in CommandShells)
+            _ = Strings(commands[shell], $"run.commands.{shell}");
+        Require(
+            Strings(run["scenarios"], "run.scenarios").SequenceEqual(Scenarios.All),
+            "run.scenarios differs from the e2e scenario list."
+        );
     }
 
     private static JsonArray Array(JsonObject document, string name)
@@ -61,6 +100,9 @@ internal static class StructureCheck
             .FirstOrDefault(node =>
                 Text(node, "role") != "external" && Text(node, "role") != "location-store"
             );
+        JsonArray RunScenarios(JsonObject value) => value["run"]!["scenarios"]!.AsArray();
+        JsonArray RunCommands(JsonObject value, string shell) =>
+            value["run"]!["commands"]![shell]!.AsArray();
         if (application is not null)
         {
             var spotIds = Array(expanded, "spots").Select(spot => Text(spot, "id")).ToHashSet();
@@ -110,6 +152,11 @@ internal static class StructureCheck
         {
             ("unknown version", value => value["version"] = 2),
             ("empty project ID", value => value["id"] = " "),
+            (
+                "missing run scenario",
+                value => RunScenarios(value).RemoveAt(RunScenarios(value).Count - 1)
+            ),
+            ("empty run command list", value => RunCommands(value, "sh").Clear()),
         };
         if (Array(document, "nodes").Count > 0)
             mutations.Add(
@@ -264,6 +311,7 @@ internal static class StructureCheck
         );
         foreach (var field in new[] { "id", "name", "language" })
             Text(document, field);
+        ValidateRun(document);
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var settings = new Dictionary<string, NodeSettings>(StringComparer.Ordinal);
         var prefix =

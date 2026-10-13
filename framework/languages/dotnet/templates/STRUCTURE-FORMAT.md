@@ -12,10 +12,17 @@
 | `id` | string | Topology ID from the landing diagram, such as `mmo-seamless`. |
 | `name` | string | Project name. Initializr replaces `my-game` when generating the project. |
 | `language` | string | Server language. This template uses `dotnet`. |
+| `run` | object | Required in format v1. Build and e2e commands, plus the ordered e2e scenario IDs. |
 | `nodes` | array | Diagram participants, including external clients and infrastructure. |
 | `channels` | array | Named channel registrations owned by application nodes. |
 | `spots` | array | Fixed logical Spots and dynamically allocated Spot families. |
 | `edges` | array | Directed diagram connections, in display order. |
+
+## Run
+
+Format v1 requires `run.commands` and `run.scenarios`. `commands` contains exactly the `sh` and `powershell` keys. Each value is a nonempty array of nonempty command strings; the structure checker validates this shape but does not execute or compare the command text. The arrays list the Build, default Local e2e, and scenario-selection commands shown in the project README.
+
+`scenarios` is an array of e2e scenario IDs in execution order. It must match the canonical list in the project's `Scenarios.cs`, including order: `cross`, `border`, `reconnect`, `update`.
 
 ## Nodes
 
@@ -58,4 +65,4 @@ The template's structure check verifies version, nonempty root fields, unique no
 
 Every e2e run validates the requested composition before node startup. Only `--check-structure` also runs the checker self-tests: an extended and reordered valid composition, and deliberately inconsistent inputs that must be rejected. Successful parsing alone is insufficient.
 
-Reference artifact: [MMORPG seamless world](mmorpg-seamless/my-game/zlink.structure.json).
+Reference artifact: [MMO seamless world](mmo-seamless/my-game/zlink.structure.json).
