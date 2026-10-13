@@ -183,20 +183,9 @@ if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
   install(TARGETS zlink_stream_e2e_client
     EXPORT zlink_stream_connector_cppTargets COMPONENT StreamConnector)
 endif()
-install(DIRECTORY core/include/
+install(DIRECTORY core/include/ "${ZLINK_FRAMEWORK_CPP_DIR}/common/include/"
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   COMPONENT StreamConnector FILES_MATCHING PATTERN "*.hpp")
-install(FILES "${ZLINK_FRAMEWORK_CPP_DIR}/common/include/zlink/json_profile.hpp"
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zlink
-  COMPONENT StreamConnector)
-install(FILES "${ZLINK_FRAMEWORK_CPP_DIR}/common/include/zlink/detail/stream_packet_name.hpp"
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zlink/detail
-  COMPONENT StreamConnector)
-install(FILES
-    "${ZLINK_FRAMEWORK_CPP_DIR}/common/include/zlink/framework/detail/binary_text_codec.hpp"
-    "${ZLINK_FRAMEWORK_CPP_DIR}/common/include/zlink/framework/detail/utf8.hpp"
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zlink/framework/detail
-  COMPONENT StreamConnector)
 install(FILES "${ZLINK_FRAMEWORK_CPP_DIR}/framework/include/zlink/framework/codecs/json_stream_connector.hpp"
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zlink/framework/codecs
   COMPONENT StreamConnector)
