@@ -7,6 +7,8 @@ import static systems.zlink.framework.runtime.handlers.ZLinkHandlerInterfaceName
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.handlers.ZLinkSpotRequest;
 import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.runtime.handlers.ZLinkGenericTypeResolver;
@@ -63,16 +65,22 @@ final class ZLinkSpotHandlerLoader {
             Class<?> spotType,
             List<Class<?>> configuredHandlerTypes,
             ScannedTimerRegistrar timerRegistrar) {
-        Map<String, SpotPacketHandlerRegistration> packetHandlers = new HashMap<>();
-        Map<String, List<SpotSubscriptionHandlerRegistration>> subscriptionHandlers =
-                new HashMap<>();
-        registerScannedSpotHandlers(spotType, packetHandlers, subscriptionHandlers, timerRegistrar);
-        for (Class<?> handlerType : configuredHandlerTypes) {
-            registerConfiguredSpotHandler(
-                    handlerType, spotType, packetHandlers, subscriptionHandlers);
-            handlerFactory.prepare(handlerType);
+        try {
+            Map<String, SpotPacketHandlerRegistration> packetHandlers = new HashMap<>();
+            Map<String, List<SpotSubscriptionHandlerRegistration>> subscriptionHandlers =
+                    new HashMap<>();
+            registerScannedSpotHandlers(
+                    spotType, packetHandlers, subscriptionHandlers, timerRegistrar);
+            for (Class<?> handlerType : configuredHandlerTypes) {
+                registerConfiguredSpotHandler(
+                        handlerType, spotType, packetHandlers, subscriptionHandlers);
+                handlerFactory.prepare(handlerType);
+            }
+            return new ZLinkSpotHandlerCatalog.Registrations(packetHandlers, subscriptionHandlers);
+        } catch (ZLinkConfigurationException failure) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION, failure.getMessage(), failure);
         }
-        return new ZLinkSpotHandlerCatalog.Registrations(packetHandlers, subscriptionHandlers);
     }
 
     private void registerScannedSpotHandlers(

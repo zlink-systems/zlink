@@ -1400,96 +1400,6 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
     }
 
     [Fact]
-    public async Task HostStartup_Rejects_Duplicate_UserSpot_Packet_Registration()
-    {
-        var builder = Host.CreateApplicationBuilder();
-        builder.Services.AddZLinkFramework(options =>
-        {
-            options.UseTestLocationStore();
-            options.DisableImplicitHandlerAutoRegistration();
-            var node = options
-                .AddRouteMesh("duplicate-packet")
-                .Listen($"inproc://duplicate-packet-{Guid.NewGuid():N}");
-            node.Channel("duplicate-packet").Server();
-            node.Objects()
-                .Server()
-                .AddSpotFactory<DuplicatePacketSpot>(
-                    "duplicate-packet",
-                    factory => factory.DisableRelocation()
-                );
-        });
-        using var host = builder.Build();
-
-        var exception = await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
-            host.StartAsync()
-        );
-
-        Assert.Contains(
-            $"SPOT packet handler '{nameof(DuplicatePacketMessage)}' is already registered",
-            exception.Message,
-            StringComparison.Ordinal
-        );
-    }
-
-    [Fact]
-    public async Task HostStartup_Rejects_Duplicate_UserSpot_Subscription_Registration()
-    {
-        var builder = Host.CreateApplicationBuilder();
-        builder.Services.AddZLinkFramework(options =>
-        {
-            options.UseTestLocationStore();
-            options.DisableImplicitHandlerAutoRegistration();
-            var node = options
-                .AddRouteMesh("duplicate-subscription")
-                .Listen($"inproc://duplicate-subscription-{Guid.NewGuid():N}");
-            node.Channel("duplicate-subscription").Server();
-            node.Objects()
-                .Server()
-                .AddSpotFactory<DuplicateSubscriptionSpot>(
-                    "duplicate-subscription",
-                    factory => factory.DisableRelocation()
-                );
-        });
-        using var host = builder.Build();
-
-        var exception = await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
-            host.StartAsync()
-        );
-
-        Assert.Contains("SPOT subscription handler", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("already registered", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task HostStartup_Rejects_Duplicate_UserSpot_Actor_Registration()
-    {
-        var builder = Host.CreateApplicationBuilder();
-        builder.Services.AddZLinkFramework(options =>
-        {
-            options.UseTestLocationStore();
-            options.DisableImplicitHandlerAutoRegistration();
-            var node = options
-                .AddRouteMesh("duplicate-actor")
-                .Listen($"inproc://duplicate-actor-{Guid.NewGuid():N}");
-            node.Channel("duplicate-actor").Server();
-            node.Objects()
-                .Server()
-                .AddSpotFactory<DuplicateActorSpot>(
-                    "duplicate-actor",
-                    factory => factory.DisableRelocation()
-                );
-        });
-        using var host = builder.Build();
-
-        var exception = await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
-            host.StartAsync()
-        );
-
-        Assert.Contains("actor packet", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("already registered", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public async Task HostStartup_Rejects_Invalid_ScannedSpotTimer()
     {
         var builder = Host.CreateApplicationBuilder();
@@ -1522,7 +1432,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
 
     private sealed record DuplicatePacketMessage(string Value);
 
-    private sealed class DuplicatePacketSpot(IZLinkSpotContext context) : IZLinkSpot
+    internal sealed class DuplicatePacketSpot(IZLinkSpotContext context) : IZLinkSpot
     {
         public IZLinkSpotContext Context { get; } = context;
 
@@ -1555,18 +1465,18 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
 
     private sealed record DuplicateSubscriptionMessage(string Value);
 
-    private sealed class DuplicateSubscriptionSpot(IZLinkSpotContext context) : IZLinkSpot
+    internal sealed class DuplicateSubscriptionSpot(IZLinkSpotContext context) : IZLinkSpot
     {
         public IZLinkSpotContext Context { get; } = context;
 
         public void Configure()
         {
             Context.Handlers.AddSubscribe<DuplicateSubscriptionHandler>(
-                "duplicate-channel",
+                Context.MeshName,
                 "duplicate-topic"
             );
             Context.Handlers.AddSubscribe<DuplicateSubscriptionHandler>(
-                "duplicate-channel",
+                Context.MeshName,
                 "duplicate-topic"
             );
         }
@@ -1593,7 +1503,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         public IZLinkActorContext Context { get; } = context;
     }
 
-    private sealed class DuplicateActorSpot(IZLinkSpotContext context) : IZLinkSpot
+    internal sealed class DuplicateActorSpot(IZLinkSpotContext context) : IZLinkSpot
     {
         public IZLinkSpotContext Context { get; } = context;
 

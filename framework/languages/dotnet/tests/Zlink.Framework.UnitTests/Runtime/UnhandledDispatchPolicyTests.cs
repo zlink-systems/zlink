@@ -10,7 +10,6 @@ using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Messaging;
-using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -27,7 +26,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             new TestSubscriptionSpot(),
             nativeSpot,
             TimeSpan.FromSeconds(1),
-            CancellationToken.None
+            CancellationToken.None,
+            ["events"]
         );
 
         Assert.Equal(3, nativeSpot.SubscriptionAttempts);
@@ -77,8 +77,8 @@ public sealed partial class UnhandledDispatchPolicyTests
         var nonOwner = new TestSubscriptionSpot(false, applicationProbe);
         registryA.Add("events", "events.child", typeof(TestSubscriptionHandler));
         registryB.Add("events", "events.child", typeof(TestSubscriptionHandler));
-        registryA.Bind(owner, spotA);
-        registryB.Bind(nonOwner, spotB);
+        registryA.Bind(owner, spotA, ["events"]);
+        registryB.Bind(nonOwner, spotB, ["events"]);
 
         var backendFactory = new ZLinkDotNetBackendAdapterFactory();
         await using var context = backendFactory.CreateRuntimeContext();
@@ -754,7 +754,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             new TestSubscriptionSpot(),
             nativeSpot,
             TimeSpan.FromSeconds(1),
-            CancellationToken.None
+            CancellationToken.None,
+            ["events"]
         );
 
         var backendFactory = new ZLinkDotNetBackendAdapterFactory();

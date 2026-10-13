@@ -68,9 +68,6 @@ export class ZLinkSpotSubscriptionDispatch {
       }
       const key = subscriptionKey(registration.channelName, registration.topic);
       const existing = this.handlers.get(key) ?? [];
-      if (existing.some((entry) => entry.handlerType === registration.handlerType)) {
-        continue;
-      }
       existing.push(registration);
       this.handlers.set(key, existing);
       this.options.nativeSpot.setSubscription(registration.channelName, registration.topic);

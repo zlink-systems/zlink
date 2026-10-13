@@ -19,7 +19,11 @@ import {
 import { randomBytes } from 'node:crypto';
 import type { ZLinkMeshCompletionHandler } from '../mesh-completion-table';
 import { setImmediate as yieldToIO } from 'node:timers/promises';
-import { type RoutingId, ZLinkFrameworkException } from '../../../contracts';
+import {
+  type RoutingId,
+  ZLinkFrameworkException,
+  ZLinkFrameworkErrorKind
+} from '../../../contracts';
 
 import type { Message as FrameworkMessage } from '../../../contracts/Common/Message';
 import { ZLinkConfigurationException } from '../../../contracts/Configuration/ConfigurationException';
@@ -1489,6 +1493,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   setSpotSubscription(state: ServiceSpotState, channelName: string, topicFilter: string): void {
+    if (!this.channels.has(channelName))
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.InvalidOperation,
+        `Spot does not participate in subscription channel '${channelName}'.`
+      );
     this.requireStateful().setSubscription(state, channelName, topicFilter);
   }
 
