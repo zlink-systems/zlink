@@ -67,7 +67,7 @@ final class ZLinkChannelSocketRegistry {
     private final Map<String, ChannelRegistration> registrations = new ConcurrentHashMap<>();
     private final ZLinkApplicationJobQueue applicationJobQueue;
 
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final ZLinkStateLane stateLane;
     private final Map<ZLinkBackendObject, ZLinkApplicationJobReceiveFlowController.Registration>
             receiveFlowRegistrations = new IdentityHashMap<>();
     private final Map<String, ZLinkBackendDealerSocket> clients = new HashMap<>();
@@ -113,6 +113,15 @@ final class ZLinkChannelSocketRegistry {
             ZLinkApplicationJobQueue applicationJobQueue,
             java.util.function.LongSupplier requestNanoTime,
             java.util.function.BooleanSupplier closing) {
+        this(applicationJobQueue, requestNanoTime, closing, null);
+    }
+
+    ZLinkChannelSocketRegistry(
+            ZLinkApplicationJobQueue applicationJobQueue,
+            java.util.function.LongSupplier requestNanoTime,
+            java.util.function.BooleanSupplier closing,
+            ZLinkStateLane stateLane) {
+        this.stateLane = stateLane == null ? new ZLinkStateLane() : stateLane;
         this.applicationJobQueue = applicationJobQueue;
         this.requestNanoTime = requestNanoTime;
         this.closing = closing;
@@ -149,18 +158,7 @@ final class ZLinkChannelSocketRegistry {
     }
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.isOnLane() ? work.get() : stateLane.awaitTurn(work);
     }
 
     void registerChannel(ChannelRegistration registration) {
@@ -591,11 +589,9 @@ final class ZLinkChannelSocketRegistry {
                 };
         if (stateLane.isOnLane()) return work.get();
         try {
-            // Callers hold no external gate that this turn reacquires; selection and first submit
-            // run here. ZLinkStateLane publishes pending completion off-lane, so continuations
-            // cannot reenter its current turn. JVM submit must finish the first attempt before
-            // return.
-            return stateLane.runNowOrQueue(work::get).toCompletableFuture().join();
+            // Selection and the first binding attempt finish in the context owner's turn.
+            // Its private registration result has no dependents; binding completion stays async.
+            return stateLane.awaitTurn(work);
         } catch (RuntimeException | Error failure) {
             Throwable cause =
                     failure instanceof CompletionException && failure.getCause() != null

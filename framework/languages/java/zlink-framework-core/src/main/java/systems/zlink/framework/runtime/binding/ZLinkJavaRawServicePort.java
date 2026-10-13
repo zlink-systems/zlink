@@ -42,7 +42,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     private final boolean ownsContext;
     private final LinkedHashMap<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
             new LinkedHashMap<>();
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final ZLinkStateLane stateLane;
     private CompletableFuture<Void> closeCompletion;
 
     private Function<
@@ -69,8 +69,18 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     private ZLinkJavaRawServicePort(Context context, boolean ownsContext) {
+        this(context, ownsContext, new ZLinkStateLane());
+    }
+
+    ZLinkJavaRawServicePort(Context context, ZLinkStateLane stateLane) {
+        this(context, false, stateLane);
+    }
+
+    private ZLinkJavaRawServicePort(
+            Context context, boolean ownsContext, ZLinkStateLane stateLane) {
         this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
+        this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
     }
 
     RouterSocket openRouter(RoutingId routingId) {
@@ -465,7 +475,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     private <T> T inStateLane(Supplier<T> work) {
-        return ZLinkCompletionBridge.await(stateLane.runNowOrQueue(work));
+        return stateLane.isOnLane() ? work.get() : stateLane.awaitTurn(work);
     }
 
     private void ensureOpen() {

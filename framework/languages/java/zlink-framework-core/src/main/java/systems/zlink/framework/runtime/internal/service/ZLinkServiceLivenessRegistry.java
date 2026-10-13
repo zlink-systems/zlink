@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Duration;
@@ -21,7 +20,7 @@ public final class ZLinkServiceLivenessRegistry {
     public static final Duration DEFAULT_PEER_TIMEOUT = Duration.ofSeconds(15);
     private final long probeIntervalNanos;
     private final long peerTimeoutNanos;
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final ZLinkStateLane stateLane;
     private final Map<RoutingId, PeerState> peers = new HashMap<>();
     private long nextProbeId = 1;
 
@@ -30,6 +29,12 @@ public final class ZLinkServiceLivenessRegistry {
     }
 
     public ZLinkServiceLivenessRegistry(Duration probeInterval, Duration peerTimeout) {
+        this(probeInterval, peerTimeout, new ZLinkStateLane());
+    }
+
+    public ZLinkServiceLivenessRegistry(
+            Duration probeInterval, Duration peerTimeout, ZLinkStateLane stateLane) {
+        this.stateLane = java.util.Objects.requireNonNull(stateLane, "stateLane");
         Objects.requireNonNull(probeInterval, "probeInterval");
         Objects.requireNonNull(peerTimeout, "peerTimeout");
         if (probeInterval.isZero()
@@ -43,7 +48,7 @@ public final class ZLinkServiceLivenessRegistry {
     }
 
     private <T> T inStateLane(Supplier<T> work) {
-        return ZLinkCompletionBridge.await(stateLane.runNowOrQueue(work));
+        return stateLane.awaitTurn(work);
     }
 
     public PeerState admit(RoutingId nodeRoutingId, String connectionId, long nowNanos) {
@@ -63,7 +68,15 @@ public final class ZLinkServiceLivenessRegistry {
     }
 
     public PeerState connection(RoutingId nodeRoutingId) {
-        return inStateLane(() -> peers.get(nodeRoutingId));
+        return inStateLane(() -> connectionOnLane(nodeRoutingId));
+    }
+
+    public PeerState connectionFromOwner(RoutingId nodeRoutingId) {
+        return stateLane.isOnLane() ? connectionOnLane(nodeRoutingId) : connection(nodeRoutingId);
+    }
+
+    private PeerState connectionOnLane(RoutingId nodeRoutingId) {
+        return peers.get(nodeRoutingId);
     }
 
     public boolean disconnect(RoutingId nodeRoutingId, String connectionId) {

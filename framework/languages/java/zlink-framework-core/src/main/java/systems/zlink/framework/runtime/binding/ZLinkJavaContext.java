@@ -3,10 +3,16 @@ package systems.zlink.framework.runtime.binding;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.CoreHwmBudgetSnapshot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.util.Optional;
 
-record ZLinkJavaContext(Context nativeContext) implements ZLinkBackendContext {
+record ZLinkJavaContext(Context nativeContext, ZLinkStateLane sourceTransportLane)
+        implements ZLinkBackendContext {
+    ZLinkJavaContext(Context nativeContext) {
+        this(nativeContext, new ZLinkStateLane());
+    }
+
     @Override
     public String name() {
         return "context";
