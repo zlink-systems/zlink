@@ -753,6 +753,14 @@ application 작업을 받지 않도록 바꾸는 동작을 [admission seal](../0
 6. Deadline 안에 끝나면 `Stopped/None`, 끝나지 않으면 bounded teardown 뒤
    `ForceStopped/DeadlineExceeded` 또는 `ForceStopped/TeardownFailed`로 끝난다.
 
+**Bounded teardown의 기한은 host 종료 결과의 owner가 하나로 정한다.** Shutdown deadline이 지난 시점부터
+[owner lease renew timeout](01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다) 하나가
+그 기한이다. 위 4~5단계와 아래 정리 순서 1~4의 남은 단계는 이 기한 안에서 모두 시작하며, deadline이
+지났다는 이유로 건너뛰지 않는다. 대기 관찰, owner record·descriptor·lease 정리는 모두 이 기한을 쓴다. 이
+기한 안에 확인하지 못한 owner record는 owner lease 만료 뒤 다른 host가 회수한다. 종료 결과는 deadline
+만료이면 bounded teardown 중의 시간 초과를 포함해 `ForceStopped/DeadlineExceeded`이고, callback이 예외를
+던졌으면 `ForceStopped/TeardownFailed`다.
+
 Listener와 transport를 정리할 때는 이미 수락한 transport callback과 진행 중인 read·write
 operation을 먼저 완료하거나 취소한다. 특히 TLS·WebSocket resource와 per-connection write
 queue를 파괴하기 전에 소유한 transport 실행 문맥에서 cancellation completion을 관찰해야

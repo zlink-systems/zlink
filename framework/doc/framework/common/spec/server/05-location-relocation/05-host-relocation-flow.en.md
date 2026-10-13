@@ -834,6 +834,15 @@ completes within a fixed time, in this order.
    `ForceStopped/DeadlineExceeded` or `ForceStopped/TeardownFailed` after bounded
    teardown.
 
+**The owner of the host termination result sets one bounded-teardown limit.** It is one
+[owner lease renew timeout](01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops)
+counted from the moment the shutdown deadline passes. The remaining steps 4–5 above and cleanup order 1–4
+below all start within this limit and are not skipped because the deadline has passed. Wait observation
+and the cleanup of owner records, descriptors and the lease all use this limit. An owner record not
+confirmed within it is reclaimed by another host after the owner lease expires. The termination result is
+`ForceStopped/DeadlineExceeded` when the deadline expired, including a timeout during bounded teardown,
+and `ForceStopped/TeardownFailed` when a callback threw.
+
 When a listener and transport are cleaned up, already-accepted transport callbacks and
 in-flight read/write operations are completed or cancelled first. In particular,
 TLS/WebSocket resources and a per-connection write queue aren't destroyed until
