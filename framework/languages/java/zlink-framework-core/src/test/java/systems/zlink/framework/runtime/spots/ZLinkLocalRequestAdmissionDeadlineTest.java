@@ -35,6 +35,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkLocalRequestAdmissionDeadlineTest {
+    private static final int IMMEDIATE_FAILURE_REQUEST_COUNT = 128;
     private static final AtomicInteger handled = new AtomicInteger();
 
     @ParameterizedTest
@@ -282,6 +283,127 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
             var third = submitLocal(runtime, actor, Duration.ofSeconds(1), false);
             third.admitted().toCompletableFuture().get(2, TimeUnit.SECONDS);
             assertEquals("reply", third.toCompletableFuture().get(2, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void ownerRejectionBeforeQueueCommitFailsAdmissionWithTheReplyCause() throws Exception {
+        try (var runtime = startAdmissionRuntime()) {
+            createLocalTargets(runtime);
+            var actor =
+                    runtime.actorManager()
+                            .find("actor-a")
+                            .toCompletableFuture()
+                            .get()
+                            .orElseThrow();
+            var queue = applicationQueue(runtime);
+            ZLinkRequestStage<String> result;
+            try (var held =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS)) {
+                result = submitLocal(runtime, true, Duration.ofSeconds(1), false);
+                awaitCapacityWaiter(queue);
+                assertTrue(
+                        runtime.actorManager()
+                                .destroy(actor)
+                                .toCompletableFuture()
+                                .get(2, TimeUnit.SECONDS));
+                assertFalse(result.admitted().toCompletableFuture().isDone());
+            }
+            var replyFailure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> result.toCompletableFuture().get(2, TimeUnit.SECONDS));
+            var admissionFailure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> result.admitted().toCompletableFuture().get(2, TimeUnit.SECONDS));
+            assertSame(replyFailure.getCause(), admissionFailure.getCause());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void handlerFailureAfterQueueCommitDoesNotFailAdmission(boolean actor) throws Exception {
+        var failure = new IllegalStateException("handler failed after admission");
+        heldReply = CompletableFuture.failedFuture(failure);
+        try (var runtime = startAdmissionRuntime()) {
+            createLocalTargets(runtime);
+            for (int index = 0; index < IMMEDIATE_FAILURE_REQUEST_COUNT; index++) {
+                var result = submitLocal(runtime, actor, Duration.ofSeconds(1), true);
+                assertThrows(
+                        ExecutionException.class,
+                        () -> result.toCompletableFuture().get(2, TimeUnit.SECONDS));
+                assertDoesNotThrow(
+                        () -> result.admitted().toCompletableFuture().get(2, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
+    void admissionContinuationOutsideHandlerStartsOutsideInfrastructureTurn() throws Exception {
+        heldReply = new CompletableFuture<>();
+        try (var runtime = startAdmissionRuntime()) {
+            createLocalTargets(runtime);
+            var queue = applicationQueue(runtime);
+            ZLinkRequestStage<String> result;
+            CompletionStage<String> continuation;
+            try (var held =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS)) {
+                result = submitLocal(runtime, true, Duration.ofSeconds(1), true);
+                awaitCapacityWaiter(queue);
+                continuation =
+                        result.admitted()
+                                .thenApply(
+                                        ignored -> {
+                                            assertFalse(
+                                                    java.util.Arrays.stream(
+                                                                    Thread.currentThread()
+                                                                            .getStackTrace())
+                                                            .anyMatch(
+                                                                    frame ->
+                                                                            frame.getMethodName()
+                                                                                            .equals(
+                                                                                                    "deliverGrant")
+                                                                                    || frame.getMethodName()
+                                                                                            .equals(
+                                                                                                    "publishApplicationJob")),
+                                                    "application continuation ran on the infrastructure publication stack");
+                                            return runtime.route()
+                                                    .requestToSpot("room-a", new Probe(false))
+                                                    .submit_sync(String.class);
+                                        });
+            }
+            assertEquals("reply", continuation.toCompletableFuture().get(2, TimeUnit.SECONDS));
+            assertFalse(result.toCompletableFuture().isDone());
+            heldReply.complete("reply");
+            assertEquals("reply", result.toCompletableFuture().get(2, TimeUnit.SECONDS));
+        } finally {
+            heldReply.complete("reply");
+        }
+    }
+
+    @Test
+    void queuedActorAdmissionDoesNotWaitForTheActiveHandlerTurn() throws Exception {
+        heldReply = new CompletableFuture<>();
+        try (var runtime = startAdmissionRuntime()) {
+            try {
+                createLocalTargets(runtime);
+                var first = submitLocal(runtime, true, Duration.ofSeconds(1), true);
+                first.admitted().toCompletableFuture().get(2, TimeUnit.SECONDS);
+                var second = submitLocal(runtime, true, Duration.ofSeconds(1), true);
+                second.admitted().toCompletableFuture().get(2, TimeUnit.SECONDS);
+                assertFalse(first.toCompletableFuture().isDone());
+                assertFalse(second.toCompletableFuture().isDone());
+                heldReply.complete("reply");
+                assertEquals("reply", first.toCompletableFuture().get(2, TimeUnit.SECONDS));
+                assertEquals("reply", second.toCompletableFuture().get(2, TimeUnit.SECONDS));
+            } finally {
+                heldReply.complete("reply");
+            }
         }
     }
 
