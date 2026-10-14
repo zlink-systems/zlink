@@ -13,6 +13,24 @@ import java.time.Instant;
 
 final class ZLinkSpotTimerScheduleTest {
     @Test
+    void preparingAnUnexecutedTickDoesNotAdvanceTheDeliveryCursor() {
+        var schedule =
+                new ZLinkSpotTimerSchedule(
+                        "timer",
+                        Duration.ofMillis(10),
+                        timerOptions(ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1));
+        var pending = schedule.nextTick(Duration.ofMillis(10).toNanos(), Instant.now());
+
+        assertEquals(1, pending.tick().deliveryIndex());
+        assertEquals(0, schedule.snapshot().deliveryIndex());
+        assertEquals(0, schedule.snapshot().lastScheduledIndex());
+
+        schedule.markDelivered(pending);
+        assertEquals(1, schedule.snapshot().deliveryIndex());
+        assertEquals(1, schedule.snapshot().lastScheduledIndex());
+    }
+
+    @Test
     void delayNextTickKeepsOneDeliveryPerDispatch() {
         ZLinkSpotTimerSchedule schedule =
                 new ZLinkSpotTimerSchedule(

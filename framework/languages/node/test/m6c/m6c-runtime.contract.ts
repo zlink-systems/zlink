@@ -35,6 +35,7 @@ import {
   ZLinkSpotRelocationCoordinationMode,
   ZLinkSpotRelocationReadyOutcome,
   ZLinkTimerOverrunPolicy,
+  type ZLinkTimerTick,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
@@ -977,6 +978,54 @@ test('managed timer pauses and restores its logical schedule without native hand
   await source.dispose();
   await target.dispose();
 });
+
+for (const policy of Object.values(ZLinkTimerOverrunPolicy)) {
+  for (const stop of [false, true]) {
+    test(`timer exception consumes the executed tick: ${policy}, stop=${stop}`, async () => {
+      const expectedDeliveries = 3n;
+      const ticks: ZLinkTimerTick[] = [];
+      let finish!: () => void;
+      const finished = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const timer = new ZLinkManagedTimer(
+        'exception-contract',
+        100,
+        { overrunPolicy: policy, maxCatchUpTicks: 3, stopOnUnhandledException: stop },
+        async (tick) => {
+          ticks.push(tick);
+          if (tick.deliveryIndex === expectedDeliveries) finish();
+          throw new Error('timer failure');
+        },
+        async () => {
+          if (stop) finish();
+        }
+      );
+      try {
+        await finished;
+        if (stop) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          assert.equal(timer.isDisposed, true);
+        }
+        await timer.cancel();
+        assert.equal(ticks.length, stop ? 1 : Number(expectedDeliveries));
+        let previous = 0n;
+        for (const [index, tick] of ticks.entries()) {
+          assert.equal(tick.deliveryIndex, BigInt(index + 1));
+          assert.ok(tick.scheduledIndex > previous);
+          assert.ok(tick.scheduledIndex >= tick.deliveryIndex);
+          assert.equal(tick.skippedTicks, tick.scheduledIndex - previous - 1n);
+          if (policy === ZLinkTimerOverrunPolicy.DelayNextTick) {
+            assert.equal(tick.scheduledIndex, tick.deliveryIndex);
+          }
+          previous = tick.scheduledIndex;
+        }
+      } finally {
+        await timer.dispose();
+      }
+    });
+  }
+}
 
 test('source rollback attempts every unit when one cleanup fence is stale', async () => {
   const events: string[] = [];

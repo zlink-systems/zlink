@@ -8,6 +8,66 @@ namespace Zlink.Framework.UnitTests;
 public sealed class TimerLifecycleTests
 {
     [Theory]
+    [InlineData(ZLinkTimerOverrunPolicy.SkipLateTicks, false)]
+    [InlineData(ZLinkTimerOverrunPolicy.CatchUpBounded, false)]
+    [InlineData(ZLinkTimerOverrunPolicy.DelayNextTick, false)]
+    [InlineData(ZLinkTimerOverrunPolicy.SkipLateTicks, true)]
+    [InlineData(ZLinkTimerOverrunPolicy.CatchUpBounded, true)]
+    [InlineData(ZLinkTimerOverrunPolicy.DelayNextTick, true)]
+    public async Task Exception_consumes_executed_tick_and_preserves_stop_policy(
+        ZLinkTimerOverrunPolicy policy,
+        bool stop
+    )
+    {
+        const int ExpectedDeliveries = 3;
+        await using var scheduler = new ZLinkTimerScheduler();
+        var ticks = new List<ZLinkTimerTick>();
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var timer = new ZLinkTimer(
+            "exception-contract",
+            TimeSpan.FromMilliseconds(100),
+            new ZLinkTimerOptions
+            {
+                OverrunPolicy = policy,
+                MaxCatchUpTicks = 3,
+                StopOnUnhandledException = stop,
+            },
+            CancellationToken.None,
+            (tick, _) =>
+            {
+                ticks.Add(tick);
+                if (tick.DeliveryIndex == ExpectedDeliveries)
+                    finished.TrySetResult();
+                return ValueTask.FromException(new InvalidOperationException("timer failure"));
+            },
+            (_, _, stopped, _) =>
+            {
+                if (stopped)
+                    finished.TrySetResult();
+                return ValueTask.CompletedTask;
+            },
+            scheduler: scheduler
+        );
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (stop)
+            Assert.True(timer.IsDisposed);
+        await timer.CancelAsync();
+        Assert.Equal(stop ? 1 : ExpectedDeliveries, ticks.Count);
+        ulong previous = 0;
+        for (var index = 0; index < ticks.Count; index++)
+        {
+            var tick = ticks[index];
+            Assert.Equal((ulong)index + 1, tick.DeliveryIndex);
+            Assert.True(tick.ScheduledIndex > previous);
+            Assert.True(tick.ScheduledIndex >= tick.DeliveryIndex);
+            Assert.Equal(tick.ScheduledIndex - previous - 1, tick.SkippedTicks);
+            if (policy == ZLinkTimerOverrunPolicy.DelayNextTick)
+                Assert.Equal(tick.DeliveryIndex, tick.ScheduledIndex);
+            previous = tick.ScheduledIndex;
+        }
+    }
+
+    [Theory]
     [InlineData(true, false)]
     [InlineData(false, false)]
     [InlineData(true, true)]

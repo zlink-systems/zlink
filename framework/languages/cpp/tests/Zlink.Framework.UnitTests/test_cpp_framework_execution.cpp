@@ -245,6 +245,48 @@ bool verify_timer_handler_activation_lifetime ()
           context.add_timer<timer_activation_handler_t> ("second", std::chrono::hours (24));
 
         auto timer_runtime = zlink::framework::detail::timer_runtime_t::from (context);
+        for (const auto policy : {zlink::framework::timer_overrun_policy_t::skip_late_ticks,
+                                  zlink::framework::timer_overrun_policy_t::catch_up_bounded,
+                                  zlink::framework::timer_overrun_policy_t::delay_next_tick}) {
+            for (const bool stop : {false, true}) {
+                zlink::framework::timer_options_t options;
+                options.overrun_policy = policy;
+                options.max_catch_up_ticks = 3;
+                options.stop_on_unhandled_exception = stop;
+                auto failing = context.add_timer<timer_activation_handler_t> (
+                  "exception-contract", std::chrono::hours (24), options);
+                const std::size_t expected_ticks = stop ? 1 : 3;
+                std::vector<zlink::framework::timer_tick_t> ticks;
+                for (std::size_t index = 0; index < expected_ticks; ++index) {
+                    const auto failure = timer_runtime.dispatch_fire_count (
+                      failing, 1, [&] (const zlink::framework::timer_tick_t &tick) {
+                          ticks.push_back (tick);
+                          throw std::runtime_error ("timer failure");
+                      });
+                    if (failure)
+                        return false;
+                }
+                if (ticks.size () != expected_ticks)
+                    return false;
+                std::uint64_t previous = 0;
+                for (std::size_t index = 0; index < ticks.size (); ++index) {
+                    const auto &tick = ticks[index];
+                    if (tick.delivery_index != index + 1 || tick.scheduled_index <= previous
+                        || tick.scheduled_index < tick.delivery_index
+                        || tick.skipped_ticks != tick.scheduled_index - previous - 1)
+                        return false;
+                    if (policy == zlink::framework::timer_overrun_policy_t::delay_next_tick
+                        && tick.scheduled_index != tick.delivery_index)
+                        return false;
+                    previous = tick.scheduled_index;
+                }
+                if (failing.is_disposed () != stop)
+                    return false;
+                if (stop && timer_runtime.dispatch_fire_count (failing, 1))
+                    return false;
+                (void) failing.cancel ();
+            }
+        }
         const auto first_result = timer_runtime.dispatch_fire_count_async (first, 1).result ();
         const auto second_result = timer_runtime.dispatch_fire_count_async (second, 1).result ();
         if (!first_result || !second_result) {
