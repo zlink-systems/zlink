@@ -53,7 +53,7 @@ Each run validates `zlink.structure.json`, creates a unique Redis Compose projec
 
 ## Known issues
 
-Public 0.30.0 cannot complete host update when a relocated Zone restores its timer inventory (#1725, fixed in 0.30.1). Shutdown also returned `ForceStopped/TeardownFailed` during 0.30.0 validation; its cause remains unclassified. The 0.30.1 candidate has not yet been validated. Node typed handlers receive fields without the declared DTO class (#1731, scheduled for 0.32.0); the template reconstructs declared packet classes before forwarding through typed APIs.
+Public 0.30.0 cannot complete host update when a relocated Zone restores its timer inventory ([#1767](https://github.com/zlink-systems/zlink/issues/1767)). Shutdown after a closed client connection returned `ForceStopped/TeardownFailed` on 0.30.0 ([#1690](https://github.com/zlink-systems/zlink/issues/1690), fixed in 0.30.1). The 0.30.1 candidate has not yet been validated. Node typed handlers receive fields without the declared DTO class (#1731, scheduled for 0.32.0); the template reconstructs declared packet classes before forwarding through typed APIs.
 
 ## Deployment sequence
 
