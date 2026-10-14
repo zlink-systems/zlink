@@ -52,7 +52,7 @@ The runner checks the structure, starts a unique Compose project with Redis on a
 
 ## Known issues
 
-Validation with public 0.30.0 encounters Java deferred Actor Join DATA_LOST (#1729), including `target rejected canonical relocation: 35`. Some initial Actor creation requests also remain incomplete until cleanup; #1772 (new Actor placement on a node without an Entry Spot) is a related candidate, not a confirmed diagnosis for those runs. Framework 0.30.1 is pinned for the fixes, but its candidate feed has not been provided and its e2e verification remains pending. Do not conceal these failures with application retries or larger deadlines.
+Validation with public 0.30.0 encounters Java deferred Actor Join DATA_LOST with `target rejected canonical relocation: 35` ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). The Session's first Actor GetOrCreate request can also remain incomplete with no receipt on any node ([#1782](https://github.com/zlink-systems/zlink/issues/1782)). Framework 0.30.1 is pinned for the fixes, and its e2e verification remains pending. Do not conceal these failures with application retries or larger deadlines.
 
 ## Deployment sequence
 
