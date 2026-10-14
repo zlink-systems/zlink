@@ -1,8 +1,8 @@
 import 'reflect-metadata';
-import { diagnostics } from './shared/diagnostics';
-import '../.zlink-framework-json-schemas.cjs';
+import { diagnostics } from './diagnostics';
+import '../../.zlink-framework-json-schemas.cjs';
 import { NestFactory } from '@nestjs/core';
-import { Global, Module } from '@nestjs/common';
+import { Global, Module, type Type } from '@nestjs/common';
 import { createInterface } from 'node:readline';
 import {
   ZLinkRedisLocationStore,
@@ -14,25 +14,32 @@ import {
   ZLinkModule,
   ZLINK_FRAMEWORK_RUNTIME,
   ZLINK_ROUTE_MESH_RUNTIME,
+  type ZLinkNestMeshNodeBuilder,
 } from '@zlink-systems/nestjs';
 import {
   ZLinkFrameworkRelocationMode,
   ZLinkFrameworkRelocationOutcome,
   ZLinkFrameworkTerminationOutcome,
   ZLinkFrameworkTerminationReason,
-  ZLinkUserSpotExecutionMode,
   type ZLinkFrameworkRuntime,
   type ZLinkRouteMeshRuntime,
+  type ZLinkRouteMeshStatus,
 } from '@zlink-systems/framework';
-import { Names, Limits, Control } from './shared/constants';
-import { NODE_CONFIG, readConfig } from './shared/config';
-import { SessionFactory } from './session/session';
-import { Entry, Table, TableRelocation } from './table/infrastructure/table';
-import { PlayerFactory, PlayerRelocation } from './table/infrastructure/player';
-import { EntryJoin, Rejoin, View, Start, Bet, Deliver } from './table/infrastructure/handlers';
-async function main(): Promise<void> {
+import { Names, Limits, Control } from './constants';
+import { NODE_CONFIG, readConfig, type NodeConfig } from './config';
+interface HostComposition {
+  providers: Type[];
+  listener: { kind: 'stream' | 'routeMesh'; name: string };
+  ready: (status: ZLinkRouteMeshStatus) => boolean;
+}
+export async function runHost(
+  configure: (
+    builder: ReturnType<typeof zlinkFramework>,
+    config: NodeConfig,
+    mesh: ZLinkNestMeshNodeBuilder,
+  ) => HostComposition,
+): Promise<void> {
   const config = readConfig(process.argv[2]);
-  const session = config.streamEndpoint !== null;
   const location = new ZLinkRedisLocationStore({
     url: `redis://${config.redisEndpoint}`,
     keyPrefix: `${config.keyPrefix}location`,
@@ -53,42 +60,11 @@ async function main(): Promise<void> {
     .addRouteMesh(Names.mesh)
     .setRoutingIdPrefix(config.id)
     .listen(config.meshEndpoint);
-  if (session) {
-    mesh.objects().client();
-    builder
-      .addStreamNode(Names.stream)
-      .enableActorDispatch()
-      .bind(config.streamEndpoint!)
-      .registerSession(SessionFactory);
-  } else {
-    const objects = mesh.objects().server();
-    objects.addEntrySpot(Entry);
-    objects.addActorFactory(Names.actor, PlayerFactory, (f) =>
-      f.preserveStateWith(PlayerRelocation),
-    );
-    objects.addSpotFactory(Names.table, Table, (f) => {
-      f.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
-      f.preserveStateWith(TableRelocation);
-    });
-  }
+  const composition = configure(builder, config, mesh);
   zlinkModule({
     providerDiscovery: [],
     imports: [Configuration, ZLinkModule.forRoot(builder.build())],
-    providers: session
-      ? [SessionFactory]
-      : [
-          Entry,
-          Table,
-          TableRelocation,
-          PlayerFactory,
-          PlayerRelocation,
-          EntryJoin,
-          Rejoin,
-          View,
-          Start,
-          Bet,
-          Deliver,
-        ],
+    providers: composition.providers,
   })(Host);
   const app = await NestFactory.createApplicationContext(Host, {
     logger: ['error', 'warn'],
@@ -105,8 +81,7 @@ async function main(): Promise<void> {
       if (observed.loss.discardedTerminalCount !== 0n)
         throw new Error('Readiness observation lost');
       const status = observed.status;
-      if (status.isReady && (session ? status.readyPeerCount > 0 : status.placement.isAvailable))
-        return;
+      if (status.isReady && composition.ready(status)) return;
     }
     throw new Error('Readiness observation deadline expired');
   }
@@ -122,13 +97,13 @@ async function main(): Promise<void> {
   const failures: unknown[] = [];
   try {
     await waitReady();
-    const listener = session
-      ? runtime.getListenerStatus('stream', Names.stream)
-      : runtime.getListenerStatus('routeMesh', Names.mesh);
+    const listener = runtime.getListenerStatus(
+      composition.listener.kind,
+      composition.listener.name,
+    );
     console.log(Control.ready + JSON.stringify({ id: config.id, endpoint: listener.endpoint }));
     for await (const line of input) {
       if (line === Control.drain) {
-        if (session) throw new Error('Session drain is not a table operation');
         console.log(Control.requested);
         const result = await runtime.relocate({
           mode: ZLinkFrameworkRelocationMode.PlannedMaintenance,
@@ -173,7 +148,7 @@ async function main(): Promise<void> {
   }
   if (failures.length) throw new AggregateError(failures, 'Node operation or cleanup failed');
 }
-main().catch((error: unknown) => {
+export function failHost(error: unknown): void {
   console.error(error);
   process.exitCode = 1;
-});
+}

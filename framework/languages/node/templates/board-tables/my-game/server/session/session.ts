@@ -31,7 +31,15 @@ export class Session implements ZLinkSession {
     const actor = this.context.actors.bound[0];
     if (!actor) throw new Error('JoinTableRequest must be first');
     if (dispatch.packetName === PacketNames.sessionInfoRequest) {
-      await this.context.client.reply(new SessionInfo(String(this.context.sessionId))).submit();
+      await this.context.client
+        .reply(
+          new SessionInfo(
+            String(this.context.sessionId),
+            actor.ref.actorId,
+            actor.ref.objectGeneration,
+          ),
+        )
+        .submit();
       return;
     }
     await actor.relay(payload);

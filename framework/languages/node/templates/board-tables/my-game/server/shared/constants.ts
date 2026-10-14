@@ -42,7 +42,6 @@ export const PacketNames = {
   handDealt: 'HandDealt',
   handResult: 'HandResult',
   actionRejected: 'ActionRejected',
-  deliverTableState: 'DeliverTableState',
 } as const;
 
 export const Control = {
@@ -54,3 +53,9 @@ export const Control = {
   safe: 'SAFE_TO_SHUTDOWN',
   stopped: 'STOPPED ',
 } as const;
+
+export const NodeEntrypoints = {
+  session: 'server/session/main.ts',
+  table: 'server/table/main.ts',
+} as const;
+export type NodeRole = keyof typeof NodeEntrypoints;

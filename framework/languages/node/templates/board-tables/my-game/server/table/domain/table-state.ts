@@ -1,6 +1,6 @@
 import { randomInt } from 'node:crypto';
 import { Game, Reasons } from '../../shared/constants';
-import { HandResult, type SeatView, type TableProjection } from '../../shared/messages';
+import { HandResult, type SeatView, type TableView } from '../../shared/messages';
 interface Seat {
   playerId: string;
   chips: number;
@@ -107,7 +107,7 @@ export class TableState {
       cardCount: s.cards.length,
     }));
   }
-  view(playerId: string, tableId: string, nodeId: string): TableProjection {
+  view(playerId: string, tableId: string, nodeId: string): TableView {
     const s = this.snapshot;
     return {
       tableId,

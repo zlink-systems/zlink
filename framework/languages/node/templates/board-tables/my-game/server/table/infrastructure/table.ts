@@ -12,7 +12,8 @@ import type {
 import { NODE_CONFIG, type NodeConfig } from '../../shared/config';
 import {
   ActionRejected,
-  DeliverTableState,
+  TableView,
+  HandDealt,
   JoinTableRequest,
   type HandResult,
 } from '../../shared/messages';
@@ -46,20 +47,43 @@ export class Table implements ZLinkSpot<Player> {
   }
   async onLeaveActor(_actor: Player): Promise<void> {}
   async onDisconnectActor(_actor: Player): Promise<void> {}
-  async sendState(playerId: string, result: HandResult | null = null): Promise<void> {
-    await this.actors
-      .sendToActor(
-        playerId,
-        new DeliverTableState(
-          this.state.view(playerId, String(this.context.spotId), this.config.id),
-          this.state.cards(playerId),
-          result,
-        ),
-      )
-      .submit();
+  view(playerId: string): TableView {
+    const v = this.state.view(playerId, String(this.context.spotId), this.config.id);
+    return new TableView(
+      v.tableId,
+      v.nodeId,
+      v.yourSeat,
+      v.handNumber,
+      v.inHand,
+      v.turnSeat,
+      v.pot,
+      v.seats,
+    );
+  }
+  async respond(actor: Player): Promise<void> {
+    const playerId = actor.context.actorId;
+    await actor.context.boundSession.send(this.view(playerId)).submit();
+    const cards = this.state.cards(playerId);
+    if (cards.length)
+      await actor.context.boundSession
+        .send(new HandDealt(this.state.snapshot.handNumber, cards))
+        .submit();
   }
   async publish(result: HandResult | null = null): Promise<void> {
-    for (const seat of this.state.snapshot.seats) await this.sendState(seat.playerId, result);
+    for (const seat of this.state.snapshot.seats) {
+      await this.actors.sendToActor(seat.playerId, this.view(seat.playerId)).submit();
+      if (result) await this.actors.sendToActor(seat.playerId, result).submit();
+    }
+  }
+  async deal(): Promise<void> {
+    await this.publish();
+    for (const seat of this.state.snapshot.seats)
+      await this.actors
+        .sendToActor(
+          seat.playerId,
+          new HandDealt(this.state.snapshot.handNumber, this.state.cards(seat.playerId)),
+        )
+        .submit();
   }
 }
 @Injectable()

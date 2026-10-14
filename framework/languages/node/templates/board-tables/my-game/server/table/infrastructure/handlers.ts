@@ -6,6 +6,7 @@ import {
 } from '@zlink-systems/nestjs';
 import {
   ZLinkSpotCreateState,
+  type Type,
   type ZLinkMessageContext,
   type ZLinkSpotManager,
 } from '@zlink-systems/framework';
@@ -13,7 +14,6 @@ import { Names, PacketNames } from '../../shared/constants';
 import {
   ActionRejected,
   BetRequest,
-  DeliverTableState,
   HandDealt,
   HandResult,
   JoinTableRequest,
@@ -64,7 +64,7 @@ export class Rejoin {
       request.tableId !== String(spot.context.spotId)
     )
       throw new Error('Reconnect identity mismatch');
-    await spot.sendState(actor.context.actorId);
+    await spot.respond(actor);
   }
 }
 @Injectable()
@@ -80,7 +80,7 @@ export class View {
     _context: ZLinkMessageContext,
     _request: TableViewRequest,
   ): Promise<void> {
-    await spot.sendState(actor.context.actorId);
+    await spot.respond(actor);
   }
 }
 @Injectable()
@@ -98,7 +98,7 @@ export class Start {
   ): Promise<void> {
     const reason = spot.state.start(actor.context.actorId);
     if (reason) await actor.context.boundSession.send(new ActionRejected(reason)).submit();
-    else await spot.publish();
+    else await spot.deal();
   }
 }
 @Injectable()
@@ -120,43 +120,27 @@ export class Bet {
     else await spot.publish(result ?? null);
   }
 }
+const deliveryPackets: ReadonlyMap<string, Type<TableView | HandDealt | HandResult>> = new Map<
+  string,
+  Type<TableView | HandDealt | HandResult>
+>([
+  [PacketNames.tableView, TableView],
+  [PacketNames.handDealt, HandDealt],
+  [PacketNames.handResult, HandResult],
+]);
 @Injectable()
-@zlinkSpotActorSendHandler({
-  spot: () => Table,
-  actor: () => Player,
-  packetName: PacketNames.deliverTableState,
-})
 export class Deliver {
   async handle(
     _spot: Table,
     actor: Player,
-    _context: ZLinkMessageContext,
-    message: DeliverTableState,
+    context: ZLinkMessageContext,
+    message: TableView | HandDealt | HandResult,
   ): Promise<void> {
-    const v = message.view;
-    await actor.context.boundSession
-      .send(
-        new TableView(
-          v.tableId,
-          v.nodeId,
-          actor.context.actorId,
-          actor.context.objectGeneration,
-          v.yourSeat,
-          v.handNumber,
-          v.inHand,
-          v.turnSeat,
-          v.pot,
-          v.seats,
-        ),
-      )
-      .submit();
-    if (message.cards.length)
-      await actor.context.boundSession.send(new HandDealt(v.handNumber, message.cards)).submit();
-    if (message.result) {
-      const r = message.result;
-      await actor.context.boundSession
-        .send(new HandResult(r.handNumber, r.pot, r.winners, r.hands, r.seats))
-        .submit();
-    }
+    const type = deliveryPackets.get(context.packetName);
+    if (!type) throw new Error(`Unregistered table push: ${context.packetName}`);
+    // Preserve the registered public DTO type when forwarding the received fields.
+    await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
   }
 }
+for (const packetName of deliveryPackets.keys())
+  zlinkSpotActorSendHandler({ spot: () => Table, actor: () => Player, packetName })(Deliver);

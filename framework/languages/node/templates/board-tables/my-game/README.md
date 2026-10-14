@@ -53,8 +53,8 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect
 ## 배포 순서
 
 1. Redis를 준비하고 각 node 설정의 `redisEndpoint`, 배포별 고유 `keyPrefix`를 지정한다.
-2. Table A·B를 `node dist/server/main.js server/config/table-a.json`과 `table-b.json`으로 시작한다. 서로 접근 가능한 `meshEndpoint`를 지정한다.
-3. Session을 `node dist/server/main.js server/config/session.json`으로 시작한다. 외부 client용 `streamEndpoint`는 `ws://` 또는 공개 계약이 지원하는 `wss://` endpoint다.
+2. Table A·B를 `node dist/server/table/main.js server/config/table-a.json`과 `table-b.json`으로 시작한다. 서로 접근 가능한 `meshEndpoint`를 지정한다.
+3. Session을 `node dist/server/session/main.js server/config/session.json`으로 시작한다. 외부 client용 `streamEndpoint`는 `ws://` 또는 공개 계약이 지원하는 `wss://` endpoint다.
 4. 각 process의 `READY`를 확인한다. 운영 제어는 표준 입력 `drain`, `shutdown`을 사용한다. Table drain은 `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN` 순서로 확인한 뒤 종료한다.
 
 기본 설정은 loopback 자동 포트를 사용한다. 운영에서는 접근 가능한 endpoint와 Redis를 명시한다. Table stable type의 placement와 route 갱신은 Framework가 결정한다.
@@ -78,6 +78,6 @@ Runner는 child process를 `windowsHide: true`로 시작한다. PowerShell 7에�
 
 ## 공개 0.30.0 검증 제한
 
-Windows Node 25.6.0과 WSL Node 22.23.2에서 `table`과 `reconnect`는 통과했다. `update`는 target runtime의 `Relocation payload participant inventory does not match Location Store` 실패로 `RELOCATED`에 도달하지 못했다. 기존 #1712의 relocation 차단 경로와 관련되며, template는 deadline·retry·상태 우회 없이 실패를 보고한다. 따라서 공개 0.30.0에서 이 template의 node 교체 시나리오는 검증 완료로 판정하지 않는다.
+Windows Node 25.6.0과 WSL Node 22.23.2에서 `table`과 `reconnect`는 통과했다. `update`는 target runtime의 `Relocation payload participant inventory does not match Location Store` 실패로 `RELOCATED`에 도달하지 못했다. 기존 #1725의 Node host relocation participant inventory 불일치이며, template는 deadline·retry·상태 우회 없이 실패를 보고한다. 따라서 공개 0.30.0에서 이 template의 node 교체 시나리오는 검증 완료로 판정하지 않는다.
 
-`table,reconnect` 선택 실행에서도 게임 판정은 모두 통과했지만 physical close 뒤 Table shutdown이 `ForceStopped/TeardownFailed`를 반환했다. 기존 #1690 관련 종료 차단 항목이며, runner는 이 경우에도 종료 코드 1을 반환한다. 시나리오 통과 줄과 전체 실행 성공을 구분하여 확인한다.
+`table,reconnect` 선택 실행에서도 게임 판정은 모두 통과했지만 physical close 뒤 Table shutdown이 `ForceStopped/TeardownFailed`를 반환했다. 공개 0.30.1에서 수정된 #1690에 해당하며, 이 템플릿은 명세에 따라 0.30.0을 사용한다. 따라서, runner는 이 경우에도 종료 코드 1을 반환한다. 시나리오 통과 줄과 전체 실행 성공을 구분하여 확인한다.

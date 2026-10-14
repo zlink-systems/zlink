@@ -6,7 +6,13 @@ import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { finished } from 'node:stream/promises';
 import { checkStructure } from './structure';
-import { Limits, Scenarios, Control } from '../server/shared/constants';
+import {
+  Limits,
+  Scenarios,
+  Control,
+  NodeEntrypoints,
+  type NodeRole,
+} from '../server/shared/constants';
 import type { NodeConfig } from '../server/shared/config';
 class NodeProcess {
   readonly child: ChildProcess;
@@ -16,6 +22,7 @@ class NodeProcess {
   readonly exit: Promise<Error | undefined>;
   constructor(
     readonly config: NodeConfig,
+    readonly role: NodeRole,
     readonly path: string,
     logDir: string,
     sequence: number,
@@ -23,10 +30,14 @@ class NodeProcess {
     writeFileSync(path, JSON.stringify(config, null, 2));
     const out = createWriteStream(`${logDir}/${config.id}-${sequence}.out.log`),
       err = createWriteStream(`${logDir}/${config.id}-${sequence}.err.log`);
-    this.child = spawn(process.execPath, ['dist/server/main.js', path], {
-      windowsHide: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    this.child = spawn(
+      process.execPath,
+      [`dist/${NodeEntrypoints[role].replace(/\.ts$/, '.js')}`, path],
+      {
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
     this.child.stdout!.pipe(out);
     this.child.stderr!.pipe(err);
     const reader = createInterface({ input: this.child.stdout! });
@@ -150,8 +161,8 @@ async function main(): Promise<void> {
     assert.equal(code, 0, `Docker ${label}; log=${logDir}`);
     return output.trim();
   }
-  async function start(config: NodeConfig): Promise<NodeProcess> {
-    const node = new NodeProcess(config, `${logDir}/${config.id}.json`, logDir, all.length);
+  async function start(config: NodeConfig, role: NodeRole): Promise<NodeProcess> {
+    const node = new NodeProcess(config, role, `${logDir}/${config.id}.json`, logDir, all.length);
     all.push(node);
     nodes.set(config.id, node);
     return node;
@@ -159,20 +170,23 @@ async function main(): Promise<void> {
   try {
     await docker(['up', '-d', '--wait'], 'up');
     const redis = await docker(['port', 'redis', '6379'], 'port');
-    const configs: NodeConfig[] = [];
-    for (const name of ['table-a', 'table-b', 'session']) {
-      const cfg = JSON.parse(readFileSync(`server/config/${name}.json`, 'utf8')) as NodeConfig;
+    const structure = JSON.parse(readFileSync('zlink.structure.json', 'utf8')) as {
+      nodes: { role: string; config: string | null }[];
+    };
+    for (const node of structure.nodes) {
+      if (node.role !== 'session' && node.role !== 'table') continue;
+      assert(node.config);
+      const cfg = JSON.parse(readFileSync(node.config, 'utf8')) as NodeConfig;
       cfg.redisEndpoint = redis;
       cfg.keyPrefix = `my-game:${runId}:`;
       cfg.meshEndpoint = 'tcp://127.0.0.1:0';
-      if (cfg.streamEndpoint !== null) cfg.streamEndpoint = 'ws://127.0.0.1:0';
-      configs.push(cfg);
+      if (node.role === 'session') cfg.streamEndpoint = 'ws://127.0.0.1:0';
+      await start(cfg, node.role);
     }
-    for (const cfg of configs) await start(cfg);
     const ready = await Promise.all([...nodes.values()].map((n) => n.ready()));
-    const endpoint = ready.find(
-      (r) => r.id === configs.find((c) => c.streamEndpoint !== null)!.id,
-    )!.endpoint;
+    const session = [...nodes.values()].find((n) => n.role === 'session');
+    assert(session);
+    const endpoint = ready.find((r) => r.id === session.config.id)!.endpoint;
     const { scenario } = await import('./client.mjs');
     const control = {
       async drain(id: string): Promise<void> {
@@ -184,7 +198,7 @@ async function main(): Promise<void> {
         const node = nodes.get(id);
         assert(node);
         await node.stop();
-        const replacement = await start(node.config);
+        const replacement = await start(node.config, node.role);
         await replacement.ready();
       },
     };

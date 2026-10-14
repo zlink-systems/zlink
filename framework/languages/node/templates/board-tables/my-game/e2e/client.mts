@@ -115,14 +115,14 @@ class PlayerClient {
     const view = await this.wait<TableView>(
       PacketNames.tableView,
       index,
-      (v) => v.actorId === playerId,
+      (v) => v.tableId === tableId,
     );
     assert.equal(view.tableId, tableId);
-    assert.equal(view.actorId, playerId);
+    assert.equal((await this.sessionInfo()).actorId, playerId);
     return view;
   }
-  async sessionId(): Promise<string> {
-    return (await this.connector.request(new SessionInfoRequest()).submit<SessionInfo>()).sessionId;
+  async sessionInfo(): Promise<SessionInfo> {
+    return this.connector.request(new SessionInfoRequest()).submit<SessionInfo>();
   }
   async view(): Promise<TableView> {
     const index = this.messages.length;
@@ -137,15 +137,7 @@ function chips(view: { seats: { chips: number }[] }): number {
   return view.seats.reduce((sum, s) => sum + s.chips, 0);
 }
 function identity(before: TableView, after: TableView): void {
-  for (const key of [
-    'actorId',
-    'objectGeneration',
-    'yourSeat',
-    'handNumber',
-    'inHand',
-    'turnSeat',
-    'pot',
-  ] as const)
+  for (const key of ['yourSeat', 'handNumber', 'inHand', 'turnSeat', 'pot'] as const)
     assert.equal(after[key], before[key], `Preserved ${key}`);
   assert.deepEqual(after.seats, before.seats);
 }
@@ -226,9 +218,9 @@ export async function scenario(
       second.seats.map((s) => s.chips),
       [Game.initialChips, Game.initialChips],
     );
-    const session1 = await p1.sessionId(),
-      session2 = await p2.sessionId();
-    assert.notEqual(session1, session2);
+    const session1 = await p1.sessionInfo(),
+      session2 = await p2.sessionInfo();
+    assert.notEqual(session1.sessionId, session2.sessionId);
     const start1 = p1.messages.length,
       start2 = p2.messages.length;
     await p1.connector.send(new StartHandRequest()).submit();
@@ -271,7 +263,10 @@ export async function scenario(
       const restored = await p2.join(ids[1], tableId);
       identity(b2, restored);
       assert.equal(restored.seats[1].chips, Game.initialChips);
-      assert.notEqual(await p2.sessionId(), session2);
+      const rebound = await p2.sessionInfo();
+      assert.notEqual(rebound.sessionId, session2.sessionId);
+      assert.equal(rebound.actorId, session2.actorId);
+      assert.equal(rebound.objectGeneration, session2.objectGeneration);
       assert.deepEqual((await p2.wait<HandDealt>(PacketNames.handDealt, mark)).cards, h2.cards);
     } else if (name === 'update') {
       await control.drain(b1.nodeId);
@@ -284,8 +279,8 @@ export async function scenario(
       assert.equal(after2.nodeId, after1.nodeId);
       assert.deepEqual((await p1.wait<HandDealt>(PacketNames.handDealt, mark1)).cards, h1.cards);
       assert.deepEqual((await p2.wait<HandDealt>(PacketNames.handDealt, mark2)).cards, h2.cards);
-      assert.equal(await p1.sessionId(), session1);
-      assert.equal(await p2.sessionId(), session2);
+      assert.deepEqual(await p1.sessionInfo(), session1);
+      assert.deepEqual(await p2.sessionInfo(), session2);
     }
     privacy(p1, h1.cards);
     for (const client of clients) if (client !== p1) privacy(client, h2.cards);
@@ -298,6 +293,14 @@ export async function scenario(
     ]);
     assert.deepEqual(results[0], results[1]);
     settlement(results[0], h1, h2, [amount, 50]);
+    for (const client of clients) {
+      const expectedDeals = (name === 'table' && client === p2) || name === 'update' ? 2 : 1;
+      assert.equal(
+        client.messages.filter((m) => m.name === PacketNames.handDealt).length,
+        expectedDeals,
+        'HandDealt only at hand start or explicit view/reconnect response',
+      );
+    }
     assert.equal(p1.disconnects, 0);
     assert.equal(p2.disconnects, 0);
     if (name === 'update') {

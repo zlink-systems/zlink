@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import assert from 'node:assert/strict';
-import { Names, Scenarios } from '../server/shared/constants';
+import { Names, Scenarios, NodeEntrypoints } from '../server/shared/constants';
 function object(value: unknown): Record<string, unknown> {
   assert(value !== null && typeof value === 'object' && !Array.isArray(value), 'Expected object');
   return value as Record<string, unknown>;
@@ -42,6 +42,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   }
   for (const node of nodes) {
     text(node.role);
+    if (node.role === 'session' || node.role === 'table')
+      realpathSync(resolve(root, NodeEntrypoints[node.role]));
     text(node.title);
     if (node.config === null) {
       assert.equal(node.role, 'external');
