@@ -23,7 +23,7 @@ public final class ZLinkHandlerScanner {
 
         List<ZLinkScannedHandler> handlers = new ArrayList<>();
         for (Class<?> candidate : candidates) {
-            if (!isConcrete(candidate)) {
+            if (!isScannableHandlerType(candidate)) {
                 continue;
             }
             Set<String> groups = resolveGroups(candidate);
@@ -33,9 +33,10 @@ public final class ZLinkHandlerScanner {
         return new ZLinkScannedHandlerCatalog(handlers);
     }
 
-    private static boolean isConcrete(Class<?> type) {
+    private static boolean isScannableHandlerType(Class<?> type) {
         int modifiers = type.getModifiers();
-        return !type.isInterface()
+        return type.getTypeParameters().length == 0
+                && !type.isInterface()
                 && !type.isAnnotation()
                 && !type.isEnum()
                 && !Modifier.isAbstract(modifiers);
