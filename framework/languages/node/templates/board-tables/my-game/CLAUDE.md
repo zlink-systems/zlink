@@ -1,1 +1,3 @@
-See [AGENTS.md](AGENTS.md).
+# Project instructions
+
+@AGENTS.md
