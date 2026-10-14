@@ -536,6 +536,155 @@ public sealed partial class EntrySpotActorDispatchTests
             );
     }
 
+    [Fact]
+    public async Task Replay_reserved_behind_the_restore_barrier_runs_before_later_owner_ingress()
+    {
+        const string replayOrderPacket = "replay-order";
+        const string handoffId = "replay-order";
+        var node = new CapturingSpotNode();
+        using var flow = new CapturingMessageFlowObserver();
+        var order = new AcceptedSendProbe();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowObserver: flow,
+            messageFlowMode: ZLinkDiagnosticsLevel.Detailed,
+            acceptedSendProbe: order
+        );
+        using var services = new ServiceCollection().AddSingleton(order).BuildServiceProvider();
+        var nativeSpot = new CapturingSpot();
+        await using var activation = new ZLinkUserSpotActivation(
+            runtime,
+            services.CreateAsyncScope(),
+            nativeSpot,
+            AcceptedSendSpotId,
+            node.RoutingId,
+            "entry",
+            "entry",
+            AcceptedSendWait,
+            ZLinkUserSpotExecutionMode.PerActor
+        );
+        activation.AttachSpot(new AcceptedSendSpot(activation));
+        ((IZLinkSpotContext)activation).Handlers.AddHandler<ReplayOrderHandler>(replayOrderPacket);
+        await activation.BindDescriptorsAsync(CancellationToken.None);
+        var actor = RegisterProbeActor(runtime, actorRef);
+        var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+        activation.StageRelocatedPerActorMember(actor, state);
+        activation.PublishRelocatedPerActorMember(actor, state);
+        await activation._serial.ExecuteActorAsync(
+            actorRef.ActorId,
+            static (_, _, _) => ValueTask.CompletedTask,
+            0,
+            CancellationToken.None
+        );
+        activation.AttachNativeDispatch();
+        var router = new ZLinkActorDispatchRouter(
+            runtime,
+            null!,
+            static (_, actorState) => actorState.Context!
+        );
+        Task Dispatch(string value, bool relocationReplay) =>
+            router
+                .Async(
+                    actor,
+                    state,
+                    new ZlinkStreamHeader(
+                        ZlinkStreamMessageKind.Send,
+                        ZlinkStreamCodec.Json,
+                        ZlinkStreamHeaderFlags.None,
+                        null,
+                        replayOrderPacket,
+                        ZlinkStreamMetadata.Empty
+                    ),
+                    Message.From(ZLinkEnvelopeCodec.EncodeJsonBytes(value, typeof(string))),
+                    relocationReplay,
+                    CancellationToken.None,
+                    null
+                )
+                .AsTask();
+        Task? replay = null;
+        Task? direct = null;
+        try
+        {
+            using var operation = (await runtime.AdmitOperationAsync()).Enter();
+            var seal = await activation.SealRelocationAsync(CancellationToken.None);
+            state.Handoff.BeginCanonicalMaintenanceImport(handoffId, []);
+            state.Handoff.MarkAuthorityCommitted(
+                handoffId,
+                actorRef.Generation,
+                actorRef.Generation
+            );
+            _ = state.Handoff.PrepareCanonicalMaintenanceReplay(handoffId);
+            var reservation = activation.ReserveRelocationActorReplay(seal, state.ActorId);
+
+            // The target posts replay while it holds the Actor restore barrier
+            // (relocation-flow §4.6), then opens ordinary admission.
+            var turn = await state.ReserveHandoffRestoreBarrier().ClaimAsync();
+            using (
+                ZLinkSpotRelocationReplayScope.Enter(
+                    new ZLinkSpotRelocationReplayAdmission(activation, seal, handoffId, reservation)
+                )
+            )
+                replay = Dispatch("replay", relocationReplay: true);
+            turn.Dispose();
+            state.Handoff.ReserveCanonicalMaintenanceTrailingAndOpenAdmission(
+                handoffId,
+                0,
+                static _ => { }
+            );
+            await Task.WhenAny(order.Started.Task, replay).WaitAsync(AcceptedSendWait);
+            Assert.False(replay.IsFaulted, replay.Exception?.ToString());
+
+            // New-owner ingress after cutover arrives while the replay handler awaits.
+            direct = Dispatch("direct", relocationReplay: false);
+            Assert.False(direct.IsCompleted);
+            await activation.AbortRelocationAsync(seal);
+            order.Release.SetResult();
+            await Task.WhenAll(replay, direct).WaitAsync(AcceptedSendWait);
+
+            Assert.True(
+                order.Events.SequenceEqual([
+                    "replay:start",
+                    "replay:end",
+                    "direct:start",
+                    "direct:end",
+                ]),
+                string.Join(",", order.Events)
+                    + " "
+                    + System.Text.Json.JsonSerializer.Serialize(flow.Events)
+            );
+        }
+        finally
+        {
+            order.Release.TrySetResult();
+            if (replay is not null)
+                await Task.WhenAny(replay, Task.Delay(AcceptedSendWait));
+            if (direct is not null)
+                await Task.WhenAny(direct, Task.Delay(AcceptedSendWait));
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class ReplayOrderHandler(AcceptedSendProbe probe)
+        : IZLinkSpotActorSendHandler<AcceptedSendSpot, ProbeActor, string>
+    {
+        public async ValueTask HandleAsync(
+            AcceptedSendSpot spot,
+            ProbeActor actor,
+            IZLinkMessageContext context,
+            string message,
+            CancellationToken cancellationToken
+        )
+        {
+            probe.Events.Enqueue($"{message}:start");
+            if (message == "replay")
+            {
+                probe.Started.TrySetResult();
+                await probe.Release.Task.WaitAsync(cancellationToken);
+            }
+            probe.Events.Enqueue($"{message}:end");
+        }
+    }
+
     private sealed class AcceptedSendProbe
     {
         public TaskCompletionSource WarmStarted { get; } =
@@ -556,6 +705,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Sent { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public System.Collections.Concurrent.ConcurrentQueue<string> Events { get; } = new();
     }
 
     private static ZLinkBackendRouteReceived CreateAcceptedSendRoute()

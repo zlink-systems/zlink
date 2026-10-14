@@ -44,11 +44,6 @@ internal sealed class ZLinkSpotRelocationActorQueueReservation(string actorId)
             throw new InvalidOperationException(
                 "SPOT relocation Actor queue reservation changed Actor."
             );
-        if (_queue?.OwnsCurrentTurn == true)
-        {
-            await operation(cancellationToken).ConfigureAwait(false);
-            return;
-        }
         if (!_work.TrySetResult(operation))
             throw new InvalidOperationException(
                 "SPOT relocation Actor queue reservation was already consumed."
