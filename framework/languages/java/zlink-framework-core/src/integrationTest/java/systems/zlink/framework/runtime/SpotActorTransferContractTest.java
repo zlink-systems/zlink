@@ -18,6 +18,7 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
@@ -130,6 +131,7 @@ final class SpotActorTransferContractTest {
             InMemoryRelocationStore relocations,
             String sourceEndpoint) {
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
         var node = options.addRouteMesh("game");

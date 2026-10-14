@@ -1758,8 +1758,7 @@ final class ZLinkJavaRawMeshNode
                         request.actor().actorId(),
                         request.actor().generation(),
                         request.actorNodeGeneration(),
-                        correlation),
-                application == null ? "application/json" : application.contentType());
+                        correlation));
     }
 
     @Override

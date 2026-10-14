@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
@@ -200,6 +201,31 @@ function handRejectsZljr(encoded: Uint8Array): boolean {
     return true;
   }
 }
+
+test('ZLJR keeps absent reply metadata with a deferred completion operation', () => {
+  const { replyContentType: _replyContentType, ...input } = goldenRecoveryRequest();
+  input.reply = Buffer.alloc(0);
+  const recovery = decodeCanonicalActorJoinRecoverySavedWork(
+    encodeCanonicalActorJoinRecoverySavedWork(input)
+  );
+  assert.ok(recovery);
+  assert.equal(recovery.replyContentType, undefined);
+  assert.deepEqual(recovery.operationId, input.operationId);
+  assert.equal(recovery.reply.byteLength, 0);
+});
+
+test('ZLJR preserves the fixed outer profile for a typed Join reply', () => {
+  const input = {
+    ...goldenRecoveryRequest(),
+    replyContentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+  };
+  const recovery = decodeCanonicalActorJoinRecoverySavedWork(
+    encodeCanonicalActorJoinRecoverySavedWork(input)
+  );
+  assert.ok(recovery);
+  assert.equal(recovery.replyContentType, SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE);
+  assert.deepEqual(recovery.reply, input.reply);
+});
 
 test('batch-4 ZLJR hand/generated codecs match the fixed 1958-byte golden record', () => {
   const golden = zljrGolden().canonical;

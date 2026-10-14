@@ -447,11 +447,9 @@ export class ZLinkLocalNativeActorJoin {
                 },
                 requestContentType: canonicalAdmission.request.contentType,
                 request: Buffer.from(canonicalAdmission.request.payload),
-                ...(completionOperationId === undefined
+                ...(completionOperationId === undefined || control.replyContentType === undefined
                   ? {}
-                  : {
-                      replyContentType: control.replyContentType ?? ZlinkStreamContentType.Raw
-                    }),
+                  : { replyContentType: control.replyContentType }),
                 reply:
                   completionOperationId === undefined
                     ? Buffer.alloc(0)

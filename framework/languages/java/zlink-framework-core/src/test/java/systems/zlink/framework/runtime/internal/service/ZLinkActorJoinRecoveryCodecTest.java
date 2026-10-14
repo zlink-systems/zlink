@@ -57,30 +57,8 @@ final class ZLinkActorJoinRecoveryCodecTest {
     void encodingMatchesFrozenNodeAndCppVectorByteForByte() {
         UUID handoff = UUID.fromString("00112233-4455-6677-8899-aabbccddeeff");
         var recovery =
-                new ZLinkActorJoinRecoveryCodec.Recovery(
-                        "actor-a",
-                        "sample.Actor",
-                        handoff,
-                        "source-spot",
-                        RoutingId.from("src"),
-                        7,
-                        11,
-                        13,
-                        17,
-                        ZLinkActorJoinRecoveryCodec.SNAPSHOT_CONTENT_TYPE,
-                        "application/json",
-                        "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                        "target-spot",
-                        RoutingId.from("dst"),
-                        19,
-                        23,
-                        12,
-                        29,
-                        new ZLinkActorJoinRecoveryCodec.Coordinator(
-                                "owner-a", 17, RoutingId.from("src"), 13, "store-v1"),
-                        new ZLinkActorJoinOperationId(31, 37),
-                        "application/json",
-                        "[]".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                recovery(
+                        "application/json", "[]".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] encoded = ZLinkActorJoinRecoveryCodec.encodeSavedWork(recovery);
 
@@ -96,5 +74,60 @@ final class ZLinkActorJoinRecoveryCodecTest {
         assertArrayEquals(
                 "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8), decoded.request());
         assertArrayEquals("[]".getBytes(java.nio.charset.StandardCharsets.UTF_8), decoded.reply());
+    }
+
+    @Test
+    void emptyApplicationReplyPreservesAbsentMetadataThroughRecovery() {
+        var recovery = recovery(null, new byte[0]);
+        var decoded =
+                ZLinkActorJoinRecoveryCodec.decodeSavedWork(
+                                ZLinkActorJoinRecoveryCodec.encodeSavedWork(recovery))
+                        .orElseThrow();
+        assertNull(decoded.replyContentType());
+        assertEquals(recovery.operationId(), decoded.operationId());
+        assertArrayEquals(new byte[0], decoded.reply());
+    }
+
+    @Test
+    void typedApplicationReplyPreservesProfileThroughRecovery() {
+        var recovery =
+                recovery(
+                        systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                .FRAMEWORK_MULTIPART_CONTENT_TYPE,
+                        "[]".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var decoded =
+                ZLinkActorJoinRecoveryCodec.decodeSavedWork(
+                                ZLinkActorJoinRecoveryCodec.encodeSavedWork(recovery))
+                        .orElseThrow();
+        assertEquals(recovery.replyContentType(), decoded.replyContentType());
+        assertArrayEquals(recovery.reply(), decoded.reply());
+    }
+
+    private static ZLinkActorJoinRecoveryCodec.Recovery recovery(
+            String replyContentType, byte[] reply) {
+        return new ZLinkActorJoinRecoveryCodec.Recovery(
+                "actor-a",
+                "sample.Actor",
+                UUID.fromString("00112233-4455-6677-8899-aabbccddeeff"),
+                "source-spot",
+                RoutingId.from("src"),
+                7,
+                11,
+                13,
+                17,
+                ZLinkActorJoinRecoveryCodec.SNAPSHOT_CONTENT_TYPE,
+                "application/json",
+                "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "target-spot",
+                RoutingId.from("dst"),
+                19,
+                23,
+                12,
+                29,
+                new ZLinkActorJoinRecoveryCodec.Coordinator(
+                        "owner-a", 17, RoutingId.from("src"), 13, "store-v1"),
+                new ZLinkActorJoinOperationId(31, 37),
+                replyContentType,
+                reply);
     }
 }
