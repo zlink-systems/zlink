@@ -24,27 +24,43 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RelocationRuntimeTests
 {
     [Fact]
-    public void Target_generation_is_a_read_only_publication_result()
+    public void Target_generation_is_the_first_store_publication_result()
     {
-        Assert.Contains(
-            typeof(System.Runtime.CompilerServices.IsExternalInit),
-            typeof(TargetStage)
-                .GetProperty(nameof(TargetStage.TargetAuthorityOwnerGeneration))!
-                .SetMethod!.ReturnParameter.GetRequiredCustomModifiers()
-        );
-        var standaloneStage = typeof(ZLinkStandaloneActorRelocationRuntime).GetNestedType(
-            "TargetStage",
-            System.Reflection.BindingFlags.NonPublic
-        )!;
-        Assert.False(
-            standaloneStage
-                .GetProperty(
-                    "TargetAuthorityOwnerGeneration",
-                    System.Reflection.BindingFlags.Instance
-                        | System.Reflection.BindingFlags.NonPublic
-                )!
-                .CanWrite
-        );
+        var stage = CreateTargetStageForHeldJournal();
+        var spot = stage.SpotParticipant;
+        Assert.Equal(2UL, stage.TargetAuthorityOwnerGeneration);
+
+        stage.RememberAuthorityPublication([new(spot.AuthorityKey, PublishedAuthority(spot, 9))]);
+        Assert.Equal(9UL, stage.TargetAuthorityOwnerGeneration);
+        Assert.Equal(9UL, stage.TargetAuthorityOwnerGenerationFor(spot));
+
+        // The Store result that published the target owns the generation; a
+        // later publication cannot replace it.
+        stage.RememberAuthorityPublication([new(spot.AuthorityKey, PublishedAuthority(spot, 10))]);
+        Assert.Equal(9UL, stage.TargetAuthorityOwnerGeneration);
+
+        static ZLinkAuthoritySnapshot PublishedAuthority(
+            ZLinkRelocationParticipantEnvelope participant,
+            ulong authorityOwnerGeneration
+        ) =>
+            new(
+                "v-published",
+                ReadOnlyMemory<byte>.Empty,
+                participant.ObjectGeneration,
+                authorityOwnerGeneration,
+                "target-owner",
+                1,
+                new ZLinkPlacementAllocation(
+                    ZLinkPlacementAllocationState.Active,
+                    participant.ObjectKind,
+                    "Game.Room",
+                    new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("target")),
+                    1,
+                    new ZLinkCapacityVector(0, 1, null)
+                ),
+                null,
+                DateTimeOffset.UnixEpoch
+            );
     }
 
     [Fact]
