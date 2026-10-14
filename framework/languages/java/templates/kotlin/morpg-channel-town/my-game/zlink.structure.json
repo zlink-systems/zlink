@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "id": "morpg-channel-town",
+  "name": "my-game",
+  "language": "kotlin",
+  "run": {
+    "commands": {
+      "sh": [
+        "./gradlew --no-daemon build",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario channel,dungeon,reconnect,update"
+      ],
+      "powershell": [
+        "./gradlew.bat --no-daemon build",
+        "./run-e2e.ps1",
+        "./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update"
+      ]
+    },
+    "scenarios": [
+      "channel",
+      "dungeon",
+      "reconnect",
+      "update"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "players",
+      "role": "external",
+      "title": "Players",
+      "config": null
+    },
+    {
+      "id": "session",
+      "role": "session",
+      "title": "session",
+      "config": "server/config/session.json"
+    },
+    {
+      "id": "townA",
+      "role": "town",
+      "title": "townA",
+      "config": "server/config/townA.json"
+    },
+    {
+      "id": "townB",
+      "role": "town",
+      "title": "townB",
+      "config": "server/config/townB.json"
+    },
+    {
+      "id": "instanceA",
+      "role": "instance",
+      "title": "instanceA",
+      "config": "server/config/instanceA.json"
+    },
+    {
+      "id": "instanceB",
+      "role": "instance",
+      "title": "instanceB",
+      "config": "server/config/instanceB.json"
+    },
+    {
+      "id": "location",
+      "role": "location-store",
+      "title": "Redis",
+      "config": "docker-compose.yml"
+    }
+  ],
+  "channels": [],
+  "spots": [
+    {
+      "id": "entryA",
+      "kind": "entry",
+      "type": null,
+      "owner": "townA"
+    },
+    {
+      "id": "entryB",
+      "kind": "entry",
+      "type": null,
+      "owner": "townB"
+    },
+    {
+      "id": "town-1",
+      "kind": "user",
+      "type": "Town",
+      "owner": "townA",
+      "logicalId": "town-1"
+    },
+    {
+      "id": "town-2",
+      "kind": "user",
+      "type": "Town",
+      "owner": "townB",
+      "logicalId": "town-2"
+    },
+    {
+      "id": "dungeon",
+      "kind": "user",
+      "type": "Dungeon",
+      "owner": "instanceA",
+      "dynamic": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "players",
+      "to": "session",
+      "label": "STREAM"
+    },
+    {
+      "from": "session",
+      "to": "townA",
+      "label": "relay"
+    },
+    {
+      "from": "townA",
+      "to": "townB",
+      "label": "relocation"
+    },
+    {
+      "from": "townB",
+      "to": "instanceA",
+      "label": "GetOrCreate"
+    },
+    {
+      "from": "townB",
+      "to": "location",
+      "label": "Location / lease",
+      "semantic": "location-authority"
+    }
+  ]
+}
