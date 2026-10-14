@@ -831,6 +831,37 @@ bool verify_void_completion_rejection_race (bool cancel_before_rejection)
            && outside.result ();
 }
 
+bool verify_cancellation_request_retains_undelivered_wait ()
+{
+    using namespace zlink::framework;
+    std::stop_source owner;
+    task_completion_source_t<void> source;
+    auto view = detail::with_task_resume_scheduler (source.task (), [] (std::function<void ()>) {
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "executor rejection during owner cancellation");
+    });
+    auto owned = [&] {
+        const detail::ambient_context_scope_t scope (nullptr, nullptr, owner.get_token ());
+        return observe_void_task (std::move (view));
+    }();
+    std::promise<void> stop_entered, release_stop;
+    auto released = release_stop.get_future ();
+    // Stop callbacks run in reverse registration order. Hold the newest one
+    // so stop_requested is visible before the wait's cancellation can run.
+    std::stop_callback blocked_stop (owner.get_token (), [&] {
+        stop_entered.set_value ();
+        released.wait ();
+    });
+    std::thread cancellation ([&] { owner.request_stop (); });
+    stop_entered.get_future ().wait ();
+    const bool first = source.complete (result_t<void>::success ());
+    release_stop.set_value ();
+    cancellation.join ();
+    const auto result = owned.result_for (std::chrono::milliseconds::zero ());
+    return first && result && !*result
+           && result->error_kind () == framework_error_kind_t::shutting_down;
+}
+
 bool verify_rejection_retain_cancellation_race ()
 {
     using namespace zlink::framework;
@@ -957,9 +988,10 @@ void run_delivery_defect (delivery_defect_t defect)
             detail::observe_task_terminal (task, callback);
             break;
         case delivery_defect_t::scheduled_observer:
-            task = detail::reschedule_task (std::move (task), [] (std::function<void ()>) {
-                throw std::logic_error ("internal scheduler defect");
-            });
+            task =
+              detail::with_task_resume_scheduler (std::move (task), [] (std::function<void ()>) {
+                  throw std::logic_error ("internal scheduler defect");
+              });
             detail::observe_task_completion (task, [] (const result_t<void> &) {});
             break;
         case delivery_defect_t::scheduled_after_delivery:
@@ -1115,6 +1147,35 @@ bool verify_cancellation_contract ()
            && failure.error_kind () == framework_error_kind_t::invalid_operation;
 }
 
+/* A rejected Yield delivery can finish before the caller installs its await.
+ * Execution gate §4 requires that rejection to remain the task's result. */
+bool verify_rejected_yield_delivery_before_await ()
+{
+    using namespace zlink::framework;
+    const auto reject_resume = [] (std::function<void ()> complete) {
+        detail::set_serial_resume_failure (framework_error_kind_t::shutting_down,
+                                           "closed Spot rejected Yield resumption");
+        complete ();
+        (void) detail::take_serial_resume_failure ();
+    };
+    auto typed =
+      detail::with_task_resume_scheduler (task_t<int> (result_t<int>::success (7)), reject_resume);
+    auto empty =
+      detail::with_task_resume_scheduler (task_t<void> (result_t<void>::success ()), reject_resume);
+    auto typed_wait = await_shared (typed, 0);
+    auto empty_wait = observe_void_task (std::move (empty));
+    int rejected_observations = 0;
+    detail::observe_task_completion (typed, [&] (const result_t<int> &result) {
+        rejected_observations +=
+          !result && result.error_kind () == framework_error_kind_t::shutting_down;
+    });
+    return !typed_wait.result ()
+           && typed_wait.result ().error_kind () == framework_error_kind_t::shutting_down
+           && !empty_wait.result ()
+           && empty_wait.result ().error_kind () == framework_error_kind_t::shutting_down
+           && rejected_observations == 1;
+}
+
 struct yield_resume_probe_t
 {
     std::atomic_bool running{false};
@@ -1209,7 +1270,7 @@ int main (int argc, char **argv)
 {
     const bool lookup_isolated = verify_lookup_admission_isolation ();
     const bool reply_admits = verify_reply_success_completes_admission ();
-    if (!lookup_isolated || !reply_admits)
+    if (!lookup_isolated || !reply_admits || !verify_rejected_yield_delivery_before_await ())
         return 34;
     if (!verify_request_admission_stages ())
         return 33;
@@ -1284,7 +1345,7 @@ int main (int argc, char **argv)
     std::deque<std::function<void ()>> rescheduled_work;
     auto immediate_task =
       zlink::framework::task_t<int> (zlink::framework::result_t<int>::success (500));
-    auto rescheduled_task = zlink::framework::detail::reschedule_task (
+    auto rescheduled_task = zlink::framework::detail::with_task_resume_scheduler (
       std::move (immediate_task), [&rescheduled_work] (std::function<void ()> work) {
           rescheduled_work.push_back (std::move (work));
       });
@@ -1549,8 +1610,10 @@ int main (int argc, char **argv)
         || !verify_nested_cancellation_lifetime () || !verify_nested_return_lifetime ()
         || !verify_void_completion_rejection_race (true)
         || !verify_void_completion_rejection_race (false) || !verify_rejected_delivery_lifetime ()
-        || !verify_rejected_ready_registration () || !verify_rejection_retain_cancellation_race ()
-        || !verify_cancelled_registration_lease () || !verify_stopped_registration_state_lifetime ()
+        || !verify_rejected_ready_registration ()
+        || !verify_cancellation_request_retains_undelivered_wait ()
+        || !verify_rejection_retain_cancellation_race () || !verify_cancelled_registration_lease ()
+        || !verify_stopped_registration_state_lifetime ()
         || !verify_ownerless_wait_after_context_stop ())
         return 30;
 

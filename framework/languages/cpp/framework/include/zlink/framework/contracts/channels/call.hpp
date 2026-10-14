@@ -118,7 +118,8 @@ template <typename TReply> class request_call_t
             return submit_owned (_submit, _packet_name, _timeout, _metadata);
         }
         auto pending = submit_owned (_submit, _packet_name, _timeout, _metadata);
-        return detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
+        return detail::with_task_resume_scheduler (std::move (pending),
+                                                   std::move (turn_plan->scheduler));
     }
 
     static request_task_t<TReply> submit_owned (submit_fn_t submit,
@@ -207,8 +208,8 @@ class channel_request_call_t
         auto turn_plan = detail::prepare_serial_turn_await (release_turn);
         auto pending = submit (packet_name, timeout, metadata);
         if (turn_plan) {
-            pending =
-              detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
+            pending = detail::with_task_resume_scheduler (std::move (pending),
+                                                          std::move (turn_plan->scheduler));
         }
         reply = co_await detail::request_submission (std::move (pending));
         co_return decode<TReply> (serializers, reply);
@@ -303,8 +304,8 @@ class send_call_t
         if (_async_submit) {
             auto pending = _async_submit (_packet_name, _metadata);
             if (auto turn_plan = detail::prepare_serial_turn_await (false)) {
-                pending =
-                  detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
+                pending = detail::with_task_resume_scheduler (std::move (pending),
+                                                              std::move (turn_plan->scheduler));
             }
             return pending;
         }

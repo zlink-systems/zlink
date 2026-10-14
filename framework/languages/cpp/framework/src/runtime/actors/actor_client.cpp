@@ -189,7 +189,7 @@ task_t<actor_create_result_t> actor_create_call_t::yield ()
     if (!turn_plan) {
         return task;
     }
-    return detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+    return detail::with_task_resume_scheduler (std::move (task), std::move (turn_plan->scheduler));
 }
 
 actor_manager_t::actor_manager_t () : _state (std::make_shared<detail::actor_manager_state_t> ())
@@ -295,7 +295,8 @@ task_t<void> actor_send_call_t::async ()
     auto task = _client->send_erased (std::move (_actor_id), std::move (_packet_name),
                                       std::move (_message), std::move (_metadata));
     if (auto turn_plan = detail::prepare_serial_turn_await (false)) {
-        task = detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+        task =
+          detail::with_task_resume_scheduler (std::move (task), std::move (turn_plan->scheduler));
     }
     return task;
 }
@@ -357,7 +358,7 @@ request_task_t<message_t> actor_request_call_t::start (bool release_turn)
     if (!turn_plan) {
         return task;
     }
-    return detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+    return detail::with_task_resume_scheduler (std::move (task), std::move (turn_plan->scheduler));
 }
 
 serializer_registry_t &actor_request_call_t::serializers () const

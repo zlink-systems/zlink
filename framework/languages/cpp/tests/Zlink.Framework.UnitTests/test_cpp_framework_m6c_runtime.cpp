@@ -2841,6 +2841,8 @@ void test_return_relocation_replaces_departed_remnant (test_context_t &test)
     test.require (retried == stateful_error_t::none && returned_inventory.size () == 1
                     && returned_inventory.front ().owner == returning,
                   "the return retry must replace the remnant instead of wedging");
+    test.require (objects.find (returning.kind, returning.key).has_value (),
+                  "returning identity stays addressable while the recovery gate holds dispatch");
 }
 
 void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)

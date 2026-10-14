@@ -360,10 +360,13 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         catch (const framework_exception_t &error) {
             if (error.kind () != framework_error_kind_t::shutting_down)
                 std::terminate ();
-            if (_ambient.wait_owner.stop_requested ())
-                return true;
-            if (_started.load (std::memory_order_acquire))
+            if (_started.load (std::memory_order_acquire)) {
+                if (_ambient.wait_owner.stop_requested ())
+                    return true;
                 std::terminate ();
+            }
+            // A requested stop is not a completed cancellation callback.
+            // Keep the registration until its existing completion claim is taken.
             if (_ambient.wait_owner.stop_possible ())
                 return false;
             /* No owner can cancel this wait and the context that captured the
@@ -509,6 +512,13 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     void on_completed (std::function<void (const result_t<T> &)> callback,
                        task_scheduler_t scheduler = {})
     {
+        auto invoke_callback = [callback =
+                                  std::move (callback)] (const result_t<T> &result) noexcept {
+            if (const auto failure = take_serial_resume_failure ())
+                callback (result_t<T>::failure (failure->kind, failure->message));
+            else
+                callback (result);
+        };
         const auto self = this->shared_from_this ();
         std::shared_ptr<task_wait_registration_t> registration;
         std::weak_ptr<task_shared_state_t<T>> owner_state;
@@ -517,7 +527,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             if (!_result) {
                 owner_state = this->weak_from_this ();
                 registration = std::make_shared<task_wait_registration_t> (
-                  [weak = owner_state, callback = std::move (callback)] (
+                  [weak = owner_state, callback = std::move (invoke_callback)] (
                     bool cancelled, const ambient_context_snapshot_t &ambient) {
                       const auto ambient_guard = enter_ambient_context (ambient);
                       if (cancelled) {
@@ -536,7 +546,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             bind_wait_owner (registration, owner_state);
             return;
         }
-        auto invoke = [self, callback = std::move (callback),
+        auto invoke = [self, callback = std::move (invoke_callback),
                        ambient = capture_ambient_context ()] () noexcept {
             const auto ambient_guard = enter_ambient_context (ambient);
             callback (*self->_result);
@@ -652,7 +662,6 @@ std::optional<result_t<T>> observe_task_result_for (const task_t<T> &task,
                                                     std::chrono::milliseconds timeout,
                                                     std::stop_token cancellation);
 
-template <typename T> task_t<T> reschedule_task (task_t<T> task, task_scheduler_t scheduler);
 template <typename T>
 task_t<T> with_task_resume_scheduler (task_t<T> task, task_scheduler_t scheduler);
 
@@ -723,7 +732,7 @@ template <typename T> class task_t
     task_t &operator= (const task_t &) = delete;
     ~task_t () = default;
 
-    bool await_ready () const noexcept { return _state->is_ready (); }
+    bool await_ready () const noexcept { return !_resume_scheduler && _state->is_ready (); }
     void await_suspend (std::coroutine_handle<> continuation)
     {
         _state->set_continuation (continuation, _resume_scheduler ? *_resume_scheduler
@@ -789,7 +798,7 @@ template <> class task_t<void>
     task_t &operator= (const task_t &) = delete;
     ~task_t () = default;
 
-    bool await_ready () const noexcept { return _state->is_ready (); }
+    bool await_ready () const noexcept { return !_resume_scheduler && _state->is_ready (); }
     void await_suspend (std::coroutine_handle<> continuation)
     {
         _state->set_continuation (continuation, _resume_scheduler ? *_resume_scheduler
@@ -871,24 +880,6 @@ task_t<T> with_task_resume_scheduler (task_t<T> task, task_scheduler_t scheduler
     task._resume_scheduler =
       scheduler ? std::make_unique<task_scheduler_t> (std::move (scheduler)) : nullptr;
     return task;
-}
-
-template <typename T> task_t<T> reschedule_task (task_t<T> task, task_scheduler_t scheduler)
-{
-    auto source = std::make_shared<task_completion_source_t<T>> ();
-    auto output = source->task ();
-    auto observed = std::make_shared<task_t<T>> (std::move (task));
-    auto target_scheduler = std::make_shared<task_scheduler_t> (std::move (scheduler));
-    detail::observe_task_completion (
-      *observed, [source, observed, target_scheduler] (const result_t<T> &result) mutable {
-          auto complete = [source, result] () mutable { source->complete (std::move (result)); };
-          if (*target_scheduler) {
-              (*target_scheduler) (std::move (complete));
-          } else {
-              complete ();
-          }
-      });
-    return output;
 }
 
 template <typename T> task_t<T> unsupported_yield_task ()

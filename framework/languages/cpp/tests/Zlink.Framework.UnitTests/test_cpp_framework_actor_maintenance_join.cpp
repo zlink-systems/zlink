@@ -224,8 +224,10 @@ bool move_to (fw::actor_client_t &sender,
 {
     auto sent =
       sender.send (fw::actor_id_t (actor_id), move_t{std::move (target)}).async ().result ();
-    if (!sent)
+    if (!sent) {
+        ADD_FAILURE () << (sent.error () ? sent.error ()->what () : "Actor move send failed");
         return false;
+    }
     std::unique_lock lock (evidence.mutex);
     return evidence.changed.wait_for (lock, wait_budget,
                                       [&] { return evidence.completions.size () >= count; });

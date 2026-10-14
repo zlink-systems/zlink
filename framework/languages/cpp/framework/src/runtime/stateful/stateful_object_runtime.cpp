@@ -448,7 +448,9 @@ std::optional<object_ref_t> stateful_object_runtime_t::find (object_kind_t kind,
     return _lane
       .run ([&, this] () -> std::optional<object_ref_t> {
           const auto record = _objects.find ({kind, key});
-          if (record == _objects.end () || record->second.state != object_state_t::ready) {
+          // Existing incarnations remain addressable while their execution gate
+          // holds application work during membership changes and recovery.
+          if (record == _objects.end () || record->second.state == object_state_t::creating) {
               return std::nullopt;
           }
           return record->second.reference;

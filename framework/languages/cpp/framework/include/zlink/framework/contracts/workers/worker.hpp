@@ -336,7 +336,8 @@ template <typename TResult> class worker_call_t
         if (!turn_plan) {
             return guarded;
         }
-        return detail::reschedule_task (std::move (guarded), std::move (turn_plan->scheduler));
+        return detail::with_task_resume_scheduler (std::move (guarded),
+                                                   std::move (turn_plan->scheduler));
     }
     bool try_start ()
     {

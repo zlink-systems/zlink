@@ -376,8 +376,8 @@ class server_request_builder_t : public request_builder_t
         auto task = request_builder_t::async<T> ();
         auto scheduler = _execution_turn->callback_scheduler ();
         if (scheduler) {
-            task =
-              zlink::framework::detail::reschedule_task (std::move (task), std::move (scheduler));
+            task = zlink::framework::detail::with_task_resume_scheduler (std::move (task),
+                                                                         std::move (scheduler));
         }
         zlink::framework::detail::observe_task_completion (task,
                                                            std::forward<TCallback> (callback));
@@ -392,7 +392,8 @@ class server_request_builder_t : public request_builder_t
         if (!scheduler) {
             return task;
         }
-        return zlink::framework::detail::reschedule_task (std::move (task), std::move (scheduler));
+        return zlink::framework::detail::with_task_resume_scheduler (std::move (task),
+                                                                     std::move (scheduler));
     }
 
     zlink::framework::task_t<raw_http_response_t> schedule_raw (bool release_turn) const
@@ -402,7 +403,8 @@ class server_request_builder_t : public request_builder_t
         if (!scheduler) {
             return task;
         }
-        return zlink::framework::detail::reschedule_task (std::move (task), std::move (scheduler));
+        return zlink::framework::detail::with_task_resume_scheduler (std::move (task),
+                                                                     std::move (scheduler));
     }
 
     std::shared_ptr<execution_turn_t> _execution_turn;

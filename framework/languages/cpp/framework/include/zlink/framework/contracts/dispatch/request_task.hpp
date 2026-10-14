@@ -191,7 +191,7 @@ template <typename T> request_submission_t<T> request_submission (request_task_t
 }
 
 template <typename T>
-request_task_t<T> reschedule_task (request_task_t<T> pending, task_scheduler_t scheduler)
+request_task_t<T> with_task_resume_scheduler (request_task_t<T> pending, task_scheduler_t scheduler)
 {
     return request_task_access_t::reschedule (std::move (pending), std::move (scheduler));
 }

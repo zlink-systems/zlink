@@ -5408,7 +5408,7 @@ task_t<spot_create_result_t> spot_create_call_t::async ()
     const auto turn_plan = detail::prepare_serial_turn_await (false);
     if (!turn_plan)
         return task;
-    return detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+    return detail::with_task_resume_scheduler (std::move (task), std::move (turn_plan->scheduler));
 }
 
 task_t<spot_create_result_t> spot_create_call_t::yield ()
@@ -5421,7 +5421,7 @@ task_t<spot_create_result_t> spot_create_call_t::yield ()
     if (!turn_plan) {
         return task;
     }
-    return detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+    return detail::with_task_resume_scheduler (std::move (task), std::move (turn_plan->scheduler));
 }
 
 spot_create_call_t spot_manager_t::create (std::string stable_type)
