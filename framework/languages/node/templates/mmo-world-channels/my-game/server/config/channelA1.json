@@ -1,0 +1,10 @@
+{
+  "id": "channelA1",
+  "redisEndpoint": "localhost:6379",
+  "keyPrefix": "my-game-world-a:",
+  "meshEndpoint": "tcp://127.0.0.1:0",
+  "worldId": "A",
+  "zoneIds": ["field@1"],
+  "zoneCapacity": 2,
+  "streamEndpoint": null
+}
