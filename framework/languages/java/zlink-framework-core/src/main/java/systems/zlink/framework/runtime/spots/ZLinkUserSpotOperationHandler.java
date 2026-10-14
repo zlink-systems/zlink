@@ -8,6 +8,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -201,8 +202,8 @@ final class ZLinkUserSpotOperationHandler
             return retained.close();
         }
         String key = ZLinkAuthorityKeyCodec.spot(fence.spotId());
-        return authorityStore
-                .read(key, OPEN)
+        // Store completion resumes the Close turn before membership and callback execution.
+        return ZLinkSerialExecutionQueue.yieldCurrent(authorityStore.read(key, OPEN))
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
