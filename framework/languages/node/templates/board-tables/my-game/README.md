@@ -24,6 +24,10 @@ The Framework package is pinned to `0.30.0` and the binding to `1.19.0`. Copy on
 npm ci && npm run build
 ```
 
+```powershell
+npm ci; npm run build
+```
+
 This compiles TypeScript and generates the Framework default typed JSON schema from the contract DTOs. The server loads the generated schema through the public `ZLinkPacket` registration path. Do not add per-message codecs.
 
 ## Local e2e
