@@ -80,7 +80,7 @@ function fixture({ sourceLeave = async () => {}, storeFailure = false } = {}) {
     node,
     entrySpotIdProvider: () => 'node-a',
     locationLifecycle: {
-      async notifyActorLeftSpot() {
+      async commitActorMembership() {
         events.push('store');
         if (storeFailure) throw new Error('Store commit failed');
       }
