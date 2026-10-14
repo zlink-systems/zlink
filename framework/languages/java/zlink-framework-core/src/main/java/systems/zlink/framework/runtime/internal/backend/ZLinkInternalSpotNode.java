@@ -5,8 +5,6 @@ import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferPrepare;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferToken;
 import systems.zlink.framework.runtime.internal.binding.spot.PrepareActorTransferResult;
@@ -384,15 +382,18 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             String packetName,
             Map<String, String> metadata,
             byte[] payload) {
-        throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                "local Actor authority journal is unavailable");
+        return new byte[0];
     }
 
-    default void installRelocatingActorBoundSession(
+    /**
+     * Installs the relocating bound Session route as one remote binding transition of the {@link
+     * RemoteSessionBindingOwner}, which binds the Actor context in the same owner turn.
+     */
+    default CompletionStage<Void> installRelocatingActorBoundSession(
             ZLinkServiceM6BWireCodec.ActorRouteFence actor,
             ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
         // Alternate backends may wait for the ordinary binding announcement.
+        return CompletableFuture.completedFuture(null);
     }
 
     default Optional<BoundSessionRoute> boundSessionRoute(ZLinkBackendActorRef actor) {
@@ -418,11 +419,33 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
 
     default void setRemoteSessionBindingOwner(RemoteSessionBindingOwner owner) {}
 
+    /**
+     * Owner of the remote bound Session fact. The node's remote route and the Actor context change
+     * only inside {@link #apply}, which runs the transition in the owner turn; a caller already in
+     * that turn runs it inline.
+     */
     @FunctionalInterface
     interface RemoteSessionBindingOwner {
         CompletionStage<Boolean> apply(
+                ZLinkInternalSpotNode node,
                 ZLinkBackendActorRef actor,
-                java.util.function.Function<Consumer<BoundSessionRoute>, Boolean> transition);
+                java.util.function.Function<RemoteSessionBindingTransition, Boolean> transition);
+    }
+
+    /** Actor-context side of one remote binding transition, applied in the owner turn. */
+    interface RemoteSessionBindingTransition {
+        RemoteSessionBindingTransition NONE =
+                new RemoteSessionBindingTransition() {
+                    @Override
+                    public void bind(BoundSessionRoute route) {}
+
+                    @Override
+                    public void retire(BoundSessionRoute route) {}
+                };
+
+        void bind(BoundSessionRoute route);
+
+        void retire(BoundSessionRoute route);
     }
 
     @FunctionalInterface

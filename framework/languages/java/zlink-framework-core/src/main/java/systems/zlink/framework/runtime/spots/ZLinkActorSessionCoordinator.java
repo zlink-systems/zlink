@@ -448,6 +448,11 @@ final class ZLinkActorSessionCoordinator {
                 acceptedRecord == null
                         ? runtime.encodeLocalActorAccepted(actor, header, payload)
                         : acceptedRecord;
+        if (journalRecord.length == 0) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                            "canonical local Session Actor journal context is unavailable"));
+        }
         return runtime.submitActorDispatch(
                         actor.context().actorId(),
                         ZLinkActorAcceptedJournal.encode(

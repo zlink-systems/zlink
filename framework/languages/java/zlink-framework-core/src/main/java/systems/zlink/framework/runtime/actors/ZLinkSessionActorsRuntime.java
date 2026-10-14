@@ -554,7 +554,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                     actorSlot,
                                                     RELAY_SUBMIT_TIMEOUT)
                                             : CompletableFuture.completedFuture(null);
-                            return nativeBinding.thenApply(
+                            return nativeBinding.thenCompose(
                                     ignored -> {
                                         long bindingGeneration =
                                                 currentBindingGeneration(ref.actorId());
@@ -575,48 +575,64 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         : null;
                                         RoutingId sourceSessionRid =
                                                 nativeSessionRelayAttached ? sessionRid : null;
-                                        long bindingToken =
-                                                actors.bindSession(
+                                        return actors.bindSession(
                                                         actor,
                                                         boundSession,
                                                         sourceNodeRid,
                                                         sourceSessionRid,
                                                         bindingGeneration,
-                                                        0);
-                                        boundSession.setBindingToken(bindingToken);
-                                        boundSession.setActorSlot(actorSlot);
-                                        AtomicReference<ZLinkBoundActor> binding =
-                                                new AtomicReference<>();
-                                        ZLinkBoundActor boundActor =
-                                                new ZLinkBoundActor(
-                                                        stream,
-                                                        sessionRid,
-                                                        ref,
-                                                        actors.meshName(),
-                                                        Optional.of(actor),
-                                                        actors,
-                                                        serializer,
-                                                        bindingToken,
-                                                        bindingGeneration,
-                                                        actorSlot,
-                                                        localActorDispatcher,
-                                                        nativeSessionRelayAttached,
-                                                        defaultCodec,
-                                                        relayHeaders,
-                                                        flow,
-                                                        () -> isCurrentBinding(binding.get()),
-                                                        operation ->
-                                                                admitIngress(
-                                                                        binding.get(), operation),
-                                                        metadataPolicy);
-                                        binding.set(boundActor);
-                                        boundSession.setUnbindListener(
-                                                () -> removeBinding(boundActor));
-                                        boundActor.setUnbindListener(
-                                                () -> removeBinding(boundActor));
-                                        boundSession.setRebindListener(
-                                                target -> recordNativeRebind(boundActor, target));
-                                        return boundActor;
+                                                        0)
+                                                .thenApply(
+                                                        bindingToken -> {
+                                                            boundSession.setBindingToken(
+                                                                    bindingToken);
+                                                            boundSession.setActorSlot(actorSlot);
+                                                            AtomicReference<ZLinkBoundActor>
+                                                                    binding =
+                                                                            new AtomicReference<>();
+                                                            ZLinkBoundActor boundActor =
+                                                                    new ZLinkBoundActor(
+                                                                            stream,
+                                                                            sessionRid,
+                                                                            ref,
+                                                                            actors.meshName(),
+                                                                            Optional.of(actor),
+                                                                            actors,
+                                                                            serializer,
+                                                                            bindingToken,
+                                                                            bindingGeneration,
+                                                                            actorSlot,
+                                                                            localActorDispatcher,
+                                                                            nativeSessionRelayAttached,
+                                                                            defaultCodec,
+                                                                            relayHeaders,
+                                                                            flow,
+                                                                            () ->
+                                                                                    isCurrentBinding(
+                                                                                            binding
+                                                                                                    .get()),
+                                                                            operation ->
+                                                                                    admitIngress(
+                                                                                            binding
+                                                                                                    .get(),
+                                                                                            operation),
+                                                                            metadataPolicy);
+                                                            binding.set(boundActor);
+                                                            boundSession.setUnbindListener(
+                                                                    () ->
+                                                                            removeBinding(
+                                                                                    boundActor));
+                                                            boundActor.setUnbindListener(
+                                                                    () ->
+                                                                            removeBinding(
+                                                                                    boundActor));
+                                                            boundSession.setRebindListener(
+                                                                    target ->
+                                                                            recordNativeRebind(
+                                                                                    boundActor,
+                                                                                    target));
+                                                            return boundActor;
+                                                        });
                                     });
                         })
                 .thenApply(value -> (ZLinkSessionActor) value);

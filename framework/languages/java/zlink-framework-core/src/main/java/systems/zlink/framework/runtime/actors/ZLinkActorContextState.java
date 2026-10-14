@@ -334,9 +334,6 @@ final class ZLinkActorContextState {
         if (boundSession instanceof ZLinkNativeBoundSessionRuntime runtime) {
             return runtime.sendFrame(frameBytes).thenApply(ignored -> true);
         }
-        if (boundSession instanceof ZLinkRoutedBoundSessionRuntime runtime) {
-            return runtime.sendFrame(frameBytes).thenApply(ignored -> true);
-        }
         return CompletableFuture.completedFuture(false);
     }
 

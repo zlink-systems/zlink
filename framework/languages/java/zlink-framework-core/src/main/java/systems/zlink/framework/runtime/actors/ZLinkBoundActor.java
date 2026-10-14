@@ -528,10 +528,17 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 ZLinkHandlerStages.fromStageSupplier(
                         () ->
                                 managedActor.isPresent() && !nativeRebound
-                                        ? (actors.clearSessionBinding(
+                                        ? actors.clearSessionBinding(
                                                         managedActor.get(), bindingToken)
-                                                ? actors.notifyDisconnected(managedActor.get())
-                                                : CompletableFuture.completedFuture(null))
+                                                .thenCompose(
+                                                        cleared ->
+                                                                cleared
+                                                                        ? actors.notifyDisconnected(
+                                                                                managedActor.get())
+                                                                        : CompletableFuture
+                                                                                .<Void>
+                                                                                        completedFuture(
+                                                                                                null))
                                         : notifyRemoteDisconnected());
         notification
                 .toCompletableFuture()

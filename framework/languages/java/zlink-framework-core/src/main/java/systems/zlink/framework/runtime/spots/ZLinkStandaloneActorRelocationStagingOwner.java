@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
@@ -415,14 +414,14 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         staged.markPublished();
     }
 
-    void prepareDirectJoinBoundSession(
+    CompletionStage<Void> prepareDirectJoinBoundSession(
             DirectJoinReplay replay,
             ZLinkSpotRetireControl.StageRequest request,
             long targetOwnerGeneration) {
         Objects.requireNonNull(replay, "replay");
         Objects.requireNonNull(request, "request");
         if (request.sessionRoutes().isEmpty()) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
         Staged staged = replay.staged();
         requireActive(staged);
@@ -436,7 +435,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             throw new IllegalStateException(
                     "direct Join bound Session differs from the staged Actor");
         }
-        backend.prepareBoundSession(
+        return backend.prepareBoundSession(
                 staged.actor(),
                 staged.request(),
                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
@@ -858,11 +857,13 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             publish(actor, request);
         }
 
-        default void prepareBoundSession(
+        default CompletionStage<Void> prepareBoundSession(
                 Object actor,
                 Request request,
                 ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute,
-                ZLinkServiceM6BWireCodec.SessionOwnerFence session) {}
+                ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
+            return CompletableFuture.completedFuture(null);
+        }
 
         void openAdmission(Object actor);
 
@@ -944,23 +945,13 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         }
 
         @Override
-        public void prepareBoundSession(
+        public CompletionStage<Void> prepareBoundSession(
                 Object actor,
                 Request request,
                 ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute,
                 ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
-            var prepared = (ZLinkActorRuntime.PreparedTransferredActor) actor;
-            ZLinkActor targetActor = prepared.actor();
-            targetNode.installRelocatingActorBoundSession(actorRoute, session);
-            actors.runtime()
-                    .bindNativeSession(
-                            targetActor,
-                            targetNode,
-                            actorRoute.actor(),
-                            session.nodeRid(),
-                            session.sessionRid(),
-                            session.bindingGeneration(),
-                            0);
+            // The node's remote binding owner binds the Actor context in the same transition.
+            return targetNode.installRelocatingActorBoundSession(actorRoute, session);
         }
 
         @Override

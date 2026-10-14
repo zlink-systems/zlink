@@ -453,21 +453,15 @@ final class ZLinkJavaRawMeshNode
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long ownerGeneration = spots.actorAuthorityOwnerGeneration(actor);
         long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (sourceNodeRid == null
-                || sourceSessionRid == null && !routingId.equals(sourceNodeRid)
-                || sourceSessionRid != null
-                        && (sourceBindingGeneration <= 0 || sourceSessionSequence <= 0)) {
-            throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                    "Session Actor ingress requires an accepted binding identity");
-        }
         if (local == null
                 || descriptor == null
+                || sourceNodeRid == null
+                || sourceSessionRid == null && !routingId.equals(sourceNodeRid)
+                || sourceSessionRid != null
+                        && (sourceBindingGeneration <= 0 || sourceSessionSequence <= 0)
                 || ownerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
-            throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    "local Actor authority fence is unavailable: " + actor.actorId());
+            return new byte[0];
         }
         UUID operation = UUID.randomUUID();
         var message =

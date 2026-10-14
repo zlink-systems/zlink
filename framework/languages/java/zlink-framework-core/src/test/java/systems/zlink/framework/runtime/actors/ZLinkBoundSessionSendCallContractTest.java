@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -23,6 +24,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
@@ -35,6 +37,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -70,9 +73,15 @@ final class ZLinkBoundSessionSendCallContractTest {
                         .join()
                         .orElseThrow();
         actors.bindNativeSession(
-                actor,
-                backend,
-                new ZLinkBackendActorRef(RoutingId.from("node-a"), "accepted-handler", 7));
+                        actor,
+                        backend,
+                        new ZLinkBackendActorRef(RoutingId.from("node-a"), "accepted-handler", 7),
+                        null,
+                        null,
+                        0,
+                        0)
+                .toCompletableFuture()
+                .join();
         var drain = new ZLinkMeshDrainCoordinator(java.util.List.of("mesh"));
         var claim = drain.tryClaim("mesh");
         var started = new CompletableFuture<Void>();
@@ -140,7 +149,15 @@ final class ZLinkBoundSessionSendCallContractTest {
                         .join()
                         .orElseThrow();
         actors.bindNativeSession(
-                actor, spotNode, new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7));
+                        actor,
+                        spotNode,
+                        new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7),
+                        null,
+                        null,
+                        0,
+                        0)
+                .toCompletableFuture()
+                .join();
 
         ZLinkBoundSession boundSession = actor.context().boundSession();
         ZLinkBoundSessionSendCall base = boundSession.send("payload");
@@ -191,7 +208,15 @@ final class ZLinkBoundSessionSendCallContractTest {
                         .join()
                         .orElseThrow();
         actors.bindNativeSession(
-                actor, spotNode, new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7));
+                        actor,
+                        spotNode,
+                        new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7),
+                        null,
+                        null,
+                        0,
+                        0)
+                .toCompletableFuture()
+                .join();
 
         CompletionException failure =
                 assertThrows(
@@ -232,18 +257,87 @@ final class ZLinkBoundSessionSendCallContractTest {
                         .join()
                         .orElseThrow();
         actors.bindNativeSession(
-                actor,
-                spotNode,
-                new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7),
-                RoutingId.from("session-node"),
-                RoutingId.from("session-1"),
-                11,
-                0);
+                        actor,
+                        spotNode,
+                        new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7),
+                        RoutingId.from("session-node"),
+                        RoutingId.from("session-1"),
+                        11,
+                        0)
+                .toCompletableFuture()
+                .join();
 
         routeAvailable.set(true);
         actor.context().boundSession().send("payload").submit().toCompletableFuture().join();
 
         assertEquals(1, sends.get());
+    }
+
+    @Test
+    void sessionBindingTransitionsRunInTheOwnerTurnWithoutWaitingForIt() throws Exception {
+        ZLinkInternalSpotNode spotNode = spotNode(new AtomicInteger(), true);
+        ZLinkActorRuntime actors =
+                new ZLinkActorRuntime(
+                        spotNode,
+                        Map.of("probe", ProbeFactory.class),
+                        Map.of(),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        new ZLinkJsonMessageSerializer(),
+                        ZLinkHandlerActivator.reflection(),
+                        ZLinkStreamCodec.RAW,
+                        unusedAdmission());
+        ZLinkActor actor =
+                actors.getOrCreateLocalActor("actor-1", ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        ZLinkStateLane ownerTurn = ownerTurn(actors);
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        ownerTurn.runAsync(
+                () -> {
+                    release.join();
+                    return null;
+                });
+
+        // A caller outside the owner turn submits the bind and returns while the turn is busy.
+        CompletableFuture<Long> bound =
+                assertTimeoutPreemptively(
+                        Duration.ofSeconds(2),
+                        () ->
+                                actors.bindNativeSession(
+                                                actor,
+                                                spotNode,
+                                                new ZLinkBackendActorRef(
+                                                        RoutingId.from("node-a"), "actor-1", 7),
+                                                RoutingId.from("session-node"),
+                                                RoutingId.from("session-1"),
+                                                11,
+                                                0)
+                                        .toCompletableFuture());
+        assertFalse(bound.isDone());
+        assertFalse(actors.hasBoundSession(actor));
+        release.complete(null);
+        long bindingToken = bound.get(5, TimeUnit.SECONDS);
+        assertTrue(actors.hasBoundSession(actor));
+
+        // A completion continuation inside the owner turn clears the binding in that same turn.
+        assertTrue(
+                ownerTurn
+                        .runAsync(
+                                () ->
+                                        actors.clearSessionBinding(actor, bindingToken)
+                                                .toCompletableFuture()
+                                                .join())
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS));
+        assertFalse(actors.hasBoundSession(actor));
+    }
+
+    private static ZLinkStateLane ownerTurn(ZLinkActorRuntime actors) throws Exception {
+        java.lang.reflect.Field lane = ZLinkActorRuntime.class.getDeclaredField("stateLane");
+        lane.setAccessible(true);
+        return (ZLinkStateLane) lane.get(actors);
     }
 
     private static java.util.function.BiFunction<

@@ -154,11 +154,8 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
     public CompletionStage<Void> disconnect() {
         return stream.unbindActor(sessionRid, actorId)
                 .submit(DEFAULT_TIMEOUT)
-                .thenRun(
-                        () -> {
-                            actorRuntime.clearSessionBinding(actor, bindingToken);
-                            unbindListener.run();
-                        });
+                .thenCompose(ignored -> actorRuntime.clearSessionBinding(actor, bindingToken))
+                .thenRun(() -> unbindListener.run());
     }
 
     private record SendCall(

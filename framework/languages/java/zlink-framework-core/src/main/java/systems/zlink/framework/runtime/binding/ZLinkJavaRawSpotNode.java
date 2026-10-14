@@ -79,9 +79,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private final Map<String, StreamBinding> streamBindings = new ConcurrentHashMap<>();
     private final Map<String, Long> streamBindingSequences = new ConcurrentHashMap<>();
     private final Map<String, RemoteStreamBinding> remoteStreamBindings = new ConcurrentHashMap<>();
-    private RemoteSessionBindingOwner remoteSessionBindingOwner =
-            (actor, transition) ->
-                    this.stateLane.runNowOrQueue(() -> transition.apply(route -> {}));
+    // The remote route maps change only in the remote binding owner's turn. Without an attached
+    // Actor runtime this node's own lane is that owner.
+    private volatile RemoteSessionBindingOwner remoteSessionBindingOwner =
+            (node, actor, transition) ->
+                    this.stateLane.runNowOrQueue(
+                            () -> transition.apply(RemoteSessionBindingTransition.NONE));
     private final Map<String, Long> remoteStreamSequences = new ConcurrentHashMap<>();
     private final ZLinkJavaInstanceSpotRegistry instanceSpots;
     private volatile java.util.function.Function<
@@ -552,11 +555,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     binding.stream());
         }
         streamBindingSequences.remove(actor.actorId());
-        remoteStreamBindings.remove(actor.actorId());
-        remoteStreamSequences.remove(actor.actorId());
         actorAuthorities.remove(
                 new ActorAuthorityKey(actor.nodeRid(), actor.actorId(), actor.generation()));
-        return CompletableFuture.completedFuture(null);
+        return retireRemoteStreamBinding(actor).thenApply(ignored -> null);
     }
 
     @Override
@@ -1054,7 +1055,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     @Override
-    public void installRelocatingActorBoundSession(
+    public CompletionStage<Void> installRelocatingActorBoundSession(
             ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute,
             ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
         Objects.requireNonNull(actorRoute, "actorRoute");
@@ -1076,21 +1077,27 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         session.bindingGeneration(),
                         actorRoute.authorityOwnerGeneration(),
                         actorRoute.ownerLeaseGeneration());
-        inStateLane(
-                () -> {
-                    RemoteStreamBinding current = remoteStreamBindings.get(actor.actorId());
-                    if (candidate.equals(current)) {
-                        return null;
-                    }
-                    if (current != null) {
-                        throw new IllegalStateException(
-                                "relocating bound Session conflicts with an installed route");
-                    }
-                    remoteStreamBindings.put(actor.actorId(), candidate);
-                    remoteStreamSequences.putIfAbsent(actor.actorId(), 0L);
-                    streamBindings.remove(actor.actorId());
-                    return null;
-                });
+        return remoteSessionBindingOwner
+                .apply(
+                        this,
+                        actor,
+                        applied -> {
+                            RemoteStreamBinding current = remoteStreamBindings.get(actor.actorId());
+                            if (candidate.equals(current)) {
+                                return true;
+                            }
+                            if (current != null) {
+                                throw new IllegalStateException(
+                                        "relocating bound Session conflicts with an installed"
+                                                + " route");
+                            }
+                            applied.bind(candidate.route());
+                            remoteStreamBindings.put(actor.actorId(), candidate);
+                            remoteStreamSequences.putIfAbsent(actor.actorId(), 0L);
+                            streamBindings.remove(actor.actorId());
+                            return true;
+                        })
+                .thenApply(ignored -> null);
     }
 
     @Override
@@ -1100,12 +1107,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         if (remote == null || !remote.actor().equals(actor)) {
             return Optional.empty();
         }
-        return Optional.of(
-                new ZLinkInternalSpotNode.BoundSessionRoute(
-                        remote.sessionOwnerNodeRid(),
-                        remote.sessionOwnerNodeGeneration(),
-                        remote.sessionRid(),
-                        remote.bindingGeneration()));
+        return Optional.of(remote.route());
     }
 
     @Override
@@ -1122,8 +1124,20 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     binding.stream());
         }
         streamBindingSequences.remove(actor.actorId());
-        remoteStreamBindings.remove(actor.actorId());
-        remoteStreamSequences.remove(actor.actorId());
+        retireRemoteStreamBinding(actor);
+    }
+
+    /** Removes the Actor's remote route in the remote binding owner's turn. */
+    private CompletionStage<Boolean> retireRemoteStreamBinding(ZLinkBackendActorRef actor) {
+        return remoteSessionBindingOwner.apply(
+                this,
+                actor,
+                applied -> {
+                    if (remoteStreamBindings.remove(actor.actorId()) != null) {
+                        remoteStreamSequences.remove(actor.actorId());
+                    }
+                    return true;
+                });
     }
 
     @Override
@@ -1897,11 +1911,22 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                 streamBindings.put(actor.actorId(), binding);
                                 streamBindingSequences.put(actor.actorId(), 0L);
                             }
-                            if (isCurrentActor(actor)) {
-                                remoteStreamBindings.remove(actor.actorId());
-                            }
                             return current;
                         });
+        RemoteStreamBinding replacedRemote = remoteStreamBindings.get(actor.actorId());
+        if (replacedRemote != null && isCurrentActor(actor)) {
+            // The local binding replaces exactly the remote route observed here; a newer remote
+            // route accepted afterwards by the owner stays.
+            remoteSessionBindingOwner.apply(
+                    this,
+                    actor,
+                    applied -> {
+                        if (remoteStreamBindings.remove(actor.actorId(), replacedRemote)) {
+                            remoteStreamSequences.remove(actor.actorId());
+                        }
+                        return true;
+                    });
+        }
         if (previous != null && !previous.equals(binding)) {
             notifyBoundSessionReplaced(previous);
         }
@@ -1946,53 +1971,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         removeStreamBinding(sessionRid, actor, bindingGeneration, stream);
     }
 
-    boolean acceptRemoteStreamBinding(
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            ZLinkServiceM6BWireCodec.BoundSessionBind command) {
-        return acceptRemoteStreamBinding(
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sourceNodeRid.toString(),
-                1L,
-                command,
-                ignored -> {});
-    }
-
-    boolean acceptRemoteStreamBinding(
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            String sessionOwnerId,
-            long sessionOwnerLeaseGeneration,
-            ZLinkServiceM6BWireCodec.BoundSessionBind command) {
-        return acceptRemoteStreamBinding(
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sessionOwnerId,
-                sessionOwnerLeaseGeneration,
-                command,
-                ignored -> {});
-    }
-
-    boolean acceptRemoteStreamBinding(
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            String sessionOwnerId,
-            long sessionOwnerLeaseGeneration,
-            ZLinkServiceM6BWireCodec.BoundSessionBind command,
-            Consumer<Boolean> resultSubmitted) {
-        return inStateLane(
-                () ->
-                        acceptRemoteStreamBindingOnOwner(
-                                sourceNodeRid,
-                                sourceNodeGeneration,
-                                sessionOwnerId,
-                                sessionOwnerLeaseGeneration,
-                                command,
-                                resultSubmitted,
-                                route -> {}));
-    }
-
     @Override
     public void setRemoteSessionBindingOwner(RemoteSessionBindingOwner owner) {
         remoteSessionBindingOwner = Objects.requireNonNull(owner, "owner");
@@ -2006,6 +1984,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             ZLinkServiceM6BWireCodec.BoundSessionBind command,
             Consumer<Boolean> resultSubmitted) {
         return remoteSessionBindingOwner.apply(
+                this,
                 command.actor().actor(),
                 applied ->
                         acceptRemoteStreamBindingOnOwner(
@@ -2025,7 +2004,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             long sessionOwnerLeaseGeneration,
             ZLinkServiceM6BWireCodec.BoundSessionBind command,
             Consumer<Boolean> resultSubmitted,
-            Consumer<BoundSessionRoute> applied) {
+            RemoteSessionBindingTransition applied) {
         ZLinkServiceM6BWireCodec.ActorRouteFence route = command.actor();
         ZLinkBackendActorRef actor = route.actor();
         RemoteStreamBinding candidate =
@@ -2056,7 +2035,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         if (!command.active()) {
             if (remoteStreamBindings.remove(actor.actorId(), candidate)) {
                 remoteStreamSequences.remove(actor.actorId());
-                applied.accept(null);
+                applied.retire(candidate.route());
             }
             resultSubmitted.accept(true);
             return true;
@@ -2075,12 +2054,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             resultSubmitted.accept(false);
             return false;
         }
-        applied.accept(
-                new BoundSessionRoute(
-                        candidate.sessionOwnerNodeRid(),
-                        candidate.sessionOwnerNodeGeneration(),
-                        command.sessionRid(),
-                        command.bindingGeneration()));
+        applied.bind(candidate.route());
         resultSubmitted.accept(true);
         remoteStreamBindings.put(actor.actorId(), candidate);
         remoteStreamSequences.put(actor.actorId(), 0L);
@@ -2767,6 +2741,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             long bindingGeneration,
             long authorityOwnerGeneration,
             long actorOwnerLeaseGeneration) {
+        BoundSessionRoute route() {
+            return new BoundSessionRoute(
+                    sessionOwnerNodeRid, sessionOwnerNodeGeneration, sessionRid, bindingGeneration);
+        }
+
         boolean sameSessionOwnerEpoch(RemoteStreamBinding other) {
             return sessionOwnerNodeRid.equals(other.sessionOwnerNodeRid)
                     && sessionOwnerNodeGeneration == other.sessionOwnerNodeGeneration

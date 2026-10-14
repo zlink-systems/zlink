@@ -1593,9 +1593,10 @@ final class EntrySpotActorDispatchTests {
             var route = canonicalBoundSessionRoute.orElseThrow();
             remoteSessionBindingOwner
                     .apply(
+                            this,
                             actor,
                             applied -> {
-                                applied.accept(route);
+                                applied.bind(route);
                                 remoteSessionBinds.add(
                                         new RemoteBind(
                                                 actor,
