@@ -24,6 +24,48 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RelocationRuntimeTests
 {
     [Fact]
+    public async Task Concurrent_target_stages_share_reconciliation_scheduling_without_failure()
+    {
+        const int callers = 8;
+        const int rounds = 64;
+        using var services = CreateRuntimeServices();
+        var runtime = CreateBareRuntime(services);
+        var registration = new ZLinkFrameworkRegistration();
+        ZLinkSpotRetireTargetRuntime target = null!;
+        var failures = new ConcurrentQueue<Exception>();
+        using var barrier = new Barrier(callers + 1);
+        var workers = Enumerable
+            .Range(0, callers)
+            .Select(_ =>
+                Task.Factory.StartNew(
+                    () =>
+                    {
+                        for (var round = 0; round < rounds; round++)
+                        {
+                            barrier.SignalAndWait();
+                            var error = Record.Exception(target.ScheduleReconciliation);
+                            if (error is not null)
+                                failures.Enqueue(error);
+                            barrier.SignalAndWait();
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default
+                )
+            )
+            .ToArray();
+        for (var round = 0; round < rounds; round++)
+        {
+            target = new ZLinkSpotRetireTargetRuntime(services, runtime, registration);
+            barrier.SignalAndWait();
+            barrier.SignalAndWait();
+        }
+        await Task.WhenAll(workers);
+        Assert.Empty(failures);
+    }
+
+    [Fact]
     public void Target_observation_accepts_only_byte_exact_steady_authority()
     {
         var (stage, _) = CreateCanonicalPublishedReconciliationFixture();

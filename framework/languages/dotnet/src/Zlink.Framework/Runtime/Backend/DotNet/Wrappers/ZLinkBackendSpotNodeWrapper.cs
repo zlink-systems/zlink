@@ -54,8 +54,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
 
     internal ZLinkManagedMeshNode NativeNode => _node;
 
-    public void SetFlowCaptureGate(Func<bool> flowCaptureEnabled) =>
-        _node.SetFlowCaptureGate(flowCaptureEnabled);
+    public void SetFlowTracer(ZLinkMessageFlowTracer flow) => _node.SetFlowTracer(flow);
 
     public void SetLogicalMulticastDispatchErrors(
         ZLinkDispatchErrorReporter reporter,

@@ -64,7 +64,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         ZLinkAggregateFence,
         ZLinkServiceWireCodec.RelocationPrepareRecord
     > _sourceAttempts = new();
-    private readonly SemaphoreSlim _reconciliationWake = new(0, 1);
     private int _reconciliationRunning;
 
     internal int ActiveStageCount => _staged.Values.OfType<TargetStage>().Count();
@@ -2604,10 +2603,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         );
     }
 
-    private void ScheduleReconciliation()
+    internal void ScheduleReconciliation()
     {
-        if (_reconciliationWake.CurrentCount == 0)
-            _reconciliationWake.Release();
         if (Interlocked.CompareExchange(ref _reconciliationRunning, 1, 0) != 0)
             return;
         if (
@@ -2620,7 +2617,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     {
         try
         {
-            Task? woken = null;
             while (!cancellationToken.IsCancellationRequested)
             {
                 await CleanupExpiredAsync().ConfigureAwait(false);
@@ -2657,14 +2653,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     }
                 }
 
-                var delay = Task.Delay(
-                    registration.Locations.Options.PollingInterval,
-                    cancellationToken
-                );
-                woken ??= _reconciliationWake.WaitAsync(cancellationToken);
-                await Task.WhenAny(delay, woken).ConfigureAwait(false);
-                if (woken.IsCompleted)
-                    woken = null;
+                await Task.Delay(registration.Locations.Options.PollingInterval, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }

@@ -211,6 +211,49 @@ public sealed class HostRelocationSealStageTests
                 ZLinkFrameworkRelocationOutcome.Relocated,
                 (await relocation.WaitAsync(TimeSpan.FromSeconds(15))).Outcome
             );
+            if (flow is not null)
+            {
+                var stages = flow.ReadLines()
+                    .Select(line =>
+                        System.Text.Json.JsonDocument.Parse(
+                            line[(line.IndexOf(" tags=", StringComparison.Ordinal) + 6)..]
+                        )
+                    )
+                    .ToArray();
+                try
+                {
+                    for (var i = 1; i <= 3; i++)
+                    {
+                        var spotStages = stages
+                            .Where(record =>
+                                record.RootElement.TryGetProperty("spot_id", out var spot)
+                                && spot.GetString() == $"zone-{i}"
+                            )
+                            .Where(record => record.RootElement.TryGetProperty("detail", out _))
+                            .Select(record => record.RootElement.GetProperty("detail").GetString())
+                            .ToArray();
+                        foreach (
+                            var transition in new[]
+                            {
+                                "prepare_submit",
+                                "prepare_submitted",
+                                "prepare_accepted",
+                                "chunks_sent",
+                                "chunks_assembled",
+                                "target_restore_begin",
+                                "target_restore_end",
+                                "relay_ready_received",
+                            }
+                        )
+                            Assert.Contains(transition, spotStages);
+                    }
+                }
+                finally
+                {
+                    foreach (var stage in stages)
+                        stage.Dispose();
+                }
+            }
             await connector.Send(new SealStageWork("after-relocation")).Async();
             await trace.WaitAsync("afterRelocationPush");
             Assert.False(handler.Disconnected.Task.IsCompleted);
