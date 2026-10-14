@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "id": "action-entry-lobby",
+  "name": "my-game",
+  "language": "node",
+  "run": {
+    "commands": {
+      "sh": [
+        "npm install && npm run build",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario hit,reconnect,update"
+      ],
+      "powershell": [
+        "npm install; if ($LASTEXITCODE -eq 0) { npm run build }",
+        "pwsh -NoProfile -File ./run-e2e.ps1",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update"
+      ]
+    },
+    "scenarios": ["hit", "reconnect", "update"]
+  },
+  "nodes": [
+    {
+      "id": "players",
+      "role": "external",
+      "title": "Players",
+      "config": null
+    },
+    {
+      "id": "session",
+      "role": "session",
+      "title": "Session node",
+      "config": "server/config/session.json"
+    },
+    {
+      "id": "matchA",
+      "role": "match",
+      "title": "Match node A",
+      "config": "server/config/match-a.json"
+    },
+    {
+      "id": "matchB",
+      "role": "match",
+      "title": "Match node B",
+      "config": "server/config/match-b.json"
+    },
+    {
+      "id": "location",
+      "role": "location-store",
+      "title": "Location Store",
+      "config": "docker-compose.yml"
+    }
+  ],
+  "channels": [],
+  "spots": [
+    {
+      "id": "match-entry-a",
+      "kind": "entry",
+      "type": null,
+      "owner": "matchA"
+    },
+    {
+      "id": "match-entry-b",
+      "kind": "entry",
+      "type": null,
+      "owner": "matchB"
+    },
+    {
+      "id": "matchmaking",
+      "kind": "user",
+      "type": "Matchmaking",
+      "owner": "matchA",
+      "logicalId": "matchmaking"
+    },
+    {
+      "id": "room",
+      "kind": "user",
+      "type": "Room",
+      "owner": "matchA",
+      "dynamic": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "players",
+      "to": "session",
+      "label": "STREAM"
+    },
+    {
+      "from": "session",
+      "to": "matchA",
+      "label": "relay"
+    },
+    {
+      "from": "matchA",
+      "to": "location",
+      "label": "Location / lease",
+      "semantic": "location-authority"
+    }
+  ]
+}
