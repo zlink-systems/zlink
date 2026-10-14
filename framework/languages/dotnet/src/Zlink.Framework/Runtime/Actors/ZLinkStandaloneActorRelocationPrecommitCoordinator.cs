@@ -127,7 +127,6 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             root,
             prepare,
             targetAuthority,
-            0,
             static () => true,
             TimeSpan.Zero,
             cancellationToken
@@ -149,7 +148,6 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         ZLinkRelocationEnvelope root,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         ZLinkActorAuthorityPayload targetAuthority,
-        ulong targetAuthorityOwnerGeneration,
         Func<bool> isTargetLeaseValid,
         TimeSpan resubmitInterval,
         CancellationToken cancellationToken
@@ -177,10 +175,6 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             || prepare.Target.NodeGeneration != targetAuthority.NodeGeneration
             || !StringComparer.Ordinal.Equals(targetOwner.OwnerId, targetAuthority.OwnerId)
             || checked((ulong)targetOwner.LeaseGeneration) != targetAuthority.OwnerLeaseGeneration
-            || (
-                targetAuthorityOwnerGeneration != 0
-                && targetAuthorityOwnerGeneration <= captured.AuthorityOwnerGeneration
-            )
         )
             throw DataLost("Target cutover changed its prepared attempt fence.");
         var state = projection.State with
@@ -210,8 +204,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     prepare.Target.NodeRid
                 ),
                 DescriptorLifecycleGeneration = prepare.Target.NodeGeneration,
-            },
-            targetAuthorityOwnerGeneration
+            }
         );
         while (true)
         {

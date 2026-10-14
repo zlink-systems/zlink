@@ -581,7 +581,6 @@ public sealed class StandaloneActorRelocationPrecommitTests
                 cutover.Envelope,
                 cutover.Prepare,
                 cutover.TargetAuthority,
-                checked(cutover.Steady.AuthorityOwnerGeneration + 1),
                 () =>
                 {
                     var valid = leaseValid;

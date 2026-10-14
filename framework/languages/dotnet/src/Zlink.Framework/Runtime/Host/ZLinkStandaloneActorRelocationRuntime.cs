@@ -1444,7 +1444,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                         stage.Envelope,
                                         stage.Prepare,
                                         stage.TargetAuthority,
-                                        0,
                                         () => IsTargetOwnerLeaseValid(stage.TargetAuthority),
                                         registration.Locations.Options.PollingInterval,
                                         cancellationToken
