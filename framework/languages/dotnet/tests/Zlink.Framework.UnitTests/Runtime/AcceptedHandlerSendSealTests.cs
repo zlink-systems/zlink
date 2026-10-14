@@ -634,10 +634,11 @@ public sealed partial class EntrySpotActorDispatchTests
             await Task.WhenAny(order.Started.Task, replay).WaitAsync(AcceptedSendWait);
             Assert.False(replay.IsFaulted, replay.Exception?.ToString());
 
-            // New-owner ingress after cutover arrives while the replay handler awaits.
-            direct = Dispatch("direct", relocationReplay: false);
-            Assert.False(direct.IsCompleted);
+            // Application admission opens while the replay handler awaits;
+            // new-owner ingress arrives only after that, as in production.
             await activation.AbortRelocationAsync(seal);
+            direct = Dispatch("direct", relocationReplay: false);
+            Assert.False(direct.IsCompleted, direct.Exception?.ToString());
             order.Release.SetResult();
             await Task.WhenAll(replay, direct).WaitAsync(AcceptedSendWait);
 
