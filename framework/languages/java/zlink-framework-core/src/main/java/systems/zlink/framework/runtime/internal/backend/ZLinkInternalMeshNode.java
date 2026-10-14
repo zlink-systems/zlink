@@ -191,6 +191,14 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return false;
     }
 
+    /**
+     * The connection whose admission exchange with this peer completed, or empty. Only equality is
+     * meaningful: a different value is a new connection.
+     */
+    default Optional<String> readyPeerRoute(RoutingId peerRid) {
+        return Optional.empty();
+    }
+
     /** Returns peers that currently satisfy this backend's ready predicate. */
     default long readyPeerCount() {
         return peers().stream()

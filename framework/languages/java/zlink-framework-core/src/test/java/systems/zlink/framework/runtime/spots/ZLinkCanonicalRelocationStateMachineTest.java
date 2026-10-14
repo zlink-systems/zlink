@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRequestException;
@@ -677,9 +679,15 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 "the target must send FAILED even when pre-stage cleanup throws");
     }
 
-    @Test
-    void actorJoinPrepareRetriesNotConnectedWithinOriginalDeadline() throws Exception {
-        Fixture fixture = fixtureWithTransientPrepareDisconnect();
+    @ParameterizedTest
+    @EnumSource(
+            value = RequestResult.class,
+            names = {"NOT_CONNECTED", "TIMED_OUT"})
+    void actorJoinPrepareRetriesTransientTransportFailureWithinOriginalDeadline(
+            RequestResult transientFailure) throws Exception {
+        //  A route loss and a reply lost to a handover are both replayable
+        //  durable-operation transport failures (actor-model §8.1).
+        Fixture fixture = fixtureWithTransientPrepareFailure(transientFailure);
 
         fixture.source
                 .stage(fixture.targetRid, fixture.request(new byte[] {1}), Duration.ofSeconds(2))
@@ -700,6 +708,9 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         assertTrue(
                 ZLinkCanonicalRelocationStateMachine.isRetryablePrepareRequestFailure(
                         new ZlinkRequestException(RequestResult.NOT_CONNECTED)));
+        assertTrue(
+                ZLinkCanonicalRelocationStateMachine.isRetryablePrepareRequestFailure(
+                        new ZlinkRequestException(RequestResult.TIMED_OUT)));
         assertTrue(
                 ZLinkCanonicalRelocationStateMachine.isRetryablePrepareRequestFailure(
                         new ZlinkSubmitException(SubmitResult.NOT_CONNECTED)));
@@ -897,8 +908,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         return fixture(null);
     }
 
-    private Fixture fixtureWithTransientPrepareDisconnect() {
-        return fixture(null, new CountingEndpoint(), true);
+    private Fixture fixtureWithTransientPrepareFailure(RequestResult firstPrepareFailure) {
+        return fixture(null, new CountingEndpoint(), firstPrepareFailure);
     }
 
     /**
@@ -913,13 +924,13 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     private Fixture fixture(
             ZLinkCanonicalRelocationStateMachine.RetentionScheduler retentionScheduler,
             CountingEndpoint endpoint) {
-        return fixture(retentionScheduler, endpoint, false);
+        return fixture(retentionScheduler, endpoint, null);
     }
 
     private Fixture fixture(
             ZLinkCanonicalRelocationStateMachine.RetentionScheduler retentionScheduler,
             CountingEndpoint endpoint,
-            boolean disconnectFirstPrepare) {
+            RequestResult firstPrepareFailure) {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
         String actorId = "actor-a";
@@ -991,10 +1002,11 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         var targetCommands = new CopyOnWriteArrayList<Integer>();
         var targetState = new AtomicReference<>(MeshNodeState.READY);
         ZLinkInternalMeshNode sourceNode =
-                disconnectFirstPrepare
-                        ? requestReplyNode(sourceRid, 11, target, sourceCommands)
+                firstPrepareFailure != null
+                        ? requestReplyNode(
+                                sourceRid, 11, target, sourceCommands, firstPrepareFailure)
                         : node(sourceRid, 11, target, sourceCommands);
-        if (disconnectFirstPrepare) {
+        if (firstPrepareFailure != null) {
             ZLinkCanonicalRelocationStateMachine.RetentionScheduler retention =
                     (deadline, cleanup) -> {};
             ZLinkCanonicalRelocationStateMachine.DelayScheduler delay = (duration, work) -> {};
@@ -1350,7 +1362,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             RoutingId localRid,
             long generation,
             AtomicReference<ZLinkCanonicalRelocationStateMachine> peer,
-            List<Integer> commands) {
+            List<Integer> commands,
+            RequestResult firstPrepareFailure) {
         MeshNodeStatus status =
                 new MeshNodeStatus(
                         MeshNodeState.READY,
@@ -1393,14 +1406,12 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                                                                 encoded);
                                         if (prepareRequests.incrementAndGet() == 1) {
                                             // The request was admitted and the target owns its
-                                            // stage, but the selected pair disappears before the
-                                            // callback can expose READY to the source.
+                                            // stage, but the reply never reaches the source.
                                             yield reply.thenCompose(
                                                     ignored ->
                                                             CompletableFuture.failedFuture(
                                                                     new ZlinkRequestException(
-                                                                            RequestResult
-                                                                                    .NOT_CONNECTED)));
+                                                                            firstPrepareFailure)));
                                         }
                                         yield reply;
                                     }

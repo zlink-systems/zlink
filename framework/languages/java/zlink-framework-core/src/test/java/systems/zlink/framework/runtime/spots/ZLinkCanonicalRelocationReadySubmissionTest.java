@@ -627,6 +627,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                         (proxy, method, args) ->
                                 switch (method.getName()) {
                                     case "status" -> status;
+                                    case "readyPeerRoute" -> Optional.empty();
                                     case "sendCanonicalRelocationControl" -> {
                                         byte[] encoded = (byte[]) args[1];
                                         int command = Byte.toUnsignedInt(encoded[3]);
@@ -688,6 +689,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                         (proxy, method, args) ->
                                 switch (method.getName()) {
                                     case "status" -> status;
+                                    case "readyPeerRoute" -> Optional.empty();
                                     case "sendCanonicalRelocationControl" -> {
                                         byte[] encoded = (byte[]) args[1];
                                         if (Byte.toUnsignedInt(encoded[3])

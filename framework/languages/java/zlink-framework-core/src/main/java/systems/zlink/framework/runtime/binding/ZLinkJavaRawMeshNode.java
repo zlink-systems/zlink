@@ -1496,6 +1496,16 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
+    public Optional<String> readyPeerRoute(RoutingId peerRid) {
+        ZLinkServiceTopologyRegistry current = topology;
+        return current == null
+                ? Optional.empty()
+                : current.peer(peerRid)
+                        .filter(this::isReadyPeer)
+                        .map(ZLinkServiceTopologyRegistry.Peer::connectionId);
+    }
+
+    @Override
     public long readyPeerCount() {
         ZLinkServiceTopologyRegistry current = topology;
         return current == null

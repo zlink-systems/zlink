@@ -1403,6 +1403,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                             };
                                         }
                                         case "toString" -> descriptor.rid().toString();
+                                        case "readyPeerRoute" -> Optional.empty();
                                         default -> defaultValue(method.getReturnType());
                                     });
         }

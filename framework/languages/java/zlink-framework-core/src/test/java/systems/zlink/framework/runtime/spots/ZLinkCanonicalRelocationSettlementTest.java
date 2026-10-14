@@ -366,7 +366,7 @@ final class ZLinkCanonicalRelocationSettlementTest {
             throws Exception {
         Fixture fixture = new Fixture();
         fixture.stage();
-        fixture.connected.set(false);
+        fixture.readyRoute.set(null);
         fixture.dropData.set(record -> true);
         fixture.dropCutover.set(true);
         fixture.relay(R1, R2);
@@ -383,7 +383,45 @@ final class ZLinkCanonicalRelocationSettlementTest {
 
         fixture.dropData.set(record -> false);
         fixture.dropCutover.set(false);
-        fixture.connected.set(true);
+        fixture.readyRoute.set("route-2");
+
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                settlement.get(3, TimeUnit.SECONDS));
+        assertEquals(1, fixture.commits.get());
+        List<byte[]> relayed = fixture.endpoint.relayed();
+        assertEquals(2, relayed.size());
+        assertArrayEquals(R1, relayed.get(0));
+        assertArrayEquals(R2, relayed.get(1));
+        assertEquals(fixture.targetOwner.ownerId(), fixture.authority().ownerId());
+    }
+
+    @Test
+    void sourceResendsTheWholeBatchAndCutoverWhenANewConnectionReplacesTheAdmittedRoute()
+            throws Exception {
+        //  Converging duplicate connections replace the admitted route while the
+        //  peer never reads as disconnected; the cutover sent on the replaced
+        //  connection is lost and the new connection carries the resend (spec 28
+        //  §4.4).
+        Fixture fixture = new Fixture();
+        fixture.stage();
+        fixture.dropData.set(record -> true);
+        fixture.dropCutover.set(true);
+        fixture.relay(R1, R2);
+        assertThrows(CompletionException.class, fixture::publish);
+
+        CompletableFuture<ZLinkRelocationTransitionClient.Settlement> settlement =
+                fixture.source
+                        .settle(
+                                fixture.targetRid,
+                                fixture.request.fence(),
+                                Instant.now().plusSeconds(30))
+                        .toCompletableFuture();
+        assertEquals(0, fixture.commits.get());
+
+        fixture.dropData.set(record -> false);
+        fixture.dropCutover.set(false);
+        fixture.readyRoute.set("route-2");
 
         assertEquals(
                 ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
@@ -421,7 +459,7 @@ final class ZLinkCanonicalRelocationSettlementTest {
         final RoutingId targetRid = RoutingId.from("target-node");
         final ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
         final AtomicInteger commits = new AtomicInteger();
-        final AtomicBoolean connected = new AtomicBoolean(true);
+        final AtomicReference<String> readyRoute = new AtomicReference<>("route-1");
         final AtomicBoolean dropCutover = new AtomicBoolean();
         final AtomicReference<java.util.function.Predicate<byte[]>> dropData =
                 new AtomicReference<>(record -> false);
@@ -739,7 +777,8 @@ final class ZLinkCanonicalRelocationSettlementTest {
                             (proxy, method, args) ->
                                     switch (method.getName()) {
                                         case "status" -> status;
-                                        case "isPeerTransportConnected" -> connected.get();
+                                        case "readyPeerRoute" ->
+                                                Optional.ofNullable(readyRoute.get());
                                         case "sendCanonicalRelocationControl" -> {
                                             byte[] encoded = ((byte[]) args[1]).clone();
                                             int command = Byte.toUnsignedInt(encoded[3]);

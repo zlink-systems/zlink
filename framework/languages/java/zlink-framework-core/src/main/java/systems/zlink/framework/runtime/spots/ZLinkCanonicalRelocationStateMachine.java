@@ -331,8 +331,8 @@ final class ZLinkCanonicalRelocationStateMachine
      * §4.4, spec 01 §10). Before {@code preserveAt} the source only reads the primary authority
      * record; from {@code preserveAt} it runs the {@code Preserve} fence — an expected-StoreVersion
      * CAS that keeps the source owner. The source attempt, its payload and the boundary batch stay
-     * retained until one of the outcomes is definitive. A transport reconnect observed while
-     * waiting resends the whole boundary batch and the cutover.
+     * retained until one of the outcomes is definitive. A new connection to the target observed
+     * while waiting resends the whole boundary batch and the cutover.
      */
     @Override
     public CompletionStage<Settlement> settle(
@@ -343,7 +343,7 @@ final class ZLinkCanonicalRelocationStateMachine
         long settleNanos = System.nanoTime();
         openSourceQuiescenceWindows.incrementAndGet();
         CompletableFuture<Settlement> result = new CompletableFuture<>();
-        settleSource(attempt, preserveAt, true, result);
+        settleSource(attempt, preserveAt, node.readyPeerRoute(targetNodeRid), result);
         return result.whenComplete(
                 (settlement, failure) -> {
                     inStateLane(() -> sources.remove(key, attempt));
@@ -368,7 +368,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private void settleSource(
             SourceAttempt attempt,
             Instant preserveAt,
-            boolean transportConnected,
+            Optional<String> observedRoute,
             CompletableFuture<Settlement> result) {
         var prepare = attempt.prepare();
         String key = primary(attempt.request().participants()).authorityKey();
@@ -426,11 +426,15 @@ final class ZLinkCanonicalRelocationStateMachine
                         result.complete(settled.get());
                         return;
                     }
-                    //  Uncertain or not yet committed: keep every copy and ask again. A
-                    //  reconnect after a lost transport resends the whole batch and cutover.
-                    boolean connected = node.isPeerTransportConnected(attempt.targetNodeRid());
+                    //  Uncertain or not yet committed: keep every copy and ask again. The
+                    //  cutover and the batch before it are lost with the connection that
+                    //  carried them; a new connection carries them again (spec 28 §4.4).
+                    //  A replacing connection can be admitted without the peer ever
+                    //  reading as disconnected, so the admitted connection identity, not
+                    //  a connected flag, tells a new connection.
+                    Optional<String> route = node.readyPeerRoute(attempt.targetNodeRid());
                     CompletionStage<Void> resend =
-                            connected && !transportConnected && !fence
+                            route.isPresent() && !route.equals(observedRoute) && !fence
                                     ? retransmitBoundaryBatch(attempt)
                                     : CompletableFuture.completedFuture(null);
                     resend.whenComplete(
@@ -439,10 +443,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                             STORE_RETRY_DELAY,
                                             () ->
                                                     settleSource(
-                                                            attempt,
-                                                            preserveAt,
-                                                            connected,
-                                                            result)));
+                                                            attempt, preserveAt, route, result)));
                 });
     }
 
@@ -493,7 +494,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 : Optional.of(Settlement.SOURCE_PRESERVED);
     }
 
-    /** Resends the whole boundary batch and the cutover after a transport reconnect. */
+    /** Resends the whole boundary batch and the cutover on a new connection. */
     private CompletionStage<Void> retransmitBoundaryBatch(SourceAttempt attempt) {
         byte[] cutover = attempt.cutover();
         if (cutover == null) {
@@ -1896,12 +1897,15 @@ final class ZLinkCanonicalRelocationStateMachine
     static boolean isRetryablePrepareRequestFailure(Throwable failure) {
         Throwable cause = unwrap(failure);
         // A disconnected exact PREPARE is either known-not-admitted
-        // (submit terminal) or acceptance-unknown (request terminal). The
-        // target owns duplicate suppression for this relocation identity, so
-        // both cases stay on the existing bounded PREPARE resend path.
+        // (submit terminal) or acceptance-unknown (request terminal), and a
+        // request whose reply was lost to a handover times out. Each is a
+        // replayable transport failure (actor-model §8.1). The target owns
+        // duplicate suppression for this relocation identity, so all stay on
+        // the existing bounded PREPARE resend path.
         return cause instanceof TimeoutException
                 || cause instanceof ZlinkRequestException requestFailure
-                        && requestFailure.getResult() == RequestResult.NOT_CONNECTED
+                        && (requestFailure.getResult() == RequestResult.NOT_CONNECTED
+                                || requestFailure.getResult() == RequestResult.TIMED_OUT)
                 || cause instanceof ZlinkSubmitException submitFailure
                         && submitFailure.getResult() == SubmitResult.NOT_CONNECTED;
     }
