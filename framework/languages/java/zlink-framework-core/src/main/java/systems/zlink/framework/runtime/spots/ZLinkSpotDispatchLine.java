@@ -6,6 +6,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
 interface SpotDispatchLine {
+    void terminateOwnedWaits();
+
     CompletionStage<Void> enqueueDispatch(Supplier<CompletionStage<Void>> operation);
 
     /** Returns whether all application sources share this Spot's gate. */

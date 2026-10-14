@@ -513,6 +513,18 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.trySealRelocation();
     }
 
+    void terminateOwnedWaits() {
+        spotQueue.terminateOwnedWaits();
+        inStateLane(
+                () -> {
+                    timerQueues.values().forEach(ZLinkSerialExecutionQueue::terminateOwnedWaits);
+                    actorQueues
+                            .values()
+                            .forEach(queue -> queue.relocationLane().terminateOwnedWaits());
+                    return null;
+                });
+    }
+
     void sealClosingAdmission() {
         spotQueue.sealClosingAdmission();
     }

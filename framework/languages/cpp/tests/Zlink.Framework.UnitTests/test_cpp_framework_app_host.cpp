@@ -928,6 +928,7 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
 {
     using namespace zlink::framework;
     using namespace std::chrono_literals;
+    constexpr auto owner_lease_renew_timeout = 100ms;
     task_completion_source_t<void> source;
     task_completion_source_t<void> outside_phase;
     source_wait_probe_t first{.awaited = source.task ()};
@@ -947,9 +948,10 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
     auto first_finished = first.finished.get_future ();
     auto second_finished = second.finished.get_future ();
     auto outside = observe_external_source (outside_phase.task (), source.task ());
-    auto make_host = [] (source_wait_probe_t &probe) {
+    auto make_host = [owner_lease_renew_timeout] (source_wait_probe_t &probe) {
         auto app = app_t::create ();
         app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
+            options.configure_locations ().owner_lease_renew_timeout = owner_lease_renew_timeout;
             options.services ().add_singleton<source_wait_http_handler_t> (
               std::make_unique<source_wait_http_handler_t> (probe));
             options.http ()
@@ -1032,13 +1034,15 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
                && second.observer_calls == 1 && second.failed_observers == 0 && first_shutdown
                && second_shutdown && outside.result () && first_exit == 0 && second_exit == 0;
     }
-    auto stop_task = first_host.shutdown (1ms);
+    const auto shutdown_deadline = 1ms;
+    const auto teardown_observation = shutdown_deadline + owner_lease_renew_timeout + 1s;
+    auto stop_task = first_host.shutdown (shutdown_deadline);
     bool teardown_waited_for_cleanup = false;
     if (bounded_cleanup_probe) {
         // Host relocation §14: an expired deadline ends as ForceStopped/DeadlineExceeded
         // while teardown keeps the resources that running user cleanup still uses.
         const bool entered = cleanup_started.wait_for (1s) == std::future_status::ready;
-        const auto terminal = entered ? stop_task.result_for (1s) : std::nullopt;
+        const auto terminal = entered ? stop_task.result_for (teardown_observation) : std::nullopt;
         const bool deadline_terminal =
           terminal && *terminal
           && terminal->value ()
@@ -2039,7 +2043,9 @@ int main (int test_argc, char **test_argv)
     auto secure_client = make_app_host_test_client (https_client_base_url,
                                                     std::string (ZLINK_FRAMEWORK_HTTP_TEST_CERT));
     trace.phase = "secure app readiness";
-    if (!wait_for_ready (secure_client)) {
+    if (!wait_for_ready (secure_client, &readiness_error)) {
+        std::cerr << "secure readiness: " << readiness_error
+                  << " host_ready=" << secure_host.is_ready () << '\n';
         secure_host.stop ();
         secure_thread.join ();
         return 15;
@@ -2072,7 +2078,10 @@ int main (int test_argc, char **test_argv)
         return 70;
     }
     const auto bounded_shutdown_started = std::chrono::steady_clock::now ();
-    auto bounded_shutdown_task = bounded_shutdown_app.shutdown (std::chrono::milliseconds (100));
+    const auto shutdown_deadline = std::chrono::milliseconds (100);
+    const auto teardown_bound =
+      shutdown_deadline + zlink::framework::location_options_t{}.owner_lease_renew_timeout;
+    auto bounded_shutdown_task = bounded_shutdown_app.shutdown (shutdown_deadline);
     const auto &bounded_shutdown_result = bounded_shutdown_task.result ();
     const auto bounded_shutdown_elapsed =
       std::chrono::steady_clock::now () - bounded_shutdown_started;
@@ -2082,7 +2091,9 @@ int main (int test_argc, char **test_argv)
            == zlink::framework::termination_outcome_t::force_stopped
       && bounded_shutdown_result.value ().reason
            == zlink::framework::termination_reason_t::deadline_exceeded
-      && bounded_shutdown_elapsed < std::chrono::seconds (1)
+      // Host relocation §14: observe teardown until the original deadline plus lease renewal timeout.
+      && bounded_shutdown_elapsed >= shutdown_deadline
+      && bounded_shutdown_elapsed < teardown_bound + std::chrono::seconds (1)
       && blocking_service_ptr->wait_stop_entered (std::chrono::seconds (1));
     blocking_service_ptr->release_stop ();
     bounded_shutdown_thread.join ();

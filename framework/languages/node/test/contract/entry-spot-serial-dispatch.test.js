@@ -1033,3 +1033,70 @@ function readTree(root) {
     }
   }
 }
+
+test('shutdown cleanup ends an HTTP Yield before closing its scope and ignores the late response', async () => {
+  const http = require('node:http');
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  };
+  const entered = deferred();
+  const release = deferred();
+  const serial = new framework.ZLinkSpotSerialTurnExecutor();
+  const scopes = new framework.ZLinkSpotSerialExecutor(
+    serial,
+    framework.ZLinkUserSpotExecutionMode.SpotWide,
+    'shutdown-http'
+  );
+  const worker = new framework.ZLinkWorkerRuntime();
+  const server = http.createServer(async (_request, response) => {
+    entered.resolve();
+    await release.promise;
+    response.end('late');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  let terminals = 0;
+  let settled = false;
+  const turn = serial.execute(async () => {
+    try {
+      return await ioWorkerCall(worker, serial, () =>
+        fetch(`http://127.0.0.1:${server.address().port}/generate`).then((response) =>
+          response.text()
+        )
+      ).yield();
+    } finally {
+      terminals += 1;
+    }
+  });
+  const observed = turn.then(
+    (value) => {
+      settled = true;
+      return value;
+    },
+    (error) => {
+      settled = true;
+      return error;
+    }
+  );
+  try {
+    await entered.promise;
+    scopes.terminateOwnedWaits();
+    const closing = scopes.close();
+    // Closing must terminate the runtime observation while the source is still pending.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(settled, true);
+    assert.equal((await observed).kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
+    await closing;
+    release.resolve();
+    await new Promise((resolve) => server.close(resolve));
+    assert.equal(terminals, 1);
+  } finally {
+    release.resolve();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    await observed;
+  }
+});

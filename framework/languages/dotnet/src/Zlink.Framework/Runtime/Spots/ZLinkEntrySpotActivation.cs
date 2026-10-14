@@ -337,7 +337,8 @@ internal sealed partial class ZLinkEntrySpotActivation
                         .InvokeAsync(
                             activation.EntrySpot.OnClosingAsync,
                             ZLinkSpotCloseReason.HostShutdown,
-                            DateTimeOffset.UtcNow + activation.DefaultRequestTimeout
+                            activation._runtime.TeardownEnd
+                                ?? DateTimeOffset.UtcNow + activation.DefaultRequestTimeout
                         )
                         .ConfigureAwait(false);
                 },

@@ -8,6 +8,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App"/>
         <PackageReference Include="Microsoft.Extensions.DependencyInjection"/>
         <PackageReference Include="Microsoft.Extensions.Hosting"/>
         <PackageReference Include="Microsoft.NET.Test.Sdk"/>
@@ -111,6 +112,8 @@
         <Compile Include="Runtime/CustomSerializerEnvelopeTests.cs"/>
         <Compile Include="Runtime/EncodedPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/DrainCoordinatorTests.cs"/>
+        <Compile Include="Runtime/ShutdownHttpYieldContractTests.cs"/>
+        <Compile Include="../Zlink.HttpClient.UnitTests/TestHttpServer.cs" Link="Support/TestHttpServer.cs"/>
         <Compile Include="Runtime/DurableAuthorityGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/AuthorityRelocationStateGoldenConformanceTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinContractTests.cs"/>

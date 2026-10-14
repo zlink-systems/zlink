@@ -79,9 +79,14 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
         }
         catch (OperationCanceledException) when (runtimeStopToken.IsCancellationRequested)
         {
-            throw new OperationCanceledException(
-                "I/O worker call was canceled because the framework runtime stopped."
-            );
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "I/O worker wait ended because the framework runtime stopped.",
+                ZLinkRetryAdvice.DoNotRetry
+            )
+            {
+                Origin = ZLinkErrorOrigin.Framework,
+            };
         }
         catch (Exception ex) when (ex is not ZLinkFrameworkException)
         {

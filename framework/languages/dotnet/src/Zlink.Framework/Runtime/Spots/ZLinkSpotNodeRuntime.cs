@@ -817,13 +817,13 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         AwaitStateLane(_spots.CancelActiveOperationsAsync());
     }
 
-    private async ValueTask CloseLifecycleAsync()
+    private async ValueTask CloseLifecycleAsync(CancellationToken cancellationToken)
     {
-        await _spots.CloseLifecycleAsync().ConfigureAwait(false);
+        await _spots.CloseLifecycleAsync(cancellationToken).ConfigureAwait(false);
         if (_entrySpotActivation is not { } activation)
             return;
 
-        await activation.CloseAsync(CancellationToken.None).ConfigureAwait(false);
+        await activation.CloseAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync() =>
@@ -846,8 +846,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     {
         var failures = new List<Exception>();
         Capture(DetachManualConnections);
-        if (!forceStopToken.CanBeCanceled)
-            await CaptureAsync(CloseLifecycleAsync).ConfigureAwait(false);
+        await CaptureAsync(() => CloseLifecycleAsync(forceStopToken)).ConfigureAwait(false);
         Capture(RequestStop);
         if (_entryDispatchPump is { } entryDispatchPump)
             await CaptureAsync(entryDispatchPump.DisposeAsync).ConfigureAwait(false);

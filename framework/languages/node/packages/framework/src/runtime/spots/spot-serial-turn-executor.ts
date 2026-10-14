@@ -37,6 +37,19 @@ export class ZLinkSpotSerialTurnExecutor {
   private resumedOwnerTurn: ZLinkSpotSerialTurn | undefined;
   private lastActivityAtMs = performance.now();
   private lifecycleAdmissionClosed = false;
+  private readonly ownedTurns = new Set<ZLinkSpotSerialTurn>();
+
+  addOwnedWait(turn: ZLinkSpotSerialTurn): void {
+    this.ownedTurns.add(turn);
+  }
+
+  removeOwnedWait(turn: ZLinkSpotSerialTurn): void {
+    this.ownedTurns.delete(turn);
+  }
+
+  terminateOwnedWaits(): void {
+    for (const turn of this.ownedTurns) turn.terminateOwnedWait();
+  }
   activeTurnId = 0;
 
   constructor(
@@ -353,7 +366,8 @@ export class ZLinkSpotSerialTurnExecutor {
     const turn = new ZLinkSpotSerialTurn(
       (resumeTurn, resume, resumeReject) => this.postResume(resumeTurn, resume, resumeReject),
       barrierClaim,
-      this.yieldAllowed
+      this.yieldAllowed,
+      this
     );
     const wrapped = async () => {
       this.depth += 1;

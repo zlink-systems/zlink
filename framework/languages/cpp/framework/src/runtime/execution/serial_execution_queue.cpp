@@ -602,7 +602,6 @@ serial_execution_queue_t::serial_execution_queue_t (offload_executor_t &executor
 
 serial_execution_queue_t::~serial_execution_queue_t ()
 {
-    close ();
     drain ();
     while (_publication_cursor) {
         auto *next = _publication_cursor->next.load (std::memory_order_acquire);
@@ -1159,6 +1158,7 @@ std::vector<std::shared_ptr<const void>> serial_execution_queue_t::pending_messa
 
 void serial_execution_queue_t::close ()
 {
+    cancel_waits ();
     std::lock_guard<std::mutex> lock (_mutex);
     close_locked ();
 }
@@ -1258,7 +1258,6 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
                 active_cancellations.push_back (std::move (_suspended_lifecycle->cancel));
         }
     }
-    cancel_waits ();
     for (auto &item : cancelled_items) {
         if (item.cancel)
             item.cancel ();

@@ -433,7 +433,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             activation.CancelActiveOperations();
     }
 
-    internal async ValueTask CloseLifecycleAsync()
+    internal async ValueTask CloseLifecycleAsync(CancellationToken cancellationToken = default)
     {
         await StopIdleEvictionAsync().ConfigureAwait(false);
         var activations = await SnapshotActivationsAsync().ConfigureAwait(false);
@@ -455,11 +455,15 @@ internal sealed class ZLinkSpotNodeCatalog(
                                 activation,
                                 transaction,
                                 ZLinkSpotCloseReason.HostShutdown,
-                                DateTimeOffset.UtcNow + activation.DefaultRequestTimeout
+                                runtime.TeardownEnd
+                                    ?? DateTimeOffset.UtcNow + activation.DefaultRequestTimeout,
+                                cancellationToken: cancellationToken
                             )
                             .ConfigureAwait(false);
                     else
-                        _ = await transaction.Task.ConfigureAwait(false);
+                        _ = await transaction
+                            .Task.WaitAsync(cancellationToken)
+                            .ConfigureAwait(false);
                 })
                 .ConfigureAwait(false);
 
@@ -552,7 +556,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         await CaptureAsync(StopIdleEvictionAsync).ConfigureAwait(false);
         await CaptureAsync(() => new ValueTask(creationsDrained)).ConfigureAwait(false);
         if (!forceStop)
-            await CaptureAsync(CloseLifecycleAsync).ConfigureAwait(false);
+            await CaptureAsync(() => CloseLifecycleAsync()).ConfigureAwait(false);
 
         ZLinkSpotActivation[] activations;
         activations = await _lane.RunAsync(() => _spots.Values.ToArray()).ConfigureAwait(false);
@@ -1800,7 +1804,8 @@ internal sealed class ZLinkSpotNodeCatalog(
         ZLinkSpotCloseReason reason,
         DateTimeOffset? deadline,
         bool releaseLocation = true,
-        bool requireNoActors = true
+        bool requireNoActors = true,
+        CancellationToken cancellationToken = default
     )
     {
         try
@@ -1811,7 +1816,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                         reason,
                         deadline ?? DateTimeOffset.UtcNow + activation.DefaultRequestTimeout,
                         requireNoActors,
-                        CancellationToken.None
+                        cancellationToken
                     )
                     .ConfigureAwait(false)
             )

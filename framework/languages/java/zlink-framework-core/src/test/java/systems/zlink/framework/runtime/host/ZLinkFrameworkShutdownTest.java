@@ -19,6 +19,13 @@ import java.util.concurrent.TimeoutException;
 
 final class ZLinkFrameworkShutdownTest {
     @Test
+    void callbackFailureSuppressedOnDeadlineKeepsTeardownClassification() {
+        var deadline = new CompletionException(new ZLinkFrameworkShutdown.DeadlineExpired());
+        deadline.addSuppressed(new TimeoutException("callback failure"));
+        assertEquals(true, ZLinkFrameworkShutdown.hasTeardownFailure(deadline));
+    }
+
+    @Test
     void socketCloseFailuresReachTheCallerForSynchronousAndAsyncCleanup() {
         for (boolean async : List.of(false, true)) {
             var shutdown =
@@ -30,8 +37,7 @@ final class ZLinkFrameworkShutdownTest {
             var remaining = new ArrayList<String>();
             shutdown.defer("remaining", () -> remaining.add("closed"));
             if (async) {
-                shutdown.deferCloseStage(
-                        "socket_close", () -> CompletableFuture.failedFuture(failure));
+                shutdown.deferStage("socket_close", () -> CompletableFuture.failedFuture(failure));
             } else {
                 shutdown.defer(
                         "socket_close",
@@ -51,7 +57,7 @@ final class ZLinkFrameworkShutdownTest {
     }
 
     @Test
-    void expiredHostDeadlineStartsAsyncResourcesAndRejectsNewStoreWork() {
+    void expiredTeardownDeadlineStartsAllRemainingCleanupRequests() {
         var shutdown = new ZLinkFrameworkShutdown(Instant.EPOCH);
         var resources = new ArrayList<String>();
         var stores = new ArrayList<String>();
@@ -68,7 +74,7 @@ final class ZLinkFrameworkShutdownTest {
                 List.of("spot_close", "auto_connect_stop", "instance_close", "stream_close")) {
             var provider = new CompletableFuture<Void>();
             providers.add(provider);
-            shutdown.deferCloseStage(
+            shutdown.deferStage(
                     stage,
                     () -> {
                         resources.add(stage);
@@ -85,13 +91,13 @@ final class ZLinkFrameworkShutdownTest {
         assertEquals(
                 List.of("stream_close", "instance_close", "auto_connect_stop", "spot_close"),
                 resources);
-        assertEquals(List.of(), stores);
+        assertEquals(List.of("descriptor_remove", "location_stop"), stores);
         assertEquals(4, providers.size());
         providers.forEach(provider -> assertFalse(provider.isDone()));
     }
 
     @Test
-    void expiredHostDeadlineRejectsStoreSubmissionAndStillClosesResources() throws Exception {
+    void expiredTeardownDeadlineSubmitsStoreAndStillClosesResources() throws Exception {
         var shutdown = new ZLinkFrameworkShutdown(Instant.EPOCH);
         var calls = new ArrayList<String>();
         var contextClosed = new CompletableFuture<Void>();
@@ -107,15 +113,11 @@ final class ZLinkFrameworkShutdownTest {
                     calls.add("descriptor");
                     return CompletableFuture.completedFuture(null);
                 });
-        var thrown =
-                assertThrows(
-                        CompletionException.class,
-                        () -> shutdown.closeAsync().toCompletableFuture().join());
-        var failure = assertInstanceOf(ZLinkFrameworkShutdown.Failure.class, thrown.getCause());
-        assertEquals("descriptor_remove", failure.stage());
-        assertInstanceOf(TimeoutException.class, failure.getCause());
+        assertThrows(
+                CompletionException.class,
+                () -> shutdown.closeAsync().toCompletableFuture().join());
         contextClosed.get(1, TimeUnit.SECONDS);
-        assertEquals(List.of("context"), calls);
+        assertEquals(List.of("descriptor", "context"), calls);
     }
 
     @Test
@@ -146,7 +148,7 @@ final class ZLinkFrameworkShutdownTest {
                         Instant.now().plus(ZLinkFrameworkRuntime.DEFAULT_TERMINATION_DEADLINE));
         var provider = new CompletableFuture<Void>();
         var calls = new ArrayList<String>();
-        shutdown.deferCloseStage(
+        shutdown.deferStage(
                 "stream_close",
                 () -> {
                     calls.add("stream");
@@ -168,13 +170,13 @@ final class ZLinkFrameworkShutdownTest {
         var calls = new ArrayList<String>();
         var contextFailure = new IllegalStateException("context failed");
         var streamFailure = new IOException("stream failed\nwith detail");
-        shutdown.deferCloseStage(
+        shutdown.deferStage(
                 "context_close",
                 () -> {
                     calls.add("context");
                     return CompletableFuture.failedFuture(contextFailure);
                 });
-        shutdown.deferCloseStage(
+        shutdown.deferStage(
                 "stream_close",
                 () -> {
                     calls.add("stream");

@@ -1,5 +1,9 @@
 package systems.zlink.framework.runtime.host;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -22,40 +26,63 @@ final class ZLinkFrameworkShutdown {
     private final ArrayDeque<Supplier<CompletionStage<Void>>> actions = new ArrayDeque<>();
 
     void defer(String stage, Runnable action) {
-        deferCloseStage(stage, () -> ZLinkTeardownExecutor.submit(action));
-    }
-
-    void deferCloseStage(String stage, Supplier<CompletionStage<Void>> action) {
-        actions.push(
-                () ->
-                        atStage(
-                                stage,
-                                () -> {
-                                    CompletionStage<Void> closing = action.get();
-                                    return withinDeadline(() -> closing);
-                                }));
+        deferStage(stage, () -> ZLinkTeardownExecutor.submit(action));
     }
 
     void deferStage(String stage, Supplier<CompletionStage<Void>> action) {
-        actions.push(() -> atStage(stage, () -> withinDeadline(action)));
+        actions.push(() -> atStage(stage, () -> withinDeadline(atStage(stage, action))));
     }
 
-    private CompletionStage<Void> withinDeadline(Supplier<CompletionStage<Void>> action) {
+    private CompletionStage<Void> withinDeadline(CompletionStage<Void> action) {
+        if (action.toCompletableFuture().isDone()) return action;
         long remaining = Duration.between(Instant.now(), deadline).toNanos();
         if (remaining <= 0L) {
-            return CompletableFuture.failedFuture(
-                    new TimeoutException("host shutdown deadline expired"));
+            return CompletableFuture.failedFuture(new DeadlineExpired());
         }
         CompletableFuture<Void> completion = new CompletableFuture<>();
-        action.get()
-                .whenComplete(
-                        (ignored, failure) -> {
-                            if (failure == null) completion.complete(null);
-                            else completion.completeExceptionally(failure);
-                        });
-        return completion.orTimeout(
-                Math.max(0L, Duration.between(Instant.now(), deadline).toNanos()),
-                TimeUnit.NANOSECONDS);
+        action.whenComplete(
+                (ignored, failure) -> {
+                    if (failure == null) completion.complete(null);
+                    else completion.completeExceptionally(failure);
+                });
+        return completion
+                .orTimeout(
+                        Math.max(0L, Duration.between(Instant.now(), deadline).toNanos()),
+                        TimeUnit.NANOSECONDS)
+                .exceptionallyCompose(
+                        error ->
+                                CompletableFuture.failedFuture(
+                                        error instanceof TimeoutException
+                                                ? new DeadlineExpired()
+                                                : error));
+    }
+
+    static final class DeadlineExpired extends TimeoutException {
+        DeadlineExpired() {
+            super("host teardown deadline expired");
+        }
+    }
+
+    static boolean hasTeardownFailure(Throwable error) {
+        if (error == null) return false;
+        Throwable value = error;
+        boolean failed =
+                (value instanceof Failure
+                                        || value instanceof CompletionException
+                                        || value instanceof ExecutionException)
+                                && value.getCause() != null
+                        ? hasTeardownFailure(value.getCause())
+                        : !(value instanceof DeadlineExpired)
+                                && !(ZLinkFrameworkErrorOrigin.isFramework(value)
+                                        && value instanceof ZLinkFrameworkException failure
+                                        && (failure.kind()
+                                                        == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED
+                                                || failure.kind()
+                                                        == ZLinkFrameworkErrorKind.SHUTTING_DOWN));
+        for (Throwable suppressed : value.getSuppressed()) {
+            failed |= hasTeardownFailure(suppressed);
+        }
+        return failed;
     }
 
     static CompletionStage<Void> atStage(String stage, Supplier<CompletionStage<Void>> action) {
@@ -64,7 +91,9 @@ final class ZLinkFrameworkShutdown {
                     .exceptionallyCompose(
                             error ->
                                     CompletableFuture.failedFuture(
-                                            new Failure(stage, unwrap(error))));
+                                            unwrap(error) instanceof Failure
+                                                    ? unwrap(error)
+                                                    : new Failure(stage, unwrap(error))));
         } catch (RuntimeException error) {
             return CompletableFuture.failedFuture(new Failure(stage, error));
         }

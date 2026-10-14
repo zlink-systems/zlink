@@ -80,7 +80,7 @@ public final class ZLinkDispatchErrorReporter {
                 tracePoint,
                 surface,
                 messageKind,
-                reason,
+                dispatchReason(reason, error),
                 action,
                 packetName,
                 channelName,
@@ -94,6 +94,21 @@ public final class ZLinkDispatchErrorReporter {
                 null,
                 null,
                 errorDetails(error));
+    }
+
+    private static ZLinkDispatchErrorReason dispatchReason(
+            ZLinkDispatchErrorReason reason, Throwable error) {
+        while (error instanceof CompletionException && error.getCause() != null)
+            error = error.getCause();
+        if (reason == ZLinkDispatchErrorReason.HANDLER_EXCEPTION
+                && systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.isFramework(
+                        error)
+                && error instanceof systems.zlink.framework.errors.ZLinkFrameworkException failure
+                && failure.kind()
+                        == systems.zlink.framework.errors.ZLinkFrameworkErrorKind.SHUTTING_DOWN) {
+            return ZLinkDispatchErrorReason.SHUTDOWN;
+        }
+        return reason;
     }
 
     public boolean captureEnabled() {
@@ -113,7 +128,7 @@ public final class ZLinkDispatchErrorReporter {
                 tracePoint,
                 error.surface(),
                 error.messageKind(),
-                error.reason(),
+                dispatchReason(error.reason(), error.failure()),
                 error.action(),
                 error.packetName(),
                 error.channelName(),

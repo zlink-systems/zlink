@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/foundation/cleanup_failure.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/channels/channel_runtime_manager.hpp"
@@ -2549,9 +2550,17 @@ void spot_context_state_t::run_local_close_steps (
   detail::task_scheduler_t resume)
 {
     // Steps 3 and 4: OnClosing once, local cleanup, then the fenced release.
+    const auto teardown_end = owner->lane.run ([&] { return owner->teardown_end; }).get ();
     auto finish = [self = shared_from_this (), owner, token, release = std::move (release),
                    reincarnate = std::move (reincarnate), done,
-                   discard_reincarnation = std::move (discard_reincarnation), resume] () mutable {
+                   discard_reincarnation = std::move (discard_reincarnation), resume,
+                   teardown_end] (result_t<void> callback_result) mutable {
+        if (teardown_end && !callback_result) {
+            done = [done, callback_result] (result_t<bool> result) {
+                done (result ? detail::result_access_t::failure<bool> (callback_result.exception ())
+                             : result);
+            };
+        }
         const bool sealed =
           owner->lane.run ([&] { return self->close_reservation == token && self->closed; }).get ();
         if (!sealed) {
@@ -2741,8 +2750,10 @@ void spot_context_state_t::run_local_close_steps (
         if (on_closing && instance) {
             service::after_close_step (
               on_closing (instance.get (),
-                          spot_closing_context_t{spot_close_reason_t::explicit_close,
-                                                 std::chrono::system_clock::time_point::max ()},
+                          spot_closing_context_t{
+                            teardown_end ? spot_close_reason_t::host_shutdown
+                                         : spot_close_reason_t::explicit_close,
+                            teardown_end.value_or (std::chrono::system_clock::time_point::max ())},
                           {}),
               resume,
               [self = shared_from_this (), owner, instance,
@@ -2750,16 +2761,18 @@ void spot_context_state_t::run_local_close_steps (
                   if (!result)
                       report_spot_close_diagnostic (owner, std::string (self->spot_id),
                                                     "on_closing_failed", result.exception ());
-                  finish ();
+                  finish (result);
               });
             return;
         }
     }
-    catch (...) {
+    catch (const std::exception &) {
         report_spot_close_diagnostic (owner, std::string (spot_id), "on_closing_failed",
                                       std::current_exception ());
+        finish (detail::result_access_t::failure<void> (std::current_exception ()));
+        return;
     }
-    finish ();
+    finish (result_t<void>::success ());
 }
 
 void report_spot_close_diagnostic (const std::shared_ptr<spot_node_builder_state_t> &owner,
@@ -13384,6 +13397,8 @@ bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_
     std::vector<task_t<bool>> running_closes;
     _state->lane
       .run ([&] {
+          _state->teardown_end =
+            std::chrono::system_clock::now () + (deadline_at - std::chrono::steady_clock::now ());
           user_spots.reserve (_state->spot_contexts_by_id.size ());
           for (const auto &[rid, context] : _state->spot_contexts_by_id) {
               if (!context._state || context._state->is_entry_spot ())
@@ -13408,22 +13423,27 @@ bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_
                                          std::chrono::ceil<std::chrono::milliseconds> (
                                            deadline_at - std::chrono::steady_clock::now ()));
         const auto result = closing.result_for (remaining);
-        return result && *result && result->value ();
+        return result && result->value ();
     };
-    for (const auto &closing : running_closes) {
-        if (!wait_for_close (closing))
-            return false;
-    }
-    for (auto &spot_id : user_spots) {
+    bool all_closed = true;
+    std::vector<std::exception_ptr> callback_failures;
+    const auto observe = [&] (const task_t<bool> &closing) {
         try {
-            if (!wait_for_close (close_spot (std::move (spot_id))))
-                return false;
+            all_closed = wait_for_close (closing) && all_closed;
         }
-        catch (...) {
-            return false;
+        catch (const std::exception &) {
+            callback_failures.push_back (std::current_exception ());
         }
-    }
-    return active_user_spot_count () == 0;
+    };
+    for (const auto &closing : running_closes)
+        observe (closing);
+    for (auto &spot_id : user_spots)
+        observe (close_spot (std::move (spot_id)));
+    if (callback_failures.size () == 1)
+        std::rethrow_exception (callback_failures.front ());
+    if (!callback_failures.empty ())
+        throw runtime::cleanup_failure_t (std::move (callback_failures));
+    return all_closed && active_user_spot_count () == 0;
 }
 
 node_rid_t spot_node_runtime_t::node_rid () const
@@ -13786,6 +13806,8 @@ bool spot_node_runtime_t::stopping () const noexcept
 
 void spot_node_runtime_t::cancel_dispatch_waits () noexcept
 {
+    auto cancellation = _state->lane.run ([&] { return _state->worker_cancellation; }).get ();
+    cancellation.request_stop ();
     detail::visit_spot_node_dispatch_queues (*_state, [] (auto &queue) { queue.cancel_waits (); });
 }
 

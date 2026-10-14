@@ -17,6 +17,10 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.add("-Xlint:-module")
 }
 
+tasks.named<JavaCompile>("compileIntegrationTestJava") {
+    source(project(":zlink-http-client").file("src/test/java/systems/zlink/httpclient/TestSupport.java"))
+}
+
 sourceSets {
     val main by getting {
         java.srcDir("../../../runtime/protocol/generated/jvm")

@@ -652,7 +652,10 @@ final class ZLinkLocationRuntimeRecoveryTest {
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
                             () -> stopping.get(2, TimeUnit.SECONDS));
-            assertTrue(failure.getCause() instanceof java.util.concurrent.TimeoutException);
+            assertEquals(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    ((systems.zlink.framework.errors.ZLinkFrameworkException) failure.getCause())
+                            .kind());
             assertThrows(java.util.concurrent.CancellationException.class, startup::join);
             assertEquals(0, store.heartbeatRenewals.get());
         }

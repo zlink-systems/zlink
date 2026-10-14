@@ -49,12 +49,39 @@ export function requireZLinkInfrastructureExecutionArea(): void {
   }
 }
 
+function observeOwnedPromise<T>(
+  pending: Promise<T>,
+  completion: (value: T | undefined, error?: unknown) => void
+): (error: unknown) => void {
+  let observation: typeof completion | undefined = completion;
+  const settle = (value: T | undefined, error?: unknown) => {
+    const completed = observation;
+    observation = undefined;
+    completed?.(value, error);
+  };
+  pending.then(
+    (value) => settle(value),
+    (error) => settle(undefined, error)
+  );
+  return (error) => settle(undefined, error);
+}
+
 export class ZLinkSpotSerialTurn {
   private suspendedResolve: (() => void) | undefined;
   private suspendedPromise: Promise<void> | undefined;
   private suspendSignaled = false;
   private owner: Promise<unknown> | undefined;
   private frameworkOperationsBlocked = false;
+  private endOwnedWait?: (error: unknown) => void;
+
+  terminateOwnedWait(): void {
+    this.endOwnedWait?.(
+      createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+        'Runtime-owned wait ended during host shutdown.'
+      )
+    );
+  }
 
   constructor(
     private readonly postResume: (
@@ -63,7 +90,11 @@ export class ZLinkSpotSerialTurn {
       reject: (reason: unknown) => void
     ) => boolean,
     private executionClaim: ZLinkExecutionBarrierClaim | undefined,
-    readonly yieldAllowed: boolean
+    readonly yieldAllowed: boolean,
+    private readonly waitOwner?: {
+      addOwnedWait(turn: ZLinkSpotSerialTurn): void;
+      removeOwnedWait(turn: ZLinkSpotSerialTurn): void;
+    }
   ) {}
 
   get isSuspended(): boolean {
@@ -132,9 +163,18 @@ export class ZLinkSpotSerialTurn {
   /** Suspends a turn only for a Framework-owned lifecycle boundary. */
   async yieldFrameworkPromise<T>(pending: Promise<T>): Promise<T> {
     this.signalSuspended();
-    const result = await pending;
-    await this.awaitResumePermit();
-    return result;
+    return await new Promise<T>((resolve, reject) => {
+      const resume = (value: T | undefined, error?: unknown) => {
+        this.endOwnedWait = undefined;
+        this.waitOwner?.removeOwnedWait(this);
+        void this.awaitResumePermit().then(() => {
+          if (error !== undefined) reject(error);
+          else resolve(value as T);
+        }, reject);
+      };
+      this.endOwnedWait = observeOwnedPromise(pending, resume);
+      this.waitOwner?.addOwnedWait(this);
+    });
   }
 
   async resumeOwnerUntilNextYield(): Promise<void> {

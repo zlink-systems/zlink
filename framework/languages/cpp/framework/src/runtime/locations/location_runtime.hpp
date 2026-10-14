@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include "runtime/foundation/cleanup_failure.hpp"
 
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/execution/state_lane.hpp"
@@ -227,20 +228,26 @@ class location_runtime_t
         });
     }
 
-    void stop () noexcept
+    std::chrono::milliseconds owner_lease_renew_timeout () const noexcept
+    {
+        return _options.owner_lease_renew_timeout;
+    }
+
+    void
+    stop (std::optional<std::chrono::steady_clock::time_point> cleanup_end = std::nullopt) noexcept
     {
         if (!_started.exchange (false))
             return;
         stop_heartbeat ();
-        static_cast<void> (cleanup_owner ());
+        static_cast<void> (cleanup_owner (cleanup_end));
     }
 
     /* Drain owner cleanup (graceful-drain-handoff §4-5): stops the lease
      * heartbeat, then removes this owner's lease and rows while the store
      * stays usable for the rest of teardown. Returns false when the store
      * rejects the cleanup (the drain worker maps it to OwnerCleanupFailed). */
-    bool cleanup_owner (std::optional<std::chrono::steady_clock::time_point> requested_deadline_at =
-                          std::nullopt) noexcept
+    result_t<void> cleanup_owner (std::optional<std::chrono::steady_clock::time_point>
+                                    requested_deadline_at = std::nullopt) noexcept
     {
         const auto deadline_at = requested_deadline_at.value_or (
           std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout);
@@ -250,28 +257,36 @@ class location_runtime_t
         try {
             const auto token = current_owner_token_unchecked ();
             if (token) {
+                std::vector<std::exception_ptr> failures;
                 auto await_cleanup = [&] (auto request) {
-                    if (remaining_until (deadline_at) <= std::chrono::milliseconds::zero ())
-                        throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                                               "owner lease cleanup timed out");
-                    auto pending = request ();
-                    const auto completed = detail::observe_task_result_for (
-                      pending, remaining_until (deadline_at), std::stop_token{});
-                    if (!completed)
-                        throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
-                                                               "owner lease cleanup timed out");
-                    completed->value ();
+                    try {
+                        auto pending = request ();
+                        const auto completed = detail::observe_task_result_for (
+                          pending, remaining_until (deadline_at), std::stop_token{});
+                        if (!completed)
+                            throw detail::make_framework_origin_exception (
+                              framework_error_kind_t::deadline_exceeded,
+                              "owner lease cleanup timed out");
+                        completed->value ();
+                    }
+                    catch (const std::exception &) {
+                        failures.push_back (std::current_exception ());
+                    }
                 };
                 await_cleanup ([&] { return _store->remove_all_by_owner (*token); });
                 await_cleanup ([&] { return _store->release_owner_lease (*token); });
                 _lane.run_checked ([this] { clear_owner_lease_on_lane (); }).get ();
+                if (failures.size () == 1)
+                    std::rethrow_exception (failures.front ());
+                if (!failures.empty ())
+                    throw cleanup_failure_t (std::move (failures));
             }
-            return true;
+            return result_t<void>::success ();
         }
         catch (const std::exception &error) {
             record_store_error ();
             record_failure (error.what ());
-            return false;
+            return detail::result_access_t::failure<void> (std::current_exception ());
         }
     }
 

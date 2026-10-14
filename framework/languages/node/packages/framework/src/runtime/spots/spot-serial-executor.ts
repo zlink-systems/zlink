@@ -112,6 +112,12 @@ export class ZLinkSpotSerialExecutor {
    * Makes all child queues unreachable and completes them in one synchronous
    * ownership turn. Already accepted work remains drainable.
    */
+  terminateOwnedWaits(): void {
+    this.spotSerial.terminateOwnedWaits();
+    for (const serial of this.actorSerials.values()) serial.terminateOwnedWaits();
+    for (const serial of this.timerSerials.values()) serial.terminateOwnedWaits();
+  }
+
   close(): Promise<void> {
     const children = this.closeChildren();
     return Promise.all([children, this.spotSerial.whenIdle()]).then(() => undefined);

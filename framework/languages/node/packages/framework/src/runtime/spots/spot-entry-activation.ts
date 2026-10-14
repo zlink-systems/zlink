@@ -317,6 +317,8 @@ export class ZLinkEntrySpotActivation {
         errors.push(error);
       }
     };
+    this.spotSerialExecutor.terminateOwnedWaits();
+    await this.serial.whenIdle();
     if (this.initialized) {
       await cleanup(() =>
         this.serial.execute(() =>

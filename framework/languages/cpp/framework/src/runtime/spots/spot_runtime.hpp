@@ -138,6 +138,7 @@ class spot_node_builder_state_t
     std::optional<service_provider_t> root_services;
     std::shared_ptr<std::atomic_bool> drain_flag;
     std::function<framework_runtime_state_t ()> host_phase;
+    std::optional<std::chrono::system_clock::time_point> teardown_end;
     /* The host admission gate (Spot address messaging §9): a draining host
      * ends new Spot creation and Actor admission with ShuttingDown before any
      * Spot seal is consulted. The host owns the flag (bind_drain_flag). */

@@ -1077,6 +1077,9 @@ export class DefaultZLinkSpotManager {
   }
 
   async drainForShutdown(meshName: string, signal?: AbortSignal, deadline?: Date): Promise<void> {
+    for (const activation of this.activations.activeActivations()) {
+      if (activation.meshName === meshName) activation.serialExecutor.terminateOwnedWaits();
+    }
     const results = await Promise.allSettled(
       this.activations
         .activeActivations()

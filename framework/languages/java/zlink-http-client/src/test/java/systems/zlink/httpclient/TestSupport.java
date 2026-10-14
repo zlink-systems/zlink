@@ -31,11 +31,11 @@ import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
 /** Shared test servers and certificate helpers. */
-final class TestSupport {
+public final class TestSupport {
 
     private TestSupport() {}
 
-    record Server(String baseUrl, AutoCloseable closeable) {}
+    public record Server(String baseUrl, AutoCloseable closeable) {}
 
     static String resourcePath(String resource) {
         try {
@@ -45,15 +45,21 @@ final class TestSupport {
         }
     }
 
-    static Server httpServer(HttpHandler handler) {
+    public static Server httpServer(HttpHandler handler) {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             // Multi-threaded executor so concurrent requests are not serialized by the test server.
-            server.setExecutor(Executors.newCachedThreadPool());
+            var executor = Executors.newCachedThreadPool();
+            server.setExecutor(executor);
             server.createContext("/", handler);
             server.start();
             int port = server.getAddress().getPort();
-            return new Server("http://127.0.0.1:" + port, () -> server.stop(0));
+            return new Server(
+                    "http://127.0.0.1:" + port,
+                    () -> {
+                        server.stop(0);
+                        executor.shutdownNow();
+                    });
         } catch (IOException cause) {
             throw new RuntimeException(cause);
         }

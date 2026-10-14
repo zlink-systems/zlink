@@ -56,6 +56,16 @@ internal sealed class ZLinkDispatchErrorReporter(
 
     public void Report(ZLinkDispatchFailure error)
     {
+        if (
+            error.Reason == ZLinkDispatchErrorReason.HandlerException
+            && error.Exception
+                is ZLinkFrameworkException
+                {
+                    Kind: ZLinkFrameworkErrorKind.ShuttingDown,
+                    Origin: ZLinkErrorOrigin.Framework
+                }
+        )
+            error = error with { Reason = ZLinkDispatchErrorReason.Shutdown };
         Flow.TraceDispatchError(error);
     }
 

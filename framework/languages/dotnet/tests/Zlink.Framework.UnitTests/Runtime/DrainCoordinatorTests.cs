@@ -21,6 +21,68 @@ namespace Zlink.Framework.UnitTests;
 public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 {
     [Fact]
+    public async Task Forced_Relocation_Establishes_Teardown_End_Before_Publication()
+    {
+        var executor = new FakeDrainExecutor();
+        executor.Complete.TrySetResult(ZLinkDrainForceReason.RelocationFailed);
+        DateTimeOffset? observedEnd = null;
+        ZLinkDrainCoordinator? owner = null;
+        using var coordinator = owner = new ZLinkDrainCoordinator(
+            new ZLinkDrainAdmissionGate(),
+            executor,
+            logger: new DrainStateLogger(state =>
+            {
+                if (state == ZLinkDrainState.ForceStopping)
+                    observedEnd = owner!.TeardownEnd;
+            })
+        );
+        Assert.IsType<ForceStopped>(
+            await coordinator.DrainAsync(
+                ZLinkFrameworkLifecycleIntent.Relocate,
+                TimeSpan.FromSeconds(1),
+                null,
+                CancellationToken.None
+            )
+        );
+        Assert.NotNull(observedEnd);
+    }
+
+    [Fact]
+    public async Task Shutdown_Expired_Drain_Uses_The_Same_Live_Teardown_Token_For_Owner_Cleanup()
+    {
+        var probe = new DrainExecutionProbe();
+        CancellationToken runtimeToken = default;
+        CancellationToken ownerToken = default;
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new AuditRuntimeFailureReporter(),
+            probe.Operations with
+            {
+                WaitForAcceptedOperations = () => new TaskCompletionSource().Task,
+                ForceStopRuntime = token =>
+                {
+                    runtimeToken = token;
+                    return ValueTask.CompletedTask;
+                },
+                CleanupOwner = token =>
+                {
+                    ownerToken = token;
+                    token.ThrowIfCancellationRequested();
+                    return ValueTask.CompletedTask;
+                },
+            },
+            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(150) }
+        );
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        coordinator.RequestShutdown(TimeSpan.FromMilliseconds(20));
+        var result = Assert.IsType<ForceStopped>(
+            await coordinator.DrainAsync(TimeSpan.FromMilliseconds(20))
+        );
+        Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, result.Reason);
+        Assert.Equal(runtimeToken, ownerToken);
+        Assert.False(ownerToken.IsCancellationRequested);
+    }
+
+    [Fact]
     public async Task Startup_Cancellation_Waits_For_Host_Lease_Cleanup_Beyond_Renew_Timeout()
     {
         var store = new StartupPendingReleaseStore();
@@ -1105,7 +1167,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         Assert.True(workStopped.Task.IsCompleted);
         Assert.Equal(1, cleanupCalls);
         Assert.True(cleanupToken.CanBeCanceled);
-        Assert.Equal(hostDeadlineToken, cleanupToken);
+        Assert.NotEqual(hostDeadlineToken, cleanupToken);
         Assert.False(cleanupDeadlineExpiredAtInvocation);
     }
 
@@ -2418,6 +2480,29 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                     [new InvalidOperationException("owner cleanup failed")]
                 );
             return;
+        }
+    }
+
+    private sealed class DrainStateLogger(Action<ZLinkDrainState> observe)
+        : ILogger<ZLinkDrainCoordinator>
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel level) => true;
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId id,
+            TState state,
+            Exception? error,
+            Func<TState, Exception?, string> formatter
+        )
+        {
+            if (state is IEnumerable<KeyValuePair<string, object?>> values)
+                foreach (var value in values)
+                    if (value.Value is ZLinkDrainState next)
+                        observe(next);
         }
     }
 

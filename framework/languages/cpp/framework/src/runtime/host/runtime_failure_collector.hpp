@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include "runtime/foundation/cleanup_failure.hpp"
 #include <exception>
 #include <stdexcept>
 #include <string>
@@ -89,32 +90,6 @@ class runtime_failure_collector_t
     }
 
   private:
-    class cleanup_failure_t final : public std::runtime_error
-    {
-      public:
-        explicit cleanup_failure_t (std::vector<std::exception_ptr> failures) :
-            std::runtime_error (message (failures)), _failures (std::move (failures))
-        {
-        }
-
-      private:
-        static std::string message (const std::vector<std::exception_ptr> &failures)
-        {
-            std::string text;
-            for (const auto &failure : failures) {
-                try {
-                    std::rethrow_exception (failure);
-                }
-                catch (const std::exception &error) {
-                    if (!text.empty ())
-                        text += "; ";
-                    text += error.what ();
-                }
-            }
-            return text;
-        }
-        std::vector<std::exception_ptr> _failures;
-    };
     mutable std::mutex _mutex;
     std::function<void (std::exception_ptr)> _runtime_reporter;
     std::vector<std::exception_ptr> _failures;

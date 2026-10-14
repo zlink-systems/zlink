@@ -573,7 +573,7 @@ TEST (ZLinkFrameworkLocationRuntime, BoundsNonCooperativeOwnerCleanup)
     EXPECT_NE (std::string::npos, runtime.last_error ()->find ("timed out"));
 }
 
-TEST (ZLinkFrameworkLocationRuntime, HostCleanupUsesShutdownDeadline)
+TEST (ZLinkFrameworkLocationRuntime, HostCleanupUsesShutdownDeadlinePlusOwnerRenewTimeout)
 {
     startup_owner_lease_repository_t store;
     store.set_claim_mode (startup_owner_lease_repository_t::claim_mode_t::succeed);
@@ -592,7 +592,7 @@ TEST (ZLinkFrameworkLocationRuntime, HostCleanupUsesShutdownDeadline)
 
     auto shutdown = host.shutdown (deadline);
     auto completed = zlink::framework::detail::observe_task_result_for (
-      shutdown, deadline + std::chrono::seconds (1), std::stop_token{});
+      shutdown, deadline + std::chrono::seconds (2) + std::chrono::seconds (1), std::stop_token{});
     store.complete_pending_release ();
     ASSERT_TRUE (completed.has_value ());
     ASSERT_TRUE (completed->has_value ());
@@ -602,6 +602,31 @@ TEST (ZLinkFrameworkLocationRuntime, HostCleanupUsesShutdownDeadline)
     EXPECT_EQ (1, store.release_calls ());
     ASSERT_TRUE (location->last_error ().has_value ());
     EXPECT_NE (std::string::npos, location->last_error ()->find ("timed out"));
+}
+
+TEST (ZLinkFrameworkLocationRuntime, HostCleanupObservesAfterOriginalShutdownDeadline)
+{
+    startup_owner_lease_repository_t store;
+    store.set_claim_mode (startup_owner_lease_repository_t::claim_mode_t::succeed);
+    store.block_owner_lease_releases ();
+    auto runtime = std::make_unique<location_runtime_t> (
+      store, location_options_t{.owner_lease_renew_timeout = std::chrono::milliseconds (500)},
+      "owner-a");
+    runtime->start (zlink::routing_id_t::from ("node-a"));
+    auto *location = runtime.get ();
+    auto host = zlink::framework::app_t::create ();
+    host.advanced ().services ().add_singleton (std::move (runtime));
+    auto shutdown = host.shutdown (std::chrono::milliseconds (30));
+    const auto limit = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (store.release_calls () == 0 && std::chrono::steady_clock::now () < limit)
+        std::this_thread::yield ();
+    EXPECT_EQ (1, store.release_calls ());
+    const auto premature = shutdown.result_for (std::chrono::milliseconds (75));
+    store.complete_pending_release ();
+    EXPECT_FALSE (premature.has_value ());
+    const auto result = shutdown.result ().value ();
+    EXPECT_EQ (zlink::framework::termination_reason_t::deadline_exceeded, result.reason);
+    EXPECT_FALSE (location->last_error ().has_value ());
 }
 
 TEST (ZLinkFrameworkLocationRuntime, HostCleanupPreservesProviderFailure)

@@ -479,6 +479,11 @@ final class ZLinkSpotLifecycle {
         closeAllAsync();
     }
 
+    void terminateOwnedWaits() {
+        entrySpots.forEach(activation -> activation.context.terminateOwnedWaits());
+        spots.values().forEach(activation -> activation.context.terminateOwnedWaits());
+    }
+
     CompletionStage<Void> closeAllAsync() {
         return closeAllAsync(Instant.now());
     }

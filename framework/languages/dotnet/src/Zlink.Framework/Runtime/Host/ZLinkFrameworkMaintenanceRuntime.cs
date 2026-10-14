@@ -310,7 +310,8 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
                 var absoluteDeadline = DateTimeOffset.UtcNow + timeout;
                 _deadline = absoluteDeadline;
                 TransitionUnderLock(ZLinkFrameworkRuntimeState.Draining);
-                _lifecycle.RequestShutdown(timeout);
+                if (forcedReason is null)
+                    _lifecycle.RequestShutdown(timeout);
                 relocationCancellation = _relocationCancellation;
                 _relocationCancellation = null;
                 using (ExecutionContext.SuppressFlow())

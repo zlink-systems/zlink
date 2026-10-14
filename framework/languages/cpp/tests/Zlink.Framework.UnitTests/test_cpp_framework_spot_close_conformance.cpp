@@ -753,7 +753,9 @@ class scenario_client_t final : public zf::hosted_service_t
                     throw std::runtime_error ("shutdown did not reach the Close barrier");
                 }
             }
-            auto terminal = shutdown.result_for (expires ? 2s : 0ms);
+            const auto teardown_observation =
+              100ms + zf::location_options_t{}.owner_lease_renew_timeout + 1s;
+            auto terminal = shutdown.result_for (expires ? teardown_observation : 0ms);
             actual["completedBeforeRelease"] = terminal.has_value ();
             actual["authorityBeforeRelease"] = authority_state (services, spot_id);
             actual["ownerDeletedBeforeRelease"] = store.owner_lease_released.load ();
@@ -1171,7 +1173,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, ShutdownJoinsExplicitCloseBeforeOwnerC
                                     {"stopped", true}}}});
 }
 
-TEST (ZLinkFrameworkSpotCloseConformance, ShutdownCloseJoinUsesDrainDeadline)
+TEST (ZLinkFrameworkSpotCloseConformance, ShutdownCloseJoinUsesTeardownEnd)
 {
     run_and_check (nlohmann::json{
       {"name", "shutdown-close-deadline"},

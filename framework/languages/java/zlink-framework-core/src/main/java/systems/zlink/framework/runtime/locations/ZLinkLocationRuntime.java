@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.locations;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
@@ -9,6 +11,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimRe
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseGenerationExhausted;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -25,7 +28,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 public final class ZLinkLocationRuntime implements AutoCloseable {
@@ -340,61 +342,51 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                         (token == null
                                                         ? CompletableFuture.completedFuture(0L)
                                                         : withinDeadline(
-                                                                () ->
-                                                                        stores.unifiedStore()
-                                                                                .removeAllByOwner(
-                                                                                        token),
+                                                                stores.unifiedStore()
+                                                                        .removeAllByOwner(token),
                                                                 deadlineNanos))
-                                                .thenCompose(
-                                                        ignored ->
-                                                                token == null
-                                                                        ? CompletableFuture
-                                                                                .completedFuture(
-                                                                                        null)
-                                                                        : withinDeadline(
-                                                                                        () ->
-                                                                                                stores.ownerLeaseStore()
-                                                                                                        .releaseOwnerLease(
-                                                                                                                token),
-                                                                                        deadlineNanos)
-                                                                                .thenApply(
-                                                                                        released ->
-                                                                                                null))
-                                                .thenCompose(
-                                                        ignored ->
-                                                                stateLane.runAsync(
-                                                                        () -> {
-                                                                            if (ownsStartupCore(
-                                                                                    state.lifecycle()
-                                                                                            .completion())) {
-                                                                                ownerToken = null;
-                                                                                ownerAdmissionDeadlineNanos =
-                                                                                        0L;
-                                                                            }
-                                                                            return null;
-                                                                        }))
                                                 .handle(
-                                                        (ignored, failure) -> {
-                                                            if (pendingFailure != null) {
-                                                                Throwable original =
-                                                                        unwrap(pendingFailure);
-                                                                if (failure != null)
-                                                                    original.addSuppressed(
-                                                                            unwrap(failure));
-                                                                throw new CompletionException(
-                                                                        original);
-                                                            }
-                                                            if (failure != null)
-                                                                throw new CompletionException(
-                                                                        unwrap(failure));
-                                                            return null;
-                                                        }));
+                                                        (ignored, failure) ->
+                                                                cleanupFailure(
+                                                                        pendingFailure, failure)))
+                        .thenCompose(
+                                pendingFailure ->
+                                        (token == null
+                                                        ? CompletableFuture.completedFuture(null)
+                                                        : withinDeadline(
+                                                                stores.ownerLeaseStore()
+                                                                        .releaseOwnerLease(token),
+                                                                deadlineNanos))
+                                                .handle(
+                                                        (ignored, failure) ->
+                                                                cleanupFailure(
+                                                                        pendingFailure, failure)))
+                        .thenCompose(
+                                failure ->
+                                        stateLane.runAsync(
+                                                () -> {
+                                                    if (ownsStartupCore(
+                                                            state.lifecycle().completion())) {
+                                                        ownerToken = null;
+                                                        ownerAdmissionDeadlineNanos = 0L;
+                                                    }
+                                                    if (failure != null)
+                                                        throw new CompletionException(failure);
+                                                    return null;
+                                                }));
         cleanup.whenComplete(
                 (ignored, failure) -> {
                     if (failure == null) state.completion().complete(null);
                     else state.completion().completeExceptionally(unwrap(failure));
                 });
         return state.completion();
+    }
+
+    private static Throwable cleanupFailure(Throwable pending, Throwable failure) {
+        if (pending == null) return failure == null ? null : unwrap(failure);
+        Throwable original = unwrap(pending);
+        if (failure != null && unwrap(failure) != original) original.addSuppressed(unwrap(failure));
+        return original;
     }
 
     private CompletableFuture<Void> startupCompletion() {
@@ -625,19 +617,21 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                         : CompletableFuture.failedFuture(failure));
     }
 
+    private static ZLinkFrameworkException ownerLeaseOperationTimeout() {
+        return ZLinkFrameworkErrorOrigin.framework(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, "owner lease operation timed out");
+    }
+
     private <T> CompletionStage<T> withinDeadline(
             CompletionStage<T> operation, long deadlineNanos) {
         long remainingNanos = deadlineNanos - System.nanoTime();
         if (remainingNanos <= 0L) {
-            return CompletableFuture.failedFuture(
-                    new TimeoutException("owner lease operation timed out"));
+            return CompletableFuture.failedFuture(ownerLeaseOperationTimeout());
         }
         CompletableFuture<T> completion = new CompletableFuture<>();
         ScheduledFuture<?> timeout =
                 heartbeatExecutor.schedule(
-                        () ->
-                                completion.completeExceptionally(
-                                        new TimeoutException("owner lease operation timed out")),
+                        () -> completion.completeExceptionally(ownerLeaseOperationTimeout()),
                         remainingNanos,
                         TimeUnit.NANOSECONDS);
         operation.whenComplete(
@@ -655,8 +649,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private <T> CompletionStage<T> withinDeadline(
             Supplier<CompletionStage<T>> operation, long deadlineNanos) {
         if (deadlineNanos - System.nanoTime() <= 0L) {
-            return CompletableFuture.failedFuture(
-                    new TimeoutException("owner lease operation timed out"));
+            return CompletableFuture.failedFuture(ownerLeaseOperationTimeout());
         }
         return withinDeadline(operation.get(), deadlineNanos);
     }

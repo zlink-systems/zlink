@@ -13,6 +13,7 @@ import {
 } from '../../contracts';
 
 import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
+import { hasTeardownFailure } from './runtime-shutdown';
 import { createDeadlineExceededError } from '../abort';
 import type { ZLinkActivationAdmission } from '../activation-admission';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
@@ -326,7 +327,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       this.shutdownOperation = operation;
       for (const state of this.states.values()) state.operation ??= operation;
     }
-    return waitForOperation(this.shutdownOperation, signal);
+    return this.shutdownOperation;
   }
 
   async prepareHostRetire(
@@ -576,19 +577,16 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
         this.transition(meshName, state, ZLinkTopologyState.Stopped);
       }
     } catch (error) {
-      const classified = drainFailureReason(error);
-      const reason: ZLinkDrainForceReason =
-        classified !== 'teardown_failed'
-          ? classified
-          : signal.aborted
-            ? 'deadline_exceeded'
-            : classified;
-      await Promise.all(
-        entries.map(([meshName]) =>
-          this.options.forceStopResources(meshName).catch(() => undefined)
-        )
+      const reason: ZLinkDrainForceReason = hasTeardownFailure(error)
+        ? 'teardown_failed'
+        : 'deadline_exceeded';
+      const cleanup = await Promise.allSettled(
+        entries.map(([meshName]) => this.options.forceStopResources(meshName))
       );
-      result = { kind: 'forceStopped', reason };
+      const callbackFailed = cleanup.some(
+        (value) => value.status === 'rejected' && hasTeardownFailure(value.reason)
+      );
+      result = { kind: 'forceStopped', reason: callbackFailed ? 'teardown_failed' : reason };
       for (const [meshName, state] of entries) {
         this.transition(meshName, state, ZLinkTopologyState.Failed);
       }

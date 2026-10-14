@@ -5,7 +5,12 @@ import type { ZLinkLocationRuntime } from '../locations';
 import type { ZLinkSpotNodeRuntimeManager } from '../spots';
 import type { ZLinkStreamRuntimeManager } from '../streams';
 import type { ZLinkLocationRuntimeStopSnapshot } from './location-runtime-owner';
-import { isAbortError } from '../abort';
+import { isAbortError, isDeadlineExceededError } from '../abort';
+import { ZLinkFrameworkException } from '../../contracts';
+import {
+  internalFrameworkErrorKind,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
 
 interface ZLinkRuntimeOwnedStore {
   dispose?(): void | Promise<void>;
@@ -30,6 +35,7 @@ export interface ZLinkRuntimeStopParts {
   readonly spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
   readonly channelRuntime?: ZLinkChannelRuntimeManager;
   readonly serviceRelocation?: { dispose(): Promise<void> };
+  readonly statefulAuthorityRoutes?: { stop(): Promise<void> | void };
   readonly ownedStores?: readonly ZLinkRuntimeOwnedStore[];
 }
 
@@ -48,6 +54,7 @@ export async function rollbackRuntimeStart(parts: ZLinkRuntimeStartRollbackParts
 export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<void> {
   const state = parts.state;
   const errors: unknown[] = [];
+  await runShutdownStep(errors, () => parts.statefulAuthorityRoutes?.stop());
   await runShutdownStep(errors, () => parts.streamRuntime?.dispose());
   await runShutdownStep(errors, () =>
     parts.spotNodeRuntime?.dispose(undefined, parts.cleanupDeadline)
@@ -57,7 +64,7 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
   await runShutdownStep(errors, () => parts.locationSnapshot.lifecycle?.dispose());
   await runShutdownStep(errors, () => parts.locationSnapshot.runtime?.stop(parts.shutdownSignal));
   await Promise.allSettled(state.listenerTasks);
-  if (errors.every(isShutdownAbort)) await runShutdownStep(errors, () => state.dispose());
+  await runShutdownStep(errors, () => state.dispose());
   await disposeOwnedStores(parts.ownedStores, errors);
   const failures = errors.filter((error) => !isShutdownAbort(error));
   for (const failure of failures) {
@@ -95,4 +102,17 @@ async function runShutdownStep(
 function isShutdownAbort(error: unknown): boolean {
   if (isAbortError(error)) return true;
   return error instanceof AggregateError && error.errors.every((nested) => isShutdownAbort(nested));
+}
+
+export function hasTeardownFailure(error: unknown): boolean {
+  if (error instanceof AggregateError) return error.errors.some(hasTeardownFailure);
+  if (error instanceof ZLinkFrameworkException) {
+    const kind = internalFrameworkErrorKind(error);
+    if (
+      kind === ZLinkFrameworkInternalErrorKind.RuntimeShutdown ||
+      kind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+    )
+      return false;
+  }
+  return !isDeadlineExceededError(error) && !isAbortError(error);
 }

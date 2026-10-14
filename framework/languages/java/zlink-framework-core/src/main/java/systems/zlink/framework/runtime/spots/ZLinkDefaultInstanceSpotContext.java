@@ -122,6 +122,10 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                                         () -> host.runWithOutbound(outbound, operation)));
     }
 
+    public void terminateOwnedWaits() {
+        dispatchQueue.terminateOwnedWaits();
+    }
+
     void sealTimerAdmission() {
         timers.freeze();
     }

@@ -273,6 +273,7 @@ for (const failedPhase of ['confirmation', 'release']) {
 
 test('host shutdown deadline bounds a pending opaque write reconciliation', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const ownerLeaseRenewTimeoutMs = 100;
   const inner = new framework.ZLinkInMemoryProviderLocationStore();
   let claimKey;
   let committed = false;
@@ -303,7 +304,9 @@ test('host shutdown deadline bounds a pending opaque write reconciliation', asyn
     }
   };
   const host = new framework.ZLinkFrameworkRuntimeHost({
-    registration: framework.createFrameworkRegistration({ locations: { storeInstance: provider } })
+    registration: framework.createFrameworkRegistration({ locations: {
+      storeInstance: provider, options: { ownerLeaseRenewTimeoutMs }
+    } })
   }, { backendAdapterFactory: fakeBackendAdapterFactory([], rid('opaque-reconcile-deadline')) });
   const observedStart = host.start().then(() => 'started', error => error);
   await started;
@@ -317,20 +320,26 @@ test('host shutdown deadline bounds a pending opaque write reconciliation', asyn
   await Promise.resolve();
   assert.equal(terminated, false);
   t.mock.timers.tick(1);
+  await Promise.resolve();
+  assert.equal(terminated, false);
+  t.mock.timers.tick(ownerLeaseRenewTimeoutMs);
   const result = await shuttingDown;
   assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.ForceStopped);
+  assert.equal(result.reason, framework.ZLinkFrameworkTerminationReason.DeadlineExceeded);
   assert.equal((await observedStart)?.name, 'AbortError');
   assert.equal(host.isStarted, false);
   completeRead();
 });
 
-test('direct host stop uses one existing default deadline for a pending provider', async t => {
+test('direct host stop observes a pending provider until the single teardown end time', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const inner = new framework.ZLinkInMemoryProviderLocationStore();
   let blockScan = false;
   let cleanupSignal;
   let resolveScanning;
-  const scanning = new Promise(resolve => { resolveScanning = resolve; });
+  const scanning = new Promise((resolve) => {
+    resolveScanning = resolve;
+  });
   const provider = {
     read: inner.read.bind(inner),
     write: inner.write.bind(inner),
@@ -341,9 +350,14 @@ test('direct host stop uses one existing default deadline for a pending provider
       return await new Promise(() => {});
     }
   };
-  const host = new framework.ZLinkFrameworkRuntimeHost({
-    registration: framework.createFrameworkRegistration({ locations: { storeInstance: provider } })
-  }, { backendAdapterFactory: fakeBackendAdapterFactory([], rid('direct-stop-deadline')) });
+  const host = new framework.ZLinkFrameworkRuntimeHost(
+    {
+      registration: framework.createFrameworkRegistration({
+        locations: { storeInstance: provider }
+      })
+    },
+    { backendAdapterFactory: fakeBackendAdapterFactory([], rid('direct-stop-deadline')) }
+  );
   await host.start();
   blockScan = true;
   const deadlines = [];
@@ -353,15 +367,23 @@ test('direct host stop uses one existing default deadline for a pending provider
     return setTimer(callback, delay, ...args);
   });
   const stopping = host.stop();
-  const observedStop = stopping.then(() => undefined, error => error);
+  const observedStop = stopping.then(
+    () => undefined,
+    (error) => error
+  );
   await scanning;
   assert.deepEqual(deadlines, [30_000]);
   t.mock.timers.tick(29_999);
   assert.equal(cleanupSignal.aborted, false);
   t.mock.timers.tick(1);
+  assert.equal(cleanupSignal.aborted, false);
+  assert.deepEqual(deadlines, [30_000, 3000]);
+  t.mock.timers.tick(3000);
   const error = await observedStop;
-  assert(error instanceof framework.ZLinkOwnerCleanupError);
-  assert.equal(error.cause?.name, 'DeadlineExceededError');
+  // Host relocation §14 preserves Framework deadline origin through cleanup.
+  assert(error instanceof AggregateError);
+  assert(error.errors.every(failure => failure === cleanupSignal.reason));
+  assert.equal(cleanupSignal.reason.name, 'DeadlineExceededError');
   assert.equal(cleanupSignal.aborted, true);
   assert.equal(host.isStarted, false);
   assert.equal(host.status.deadline, undefined);
@@ -1374,4 +1396,27 @@ function spotPeer(ownerId, nodeRid, endpoint) {
     generation: 0n,
     updatedAt: new Date(0)
   };
+}
+
+for (const frameworkCancellation of [false, true]) {
+  test(`Owner cleanup preserves cancellation origin without repeating Store requests (${frameworkCancellation})`, async () => {
+    const provider = new framework.ZLinkInMemoryProviderLocationStore();
+    const host = new framework.ZLinkFrameworkRuntimeHost({
+      registration: framework.createFrameworkRegistration({
+        locations: { storeInstance: provider, options: { ownerLeaseRenewTimeoutMs: 80 } }
+      })
+    }, { backendAdapterFactory: fakeBackendAdapterFactory([], zlink.RoutingId.from('cleanup-origin')) });
+    await host.start();
+    const owner = host.locationOwner.currentRuntime;
+    const error = frameworkCancellation
+      ? framework.createInternalFrameworkException(framework.ZLinkFrameworkInternalErrorKind.RuntimeShutdown, 'Framework stop.')
+      : new DOMException('Application Store abort.', 'AbortError');
+    let requests = 0;
+    owner.stores.locationStore.removeAllByOwner = async () => { requests += 1; throw error; };
+    const result = await host.shutdown({ deadlineMs: 200 });
+    assert.equal(result.reason, frameworkCancellation
+      ? framework.ZLinkFrameworkTerminationReason.DeadlineExceeded
+      : framework.ZLinkFrameworkTerminationReason.TeardownFailed);
+    assert.equal(requests, 1, 'Owner cleanup has one operation record for drain and stop.');
+  });
 }

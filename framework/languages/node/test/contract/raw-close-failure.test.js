@@ -103,7 +103,7 @@ test('fanout registry retains a failed subscriber for subsequent close', async (
   assert.equal(attempts, 2);
 });
 
-test('shutdown reports a failed socket and defers context disposal', async () => {
+test('shutdown reports a failed socket and requests the remaining context disposal', async () => {
   const failure = new Error('first runtime close failed');
   let attempts = 0;
   let contextCloses = 0;
@@ -129,10 +129,11 @@ test('shutdown reports a failed socket and defers context disposal', async () =>
   };
   await assert.rejects(stopRuntimeParts(parts), (error) => error === failure);
   assert.deepEqual(reported, [failure]);
-  assert.equal(contextCloses, 0);
+  // Host relocation §14: a failed stage does not omit the remaining requests.
+  assert.equal(contextCloses, 1);
   await stopRuntimeParts(parts);
   assert.equal(attempts, 2);
-  assert.equal(contextCloses, 1);
+  assert.equal(contextCloses, 2);
 });
 
 test('start rollback propagates failed socket cleanup and defers context disposal', async () => {

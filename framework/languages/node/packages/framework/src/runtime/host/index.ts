@@ -1,3 +1,4 @@
+import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
@@ -156,7 +157,6 @@ import {
 } from '../framework-errors-internal';
 import {
   ZLinkAuthoritySpotRouteResolver,
-  ZLinkOwnerCleanupError,
   type ZLinkLocationRuntime,
   type ZLinkStoreLocationResolvers
 } from '../locations';
@@ -208,7 +208,8 @@ import {
   ZLinkRouteMeshRuntimeCoordinator
 } from './route-mesh-runtime';
 import { DefaultZLinkRouteMeshRuntimeOptions } from './route-mesh-runtime-options';
-import { rollbackRuntimeStart, stopRuntimeParts } from './runtime-shutdown';
+import { hasTeardownFailure, rollbackRuntimeStart, stopRuntimeParts } from './runtime-shutdown';
+import { ZLinkOwnerCleanupError } from '../locations';
 import {
   ZLinkHostServiceRelocationRuntime,
   ZLinkRelocationStateIncompatibleError
@@ -248,6 +249,7 @@ export class ZLinkFrameworkRuntimeHost
   private readonly runtimeObservationSource = Symbol('zlink.framework-runtime');
   private runtimeDeadline?: Date;
   private shutdownDeadline?: AbortController;
+  private teardownDeadline?: { end: Date; signal: AbortSignal };
   private runtimeRelocationResult?: ZLinkFrameworkRelocationResult;
   private runtimeTerminationResult?: ZLinkFrameworkTerminationResult;
   private relocationOperation?: Promise<ZLinkFrameworkRelocationResult>;
@@ -1098,7 +1100,8 @@ export class ZLinkFrameworkRuntimeHost
 
   private async runShutdown(deadlineMs: number): Promise<ZLinkFrameworkTerminationResult> {
     return await this.runWithShutdownDeadline(deadlineMs, async () => {
-      const deadlineAtMs = performance.now() + deadlineMs;
+      const deadlineAtMs = performance.now() + (this.runtimeDeadline!.getTime() - Date.now());
+      let stopping: Promise<void> | undefined;
       try {
         this.admission.close();
         if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
@@ -1121,7 +1124,8 @@ export class ZLinkFrameworkRuntimeHost
         );
         const drain = await shutdown;
         await unscopedStreamDrain;
-        await this.stop();
+        stopping = this.stop();
+        await stopping;
         if (drain.kind === 'forceStopped') {
           return this.completeTermination({
             outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
@@ -1139,12 +1143,18 @@ export class ZLinkFrameworkRuntimeHost
           reason: ZLinkFrameworkTerminationReason.None
         });
       } catch (error) {
-        await this.stop().catch(() => undefined);
+        if (stopping === undefined) {
+          try {
+            await this.stop();
+          } catch (cleanupError) {
+            error = new AggregateError([error, cleanupError], 'Host shutdown failed.');
+          }
+        }
         return this.completeTermination({
           outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
-          reason: isDeadlineExceededError(error)
-            ? ZLinkFrameworkTerminationReason.DeadlineExceeded
-            : ZLinkFrameworkTerminationReason.TeardownFailed
+          reason: hasTeardownFailure(error)
+            ? ZLinkFrameworkTerminationReason.TeardownFailed
+            : ZLinkFrameworkTerminationReason.DeadlineExceeded
         });
       }
     });
@@ -1159,15 +1169,28 @@ export class ZLinkFrameworkRuntimeHost
     this.shutdownDeadline = deadline;
     const ownsRuntimeDeadline = this.runtimeDeadline === undefined;
     this.runtimeDeadline ??= new Date(Date.now() + deadlineMs);
-    const timer = setTimeout(
-      () => deadline.abort(createDeadlineExceededError('Shutdown deadline exceeded.')),
-      Math.max(0, this.runtimeDeadline.getTime() - Date.now())
+    const cleanup = new AbortController();
+    const cleanupEnd = new Date(
+      this.runtimeDeadline.getTime() +
+        (this.options.registration.locations.options.ownerLeaseRenewTimeoutMs ??
+          zlinkRuntimeDefaultLocationOptions.ownerLeaseRenewTimeoutMs)
     );
+    this.teardownDeadline = { end: cleanupEnd, signal: cleanup.signal };
+    let timer: ReturnType<typeof setTimeout>;
+    const expireDrain = () => {
+      deadline.abort(createDeadlineExceededError('Shutdown deadline exceeded.'));
+      timer = setTimeout(
+        () => cleanup.abort(createDeadlineExceededError('Host teardown deadline exceeded.')),
+        Math.max(0, cleanupEnd.getTime() - Date.now())
+      );
+    };
+    timer = setTimeout(expireDrain, Math.max(0, this.runtimeDeadline.getTime() - Date.now()));
     try {
       return await operation();
     } finally {
       clearTimeout(timer);
       this.shutdownDeadline = undefined;
+      this.teardownDeadline = undefined;
       if (ownsRuntimeDeadline) this.runtimeDeadline = undefined;
     }
   }
@@ -1188,17 +1211,39 @@ export class ZLinkFrameworkRuntimeHost
     return result;
   }
 
-  private completeRelocation(
+  private async completeRelocation(
     result: ZLinkFrameworkRelocationResult
-  ): ZLinkFrameworkRelocationResult {
+  ): Promise<ZLinkFrameworkRelocationResult> {
     this.runtimeRelocationResult = result;
-    this.runtimeDeadline = undefined;
+    if (this.shutdownDeadline === undefined) this.runtimeDeadline = undefined;
     this.recordRelocationResult(result);
     this.setRuntimeState(
       result.outcome === ZLinkFrameworkRelocationOutcome.Relocated
         ? ZLinkFrameworkRuntimeState.Relocated
         : ZLinkFrameworkRuntimeState.Error
     );
+    if (
+      result.outcome === ZLinkFrameworkRelocationOutcome.Blocked &&
+      this.shutdownDeadline === undefined
+    ) {
+      await this.runWithShutdownDeadline(0, async () => {
+        const cleanup = await Promise.allSettled([this.stop()]);
+        const failure = cleanup[0];
+        if (failure.status === 'rejected' && hasTeardownFailure(failure.reason)) {
+          (this.errorSink ?? this.preStartErrorSink).reportRuntimeTaskException(
+            'host teardown',
+            failure.reason
+          );
+        }
+        this.completeTermination(
+          {
+            outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
+            reason: ZLinkFrameworkTerminationReason.TeardownFailed
+          },
+          ZLinkFrameworkRuntimeState.Error
+        );
+      });
+    }
     return result;
   }
 
@@ -1233,7 +1278,8 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   private completeTermination(
-    result: ZLinkFrameworkTerminationResult
+    result: ZLinkFrameworkTerminationResult,
+    state: ZLinkFrameworkRuntimeState = ZLinkFrameworkRuntimeState.Stopped
   ): ZLinkFrameworkTerminationResult {
     this.runtimeTerminationResult = result;
     this.runtimeDeadline = undefined;
@@ -1261,7 +1307,7 @@ export class ZLinkFrameworkRuntimeHost
       outcome: result.outcome,
       reason: result.reason
     });
-    this.setRuntimeState(ZLinkFrameworkRuntimeState.Stopped);
+    this.setRuntimeState(state);
     return result;
   }
 
@@ -1437,7 +1483,7 @@ export class ZLinkFrameworkRuntimeHost
         spotNodeRuntime,
         channelRuntime,
         this.executionState.abortController.signal,
-        () => this.shutdownDeadline!.signal
+        () => this.teardownDeadline!.signal
       );
       startedLocationRuntime = locationRuntime;
       if (locationRuntime !== undefined) {
@@ -1496,7 +1542,7 @@ export class ZLinkFrameworkRuntimeHost
           rollbackRuntimeStart({
             context,
             startedLocationRuntime: startedLocationRuntime ?? this.locationOwner.currentRuntime,
-            shutdownSignal: this.shutdownDeadline!.signal,
+            shutdownSignal: this.teardownDeadline?.signal,
             streamRuntime,
             spotNodeRuntime,
             channelRuntime,
@@ -1588,28 +1634,31 @@ export class ZLinkFrameworkRuntimeHost
     this.removeOwnerLeaseRecoveryPublication();
     const locationSnapshot = this.locationOwner.clearForStop();
     this.lifecycleSink?.push('framework:stop');
-    await statefulAuthorityRoutes?.stop();
-    await stopRuntimeParts({
-      state,
-      locationSnapshot,
-      cleanupDeadline: this.runtimeDeadline,
-      shutdownSignal: this.shutdownDeadline!.signal,
-      streamRuntime,
-      spotNodeRuntime,
-      channelRuntime,
-      serviceRelocation: this.serviceRelocation,
-      ownedStores: registeredRuntimeStores(this.options.registration)
-    });
-    this.executionState = undefined;
-    this.channelRuntime = undefined;
-    this.spotNodeRuntime = undefined;
-    this.streamRuntime = undefined;
-    this.statefulAuthorityRoutes = undefined;
-    this.cachedLocationSpotRouteResolver = undefined;
-    this.listenerRecords.clear();
-    this.lifecycleSink?.push('framework:stopped');
-    if (this.shutdownOperation === undefined) {
-      this.setRuntimeState(ZLinkFrameworkRuntimeState.Stopped);
+    try {
+      await stopRuntimeParts({
+        state,
+        locationSnapshot,
+        cleanupDeadline: this.teardownDeadline?.end,
+        shutdownSignal: this.teardownDeadline?.signal,
+        streamRuntime,
+        spotNodeRuntime,
+        channelRuntime,
+        serviceRelocation: this.serviceRelocation,
+        statefulAuthorityRoutes,
+        ownedStores: registeredRuntimeStores(this.options.registration)
+      });
+    } finally {
+      this.executionState = undefined;
+      this.channelRuntime = undefined;
+      this.spotNodeRuntime = undefined;
+      this.streamRuntime = undefined;
+      this.statefulAuthorityRoutes = undefined;
+      this.cachedLocationSpotRouteResolver = undefined;
+      this.listenerRecords.clear();
+      this.lifecycleSink?.push('framework:stopped');
+      if (this.shutdownOperation === undefined) {
+        this.setRuntimeState(ZLinkFrameworkRuntimeState.Stopped);
+      }
     }
   }
 
@@ -1790,7 +1839,11 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   private async performMeshShutdown(meshName: string, signal: AbortSignal): Promise<void> {
-    await this.spotManager?.drainForShutdown(meshName, signal, this.runtimeDeadline);
+    await this.spotManager?.drainForShutdown(
+      meshName,
+      this.teardownDeadline?.signal ?? signal,
+      this.teardownDeadline?.end ?? this.runtimeDeadline
+    );
     await awaitWithDrainSignal(this.streamRuntime?.notifyServerDrain(meshName), signal);
   }
 
@@ -1937,15 +1990,21 @@ export class ZLinkFrameworkRuntimeHost
     const runtime = this.locationOwner.currentRuntime;
     if (runtime === undefined) return;
     try {
-      await runtime.cleanupOwner(signal);
+      await runtime.cleanupOwner(this.teardownDeadline?.signal ?? signal);
     } catch (error) {
-      throw new ZLinkOwnerCleanupError(error);
+      if (hasTeardownFailure(error) && !(error instanceof ZLinkOwnerCleanupError))
+        throw new ZLinkOwnerCleanupError(error);
+      throw error;
     }
   }
 
   private async forceStopMesh(meshName: string): Promise<void> {
     await waitForForcedSessionNotification(this.streamRuntime?.notifyServerDrain(meshName));
-    await this.spotManager?.drainForShutdown(meshName, undefined, this.runtimeDeadline);
+    await this.spotManager?.drainForShutdown(
+      meshName,
+      undefined,
+      this.teardownDeadline?.end ?? this.runtimeDeadline
+    );
   }
 
   private registerInstanceApplicationLifecycle(

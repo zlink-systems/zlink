@@ -1,3 +1,4 @@
+import { createDeadlineExceededError, isAbortError, isDeadlineExceededError } from '../abort';
 import { ZLinkSpotCloseReason, type ZLinkSpotClosingContext } from '../../contracts';
 
 const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000;
@@ -18,16 +19,37 @@ export async function invokeSpotClosing(
   );
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<void>((resolve) => {
+  const expired = new Promise<void>((resolve, reject) => {
     timer = setTimeout(() => {
       controller.abort();
-      resolve();
+      if (reason === ZLinkSpotCloseReason.HostShutdown)
+        reject(createDeadlineExceededError('Spot closing exceeded the host teardown end time.'));
+      else resolve();
     }, timeoutMs);
   });
   try {
-    const operation = callback({ reason, deadline }, controller.signal);
+    const operation = Promise.resolve()
+      .then(() => callback({ reason, deadline }, controller.signal))
+      .catch((error) => {
+        if (controller.signal.aborted && isAbortError(error)) {
+          throw createDeadlineExceededError('Spot closing exceeded the host teardown end time.');
+        }
+        if (
+          reason === ZLinkSpotCloseReason.HostShutdown &&
+          (isAbortError(error) || isDeadlineExceededError(error))
+        ) {
+          throw new ZLinkSpotClosingFailure(error);
+        }
+        throw error;
+      });
     await Promise.race([operation, expired]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+class ZLinkSpotClosingFailure extends Error {
+  constructor(cause: unknown) {
+    super('Spot closing callback failed.', { cause });
   }
 }

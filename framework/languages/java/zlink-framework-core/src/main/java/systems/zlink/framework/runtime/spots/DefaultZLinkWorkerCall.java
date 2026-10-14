@@ -45,17 +45,21 @@ final class DefaultZLinkWorkerCall<T> implements ZLinkWorkerCall<T> {
 
     @Override
     public CompletionStage<T> submit() {
+        return ZLinkSerialExecutionQueue.manageCurrent(start());
+    }
+
+    private CompletableFuture<T> start() {
         ensureSingleTerminator();
         CompletableFuture<T> result = new CompletableFuture<>();
         start(result);
-        return ZLinkSerialExecutionQueue.manageCurrent(result);
+        return result;
     }
 
     @Override
     public CompletionStage<T> yield() {
         systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                 .requireYieldAllowed("CPU worker");
-        return ZLinkSerialExecutionQueue.yieldCurrent(submit());
+        return ZLinkSerialExecutionQueue.yieldCurrent(start());
     }
 
     private void start(CompletableFuture<T> result) {

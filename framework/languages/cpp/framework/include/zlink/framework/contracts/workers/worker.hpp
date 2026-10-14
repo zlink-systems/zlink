@@ -256,8 +256,8 @@ task_t<TResult> apply_worker_deadline (task_t<TResult> task,
         if (const auto control = weak_control.lock ()) {
             control->cancellation.request_stop ();
         }
-        finish (result_t<TResult>::failure (framework_error_kind_t::shutting_down,
-                                            "worker host is shutting down"));
+        finish (detail::result_access_t::failure<TResult> (detail::make_framework_origin_exception (
+          framework_error_kind_t::shutting_down, "worker host is shutting down")));
     });
 
     detail::observe_task_completion (task,
@@ -274,8 +274,9 @@ task_t<TResult> apply_worker_deadline (task_t<TResult> task,
               if (const auto control = weak_control.lock ()) {
                   control->cancellation.request_stop ();
               }
-              finish (result_t<TResult>::failure (framework_error_kind_t::deadline_exceeded,
-                                                  "worker task timed out"));
+              finish (
+                detail::result_access_t::failure<TResult> (detail::make_framework_origin_exception (
+                  framework_error_kind_t::deadline_exceeded, "worker task timed out")));
           };
       });
     return output;

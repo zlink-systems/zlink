@@ -1,3 +1,8 @@
+import { ZLinkFrameworkException } from '../../contracts';
+import {
+  internalFrameworkErrorKind,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
@@ -104,6 +109,13 @@ export class ZLinkDispatchErrorReporter {
 }
 
 function normalizeDispatchFailure(event: ZLinkRuntimeDispatchFailure): ZLinkRuntimeDispatchFailure {
+  if (
+    event.reason === ZLinkDispatchErrorReason.HandlerException &&
+    event.error instanceof ZLinkFrameworkException &&
+    internalFrameworkErrorKind(event.error) === ZLinkFrameworkInternalErrorKind.RuntimeShutdown
+  ) {
+    event = { ...event, reason: ZLinkDispatchErrorReason.Shutdown };
+  }
   if (event.messageKind !== 'publish') return event;
   return {
     ...event,

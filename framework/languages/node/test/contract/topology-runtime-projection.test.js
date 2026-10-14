@@ -1333,3 +1333,29 @@ for (const kind of ['ClientServer', 'Fanout']) test(`${kind} failed first read d
   assert.equal(first.sequence, 1n);
   assert.notEqual(first.state, framework.ZLinkTopologyState.Stopped);
 });
+
+test('A forced relocation uses its confirmation time for the shared teardown end', async () => {
+  const ownerLeaseRenewTimeoutMs = 120;
+  const host = new internal.ZLinkFrameworkRuntimeHost({
+    registration: internal.createFrameworkRegistration({
+      locations: { options: { ownerLeaseRenewTimeoutMs } }
+    })
+  });
+  host.executionState = { abortController: new AbortController() };
+  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  let confirmedAt;
+  let cleanupEnd;
+  host.routeMeshCoordinator = {
+    async prepareHostRetire() {
+      confirmedAt = Date.now();
+      throw new internal.ZLinkRetiringRollbackError();
+    }
+  };
+  host.stop = async () => { cleanupEnd = host.teardownDeadline?.end; };
+  await host.relocate({ mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance });
+  assert.ok(cleanupEnd instanceof Date, 'Forced relocation must establish the teardown end.');
+  assert.ok(cleanupEnd.getTime() >= confirmedAt + ownerLeaseRenewTimeoutMs);
+  assert.ok(cleanupEnd.getTime() <= Date.now() + ownerLeaseRenewTimeoutMs);
+  assert.equal(host.status.terminationResult.reason, framework.ZLinkFrameworkTerminationReason.TeardownFailed);
+  assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Error);
+});

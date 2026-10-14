@@ -191,6 +191,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     public ZLinkFrameworkRegistration Registration { get; }
 
+    internal DateTimeOffset? TeardownEnd =>
+        Services.GetService<ZLinkDrainCoordinator>()?.TeardownEnd;
+
     internal ZLinkStandaloneActorRelocationRuntime StandaloneActorRelocationRuntime =>
         _standaloneActorRelocationRuntime;
 

@@ -108,6 +108,9 @@ class app_t
                                                 std::stop_token wait_cancellation);
     static task_t<void> run_shared_relocation (detail::app_state_t &state);
     static void run_shared_shutdown (detail::app_state_t &state) noexcept;
+    static void begin_shared_shutdown (detail::app_state_t &state,
+                                       std::chrono::system_clock::time_point deadline,
+                                       termination_reason_t reason);
 
     service_collection_t &_services () noexcept;
     handler_registry_t &_handlers () noexcept;

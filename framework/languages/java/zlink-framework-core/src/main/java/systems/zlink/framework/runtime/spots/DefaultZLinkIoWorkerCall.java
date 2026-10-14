@@ -39,6 +39,10 @@ final class DefaultZLinkIoWorkerCall<T> implements ZLinkWorkerCall<T> {
 
     @Override
     public CompletionStage<T> submit() {
+        return ZLinkSerialExecutionQueue.manageCurrent(start());
+    }
+
+    private CompletionStage<T> start() {
         if (!terminated.compareAndSet(false, true)) {
             throw new IllegalStateException(
                     "runIoWorker call already has a terminator; call one terminator once");
@@ -118,13 +122,13 @@ final class DefaultZLinkIoWorkerCall<T> implements ZLinkWorkerCall<T> {
                         new ZLinkWorkerFailedException("I/O worker call failed", error));
             }
         }
-        return ZLinkSerialExecutionQueue.manageCurrent(result);
+        return result;
     }
 
     @Override
     public CompletionStage<T> yield() {
         systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                 .requireYieldAllowed("I/O worker");
-        return ZLinkSerialExecutionQueue.yieldCurrent(submit());
+        return ZLinkSerialExecutionQueue.yieldCurrent(start());
     }
 }

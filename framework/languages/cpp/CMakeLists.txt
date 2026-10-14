@@ -2411,8 +2411,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_http_client_test(
     test_cpp_http_client
     http-client/tests/test_cpp_http_client.cpp
-    "http-client-contract;http-client-unit;http-client-e2e;http-client-regression"
+    "http-client-contract;http-client-unit;http-client-e2e;http-client-regression;framework-contract"
     integration)
+  target_link_libraries(test_cpp_http_client PRIVATE zlink::framework)
   if(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL)
     target_compile_definitions(test_cpp_http_client PRIVATE
       ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL

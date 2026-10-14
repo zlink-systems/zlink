@@ -130,16 +130,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private final CompletableFuture<Void> startupReady = new CompletableFuture<>();
     private final AtomicReference<ZLinkFrameworkRuntimeState> runtimeState =
             new AtomicReference<>(ZLinkFrameworkRuntimeState.PREPARING);
-    private final AtomicReference<ZLinkTerminationIntent> effectiveTerminationIntent =
-            new AtomicReference<>();
     private final AtomicReference<ZLinkTerminationReason> terminationBlocker =
             new AtomicReference<>();
     private final AtomicReference<ZLinkTerminationResult> terminalTermination =
             new AtomicReference<>();
-    private final AtomicReference<CompletableFuture<ZLinkTerminationResult>> activeTermination =
-            new AtomicReference<>();
+    private final AtomicReference<TerminationOperation> activeTermination = new AtomicReference<>();
     private final AtomicReference<RelocationOperation> activeRelocation = new AtomicReference<>();
-    private final AtomicReference<Instant> terminationDeadline = new AtomicReference<>();
+    private final AtomicReference<Instant> teardownEnd = new AtomicReference<>();
     private final AtomicLong terminationSequence = new AtomicLong();
     private final AtomicReference<ZLinkFrameworkRelocationResult> lastRelocationResult =
             new AtomicReference<>();
@@ -228,7 +225,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             if (!closeGate.closing()) {
                                 shutdown();
                             }
-                            return terminationDeadline.get();
+                            return currentLifecycleDeadline();
                         });
         if (this.registration.relocationStore() != null) {
             runtimeHandlers.add(
@@ -1021,7 +1018,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         options.mode(),
                         effectiveTargetVersion,
                         completion,
-                        new CompletableFuture<>());
+                        new CompletableFuture<>(),
+                        Instant.now().plus(deadline));
         if (!activeRelocation.compareAndSet(null, candidate)) {
             return relocate(options);
         }
@@ -1040,8 +1038,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                     currentState);
             return independentRelocationWaiter(completion);
         }
-        terminationDeadline.set(Instant.now().plus(deadline));
-        Instant relocationDeadline = terminationDeadline.get();
+        Instant relocationDeadline = candidate.deadline();
         withinRelocationDeadline(
                         relocationPreflightUntilDeadline(relocationDeadline), relocationDeadline)
                 .whenComplete(
@@ -1345,19 +1342,24 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 && activeTermination.get() != null
                         ? runtimeState.get()
                         : state);
-        operation.completion().complete(result);
         activeRelocation.compareAndSet(operation, null);
+        if (state == ZLinkFrameworkRuntimeState.ERROR && activeTermination.get() == null) {
+            forceStop(InternalDrainForceReason.TEARDOWN_FAILED);
+        }
+        operation.completion().complete(result);
     }
 
     private record RelocationOperation(
             ZLinkFrameworkRelocationMode mode,
             long effectiveTargetVersion,
             CompletableFuture<ZLinkFrameworkRelocationResult> completion,
-            CompletableFuture<Void> cancellation) {
+            CompletableFuture<Void> cancellation,
+            Instant deadline) {
         private RelocationOperation {
             Objects.requireNonNull(mode, "mode");
             Objects.requireNonNull(completion, "completion");
             Objects.requireNonNull(cancellation, "cancellation");
+            Objects.requireNonNull(deadline, "deadline");
         }
 
         boolean matches(ZLinkFrameworkRelocationMode requestedMode, long requestedTargetVersion) {
@@ -1431,28 +1433,32 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (deadline.isZero() || deadline.isNegative()) {
             throw new IllegalArgumentException("termination deadline must be positive");
         }
-        CompletableFuture<ZLinkTerminationResult> current = activeTermination.get();
+        TerminationOperation current = activeTermination.get();
         if (current != null) {
             if (intent == ZLinkTerminationIntent.SHUTDOWN
                     && !drainStarted.get()
-                    && effectiveTerminationIntent.compareAndSet(
-                            ZLinkTerminationIntent.RETIRE, ZLinkTerminationIntent.SHUTDOWN)) {
+                    && current.intent() == ZLinkTerminationIntent.RETIRE
+                    && activeTermination.compareAndSet(
+                            current,
+                            new TerminationOperation(
+                                    ZLinkTerminationIntent.SHUTDOWN,
+                                    Instant.now().plus(deadline),
+                                    current.completion()))) {
                 if (relocationShutdown.requestShutdown()) {
-                    startTermination(current, deadline);
+                    startTermination(current.completion(), deadline);
                 }
             }
-            return independentWaiter(current);
+            return independentWaiter(current.completion());
         }
         var candidate = new CompletableFuture<ZLinkTerminationResult>();
-        if (!activeTermination.compareAndSet(null, candidate)) {
+        var operation = new TerminationOperation(intent, Instant.now().plus(deadline), candidate);
+        if (!activeTermination.compareAndSet(null, operation)) {
             return beginTermination(intent, deadline);
         }
         RelocationOperation interruptedRelocation = activeRelocation.get();
         if (interruptedRelocation != null) interruptedRelocation.cancellation().complete(null);
         terminalTermination.set(null);
         terminationBlocker.set(null);
-        terminationDeadline.set(Instant.now().plus(deadline));
-        effectiveTerminationIntent.set(intent);
         publishRuntimeState(runtimeState.get());
         if (intent == ZLinkTerminationIntent.SHUTDOWN) {
             startTermination(candidate, deadline);
@@ -1464,8 +1470,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             if (candidate.isDone()) {
                                 return;
                             }
-                            if (effectiveTerminationIntent.get()
-                                    == ZLinkTerminationIntent.SHUTDOWN) {
+                            if (currentTerminationIntent() == ZLinkTerminationIntent.SHUTDOWN) {
                                 startTermination(candidate, deadline);
                                 return;
                             }
@@ -1483,12 +1488,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 terminalTermination.set(blocked);
                                 publishRuntimeState(ZLinkFrameworkRuntimeState.SERVING);
                                 candidate.complete(blocked);
-                                effectiveTerminationIntent.compareAndSet(
-                                        ZLinkTerminationIntent.RETIRE, null);
-                                activeTermination.compareAndSet(candidate, null);
+                                activeTermination.compareAndSet(operation, null);
                                 return;
                             }
-                            Instant retireDeadline = terminationDeadline.get();
+                            Instant retireDeadline = currentLifecycleDeadline();
                             CompletableFuture<Void> readinessCancellation =
                                     new CompletableFuture<>();
                             readinessCancellation.orTimeout(
@@ -1559,61 +1562,88 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (locationRuntime != null) {
             locationRuntime.cancelStartup();
         }
-        drain(deadline)
-                .whenComplete(
-                        (result, failure) -> {
-                            if (completion.isDone()) {
-                                return;
-                            }
-                            ZLinkTerminationIntent intent = effectiveTerminationIntent.get();
-                            if (intent == null) {
-                                intent = ZLinkTerminationIntent.SHUTDOWN;
-                            }
-                            ZLinkTerminationResult terminal;
-                            if (forcedReason != null) {
-                                terminal =
-                                        new ZLinkTerminationResult(
-                                                intent,
-                                                ZLinkTerminationOutcome.FORCE_STOPPED,
-                                                forcedReason);
-                            } else if (failure != null) {
-                                terminal =
-                                        new ZLinkTerminationResult(
-                                                intent,
-                                                ZLinkTerminationOutcome.FORCE_STOPPED,
-                                                ZLinkTerminationReason.TEARDOWN_FAILED);
-                            } else if (result instanceof InternalDrained) {
-                                terminal =
-                                        new ZLinkTerminationResult(
-                                                intent,
-                                                ZLinkTerminationOutcome.STOPPED,
-                                                ZLinkTerminationReason.NONE);
-                            } else if (result instanceof InternalForceStopped forced) {
-                                terminal =
-                                        new ZLinkTerminationResult(
-                                                intent,
-                                                ZLinkTerminationOutcome.FORCE_STOPPED,
-                                                forced.reason()
-                                                                == InternalDrainForceReason
-                                                                        .DEADLINE_EXCEEDED
-                                                        ? ZLinkTerminationReason.DEADLINE_EXCEEDED
-                                                        : ZLinkTerminationReason.TEARDOWN_FAILED);
-                            } else {
-                                terminal =
-                                        new ZLinkTerminationResult(
-                                                intent,
-                                                ZLinkTerminationOutcome.FORCE_STOPPED,
-                                                ZLinkTerminationReason.DEADLINE_EXCEEDED);
-                            }
-                            terminalTermination.set(terminal);
-                            lastTerminationResult.set(mapPublicTerminationResult(terminal));
-                            publishRuntimeState(
-                                    ZLinkFrameworkRuntimeState.STOPPED,
-                                    result instanceof InternalForceStopped forced
-                                            ? forced.failure()
-                                            : failure);
-                            completion.complete(terminal);
-                        });
+        drain(deadline).whenComplete(terminationObserver(completion, forcedReason));
+    }
+
+    private java.util.function.BiConsumer<InternalDrainResult, Throwable> terminationObserver(
+            CompletableFuture<ZLinkTerminationResult> completion,
+            ZLinkTerminationReason forcedReason) {
+        return (result, failure) -> {
+            if (completion.isDone()) {
+                return;
+            }
+            ZLinkTerminationIntent intent = currentTerminationIntent();
+            if (intent == null) {
+                intent = ZLinkTerminationIntent.SHUTDOWN;
+            }
+            ZLinkTerminationResult terminal;
+            if (forcedReason != null) {
+                terminal =
+                        new ZLinkTerminationResult(
+                                intent, ZLinkTerminationOutcome.FORCE_STOPPED, forcedReason);
+            } else if (failure != null) {
+                terminal =
+                        new ZLinkTerminationResult(
+                                intent,
+                                ZLinkTerminationOutcome.FORCE_STOPPED,
+                                ZLinkTerminationReason.TEARDOWN_FAILED);
+            } else if (result instanceof InternalDrained) {
+                terminal =
+                        new ZLinkTerminationResult(
+                                intent,
+                                ZLinkTerminationOutcome.STOPPED,
+                                ZLinkTerminationReason.NONE);
+            } else if (result instanceof InternalForceStopped forced) {
+                terminal =
+                        new ZLinkTerminationResult(
+                                intent,
+                                ZLinkTerminationOutcome.FORCE_STOPPED,
+                                forced.reason() == InternalDrainForceReason.DEADLINE_EXCEEDED
+                                        ? ZLinkTerminationReason.DEADLINE_EXCEEDED
+                                        : ZLinkTerminationReason.TEARDOWN_FAILED);
+            } else {
+                terminal =
+                        new ZLinkTerminationResult(
+                                intent,
+                                ZLinkTerminationOutcome.FORCE_STOPPED,
+                                ZLinkTerminationReason.DEADLINE_EXCEEDED);
+            }
+            terminalTermination.set(terminal);
+            lastTerminationResult.set(mapPublicTerminationResult(terminal));
+            publishRuntimeState(
+                    ZLinkFrameworkRuntimeState.STOPPED,
+                    result instanceof InternalForceStopped forced ? forced.failure() : failure);
+            completion.complete(terminal);
+        };
+    }
+
+    private record TerminationOperation(
+            ZLinkTerminationIntent intent,
+            Instant referenceTime,
+            CompletableFuture<ZLinkTerminationResult> completion) {}
+
+    private ZLinkTerminationIntent currentTerminationIntent() {
+        var operation = activeTermination.get();
+        return operation == null ? null : operation.intent();
+    }
+
+    private Instant currentLifecycleDeadline() {
+        var operation = activeTermination.get();
+        if (operation != null) return operation.referenceTime();
+        Instant end = teardownEnd.get();
+        if (end != null)
+            return end.minus(registration.locations().options().ownerLeaseRenewTimeout());
+        var relocation = activeRelocation.get();
+        return relocation == null ? null : relocation.deadline();
+    }
+
+    private Instant establishTeardownEnd(Instant referenceTime) {
+        Instant established = teardownEnd.get();
+        if (established != null) return established;
+        Instant candidate =
+                referenceTime.plus(registration.locations().options().ownerLeaseRenewTimeout());
+        Instant current = teardownEnd.compareAndExchange(null, candidate);
+        return current == null ? candidate : current;
     }
 
     private CompletionStage<ZLinkTerminationReason> retirePreflight() {
@@ -1786,7 +1816,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 state,
                 state.isReadyState(),
                 state.acceptsWork(!drainStarted.get()),
-                Optional.ofNullable(terminationDeadline.get()),
+                Optional.ofNullable(currentLifecycleDeadline()),
                 Optional.ofNullable(lastRelocationResult.get()),
                 Optional.ofNullable(lastTerminationResult.get()),
                 safeToShutdown(state),
@@ -2097,9 +2127,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private CompletionStage<Void> closeCoreAsync() {
-        if (activeTermination.get() == null) {
-            terminationDeadline.set(Instant.now().plus(DEFAULT_TERMINATION_DEADLINE));
-        }
+        var operation = activeTermination.get();
+        Instant cleanupEnd =
+                establishTeardownEnd(
+                        operation == null
+                                ? Instant.now().plus(DEFAULT_TERMINATION_DEADLINE)
+                                : operation.referenceTime());
         ZLinkFrameworkRuntimeState currentState = runtimeState.get();
         if (currentState != ZLinkFrameworkRuntimeState.STOPPED
                 && currentState != ZLinkFrameworkRuntimeState.ERROR) {
@@ -2113,7 +2146,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (channels != null) {
             channels.beginClose();
         }
-        ZLinkFrameworkShutdown shutdown = new ZLinkFrameworkShutdown(terminationDeadline.get());
+        ZLinkFrameworkShutdown shutdown = new ZLinkFrameworkShutdown(cleanupEnd);
         // Close completion admission after accepted runtime components have
         // finished their teardown, so graceful drain can still publish the
         // replies it already accepted.
@@ -2132,34 +2165,32 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (locationRuntime != null) {
             shutdown.defer("location_close", locationRuntime::close);
             shutdown.defer("location_lifecycle_close", locationLifecycle::close);
-            shutdown.deferStage(
-                    "location_stop", () -> locationRuntime.stop(terminationDeadline.get()));
+            shutdown.deferStage("location_stop", () -> locationRuntime.stop(cleanupEnd));
             if (objectDescriptors != null) {
                 shutdown.deferStage("descriptor_remove", objectDescriptors::remove);
             }
         }
         if (spots != null) {
-            shutdown.deferCloseStage(
+            shutdown.deferStage(
                     "spot_close",
                     () -> {
                         if (spotRuntimeStopped.compareAndSet(false, true)) {
-                            return spots.closeAsync();
+                            return spots.closeAsync(cleanupEnd);
                         }
                         return CompletableFuture.completedFuture(null);
                     });
         }
         if (channels != null) {
-            shutdown.deferCloseStage(
-                    "channel_close", () -> channels.closeAsync(terminationDeadline.get()));
+            shutdown.deferStage("channel_close", () -> channels.closeAsync(cleanupEnd));
         }
         if (locationAutoConnectHost != null) {
-            shutdown.deferCloseStage("auto_connect_stop", locationAutoConnectHost::stop);
+            shutdown.deferStage("auto_connect_stop", locationAutoConnectHost::stop);
         }
         if (actors != null) {
-            shutdown.deferCloseStage("instance_close", actors::closeAsync);
+            shutdown.deferStage("instance_close", actors::closeAsync);
         }
         if (streams != null) {
-            shutdown.deferCloseStage("stream_close", streams::closeAsync);
+            shutdown.deferStage("stream_close", streams::closeAsync);
         }
         return shutdown.closeAsync()
                 .whenComplete(
@@ -2167,8 +2198,18 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             if (channels != null) {
                                 channels.clearListenerRecords();
                             }
-                            if (!drainStarted.get() && failure == null) {
-                                drained.complete(new InternalDrained());
+                            if (!drainStarted.get()) {
+                                drained.complete(
+                                        failure == null
+                                                ? new InternalDrained()
+                                                : new InternalForceStopped(
+                                                        ZLinkFrameworkShutdown.hasTeardownFailure(
+                                                                        failure)
+                                                                ? InternalDrainForceReason
+                                                                        .TEARDOWN_FAILED
+                                                                : InternalDrainForceReason
+                                                                        .DEADLINE_EXCEEDED,
+                                                        failure));
                             }
                             if (failure != null) {
                                 publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
@@ -2190,12 +2231,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (deadline.isZero() || deadline.isNegative()) {
             throw new IllegalArgumentException("deadline must be positive");
         }
+        if (drainTerminalStarted.get() || closeGate.closing()) return drained;
         if (drainStarted.compareAndSet(false, true)) {
             try {
-                CompletableFuture.delayedExecutor(deadline.toMillis(), TimeUnit.MILLISECONDS)
+                long remaining =
+                        Duration.between(Instant.now(), currentLifecycleDeadline()).toNanos();
+                CompletableFuture.delayedExecutor(Math.max(0L, remaining), TimeUnit.NANOSECONDS)
                         .execute(() -> forceStop(InternalDrainForceReason.DEADLINE_EXCEEDED));
-                effectiveTerminationIntent.compareAndSet(null, ZLinkTerminationIntent.SHUTDOWN);
-                terminationDeadline.compareAndSet(null, Instant.now().plus(deadline));
                 meshDrains.sealAll();
                 meshNodes
                         .nodesByName()
@@ -2326,13 +2368,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                                         () ->
                                                                                                 spots
                                                                                                         .notifyClosing(
-                                                                                                                Optional
-                                                                                                                        .ofNullable(
-                                                                                                                                terminationDeadline
-                                                                                                                                        .get())
-                                                                                                                        .orElseGet(
-                                                                                                                                Instant
-                                                                                                                                        ::now)))));
+                                                                                                                establishTeardownEnd(
+                                                                                                                        currentLifecycleDeadline())))));
                                 CompletionStage<Void> actorShutdown =
                                         spotClosing.thenCompose(
                                                 closingIgnored ->
@@ -2368,13 +2405,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                                                                         .spots
                                                                                                                         .ZLinkSpotCloseReason
                                                                                                                         .HOST_SHUTDOWN,
-                                                                                                                Optional
-                                                                                                                        .ofNullable(
-                                                                                                                                terminationDeadline
-                                                                                                                                        .get())
-                                                                                                                        .orElseGet(
-                                                                                                                                Instant
-                                                                                                                                        ::now)))));
+                                                                                                                establishTeardownEnd(
+                                                                                                                        currentLifecycleDeadline())))));
                                 spotDrain.whenComplete(
                                         (workloadsIgnored, workloadFailure) -> {
                                             if (workloadFailure != null) {
@@ -2455,11 +2487,15 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         traceDrainStage("owner_cleanup", closeAsync())
                 .whenComplete(
                         (ignored, failure) -> {
-                            if (failure == null) {
-                                drained.complete(new InternalDrained());
-                            } else {
+                            if (ZLinkFrameworkShutdown.hasTeardownFailure(failure)) {
                                 completeForcedStop(
-                                        InternalDrainForceReason.OWNER_CLEANUP_FAILED, failure);
+                                        InternalDrainForceReason.TEARDOWN_FAILED, failure);
+                            } else if (failure != null
+                                    || !Instant.now().isBefore(currentLifecycleDeadline())) {
+                                completeForcedStop(
+                                        InternalDrainForceReason.DEADLINE_EXCEEDED, failure);
+                            } else {
+                                drained.complete(new InternalDrained());
                             }
                         });
     }
@@ -2472,6 +2508,19 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (!drainTerminalStarted.compareAndSet(false, true)) {
             return;
         }
+        Instant confirmedAt = Instant.now();
+        drainStarted.set(true);
+        var candidate =
+                new TerminationOperation(
+                        ZLinkTerminationIntent.SHUTDOWN, confirmedAt, new CompletableFuture<>());
+        var existing = activeTermination.compareAndExchange(null, candidate);
+        var operation = existing == null ? candidate : existing;
+        if (existing == null)
+            drained.whenComplete(terminationObserver(candidate.completion(), null));
+        establishTeardownEnd(
+                operation.intent() == ZLinkTerminationIntent.SHUTDOWN
+                        ? operation.referenceTime()
+                        : confirmedAt);
         ZLinkTeardownExecutor.execute(() -> forceStopOnTeardownThread(reason, failure));
     }
 
@@ -2480,6 +2529,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (drained.isDone()) {
             return;
         }
+        if (spots != null) spots.terminateOwnedWaits();
         InternalDrainForceReason reason = initialReason;
         ZLinkRuntimeMetrics.increment(
                 "zlink.drain.forced", Map.of("kind", streams == null ? "runtime" : "session"));
@@ -2493,11 +2543,19 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 .thenCompose(ignored -> closeAsync())
                 .whenComplete(
                         (ignored, failure) -> {
+                            Throwable terminalFailure =
+                                    initialFailure != null ? initialFailure : failure;
+                            if (initialFailure != null
+                                    && failure != null
+                                    && initialFailure != failure) {
+                                terminalFailure = new CompletionException(initialFailure);
+                                terminalFailure.addSuppressed(failure);
+                            }
                             completeForcedStop(
-                                    failure == null
-                                            ? requestedReason
-                                            : InternalDrainForceReason.TEARDOWN_FAILED,
-                                    initialFailure != null ? initialFailure : failure);
+                                    ZLinkFrameworkShutdown.hasTeardownFailure(failure)
+                                            ? InternalDrainForceReason.TEARDOWN_FAILED
+                                            : requestedReason,
+                                    terminalFailure);
                         });
     }
 

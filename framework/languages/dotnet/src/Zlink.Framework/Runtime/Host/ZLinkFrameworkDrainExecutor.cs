@@ -7,8 +7,10 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
     private readonly IZLinkRuntimeFailureReporter _failureReporter;
     private readonly ZLinkDrainExecutionOperations _operations;
     private readonly ZLinkLocationOptions _locationOptions;
+    private readonly ZLinkLocationRuntime? _locationRuntime;
     private readonly ILogger<ZLinkFrameworkDrainExecutor>? _logger;
     private readonly Func<Task> _stopMeshMonitoring;
+    private readonly Func<DateTimeOffset?> _teardownEnd;
     private readonly CancellationTokenSource _shutdownDeadline = new();
     private int _shutdownRequested;
 
@@ -25,15 +27,20 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             ZLinkDrainExecutionOperations.Create(runtime, autoConnect, locationRuntime),
             locationOptions,
             logger,
-            routeMeshRuntime.StopAsync
-        ) { }
+            routeMeshRuntime.StopAsync,
+            () => runtime.TeardownEnd
+        )
+    {
+        _locationRuntime = locationRuntime;
+    }
 
     internal ZLinkFrameworkDrainExecutor(
         IZLinkRuntimeFailureReporter failureReporter,
         ZLinkDrainExecutionOperations operations,
         ZLinkLocationOptions locationOptions,
         ILogger<ZLinkFrameworkDrainExecutor>? logger = null,
-        Func<Task>? stopMeshMonitoring = null
+        Func<Task>? stopMeshMonitoring = null,
+        Func<DateTimeOffset?>? teardownEnd = null
     )
     {
         _failureReporter = failureReporter;
@@ -41,9 +48,13 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         _locationOptions = locationOptions;
         _logger = logger;
         _stopMeshMonitoring = stopMeshMonitoring ?? Noop;
+        _teardownEnd = teardownEnd ?? (() => null);
     }
 
     private static Task Noop() => Task.CompletedTask;
+
+    public TimeSpan OwnerLeaseRenewTimeout =>
+        _locationRuntime?.OwnerLeaseRenewTimeout ?? _locationOptions.OwnerLeaseRenewTimeout;
 
     public CancellationToken ShutdownCancellationToken => _shutdownDeadline.Token;
 
@@ -230,6 +241,19 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             // Spot closing callbacks, then destroys local scopes. Only the
             // relocation workload owner above may start actor handoffs.
             var spotsDrained = false;
+            if (
+                intent == ZLinkFrameworkLifecycleIntent.Shutdown
+                && _teardownEnd() is { } cleanupEnd
+            )
+            {
+                deadlineToken.ThrowIfCancellationRequested();
+                var remaining = cleanupEnd - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                    _shutdownDeadline.Cancel();
+                else
+                    _shutdownDeadline.CancelAfter(remaining);
+                absoluteDeadline = cleanupEnd;
+            }
             while (!spotsDrained)
             {
                 try
@@ -532,7 +556,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             {
                 try
                 {
-                    await _operations.CleanupOwner(_shutdownDeadline.Token).ConfigureAwait(false);
+                    await _operations.CleanupOwner(cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception error)
                 {
@@ -543,7 +567,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             }
             await CaptureAsync(
                     "stop_location",
-                    () => _operations.StopLocation(_shutdownDeadline.Token),
+                    () => _operations.StopLocation(cancellationToken),
                     failures
                 )
                 .ConfigureAwait(false);

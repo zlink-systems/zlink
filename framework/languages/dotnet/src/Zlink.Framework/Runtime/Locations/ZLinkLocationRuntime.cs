@@ -35,6 +35,7 @@ internal sealed class ZLinkOwnerLeaseCancellationCleanupException(
 internal sealed class ZLinkLocationRuntime : IAsyncDisposable
 {
     private readonly ZLinkLocationOptions _options;
+    internal TimeSpan OwnerLeaseRenewTimeout => _options.OwnerLeaseRenewTimeout;
     private readonly IZLinkLocationRepository _store;
     private readonly TimeProvider _time;
     private readonly IReadOnlyList<KeyValuePair<string, string>> _metricScopes;

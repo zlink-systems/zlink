@@ -98,6 +98,7 @@ internal sealed class ZLinkDrainBlockedException(ZLinkFrameworkRelocationReason 
 
 internal interface IZLinkDrainExecutor
 {
+    TimeSpan OwnerLeaseRenewTimeout => new ZLinkLocationOptions().OwnerLeaseRenewTimeout;
     CancellationToken ShutdownCancellationToken => CancellationToken.None;
 
     void RequestShutdown(TimeSpan deadline) { }
@@ -157,11 +158,6 @@ internal sealed class ZLinkDrainForceException(
 
 internal sealed class ZLinkDrainCoordinator : IDisposable
 {
-    // The caller's deadline bounds orderly drain. Once it expires, force
-    // teardown still needs a small independent budget to release runtime
-    // resources and classify the original timeout as DeadlineExceeded.
-    private static readonly TimeSpan MinimumForceStopTeardown = TimeSpan.FromSeconds(2);
-
     internal static readonly TimeSpan DefaultDeadline = TimeSpan.FromSeconds(30);
 
     private readonly ZLinkDrainAdmissionGate _admission;
@@ -176,6 +172,8 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
     );
     private Task<ZLinkDrainResult>? _operation;
     private Task<ZLinkDrainResult>? _forceStopOperation;
+    private DateTimeOffset? _shutdownEnd;
+    internal DateTimeOffset? TeardownEnd { get; private set; }
 
     public ZLinkDrainCoordinator(
         ZLinkDrainAdmissionGate admission,
@@ -201,6 +199,8 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         if (deadline <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(deadline));
         _admission.BeginDrain(ZLinkDrainOwner.Shutdown);
+        _shutdownEnd ??= DateTimeOffset.UtcNow + deadline;
+        EstablishTeardownEnd(_shutdownEnd.Value);
         _executor.RequestShutdown(deadline);
     }
 
@@ -287,6 +287,8 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         Action? effectiveRelocationDetached = relocationDetached;
         if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
         {
+            _shutdownEnd ??= DateTimeOffset.UtcNow + deadline;
+            EstablishTeardownEnd(_shutdownEnd.Value);
             _admission.BeginDrain(ZLinkDrainOwner.Shutdown);
         }
         else
@@ -399,7 +401,13 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
             var executionResult = await execution.ConfigureAwait(false);
             result = executionResult.Disposition switch
             {
-                ZLinkDrainExecutionDisposition.Completed => new Drained(),
+                ZLinkDrainExecutionDisposition.Completed => intent
+                    == ZLinkFrameworkLifecycleIntent.Shutdown
+                && _shutdownEnd is { } end
+                && DateTimeOffset.UtcNow >= end
+                    ? await ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, deadline)
+                        .ConfigureAwait(false)
+                    : new Drained(),
                 ZLinkDrainExecutionDisposition.Blocked => new DrainBlocked(
                     executionResult.BlockedReason ?? ZLinkFrameworkRelocationReason.RelocationFailed
                 ),
@@ -464,13 +472,13 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         ulong committedUnitCount = 0
     )
     {
-        RequestShutdown(deadline);
         var operation = await _lane
             .RunAsync(() =>
             {
                 if (_forceStopOperation is not null)
                     return _forceStopOperation;
 
+                EstablishTeardownEnd(DateTimeOffset.UtcNow);
                 using (ExecutionContext.SuppressFlow())
                     _forceStopOperation = Task.Run(() =>
                         ExecuteForceStopAsync(reason, deadline, hasCommitted, committedUnitCount)
@@ -529,38 +537,60 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         {
             _logger?.LogError(error, "ZLink force-stopping terminal event publication failed.");
         }
-        // Do not reuse a very short orderly-drain deadline as the complete
-        // force-teardown budget. A 100 ms shutdown can already be expired
-        // when this path starts; passing that same budget to owner cleanup
-        // turns the original deadline into OwnerCleanupFailed/TeardownFailed.
-        // The original reason remains authoritative while teardown receives
-        // the minimum bounded window required to release its resources.
-        var teardownBudget =
-            reason == ZLinkDrainForceReason.DeadlineExceeded || deadline < MinimumForceStopTeardown
-                ? MinimumForceStopTeardown
-                : deadline;
-        Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"force_stop_begin reason={reason} deadline={deadline} budget={teardownBudget}"
-        );
-        using var teardownBound = new CancellationTokenSource(teardownBudget);
+        var now = DateTimeOffset.UtcNow;
+        var remaining = TeardownEnd!.Value - now;
+        using var teardownBound = new CancellationTokenSource();
+        if (remaining <= TimeSpan.Zero)
+            teardownBound.Cancel();
+        else
+            teardownBound.CancelAfter(remaining);
         try
         {
             await _executor.ForceStopAsync(reason, teardownBound.Token).ConfigureAwait(false);
         }
         catch (ZLinkDrainForceException failure)
         {
-            reason = failure.Reason;
+            reason = HasTeardownFailure(failure.InnerException!, teardownBound.Token)
+                ? failure.Reason
+                : ZLinkDrainForceReason.DeadlineExceeded;
         }
-        catch (OperationCanceledException) when (teardownBound.IsCancellationRequested)
+        catch (OperationCanceledException error)
+            when (teardownBound.IsCancellationRequested
+                && error.CancellationToken == teardownBound.Token
+            )
         {
             reason = ZLinkDrainForceReason.DeadlineExceeded;
         }
         catch (Exception error)
         {
             _logger?.LogError(error, "ZLink forced drain teardown failed.");
-            reason = ZLinkDrainForceReason.TeardownFailed;
+            reason = HasTeardownFailure(error, teardownBound.Token)
+                ? ZLinkDrainForceReason.TeardownFailed
+                : ZLinkDrainForceReason.DeadlineExceeded;
         }
         return new ForceStopped(reason, hasCommitted, committedUnitCount);
+    }
+
+    private DateTimeOffset EstablishTeardownEnd(DateTimeOffset confirmedAt) =>
+        TeardownEnd ??= (_shutdownEnd ?? confirmedAt) + _executor.OwnerLeaseRenewTimeout;
+
+    private static bool HasTeardownFailure(Exception error, CancellationToken teardownToken)
+    {
+        if (error is AggregateException aggregate)
+            return aggregate.InnerExceptions.Any(inner => HasTeardownFailure(inner, teardownToken));
+        if (
+            error is OperationCanceledException canceled
+            && teardownToken.IsCancellationRequested
+            && canceled.CancellationToken == teardownToken
+        )
+            return false;
+        return error
+            is not ZLinkFrameworkException
+            {
+                Origin: ZLinkErrorOrigin.Framework,
+                Kind: ZLinkFrameworkErrorKind.DeadlineExceeded
+                    or ZLinkFrameworkErrorKind.ShuttingDown
+            };
     }
 
     private void RecordUnfinished(IReadOnlyList<ZLinkUnfinishedOperation> unfinished)

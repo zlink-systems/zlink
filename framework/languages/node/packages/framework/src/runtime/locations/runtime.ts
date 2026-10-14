@@ -8,6 +8,7 @@ import {
 import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
 import { randomUUID } from 'node:crypto';
 import type { RoutingId } from '../../contracts/Common';
+import { ZLinkFrameworkException } from '../../contracts';
 import {
   ZLinkLocationAutoConnectType,
   ZLinkFrameworkRuntimeState,
@@ -66,7 +67,7 @@ import type { ZLinkDomainLocationStore } from './domain-store-contract';
 import { zlinkLocationAutoConnectTypeName, zlinkLocationRoleName } from './canonical-codec';
 import { ZLinkLocationKeyCodec } from './key-codec';
 import { ZLinkLiveRowFilter, ZLinkOwnerLeaseTracker } from './lease-tracker';
-import { isAbortError } from '../abort';
+import { awaitWithAbort, isAbortError, isDeadlineExceededError } from '../abort';
 import type { ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 
 export interface ZLinkLocationRuntimeStores {
@@ -123,6 +124,11 @@ export interface ZLinkLocationEventSink {
   routeResolveMiss(key: ZLinkRouteLocationKey): void;
 }
 
+const COMPLETED_OWNER_CLEANUP: Promise<PromiseSettledResult<void>> = Promise.resolve({
+  status: 'fulfilled',
+  value: undefined
+});
+
 export class ZLinkOwnerCleanupError extends Error {
   constructor(cause: unknown) {
     super(`Owner cleanup failed: ${errorMessage(cause)}`, { cause });
@@ -154,7 +160,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   private heartbeatRenewal?: Promise<unknown>;
   private nodeRidValue?: RoutingId;
   private started = false;
-  private ownerCleanupComplete = true;
+  private ownerCleanupOperation: Promise<PromiseSettledResult<void>> | undefined =
+    COMPLETED_OWNER_CLEANUP;
   private readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   private readonly meshNames: readonly string[];
   private readonly leaseScopes: readonly {
@@ -337,7 +344,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
 
     this.started = true;
-    this.ownerCleanupComplete = false;
+    this.ownerCleanupOperation = undefined;
     this.nodeRidValue = nodeRid;
     const claim = this.renewOwnerLeaseOnce(signal, shutdownSignal);
     this.heartbeatRenewal = claim;
@@ -351,7 +358,13 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       this.scheduleHeartbeat();
     } catch (error) {
       this.started = false;
-      this.ownerCleanupComplete = true;
+      this.ownerCleanupOperation ??= claim.then(
+        () => ({ status: 'fulfilled', value: undefined }),
+        (reason): PromiseSettledResult<void> =>
+          isAbortError(reason)
+            ? { status: 'fulfilled', value: undefined }
+            : { status: 'rejected', reason }
+      );
       throw signal?.aborted === true ? signal.reason : error;
     }
   }
@@ -367,47 +380,88 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     await this.cleanupOwner(signal);
   }
 
-  async cleanupOwner(signal?: AbortSignal): Promise<void> {
+  cleanupOwner(signal?: AbortSignal): Promise<void> {
+    const operation = (this.ownerCleanupOperation ??= Promise.resolve()
+      .then(() => this.performOwnerCleanup(signal))
+      .then<PromiseSettledResult<void>, PromiseSettledResult<void>>(
+        () => ({ status: 'fulfilled', value: undefined }),
+        (reason) => ({ status: 'rejected', reason })
+      ));
+    return operation.then((result) => {
+      if (result.status === 'rejected') throw result.reason;
+    });
+  }
+
+  private async performOwnerCleanup(signal?: AbortSignal): Promise<void> {
+    const errors: unknown[] = [];
+    const cancellationFailure = (error: unknown): unknown =>
+      isAbortError(error)
+        ? signal?.aborted === true
+          ? signal.reason
+          : new ZLinkOwnerCleanupError(error)
+        : error;
+    const observe = async <T>(request: () => Promise<T>): Promise<T | undefined> => {
+      try {
+        const pending = request();
+        return await awaitWithAbort(pending, signal);
+      } catch (error) {
+        errors.push(cancellationFailure(error));
+        return undefined;
+      }
+    };
     const pending = this.heartbeatRenewal;
     try {
-      await withTimeout(() => pending ?? Promise.resolve(), undefined, signal);
+      await awaitWithAbort(pending ?? Promise.resolve(), signal);
     } catch (error) {
-      if (!isAbortError(error)) throw error;
-    } finally {
-      if (this.heartbeatRenewal === pending) this.heartbeatRenewal = undefined;
+      if (!isAbortError(error) || signal?.aborted === true) errors.push(cancellationFailure(error));
+      if (
+        this.ownerToken === undefined &&
+        this.lastOwnerToken === undefined &&
+        !this.started &&
+        signal?.aborted !== true
+      ) {
+        if (errors.length > 0) this.failOwnerCleanup(errors);
+        return;
+      }
     }
-    if (this.ownerCleanupComplete) {
-      return;
-    }
-    try {
+    if (this.heartbeatRenewal === pending) this.heartbeatRenewal = undefined;
+    {
       const owner = this.ownerToken ??
         this.lastOwnerToken ?? {
           ownerId: this.ownerId,
           leaseGeneration: 0n
         };
-      await withTimeout(
-        async (cleanupSignal) => {
-          await this.stores.locationStore.removeAllByOwner(owner, cleanupSignal);
-          const currentLease = await this.stores.ownerLeaseStore.readOwnerLease(
-            this.ownerId,
-            cleanupSignal
-          );
-          if (currentLease.kind === 'found') {
-            await this.stores.ownerLeaseStore.releaseOwnerLease(currentLease.token, cleanupSignal);
-          }
-        },
-        undefined,
-        signal
+      await observe(() => this.stores.locationStore.removeAllByOwner(owner, signal));
+      const lease = await observe(() =>
+        this.stores.ownerLeaseStore.readOwnerLease(this.ownerId, signal)
       );
-      this.ownerToken = undefined;
-      this.lastOwnerToken = undefined;
-      this.ownerCleanupComplete = true;
-    } catch (error) {
-      this.recordFailure(errorMessage(error));
-      throw new ZLinkOwnerCleanupError(error);
+      const token =
+        lease?.kind === 'found' ? lease.token : owner.leaseGeneration > 0n ? owner : undefined;
+      if (token !== undefined)
+        await observe(() => this.stores.ownerLeaseStore.releaseOwnerLease(token, signal));
+      if (errors.length === 0) {
+        this.ownerToken = undefined;
+        this.lastOwnerToken = undefined;
+      }
     }
+    if (errors.length > 0) this.failOwnerCleanup(errors);
   }
 
+  private failOwnerCleanup(errors: unknown[]): never {
+    this.recordFailure(
+      errorMessage(errors[0] instanceof ZLinkOwnerCleanupError ? errors[0].cause : errors[0])
+    );
+    const failures = errors.map((error) =>
+      error instanceof ZLinkOwnerCleanupError ||
+      error instanceof ZLinkFrameworkException ||
+      isAbortError(error) ||
+      isDeadlineExceededError(error)
+        ? error
+        : new ZLinkOwnerCleanupError(error)
+    );
+    if (failures.length === 1) throw failures[0];
+    throw new AggregateError(failures, 'Owner cleanup failed.');
+  }
   async renewOwnerLeaseOnce(
     signal?: AbortSignal,
     shutdownSignal?: () => AbortSignal
@@ -597,13 +651,19 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     if (confirmationTimeoutMs !== undefined && confirmationTimeoutMs <= 0) throw originalError;
     let confirmed: Awaited<ReturnType<ZLinkOwnerLeaseStore['readOwnerLease']>>;
     try {
-      confirmed = await withTimeout(
-        (readSignal) => this.stores.ownerLeaseStore.readOwnerLease(this.ownerId, readSignal),
-        confirmationTimeoutMs,
-        cleanupSignal
-      );
+      confirmed =
+        cleanupSignal === undefined
+          ? await withTimeout(
+              (readSignal) => this.stores.ownerLeaseStore.readOwnerLease(this.ownerId, readSignal),
+              confirmationTimeoutMs
+            )
+          : await awaitWithAbort(
+              this.stores.ownerLeaseStore.readOwnerLease(this.ownerId, cleanupSignal),
+              cleanupSignal
+            );
     } catch (confirmationError) {
       this.recordFailure(errorMessage(confirmationError), 'owner_lease_claim_confirmation');
+      if (cleanupSignal?.aborted === true) throw cleanupSignal.reason;
       if (cancelled) throw new ZLinkOwnerCleanupError(confirmationError);
       throw confirmationError;
     }
@@ -612,14 +672,20 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
     if (signal?.aborted === true) {
       try {
-        await withTimeout(
-          (releaseSignal) =>
-            this.stores.ownerLeaseStore.releaseOwnerLease(confirmed.token, releaseSignal),
-          cleanupSignal === undefined ? remainingTimeoutMs(timeoutDeadline) : undefined,
-          cleanupSignal
-        );
+        if (cleanupSignal === undefined)
+          await withTimeout(
+            (releaseSignal) =>
+              this.stores.ownerLeaseStore.releaseOwnerLease(confirmed.token, releaseSignal),
+            remainingTimeoutMs(timeoutDeadline)
+          );
+        else
+          await awaitWithAbort(
+            this.stores.ownerLeaseStore.releaseOwnerLease(confirmed.token, cleanupSignal),
+            cleanupSignal
+          );
       } catch (releaseError) {
         this.recordFailure(errorMessage(releaseError), 'owner_lease_release');
+        if (cleanupSignal?.aborted === true) throw cleanupSignal.reason;
         throw new ZLinkOwnerCleanupError(releaseError);
       }
       throw originalError;

@@ -51,6 +51,11 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     private final ZLinkSerialExecutionQueue dispatchQueue;
     private final ZLinkSerialExecutionQueue infrastructureQueue;
     private final ZLinkSpotSerialExecutor serials;
+
+    public void terminateOwnedWaits() {
+        serials.terminateOwnedWaits();
+    }
+
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final List<DefaultSpotContext> timerContexts = new ArrayList<>();
     private final Map<String, ZLinkSpotTimerRegistry> actorTimers = new ConcurrentHashMap<>();
@@ -872,6 +877,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
 
     CompletionStage<Void> awaitAllLanes(ZLinkSerialExecutionQueue.Quiescence spotScope) {
         return serials.awaitAllLanes(spotScope);
+    }
+
+    public void terminateOwnedWaits() {
+        serials.terminateOwnedWaits();
     }
 
     void sealClosingAdmission() {

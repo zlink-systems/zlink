@@ -291,6 +291,27 @@ runtime::hosted_service_lifecycle_t *lifecycle_of (hosted_service_t *service) no
     return dynamic_cast<runtime::hosted_service_lifecycle_t *> (service);
 }
 
+bool has_teardown_failure (std::exception_ptr failure)
+{
+    if (!failure)
+        return false;
+    try {
+        std::rethrow_exception (failure);
+    }
+    catch (const runtime::cleanup_failure_t &aggregate) {
+        return std::any_of (aggregate.causes ().begin (), aggregate.causes ().end (),
+                            has_teardown_failure);
+    }
+    catch (const framework_exception_t &error) {
+        return !(error_origin (error) == error_origin_t::framework
+                 && (error.kind () == framework_error_kind_t::deadline_exceeded
+                     || error.kind () == framework_error_kind_t::shutting_down));
+    }
+    catch (const std::exception &) {
+        return true;
+    }
+}
+
 class app_state_t
 {
   public:
@@ -461,7 +482,6 @@ class app_state_t
         bool started = false;
         bool terminal = false;
         termination_result_t result{};
-        std::chrono::milliseconds deadline{30000};
         std::optional<std::chrono::system_clock::time_point> deadline_at;
         std::vector<std::shared_ptr<termination_waiter_t>> waiters;
         std::thread worker;
@@ -3480,9 +3500,15 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 state.runtime_state.store (framework_runtime_state_t::error,
                                            std::memory_order_release);
             } else {
-                (void) publish_mesh_descriptor_state (state, framework_runtime_state_t::serving);
-                state.runtime_state.store (framework_runtime_state_t::serving,
-                                           std::memory_order_release);
+                if (publish_mesh_descriptor_state (state, framework_runtime_state_t::serving)) {
+                    state.runtime_state.store (framework_runtime_state_t::serving,
+                                               std::memory_order_release);
+                } else {
+                    authority_split = true;
+                    result.reason = relocation_reason_t::store_unavailable;
+                    state.runtime_state.store (framework_runtime_state_t::error,
+                                               std::memory_order_release);
+                }
             }
         }
 
@@ -3496,6 +3522,10 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
         operation.result = result;
         waiters = std::move (operation.waiters);
         operation.waiters.clear ();
+        if (!interrupted && authority_split) {
+            begin_shared_shutdown (state, std::chrono::system_clock::now (),
+                                   termination_reason_t::teardown_failed);
+        }
         lock.unlock ();
         for (auto &waiter : waiters)
             waiter->complete (result);
@@ -3759,6 +3789,8 @@ task_t<termination_result_t> app_t::shutdown (std::chrono::milliseconds deadline
             _state->relocation_operation.shutdown_requested = true;
         }
     }
+    begin_shared_shutdown (*_state, std::chrono::system_clock::now () + deadline,
+                           termination_reason_t::none);
     auto &operation = _state->termination_operation;
     std::shared_ptr<detail::app_state_t::termination_waiter_t> waiter;
     task_t<termination_result_t> task (result_t<termination_result_t>::success ({}));
@@ -3768,16 +3800,6 @@ task_t<termination_result_t> app_t::shutdown (std::chrono::milliseconds deadline
             return task_t<termination_result_t> (
               result_t<termination_result_t>::success (operation.result));
         }
-        if (!operation.started) {
-            operation.started = true;
-            operation.deadline = deadline;
-            operation.deadline_at = std::chrono::system_clock::now () + deadline;
-            _state->runtime_state.store (framework_runtime_state_t::draining,
-                                         std::memory_order_release);
-            _state->draining->store (true, std::memory_order_release);
-            auto *state = _state.get ();
-            operation.worker = std::thread ([state] { run_shared_shutdown (*state); });
-        }
         waiter = std::make_shared<detail::app_state_t::termination_waiter_t> ();
         task = waiter->task ();
         operation.waiters.push_back (waiter);
@@ -3786,10 +3808,44 @@ task_t<termination_result_t> app_t::shutdown (std::chrono::milliseconds deadline
     return task;
 }
 
+void app_t::begin_shared_shutdown (detail::app_state_t &state,
+                                   std::chrono::system_clock::time_point deadline,
+                                   termination_reason_t reason)
+{
+    auto &operation = state.termination_operation;
+    std::lock_guard lock (operation.mutex);
+    if (operation.terminal)
+        return;
+    if (reason == termination_reason_t::teardown_failed)
+        operation.result.reason = reason;
+    if (operation.started)
+        return;
+    operation.started = true;
+    operation.deadline_at = deadline;
+    if (reason == termination_reason_t::none)
+        state.runtime_state.store (framework_runtime_state_t::draining, std::memory_order_release);
+    state.draining->store (true, std::memory_order_release);
+    operation.worker = std::thread ([&state] { run_shared_shutdown (state); });
+}
+
 void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
 {
     const auto started_at = std::chrono::steady_clock::now ();
-    const auto deadline_at = started_at + state.termination_operation.deadline;
+    const auto deadline_at =
+      started_at
+      + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+        *state.termination_operation.deadline_at - std::chrono::system_clock::now ());
+    auto provider = state.services.build_provider ();
+    auto location = provider.get<runtime::location_runtime_t> ();
+    const auto renew_timeout =
+      location ? location->get ().owner_lease_renew_timeout ()
+      : state.framework_options
+        ? state.framework_options->location_options ().owner_lease_renew_timeout
+        : location_options_t{}.owner_lease_renew_timeout;
+    const auto cleanup_end = deadline_at + renew_timeout;
+    for (const auto &service : state.hosted_services)
+        if (auto *lifecycle = detail::lifecycle_of (service.get ()))
+            lifecycle->set_teardown_end (cleanup_end);
     auto monitoring = detail::monitoring_runtime_t (state.monitoring);
     auto emit_state = [&] (detail::drain_state_t drain_state) {
         try {
@@ -3809,8 +3865,11 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     shutdown_progress_t result = shutdown_completed_t{};
     bool force_state_emitted = false;
     auto force = [&] (shutdown_force_reason_t reason) {
-        if (!std::holds_alternative<shutdown_completed_t> (result))
+        if (auto *forced = std::get_if<shutdown_forced_t> (&result)) {
+            if (reason == shutdown_force_reason_t::teardown_failed)
+                forced->reason = reason;
             return;
+        }
         result = shutdown_forced_t{reason};
         if (!force_state_emitted) {
             force_state_emitted = true;
@@ -3835,6 +3894,14 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
             force (shutdown_force_reason_t::deadline_exceeded);
         }
     }
+
+    termination_reason_t requested_reason;
+    {
+        std::lock_guard lock (state.termination_operation.mutex);
+        requested_reason = state.termination_operation.result.reason;
+    }
+    if (requested_reason == termination_reason_t::teardown_failed)
+        force (shutdown_force_reason_t::teardown_failed);
 
     if (std::holds_alternative<shutdown_completed_t> (result))
         state.runtime_state.store (framework_runtime_state_t::draining, std::memory_order_release);
@@ -3937,41 +4004,12 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         }
     }
 
-    if (std::holds_alternative<shutdown_completed_t> (result)) {
-        bool spots_closed = true;
-        for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
-            auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
-            if (runtime && !runtime->close_all_user_spots (deadline_at)) {
-                spots_closed = false;
-                break;
-            }
-        }
-        if (!spots_closed)
-            force (std::chrono::steady_clock::now () >= deadline_at
-                     ? shutdown_force_reason_t::deadline_exceeded
-                     : shutdown_force_reason_t::teardown_failed);
-    }
-
-    if (std::holds_alternative<shutdown_completed_t> (result)) {
-        try {
-            auto provider = state.services.build_provider ();
-            if (auto location_runtime = provider.get<runtime::location_runtime_t> ()) {
-                if (!location_runtime->get ().cleanup_owner (deadline_at)) {
-                    force (std::chrono::steady_clock::now () >= deadline_at
-                             ? shutdown_force_reason_t::deadline_exceeded
-                             : shutdown_force_reason_t::teardown_failed);
-                }
-            }
-        }
-        catch (...) {
-            force (shutdown_force_reason_t::teardown_failed);
-        }
-    }
-
-    const bool force_stopped = std::holds_alternative<shutdown_forced_t> (result);
-    if (force_stopped) {
-        // User cleanup returns cooperatively: framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#2-execution-gate--owner-처리-순서
+    if (std::holds_alternative<shutdown_forced_t> (result)) {
         detail::cancel_handler_waits (state.handlers);
+        for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
+            if (auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name))
+                runtime->cancel_dispatch_waits ();
+        }
         for (const auto &service : state.hosted_services) {
             if (auto *lifecycle = detail::lifecycle_of (service.get ())) {
                 lifecycle->cancel_execution_waits ();
@@ -3979,10 +4017,53 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
                     if (node)
                         node->cancel_pending_dispatch_waits ();
                 });
-                if (!lifecycle->wait_for_accepted_callbacks_until (deadline_at))
-                    force (shutdown_force_reason_t::teardown_failed);
+                if (!lifecycle->wait_for_accepted_callbacks_until (cleanup_end))
+                    force (shutdown_force_reason_t::deadline_exceeded);
             }
         }
+    }
+    {
+        bool spots_closed = true;
+        for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
+            auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
+            try {
+                if (runtime && !runtime->close_all_user_spots (cleanup_end))
+                    spots_closed = false;
+            }
+            catch (const std::exception &) {
+                force (detail::has_teardown_failure (std::current_exception ())
+                         ? shutdown_force_reason_t::teardown_failed
+                         : shutdown_force_reason_t::deadline_exceeded);
+            }
+        }
+        if (!spots_closed)
+            force (std::chrono::steady_clock::now () >= cleanup_end
+                     ? shutdown_force_reason_t::deadline_exceeded
+                     : shutdown_force_reason_t::teardown_failed);
+    }
+
+    {
+        try {
+            auto provider = state.services.build_provider ();
+            if (auto location_runtime = provider.get<runtime::location_runtime_t> ()) {
+                const auto cleanup = location_runtime->get ().cleanup_owner (cleanup_end);
+                if (!cleanup) {
+                    force (detail::has_teardown_failure (cleanup.exception ())
+                             ? shutdown_force_reason_t::teardown_failed
+                             : shutdown_force_reason_t::deadline_exceeded);
+                }
+            }
+        }
+        catch (const std::exception &) {
+            force (shutdown_force_reason_t::teardown_failed);
+        }
+    }
+
+    if (std::holds_alternative<shutdown_completed_t> (result)
+        && std::chrono::steady_clock::now () >= deadline_at)
+        force (shutdown_force_reason_t::deadline_exceeded);
+    const bool force_stopped = std::holds_alternative<shutdown_forced_t> (result);
+    if (force_stopped) {
         /* graceful-drain-handoff §7: active sessions receive the reason code
          * before forced teardown; the notification is bounded and never
          * blocks the terminal result indefinitely. */
@@ -4035,7 +4116,7 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         std::unique_lock lock (state.termination_teardown_mutex);
         if (state.run_active) {
             teardown_completed = state.termination_teardown_changed.wait_until (
-              lock, deadline_at, [&] { return state.teardown_complete; });
+              lock, cleanup_end, [&] { return state.teardown_complete; });
         }
     }
     if (!teardown_completed && terminal.outcome == termination_outcome_t::stopped) {
@@ -4046,6 +4127,11 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     {
         std::lock_guard lock (state.termination_operation.mutex);
         if (!state.termination_operation.terminal) {
+            if (state.termination_operation.result.reason
+                == termination_reason_t::teardown_failed) {
+                terminal.outcome = termination_outcome_t::force_stopped;
+                terminal.reason = termination_reason_t::teardown_failed;
+            }
             state.termination_operation.terminal = true;
             state.termination_operation.result = terminal;
             waiters = std::move (state.termination_operation.waiters);

@@ -47,6 +47,8 @@ class hosted_service_lifecycle_t
 
     virtual int shutdown_stop_priority () const noexcept { return 0; }
 
+    virtual void set_teardown_end (std::chrono::steady_clock::time_point) noexcept {}
+
     virtual void seal_application_dispatch () noexcept {}
 
     virtual bool wait_for_accepted_callbacks_until (std::chrono::steady_clock::time_point) noexcept

@@ -1902,6 +1902,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     public CompletionStage<Void> closeAsync() {
+        return closeAsync(Instant.now());
+    }
+
+    public void terminateOwnedWaits() {
+        spotLifecycle.terminateOwnedWaits();
+        instanceSpotActivations
+                .values()
+                .forEach(activation -> activation.context.terminateOwnedWaits());
+    }
+
+    public CompletionStage<Void> closeAsync(Instant cleanupEnd) {
         beginClose();
         // Accepted Instance activations finish their first-message Store cleanup before Spots
         // close; the host drain stage bounds this wait with its deadline.
@@ -1912,7 +1923,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 node.instanceActivationTerminals()
                                                         .toCompletableFuture())
                                 .toArray(CompletableFuture[]::new))
-                .thenCompose(ignored -> spotLifecycle.closeAllAsync())
+                .thenCompose(ignored -> spotLifecycle.closeAllAsync(cleanupEnd))
                 .handle(
                         (ignored, failure) -> {
                             CompletionStage<Void> closing = CompletableFuture.completedFuture(null);
@@ -1929,7 +1940,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                         .spots
                                                                                         .ZLinkSpotCloseReason
                                                                                         .HOST_SHUTDOWN,
-                                                                                Instant.now())))
+                                                                                cleanupEnd)))
                                                 .thenCompose(stage -> stage);
                             }
                             return SpotActivationBase.finishCleanup(failure, closing);

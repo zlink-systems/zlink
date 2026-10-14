@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <zlink/http_client.hpp>
+#include <zlink/framework.hpp>
+#include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 
 #include "runtime_context_hooks_environment.hpp"
 
@@ -406,8 +409,9 @@ http::response<http::string_body> make_response (const http::request<http::strin
 class loopback_http_server_t
 {
   public:
-    loopback_http_server_t () :
-        _acceptor (_io, tcp::endpoint (asio::ip::make_address ("127.0.0.1"), 0))
+    explicit loopback_http_server_t (std::function<void ()> before_response = {}) :
+        _acceptor (_io, tcp::endpoint (asio::ip::make_address ("127.0.0.1"), 0)),
+        _before_response (std::move (before_response))
     {
         _port = _acceptor.local_endpoint ().port ();
         _thread = std::thread ([this] { run (); });
@@ -475,6 +479,8 @@ class loopback_http_server_t
                 return;
             }
 
+            if (_before_response)
+                _before_response ();
             auto response = make_response (request);
             http::write (socket, response, ec);
             if (ec || !response.keep_alive () || request.need_eof ()) {
@@ -487,6 +493,7 @@ class loopback_http_server_t
     asio::io_context _io;
     tcp::acceptor _acceptor;
     std::uint16_t _port = 0;
+    std::function<void ()> _before_response;
     std::atomic_bool _stop{false};
     std::atomic<int> _flaky_hits{0};
     std::atomic<int> _connections{0};
@@ -2098,3 +2105,232 @@ int main (int argc, char **argv)
     testing::InitGoogleTest (&argc, argv);
     return RUN_ALL_TESTS ();
 }
+
+namespace
+{
+namespace zf = zlink::framework;
+
+struct shutdown_probe_t
+{
+    static constexpr const char *packet_name = "shutdown-http-probe";
+    int value{};
+};
+struct shutdown_reply_t
+{
+    static constexpr const char *packet_name = "shutdown-http-reply";
+    int value{};
+};
+void to_json (nlohmann::json &json, const shutdown_probe_t &value)
+{
+    json = {{"value", value.value}};
+}
+void from_json (const nlohmann::json &json, shutdown_probe_t &value)
+{
+    value.value = json.at ("value");
+}
+void to_json (nlohmann::json &json, const shutdown_reply_t &value)
+{
+    json = {{"value", value.value}};
+}
+void from_json (const nlohmann::json &json, shutdown_reply_t &value)
+{
+    value.value = json.at ("value");
+}
+
+struct shutdown_observation_t
+{
+    std::string uri;
+    std::atomic_int handler_ended{0};
+    std::atomic_int source_ended{0};
+    std::atomic_int handler_errors{0};
+    bool callback_throws = false;
+};
+
+zf::task_t<int> shutdown_http_request (std::shared_ptr<shutdown_observation_t> state)
+{
+    auto client = zlink::http_client::client_t::create (state->uri).build ();
+    co_await client.get ("/hello").async_raw ();
+    ++state->source_ended;
+    co_return 0;
+}
+
+class shutdown_instance_t final : public zf::instance_spot_t
+{
+  public:
+    shutdown_instance_t (zf::instance_spot_context_t context,
+                         std::shared_ptr<shutdown_observation_t> state) :
+        _context (std::move (context)), _state (std::move (state))
+    {
+    }
+    zf::instance_spot_context_t &context () noexcept override { return _context; }
+    const zf::instance_spot_context_t &context () const noexcept override { return _context; }
+    void configure () override { _context.handlers ().add_handler<&shutdown_instance_t::probe> (); }
+    zf::task_t<shutdown_reply_t> probe (const shutdown_probe_t &request)
+    {
+        if (request.value != 0)
+            co_return shutdown_reply_t{request.value};
+        struct end_t
+        {
+            std::shared_ptr<shutdown_observation_t> state;
+            ~end_t () { ++state->handler_ended; }
+        } ended{_state};
+        co_await _context.run_io_worker ([state = _state] { return shutdown_http_request (state); })
+          .yield ();
+        co_return shutdown_reply_t{0};
+    }
+    zf::task_t<void> on_closing (const zf::spot_closing_context_t &, std::stop_token) override
+    {
+        if (_state->callback_throws)
+            throw std::runtime_error ("application closing failure");
+        co_return;
+    }
+
+  private:
+    zf::instance_spot_context_t _context;
+    std::shared_ptr<shutdown_observation_t> _state;
+};
+
+class shutdown_actor_t final : public zf::actor_t
+{
+  public:
+    explicit shutdown_actor_t (zf::actor_context_t context) : _context (std::move (context)) {}
+    zf::actor_context_t &context () noexcept override { return _context; }
+    const zf::actor_context_t &context () const noexcept override { return _context; }
+
+  private:
+    zf::actor_context_t _context;
+};
+class shutdown_entry_t final : public zf::entry_spot_t<shutdown_actor_t>
+{
+  public:
+    explicit shutdown_entry_t (zf::entry_spot_context_t context) : _context (std::move (context)) {}
+    zf::entry_spot_context_t &context () noexcept override { return _context; }
+    const zf::entry_spot_context_t &context () const noexcept override { return _context; }
+    void configure () override {}
+    zf::task_t<void> on_actor_joined (shutdown_actor_t &) override { co_return; }
+    zf::task_t<void> on_leave_actor (shutdown_actor_t &) override { co_return; }
+
+  private:
+    zf::entry_spot_context_t _context;
+};
+
+class shutdown_host_t
+{
+  public:
+    shutdown_host_t (std::shared_ptr<zf::runtime::in_memory_location_store_t> store,
+                     std::shared_ptr<shutdown_observation_t> state,
+                     const std::string &rid)
+    {
+        app.add_zlink_framework ([&] (zf::zlink_framework_options_t &options) {
+            options.add_location_store (store);
+            options.add_relocation_store (
+              std::make_shared<zf::runtime::in_memory_relocation_store_t> ());
+            zf::detail::dispatch_options_access_t::set_observer_for_tests (
+              options.configure_dispatch (), [state] (const zf::message_flow_event_t &event) {
+                  if (event.error_reason == zf::dispatch_error_reason_t::handler_exception)
+                      ++state->handler_errors;
+              });
+            options.add_route_mesh ("shutdown-http-mesh")
+              .set_object_role (zf::object_role_t::server)
+              .set_routing_id (zlink::routing_id_t::from (rid))
+              .listen ("tcp://127.0.0.1:0")
+              .add_entry_spot<shutdown_entry_t> ([] (zf::entry_spot_context_t context) {
+                  return std::make_shared<shutdown_entry_t> (std::move (context));
+              })
+              .add_instance_spot_factory<shutdown_instance_t> (
+                "probe",
+                [state] (zf::instance_spot_context_t context) {
+                    return std::make_shared<shutdown_instance_t> (std::move (context), state);
+                },
+                [] (auto &factory) { factory.disable_relocation (); });
+        });
+        thread = std::thread ([this] {
+            char program[] = "shutdown-http-contract";
+            char *args[] = {program, nullptr};
+            app.run (1, args);
+        });
+    }
+    ~shutdown_host_t ()
+    {
+        app.request_stop ();
+        if (thread.joinable ())
+            thread.join ();
+    }
+    bool ready ()
+    {
+        const auto end = std::chrono::steady_clock::now () + 3s;
+        while (!app.is_ready () && std::chrono::steady_clock::now () < end)
+            std::this_thread::sleep_for (1ms);
+        return app.is_ready ();
+    }
+    auto request (int value)
+    {
+        auto services = app.advanced ().services ().build_provider ();
+        auto route = app.advanced ().zlink ().route_client (
+          services.get_required<zf::serializer_registry_t> ());
+        return route.request_to_spot (zf::spot_id_t ("same-instance"), shutdown_probe_t{value})
+          .instance_spot ("probe")
+          .timeout (3s)
+          .async<shutdown_reply_t> ();
+    }
+    zf::app_t app = zf::app_t::create ();
+    std::thread thread;
+};
+
+TEST (FrameworkShutdownHttpYield, DeadlineEndsObservationAndReleasesInstanceOwner)
+{
+    std::promise<void> entered, release;
+    auto held = release.get_future ().share ();
+    struct release_t
+    {
+        std::promise<void> *source;
+        void finish ()
+        {
+            if (auto *pending = std::exchange (source, nullptr))
+                pending->set_value ();
+        }
+        ~release_t () { finish (); }
+    };
+    auto state = std::make_shared<shutdown_observation_t> ();
+    loopback_http_server_t server ([&] {
+        entered.set_value ();
+        held.wait ();
+    });
+    release_t release_on_exit{&release};
+    state->uri = server.base_url ();
+    auto store = std::make_shared<zf::runtime::in_memory_location_store_t> ();
+    shutdown_host_t original (store, state, "shutdown-original");
+    ASSERT_TRUE (original.ready ());
+    auto request = original.request (0);
+    ASSERT_EQ (entered.get_future ().wait_for (3s), std::future_status::ready);
+    const auto stopped = original.app.shutdown (50ms).result ().value ();
+    EXPECT_EQ (stopped.outcome, zf::termination_outcome_t::force_stopped);
+    EXPECT_EQ (stopped.reason, zf::termination_reason_t::deadline_exceeded);
+    EXPECT_EQ (state->handler_ended, 1);
+    release_on_exit.finish ();
+    const auto source_end = std::chrono::steady_clock::now () + 3s;
+    while (state->source_ended == 0 && std::chrono::steady_clock::now () < source_end)
+        std::this_thread::sleep_for (1ms);
+    EXPECT_EQ (state->source_ended, 1);
+    EXPECT_EQ (state->handler_ended, 1);
+    shutdown_host_t replacement (store, state, "shutdown-replacement");
+    ASSERT_TRUE (replacement.ready ());
+    const auto reply = replacement.request (7).result ();
+    ASSERT_TRUE (reply) << reply.error ()->what ();
+    EXPECT_EQ (reply.value ().value, 7);
+    EXPECT_EQ (state->handler_errors, 0);
+}
+
+TEST (FrameworkShutdownHttpYield, ActualClosingExceptionIsTeardownFailed)
+{
+    auto state = std::make_shared<shutdown_observation_t> ();
+    state->callback_throws = true;
+    shutdown_host_t host (std::make_shared<zf::runtime::in_memory_location_store_t> (), state,
+                          "shutdown-callback");
+    ASSERT_TRUE (host.ready ());
+    ASSERT_TRUE (host.request (7).result ());
+    const auto stopped = host.app.shutdown (50ms).result ().value ();
+    EXPECT_EQ (stopped.outcome, zf::termination_outcome_t::force_stopped);
+    EXPECT_EQ (stopped.reason, zf::termination_reason_t::teardown_failed);
+}
+} // namespace
