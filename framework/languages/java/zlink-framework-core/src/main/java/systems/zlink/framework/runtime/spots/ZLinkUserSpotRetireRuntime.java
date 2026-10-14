@@ -297,7 +297,9 @@ public final class ZLinkUserSpotRetireRuntime {
                     node.spotNode(),
                     actors.currentRef(actor),
                     route.sessionOwnerNodeRid(),
-                    route.sessionRid());
+                    route.sessionRid(),
+                    route.bindingGeneration(),
+                    0);
         }
     }
 

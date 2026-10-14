@@ -13,7 +13,6 @@ import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalAct
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.spots.ZLinkSpot;
 
@@ -473,25 +472,11 @@ final class ZLinkActorSessionCoordinator {
 
     CompletionStage<Optional<Message>> runPacketTurn(
             ZLinkActor actor,
-            boolean request,
-            boolean noBindRequest,
             ZLinkBackendActorReceived headerPart,
-            ZLinkInternalSpotNode primaryNode,
             Supplier<CompletionStage<Optional<Message>>> operation,
             Supplier<byte[]> relocationRecord,
             Runnable relocationRelease) {
         ZLinkActorRuntime runtime = requireActors();
-        if (request
-                && !noBindRequest
-                && !runtime.hasBoundSession(
-                        actor, headerPart.sourceNodeRid(), headerPart.sourceSessionRid())) {
-            bindNativeSession(
-                    actor,
-                    primaryNode,
-                    headerPart.actor(),
-                    headerPart.sourceNodeRid(),
-                    headerPart.sourceSessionRid());
-        }
         String actorId = actor.context().actorId();
         CompletableFuture<Optional<Message>> result = new CompletableFuture<>();
         Supplier<CompletionStage<Void>> turn =
@@ -524,37 +509,6 @@ final class ZLinkActorSessionCoordinator {
 
     boolean hasBoundSession(ZLinkActor actor) {
         return requireActors().hasBoundSession(actor);
-    }
-
-    void bindNativeSession(
-            ZLinkActor actor,
-            ZLinkInternalSpotNode node,
-            ZLinkBackendActorRef actorRef,
-            RoutingId sourceNodeRid,
-            RoutingId sourceSessionRid) {
-        ZLinkInternalSpotNode.BoundSessionRoute route =
-                node.boundSessionRoute(actorRef)
-                        .filter(
-                                candidate ->
-                                        candidate.sessionOwnerNodeRid().equals(sourceNodeRid)
-                                                && candidate.sessionRid().equals(sourceSessionRid)
-                                                && candidate.bindingGeneration() > 0)
-                        .orElseThrow(
-                                () ->
-                                        new ZLinkFrameworkException(
-                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                "bound Session runtime route is unavailable or"
-                                                        + " stale: "
-                                                        + actorRef.actorId()));
-        requireActors()
-                .bindNativeSession(
-                        actor,
-                        node,
-                        actorRef,
-                        sourceNodeRid,
-                        sourceSessionRid,
-                        route.bindingGeneration(),
-                        0);
     }
 
     Object spotSurface(

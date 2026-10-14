@@ -504,10 +504,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                 return actor;
                                                             });
                                         }))
-                .thenCompose(
-                        actor ->
-                                actor.notifyRemoteBoundSession()
-                                        .thenApply(notificationIgnored -> actor))
                 .whenComplete(
                         (actor, error) -> {
                             if (error != null && actor != null) {

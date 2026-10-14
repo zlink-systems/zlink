@@ -2356,21 +2356,32 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             var route =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 41, 1);
+            var actorBinding =
+                    new java.util.concurrent.atomic.AtomicReference<
+                            ZLinkInternalSpotNode.BoundSessionRoute>();
+            target.setRemoteSessionBindingOwner(
+                    (ref, transition) ->
+                            CompletableFuture.completedFuture(transition.apply(actorBinding::set)));
             var command =
                     new ZLinkServiceM6BWireCodec.BoundSessionBind(
                             1, route, RoutingId.from("jvm-m6b-linearized-session"), true, 3);
 
             assertTrue(
-                    target.acceptRemoteStreamBinding(
-                            sourceRid,
-                            7,
-                            sourceRid.toString(),
-                            1,
-                            command,
-                            accepted -> {
-                                assertTrue(accepted);
-                                assertFalse(target.hasRemoteActorBoundSessionRoute(actor));
-                            }));
+                    target.applyRemoteStreamBinding(
+                                    sourceRid,
+                                    7,
+                                    sourceRid.toString(),
+                                    1,
+                                    command,
+                                    accepted -> {
+                                        assertTrue(accepted);
+                                        assertEquals(
+                                                command.bindingGeneration(),
+                                                actorBinding.get().bindingGeneration());
+                                        assertFalse(target.hasRemoteActorBoundSessionRoute(actor));
+                                    })
+                            .toCompletableFuture()
+                            .join());
             assertTrue(target.hasRemoteActorBoundSessionRoute(actor));
         }
     }

@@ -952,12 +952,15 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             var prepared = (ZLinkActorRuntime.PreparedTransferredActor) actor;
             ZLinkActor targetActor = prepared.actor();
             targetNode.installRelocatingActorBoundSession(actorRoute, session);
-            actors.bindNativeSession(
-                    targetActor,
-                    targetNode,
-                    actorRoute.actor(),
-                    session.nodeRid(),
-                    session.sessionRid());
+            actors.runtime()
+                    .bindNativeSession(
+                            targetActor,
+                            targetNode,
+                            actorRoute.actor(),
+                            session.nodeRid(),
+                            session.sessionRid(),
+                            session.bindingGeneration(),
+                            0);
         }
 
         @Override

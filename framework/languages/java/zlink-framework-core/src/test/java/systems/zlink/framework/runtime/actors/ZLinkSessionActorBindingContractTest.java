@@ -380,14 +380,15 @@ final class ZLinkSessionActorBindingContractTest {
     @Test
     void nativeBindWaitsForTheTargetSessionContextAcknowledgement() {
         FakeStream stream = new FakeStream();
-        CompletableFuture<List<Message>> acknowledgement = new CompletableFuture<>();
-        stream.pendingBoundRequest = acknowledgement;
+        CompletableFuture<Void> acknowledgement = new CompletableFuture<>();
+        stream.bindingAcknowledgement = acknowledgement;
         ZLinkSessionActorsRuntime runtime = runtime(stream);
 
         var binding = runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A));
 
         assertFalse(binding.toCompletableFuture().isDone());
-        acknowledgement.complete(List.of(Message.from(new byte[0])));
+        assertTrue(runtime.bound().isEmpty());
+        acknowledgement.complete(null);
         binding.toCompletableFuture().join();
     }
 
@@ -1110,6 +1111,8 @@ final class ZLinkSessionActorBindingContractTest {
         private boolean deferUnbind;
         private SubmitResult relayFailure;
         private CompletableFuture<List<Message>> pendingBoundRequest;
+        private CompletionStage<Void> bindingAcknowledgement =
+                CompletableFuture.completedFuture(null);
         private CompletableFuture<List<Message>> pendingDisconnectNotification;
         private CountDownLatch blockRelayEntered;
         private CountDownLatch blockRelayRelease;
@@ -1278,7 +1281,7 @@ final class ZLinkSessionActorBindingContractTest {
                 RoutingId sessionRid, ZLinkBackendActorRef actor) {
             binds.add(actor.actorId());
             bindingEvents.add("prepare:" + actor.actorId());
-            return timeout -> CompletableFuture.completedFuture(null);
+            return timeout -> bindingAcknowledgement;
         }
 
         @Override

@@ -410,7 +410,6 @@ final class ZLinkBoundActorRouteContractTest {
             } finally {
                 relayHeaders.exit();
             }
-            actor.notifyRemoteBoundSession().toCompletableFuture().join();
             assertEquals(0L, metrics.inflight("game", "actor"));
             assertEquals(0L, metrics.durationCount("game", "actor", "completed"));
 

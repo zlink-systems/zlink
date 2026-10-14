@@ -1407,18 +1407,6 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         }
 
         @Override
-        public void bindRemoteActorBoundSession(
-                ZLinkBackendActorRef actor, RoutingId sourceNodeRid, RoutingId sourceSessionRid) {
-            record(
-                    "bindRemoteActorBoundSession."
-                            + actor.actorId()
-                            + "."
-                            + sourceNodeRid
-                            + "."
-                            + sourceSessionRid);
-        }
-
-        @Override
         public void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout) {
             record("closeActorBoundSession." + actor.actorId());
         }

@@ -413,7 +413,7 @@ final class EntrySpotActorDispatchTests {
     }
 
     @Test
-    void entrySpotActorDispatchBoundRequestUsesBoundSessionAndBindsSession() throws Exception {
+    void entrySpotActorDispatchBoundRequestUsesTheRegisteredSession() throws Exception {
         TestBackend backend = startBackend();
         try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
             runtime.actorManager()
@@ -421,6 +421,10 @@ final class EntrySpotActorDispatchTests {
                     .submit()
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
+
+            var actors = (ZLinkActorRuntime) runtime.actorManager();
+            backend.node.announceSessionBinding(
+                    actors.currentRef(actors.localActor("actor-a").orElseThrow()));
 
             backend.entrySpot.raiseActorReadable(
                     actorRequestParts("actor-a", "request", "bound", 0, 0));
@@ -456,11 +460,14 @@ final class EntrySpotActorDispatchTests {
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
 
+            var actors = (ZLinkActorRuntime) runtime.actorManager();
+            backend.node.announceSessionBinding(
+                    actors.currentRef(actors.localActor("actor-a").orElseThrow()));
+
             backend.entrySpot.raiseActorReadable(
                     actorRequestParts("actor-a", "request", "bound", 0, 0));
             awaitSingle(backend.node.boundSessionReplies);
 
-            ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
             ZLinkActor actor = actors.localActor("actor-a").orElseThrow();
             assertEquals(
                     sessionOwnerBindingGeneration,
@@ -1575,6 +1582,31 @@ final class EntrySpotActorDispatchTests {
         private final List<ReplyRecord> noBindReplies = new CopyOnWriteArrayList<>();
         private final List<ReplyRecord> boundSessionReplies = new CopyOnWriteArrayList<>();
         private final List<RemoteBind> remoteSessionBinds = new CopyOnWriteArrayList<>();
+        private RemoteSessionBindingOwner remoteSessionBindingOwner;
+
+        @Override
+        public void setRemoteSessionBindingOwner(RemoteSessionBindingOwner owner) {
+            remoteSessionBindingOwner = owner;
+        }
+
+        void announceSessionBinding(ZLinkBackendActorRef actor) {
+            var route = canonicalBoundSessionRoute.orElseThrow();
+            remoteSessionBindingOwner
+                    .apply(
+                            actor,
+                            applied -> {
+                                applied.accept(route);
+                                remoteSessionBinds.add(
+                                        new RemoteBind(
+                                                actor,
+                                                route.sessionOwnerNodeRid(),
+                                                route.sessionRid()));
+                                return true;
+                            })
+                    .toCompletableFuture()
+                    .join();
+        }
+
         private Optional<ZLinkInternalSpotNode.BoundSessionRoute> canonicalBoundSessionRoute =
                 Optional.of(
                         new ZLinkInternalSpotNode.BoundSessionRoute(
@@ -1715,12 +1747,6 @@ final class EntrySpotActorDispatchTests {
                 List<Message> parts,
                 SendFlags flags) {
             throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public void bindRemoteActorBoundSession(
-                ZLinkBackendActorRef actor, RoutingId sourceNodeRid, RoutingId sourceSessionRid) {
-            remoteSessionBinds.add(new RemoteBind(actor, sourceNodeRid, sourceSessionRid));
         }
 
         @Override

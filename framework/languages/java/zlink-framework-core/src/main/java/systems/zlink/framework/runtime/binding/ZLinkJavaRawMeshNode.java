@@ -6792,7 +6792,7 @@ final class ZLinkJavaRawMeshNode
                                 return null;
                             }
                             ((ZLinkJavaRawSpotNode) spotNode())
-                                    .acceptRemoteStreamBinding(
+                                    .applyRemoteStreamBinding(
                                             inbound.source(),
                                             sourceGeneration,
                                             ownerId,
@@ -6800,7 +6800,12 @@ final class ZLinkJavaRawMeshNode
                                             binding,
                                             accepted ->
                                                     replyBoundSessionBind(
-                                                            inbound, binding, accepted));
+                                                            inbound, binding, accepted))
+                                    .whenComplete(
+                                            (accepted, error) -> {
+                                                if (error != null)
+                                                    replyBoundSessionBind(inbound, binding, false);
+                                            });
                             return null;
                         });
     }

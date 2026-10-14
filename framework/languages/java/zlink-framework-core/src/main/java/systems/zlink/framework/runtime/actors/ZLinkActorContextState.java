@@ -293,6 +293,10 @@ final class ZLinkActorContextState {
         return false;
     }
 
+    long sessionBindingToken() {
+        return sessionBindingToken;
+    }
+
     record BoundSessionSource(
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,

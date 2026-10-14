@@ -600,29 +600,4 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     .thenAccept(reply -> reply.forEach(Message::close));
         }
     }
-
-    CompletionStage<Void> notifyRemoteBoundSession() {
-        if (!nativeSessionRelayAttached || managedActor.isPresent()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        ZLinkStreamHeader header =
-                new ZLinkStreamHeader(
-                        ZLinkStreamMessageKind.SEND,
-                        ZLinkStreamCodec.RAW,
-                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                        Optional.empty(),
-                        ZLinkBoundSessionRuntime.REMOTE_BOUND_SESSION_BIND_PACKET_NAME,
-                        Map.of());
-        try (Message payloadPart = Message.from(new byte[0])) {
-            // Binding completes only after the target Framework installs the
-            // native session context and acknowledges this internal request.
-            return stream.requestBoundActor(
-                            sessionRid,
-                            ref.actorId(),
-                            header,
-                            List.of(payloadPart),
-                            ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT)
-                    .thenAccept(reply -> reply.forEach(Message::close));
-        }
-    }
 }

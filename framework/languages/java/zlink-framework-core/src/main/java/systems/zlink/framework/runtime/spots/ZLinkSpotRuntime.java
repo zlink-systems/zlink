@@ -139,9 +139,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private static final int ACTOR_RECV_INFO_NO_BIND = 1;
     private static final long ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES = 512L;
 
-    private static final String REMOTE_BOUND_SESSION_BIND_PACKET_NAME =
-            "zlink.framework.actor.bound_session.bind";
-
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
     private final ZLinkFrameworkRegistration frameworkRegistration;
@@ -4126,10 +4123,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             CompletionStage<Optional<Message>> admitted =
                                     actorSessions.runPacketTurn(
                                             actor,
-                                            packetHeader.requestSeq().isPresent(),
-                                            noBindRequest,
                                             headerPart,
-                                            primaryNode,
                                             () -> {
                                                 traceActorFlow(
                                                         ZLinkMessageFlowOutcome.ADMITTED,
@@ -6407,29 +6401,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkBackendActorReceived headerPart,
             ZLinkActor actor,
             boolean pendingHeader) {
-        if (REMOTE_BOUND_SESSION_BIND_PACKET_NAME.equals(packetHeader.packetName())) {
-            actorSessions.bindNativeSession(
-                    actor,
-                    primaryNode,
-                    headerPart.actor(),
-                    headerPart.sourceNodeRid(),
-                    headerPart.sourceSessionRid());
-            if (packetHeader.requestSeq().isPresent()) {
-                // The native STREAM bind is terminal only after this target
-                // runtime has installed the session context.
-                try (Message acknowledgement = Message.from(new byte[0])) {
-                    primaryNode.replyActorNoBind(
-                            headerPart.actor(),
-                            headerPart.sourceNodeRid(),
-                            headerPart.sourceSessionRid(),
-                            headerPart.requestId(),
-                            headerPart.flags(),
-                            List.of(acknowledgement));
-                }
-            }
-            closePendingActorHeader(headerPart, pendingHeader);
-            return true;
-        }
         if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                 packetHeader.packetName())) {
             CompletionStage<Void> callback = notifySpotActorDisconnected(actor);
@@ -6465,9 +6436,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         }
         try {
             String packetName = ActorPacketFrames.decode(actorMessages.get(0)).packetName();
-            return REMOTE_BOUND_SESSION_BIND_PACKET_NAME.equals(packetName)
-                    || ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
-                            packetName);
+            return ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(packetName);
         } catch (RuntimeException malformed) {
             return false;
         }

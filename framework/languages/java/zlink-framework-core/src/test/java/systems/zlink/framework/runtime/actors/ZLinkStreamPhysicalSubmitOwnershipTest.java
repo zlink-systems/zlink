@@ -373,37 +373,31 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
     }
 
     @Test
-    void boundSessionBindWaitsForBackendPhysicalTerminal() throws Exception {
+    void boundSessionBindWaitsForBackendPhysicalTerminal() {
         CompletableFuture<Void> physicalTerminal = new CompletableFuture<>();
         AtomicInteger asyncSubmits = new AtomicInteger();
         ZLinkBackendStreamSocket stream =
                 streamProxy(
                         (method, arguments) -> {
-                            if (method.getName().equals("relayBoundActorAsync")) {
-                                asyncSubmits.incrementAndGet();
-                                return physicalTerminal;
+                            if (method.getName().equals("bindActor")) {
+                                return (systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkBackendActorBindOperation)
+                                        timeout -> {
+                                            asyncSubmits.incrementAndGet();
+                                            return physicalTerminal;
+                                        };
                             }
                             throw new UnsupportedOperationException(method.getName());
                         });
-        ZLinkBoundSessionRuntime runtime =
-                new ZLinkBoundSessionRuntime(
-                        stream,
-                        null,
-                        SESSION,
-                        "actor-1",
-                        null,
-                        null,
-                        null,
-                        ZLinkStreamCodec.JSON,
-                        ZLinkRelayMetadataPolicy.EMPTY);
-        Method relay =
-                ZLinkBoundSessionRuntime.class.getDeclaredMethod(
-                        "relayBoundSessionBind", ZLinkStreamHeader.class);
-        relay.setAccessible(true);
-
-        @SuppressWarnings("unchecked")
         CompletionStage<Void> submission =
-                (CompletionStage<Void>) relay.invoke(runtime, oneWayHeader("bound-session-bind"));
+                ZLinkBoundSessionRuntime.bindActorWithRetry(
+                        stream,
+                        SESSION,
+                        new systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef(
+                                systems.zlink.contracts.core.RoutingId.from("actor-node"),
+                                "actor-1",
+                                1),
+                        java.time.Duration.ofSeconds(1));
 
         assertEquals(1, asyncSubmits.get());
         assertFalse(submission.toCompletableFuture().isDone());

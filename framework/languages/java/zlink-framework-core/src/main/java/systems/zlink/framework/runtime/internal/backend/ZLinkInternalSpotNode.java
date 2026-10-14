@@ -389,9 +389,6 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                 "local Actor authority journal is unavailable");
     }
 
-    void bindRemoteActorBoundSession(
-            ZLinkBackendActorRef actor, RoutingId sourceNodeRid, RoutingId sourceSessionRid);
-
     default void installRelocatingActorBoundSession(
             ZLinkServiceM6BWireCodec.ActorRouteFence actor,
             ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
@@ -418,6 +415,15 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             long sessionOwnerNodeGeneration,
             RoutingId sessionRid,
             long bindingGeneration) {}
+
+    default void setRemoteSessionBindingOwner(RemoteSessionBindingOwner owner) {}
+
+    @FunctionalInterface
+    interface RemoteSessionBindingOwner {
+        CompletionStage<Boolean> apply(
+                ZLinkBackendActorRef actor,
+                java.util.function.Function<Consumer<BoundSessionRoute>, Boolean> transition);
+    }
 
     @FunctionalInterface
     interface MessageFollowRelayHandler {
