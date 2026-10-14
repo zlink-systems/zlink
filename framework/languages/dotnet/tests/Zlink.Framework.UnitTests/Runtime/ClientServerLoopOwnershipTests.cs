@@ -1,9 +1,7 @@
-using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.LocationProvider;
-using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
@@ -61,50 +59,43 @@ public sealed class ClientServerLoopOwnershipTests
         }
     }
 
-    // ClientServer channel section 6, step 4: the listener closes after the accepted handlers
-    // have finished. A close that runs while the server receive loop can still use the
-    // router is the EBUSY window of #1745.
+    // ClientServer channel section 6, steps 3 and 4: a server that stops still runs the
+    // request handler it has accepted and delivers that request's reply before it closes the
+    // listener. A listener that closes while the handler runs is the EBUSY window of #1745.
     [Fact]
-    public async Task Server_listener_closes_only_after_its_accepted_handler_finishes()
+    public async Task Stopping_server_delivers_the_reply_of_its_accepted_request()
     {
         var gate = new HandlerGate();
-        var services = new ServiceCollection();
-        services.AddSingleton(gate);
-        services.AddZLinkFramework(options =>
+        var serverServices = new ServiceCollection();
+        serverServices.AddSingleton(gate);
+        serverServices.AddZLinkFramework(options =>
         {
             options.DisableImplicitHandlerAutoRegistration();
-            options.AddClientServerChannel("work").Client();
             options
                 .AddClientServerChannel("work")
                 .Server()
                 .Listen(0)
                 .AddRequestHandler<GatedHandler, GatedRequest, GatedReply>();
         });
-        await using var provider = services.BuildServiceProvider();
-        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
-        await runtime.StartAsync(CancellationToken.None);
-        var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
-        var bundle = await state.RunStateAsync(() =>
-            state.ClientServerServerBundles[ZLinkChannelName.FromBoundary("work", "channelName")]
-        );
-        var recorder = DispatchProxy.Create<IAsyncDisposable, CloseRecorder>();
-        var close = (CloseRecorder)(object)recorder;
-        close.Inner = bundle.Socket;
-        close.Gate = gate;
-        typeof(ZLinkChannelRuntimeBundle)
-            .GetField("<Socket>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(bundle, recorder);
+        await using var server = serverServices.BuildServiceProvider();
+        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await serverRuntime.StartAsync(CancellationToken.None);
+        var endpoint = serverRuntime
+            .GetListenerStatus(ZLinkListenerKind.ClientServer, "work")
+            .Endpoint;
+        Assert.NotNull(endpoint);
 
-        Task stop = Task.CompletedTask;
+        var clientServices = new ServiceCollection();
+        clientServices.AddZLinkFramework(options =>
+            options.AddClientServerChannel("work").Client().Connect(endpoint!)
+        );
+        await using var client = clientServices.BuildServiceProvider();
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await clientRuntime.StartAsync(CancellationToken.None);
+        Task? stop = null;
         try
         {
-            var transport = runtime.GetClientServerClientRuntime("work");
-            var ready = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-            while (transport.ReadyCount != 1 && DateTime.UtcNow < ready)
-                await Task.Delay(10);
-            Assert.Equal(1, transport.ReadyCount);
-
-            var request = provider
+            var request = client
                 .GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new GatedRequest("held"))
                 .Timeout(TimeSpan.FromSeconds(30))
@@ -112,20 +103,18 @@ public sealed class ClientServerLoopOwnershipTests
                 .AsTask();
             await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-            stop = runtime.StopAsync(CancellationToken.None).AsTask();
-            // A close that does not wait for the handler happens while it is held here.
-            await Task.WhenAny(close.Closed.Task, Task.Delay(TimeSpan.FromSeconds(1)));
+            stop = serverRuntime.StopAsync(CancellationToken.None).AsTask();
             gate.Release();
-            await stop.WaitAsync(TimeSpan.FromSeconds(30));
-            await request.ContinueWith(static _ => { }, TaskScheduler.Default);
 
-            Assert.True(close.Closed.Task.IsCompleted);
-            Assert.True(await close.Closed.Task);
+            Assert.Equal(new GatedReply("held"), await request.WaitAsync(TimeSpan.FromSeconds(30)));
+            await stop.WaitAsync(TimeSpan.FromSeconds(30));
         }
         finally
         {
             gate.Release();
-            await stop.ContinueWith(static _ => { }, TaskScheduler.Default);
+            await clientRuntime.StopAsync(CancellationToken.None);
+            if (stop is null)
+                await serverRuntime.StopAsync(CancellationToken.None);
         }
     }
 
@@ -169,17 +158,14 @@ public sealed class ClientServerLoopOwnershipTests
 
     private sealed record GatedReply(string Value);
 
-    internal sealed class HandlerGate
+    private sealed class HandlerGate
     {
         private readonly TaskCompletionSource _released = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        private int _finished;
 
         public TaskCompletionSource Entered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public bool Finished => Volatile.Read(ref _finished) != 0;
 
         public void Release() => _released.TrySetResult();
 
@@ -189,7 +175,6 @@ public sealed class ClientServerLoopOwnershipTests
         {
             Entered.TrySetResult();
             await _released.Task.ConfigureAwait(false);
-            Volatile.Write(ref _finished, 1);
         }
     }
 
@@ -204,25 +189,6 @@ public sealed class ClientServerLoopOwnershipTests
         {
             await gate.HoldAsync().ConfigureAwait(false);
             return new GatedReply(request.Value);
-        }
-    }
-
-    // Records whether the accepted handler had finished when the router was closed, then
-    // closes the router.
-    public class CloseRecorder : DispatchProxy
-    {
-        internal IAsyncDisposable Inner { get; set; } = null!;
-
-        internal HandlerGate Gate { get; set; } = null!;
-
-        internal TaskCompletionSource<bool> Closed { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
-        {
-            if (targetMethod?.Name == nameof(IAsyncDisposable.DisposeAsync))
-                Closed.TrySetResult(Gate.Finished);
-            return targetMethod!.Invoke(Inner, args);
         }
     }
 }

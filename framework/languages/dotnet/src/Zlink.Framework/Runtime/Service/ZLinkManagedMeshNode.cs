@@ -48,7 +48,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     // TimeSpan's smallest positive unit. This one-shot notifies the owner;
     // it does not schedule periodic receive polling.
     private static readonly TimeSpan ReceiveWakeInterval = TimeSpan.FromTicks(1);
-    private static readonly TimeSpan TransportShutdownGrace = PollInterval + PollInterval;
     private static readonly TimeSpan RelocationAckRetryInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly IContext _context;
@@ -3308,33 +3307,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             SignalReceiveOwner();
             return _receiveLoop;
         });
+        // The receive loop returns within one PollInterval after the stop and the
+        // wake above. The router, poller and monitor close only after it has
+        // returned: a close while the loop is inside a Core call is refused with
+        // ZLINK_CLOSE_BUSY. The shutdown token bounds the inbound operations
+        // below, not this wait.
         if (receiveLoop is not null)
-            try
-            {
-                await receiveLoop.WaitAsync(shutdownToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested)
-            {
-                // Force-stop must continue to release the socket and poller
-                // even when the receive loop does not observe cancellation.
-            }
-
-        // The native poller wait is bounded by PollInterval, but the caller's
-        // shutdown token can be shorter. Preserve the existing final bounded
-        // window for the receive loop before its owner is closed;
-        // otherwise poller destruction reports ZLINK_CLOSE_BUSY (401) even
-        // though the loop is already on its way out.
-        if (receiveLoop is not null && !receiveLoop.IsCompleted)
-            try
-            {
-                await receiveLoop.WaitAsync(TransportShutdownGrace).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                // The existing shutdown bound still controls the caller-facing
-                // operation. Resource cleanup continues through the normal
-                // owner disposal path below.
-            }
+            await receiveLoop.ConfigureAwait(false);
 
         await CloseInboundOperationAdmissionAsync(shutdownToken).ConfigureAwait(false);
 
