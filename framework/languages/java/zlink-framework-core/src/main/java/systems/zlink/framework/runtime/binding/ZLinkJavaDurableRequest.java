@@ -7,6 +7,7 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Duration;
 import java.util.List;
@@ -30,6 +31,7 @@ final class ZLinkJavaDurableRequest {
     private final BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit;
     private final BooleanSupplier targetLifecycleEnded;
     private final CompletableFuture<List<byte[]>> completion = new CompletableFuture<>();
+    private final CompletableFuture<List<byte[]>> caller = new CompletableFuture<>();
     private final LongSupplier nanoTime;
     private final long started;
     private final long timeoutNanos;
@@ -99,14 +101,23 @@ final class ZLinkJavaDurableRequest {
                                 TimeUnit.NANOSECONDS);
         request.completion.whenComplete(
                 (reply, failure) -> {
-                    deadline.cancel(false);
                     try {
-                        registration.close();
-                    } catch (Exception cleanupFailure) {
-                        LOGGER.log(
-                                Level.WARNING,
-                                "durable request observer cleanup failed",
-                                cleanupFailure);
+                        deadline.cancel(false);
+                        try {
+                            registration.close();
+                        } catch (Exception cleanupFailure) {
+                            LOGGER.log(
+                                    Level.WARNING,
+                                    "durable request observer cleanup failed",
+                                    cleanupFailure);
+                        }
+                    } finally {
+                        ZLinkStateLane.publishOutsideLane(
+                                request.completion,
+                                (value, terminalFailure) -> {
+                                    if (terminalFailure == null) request.caller.complete(value);
+                                    else request.caller.completeExceptionally(terminalFailure);
+                                });
                     }
                 });
         ZLinkCompletionBridge.forwardCancellation(
@@ -117,7 +128,8 @@ final class ZLinkJavaDurableRequest {
                                     if (request.pending != null)
                                         request.pending.toCompletableFuture().cancel(false);
                                 }));
-        return request.completion;
+        ZLinkCompletionBridge.forwardCancellation(request.caller, request.completion);
+        return request.caller;
     }
 
     private void post(Runnable action) {

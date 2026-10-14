@@ -7,8 +7,6 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -929,22 +927,13 @@ public final class ZLinkServiceM6AWireCodec {
         }
 
         private static String decodeText(byte[] bytes, String field) {
-            try {
-                String value =
-                        StandardCharsets.UTF_8
-                                .newDecoder()
-                                .onMalformedInput(CodingErrorAction.REPORT)
-                                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                                .decode(ByteBuffer.wrap(bytes))
-                                .toString();
-                if (value.indexOf('\0') >= 0
-                        || !Arrays.equals(value.getBytes(StandardCharsets.UTF_8), bytes)) {
-                    throw protocol(field + " is not canonical UTF-8");
-                }
-                return value;
-            } catch (CharacterCodingException failure) {
+            String value = new String(bytes, StandardCharsets.UTF_8);
+            // Replacement of malformed input cannot round-trip to its original bytes.
+            if (value.indexOf('\0') >= 0
+                    || !Arrays.equals(value.getBytes(StandardCharsets.UTF_8), bytes)) {
                 throw protocol(field + " is not canonical UTF-8");
             }
+            return value;
         }
     }
 }

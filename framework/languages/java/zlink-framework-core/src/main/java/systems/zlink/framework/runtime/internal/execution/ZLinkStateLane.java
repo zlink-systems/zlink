@@ -13,6 +13,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 /**
@@ -131,6 +132,13 @@ public final class ZLinkStateLane {
             return result;
         }
         return result.handleAsync((value, error) -> result.join());
+    }
+
+    /** Registers the publication itself so a raced terminal cannot inline it in an owner turn. */
+    public static <T> void publishOutsideLane(
+            CompletableFuture<T> result, BiConsumer<? super T, ? super Throwable> publication) {
+        if (result.isDone() && CURRENT.get() == null) result.whenComplete(publication);
+        else result.whenCompleteAsync(publication);
     }
 
     /** Returns null when the owner is busy; a returned stage has already run its turn. */

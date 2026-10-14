@@ -223,14 +223,6 @@ public final class ZLinkCodecRegistration
         return serializer;
     }
 
-    public static <T> ZLinkEncodedPayload serializeForDeclaredType(
-            ZLinkMessageSerializer serializer, T value, Class<?> declaredType) {
-        if (serializer instanceof CompositeSerializer composite) {
-            return composite.serializeForDeclaredType(value, declaredType);
-        }
-        return serializer.serialize(value, declaredType);
-    }
-
     public static ZLinkMessageSerializer serializerForReceivedContentType(
             ZLinkMessageSerializer serializer, String contentType) {
         Objects.requireNonNull(serializer, "serializer");
@@ -546,10 +538,6 @@ public final class ZLinkCodecRegistration
         @Override
         public void prepare(Class<?> type) {
             registration.serializerForSending(type, fallback).prepare(type);
-        }
-
-        private <T> ZLinkEncodedPayload serializeForDeclaredType(T value, Class<?> declaredType) {
-            return serialize(value, declaredType);
         }
 
         private ZLinkStreamCodec streamCodecForDeclaredType(Class<?> declaredType) {

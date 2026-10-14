@@ -18,6 +18,14 @@ public final class ZLinkMessagePayloads {
         return Message.from(payload.bytes());
     }
 
+    public static Message message(
+            ZLinkMessageSerializer serializer, Object value, Class<?> declaredType) {
+        var selected = ZLinkCodecRegistration.serializerForPayloadType(serializer, declaredType);
+        return selected instanceof ZLinkOwnedMessageSerializer owned
+                ? owned.serializeOwned(value)
+                : message(selected.serialize(value, declaredType));
+    }
+
     public static Message message(ZLinkMessage message, ZLinkMessageSerializer serializer) {
         return message(message.toEncodedPayload(serializer));
     }
