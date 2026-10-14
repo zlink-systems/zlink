@@ -52,7 +52,12 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
 
         if (dispatch.PacketName == nameof(SessionInfoRequest))
         {
-            await Context.Client.Reply(new SessionInfo(Context.SessionId)).Async();
+            var actor = Context.Actors.Bound.Single().Ref;
+            await Context
+                .Client.Reply(
+                    new SessionInfo(Context.SessionId, actor.ActorId, actor.ObjectGeneration)
+                )
+                .Async();
             return;
         }
 

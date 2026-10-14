@@ -101,10 +101,7 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
 
     public async Task<TableView> JoinAsync(string tableId, CancellationToken ct)
     {
-        var view = WaitAsync<TableView>(
-            view => view.TableId == tableId && view.ActorId == PlayerId,
-            ct
-        );
+        var view = WaitAsync<TableView>(view => view.TableId == tableId, ct);
         await SendAsync(new JoinTableRequest(PlayerId, tableId), ct);
         return await view;
     }
@@ -116,8 +113,8 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
         return await response;
     }
 
-    public async Task<string> SessionAsync(CancellationToken ct) =>
-        (await Connector.Request(new SessionInfoRequest()).Async<SessionInfo>(ct)).SessionId;
+    public async Task<SessionInfo> SessionAsync(CancellationToken ct) =>
+        await Connector.Request(new SessionInfoRequest()).Async<SessionInfo>(ct);
 
     public ValueTask DisposeAsync() => Connector.DisposeAsync();
 }

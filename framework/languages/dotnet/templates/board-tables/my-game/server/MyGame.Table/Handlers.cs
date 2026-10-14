@@ -57,31 +57,14 @@ public sealed class BetHandler : IZLinkSpotActorSendHandler<TableSpot, PlayerAct
     ) => spot.BetAsync(actor, request, ct);
 }
 
-public sealed class PlayerDelivery<TSpot, TActor, TMessage>
-    : IZLinkSpotActorSendHandler<TSpot, TActor, TMessage>
-    where TSpot : class
-    where TActor : IZLinkActor
+public sealed class PlayerDelivery<TMessage>
+    : IZLinkSpotActorSendHandler<TableSpot, PlayerActor, TMessage>
 {
     public ValueTask HandleAsync(
-        TSpot spot,
-        TActor actor,
+        TableSpot spot,
+        PlayerActor actor,
         IZLinkMessageContext context,
         TMessage message,
         CancellationToken ct
-    ) => SendAsync(actor, message);
-
-    public static ValueTask SendAsync(TActor actor, TMessage message)
-    {
-        // Resolve Framework-owned generation from the Actor at the delivery boundary.
-        if (message is TableView view)
-            return actor
-                .Context.BoundSession.Send(
-                    view with
-                    {
-                        ObjectGeneration = actor.Context.ObjectGeneration,
-                    }
-                )
-                .Async();
-        return actor.Context.BoundSession.Send(message).Async();
-    }
+    ) => actor.Context.BoundSession.Send(message).Async();
 }

@@ -137,7 +137,13 @@ internal static class Scenarios
             await using var reconnected = await GameClient.ConnectAsync(endpoint, p2.PlayerId, ct);
             var restored = await reconnected.JoinAsync(table, ct);
             var restoredCards = await reconnected.WaitAsync<HandDealt>(_ => true, ct);
-            Require(await reconnected.SessionAsync(ct) != session2, "Reconnect reused session ID.");
+            var restoredSession = await reconnected.SessionAsync(ct);
+            Require(
+                restoredSession.SessionId != session2.SessionId
+                    && restoredSession.ActorId == session2.ActorId
+                    && restoredSession.ObjectGeneration == session2.ObjectGeneration,
+                "Reconnect changed player session binding identity."
+            );
             SameState(before2, restored);
             Require(Equal(hand2, restoredCards), "Reconnect changed private cards.");
             Require(
@@ -152,6 +158,10 @@ internal static class Scenarios
             if (scenario == "update")
             {
                 await run!.DrainAsync(before1.NodeId, ct);
+                Require(
+                    session1 == await p1.SessionAsync(ct) && session2 == await p2.SessionAsync(ct),
+                    "Relocation changed a player session binding."
+                );
                 var moved1 = await p1.ViewAsync(view => view.NodeId != before1.NodeId, ct);
                 var moved2 = await p2.ViewAsync(view => view.NodeId != before2.NodeId, ct);
                 SameState(before1, moved1);
@@ -160,10 +170,6 @@ internal static class Scenarios
                     Equal(hand1, await p1.WaitAsync<HandDealt>(_ => true, ct))
                         && Equal(hand2, await p2.WaitAsync<HandDealt>(_ => true, ct)),
                     "Relocation changed cards."
-                );
-                Require(
-                    await p2.SessionAsync(ct) == session2,
-                    "Relocation changed second session."
                 );
             }
             await FinishAsync(p1, p2, hand1, hand2, amount1, ct);
@@ -184,7 +190,7 @@ internal static class Scenarios
     private static void SameState(TableView before, TableView after) =>
         Require(
             Equal(before with { NodeId = after.NodeId }, after),
-            "Continuity changed Actor identity or table state."
+            "Continuity changed table state."
         );
 
     private static void PrivateCards(GameClient client, HandDealt own)

@@ -22,22 +22,11 @@ public sealed class TableSpot(
         Context.Handlers.AddActorPacket<ViewHandler, PlayerActor>(nameof(TableViewRequest));
         Context.Handlers.AddActorPacket<StartHandler, PlayerActor>(nameof(StartHandRequest));
         Context.Handlers.AddActorPacket<BetHandler, PlayerActor>(nameof(BetRequest));
-        Context.Handlers.AddActorPacket<
-            PlayerDelivery<TableSpot, PlayerActor, TableView>,
-            PlayerActor
-        >(nameof(TableView));
-        Context.Handlers.AddActorPacket<
-            PlayerDelivery<TableSpot, PlayerActor, HandDealt>,
-            PlayerActor
-        >(nameof(HandDealt));
-        Context.Handlers.AddActorPacket<
-            PlayerDelivery<TableSpot, PlayerActor, HandResult>,
-            PlayerActor
-        >(nameof(HandResult));
-        Context.Handlers.AddActorPacket<
-            PlayerDelivery<TableSpot, PlayerActor, ActionRejected>,
-            PlayerActor
-        >(nameof(ActionRejected));
+        Context.Handlers.AddActorPacket<PlayerDelivery<TableView>, PlayerActor>(nameof(TableView));
+        Context.Handlers.AddActorPacket<PlayerDelivery<HandDealt>, PlayerActor>(nameof(HandDealt));
+        Context.Handlers.AddActorPacket<PlayerDelivery<HandResult>, PlayerActor>(
+            nameof(HandResult)
+        );
     }
 
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
@@ -90,10 +79,7 @@ public sealed class TableSpot(
             return;
         }
         ct.ThrowIfCancellationRequested();
-        await PlayerDelivery<TableSpot, PlayerActor, TableView>.SendAsync(
-            actor,
-            CreateView(seat, Seats())
-        );
+        await actor.Context.BoundSession.Send(CreateView(seat, Seats())).Async();
         if (state.InHand && seat.Cards.Length != 0)
             await actor
                 .Context.BoundSession.Send(new HandDealt(state.HandNumber, seat.Cards))
@@ -104,8 +90,6 @@ public sealed class TableSpot(
         new(
             Context.SpotId,
             settings.Id,
-            player.PlayerId,
-            default,
             player.Seat,
             state.HandNumber,
             state.InHand,

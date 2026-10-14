@@ -29,7 +29,7 @@ public static class Rejection
 
 public sealed record SessionInfoRequest;
 
-public sealed record SessionInfo(string SessionId);
+public sealed record SessionInfo(string SessionId, string ActorId, ulong ObjectGeneration);
 
 public sealed record JoinTableRequest(string PlayerId, string TableId);
 
@@ -44,8 +44,6 @@ public sealed record SeatView(int Seat, string PlayerId, int Chips, bool Acted, 
 public sealed record TableView(
     string TableId,
     string NodeId,
-    string ActorId,
-    ulong ObjectGeneration,
     int YourSeat,
     int HandNumber,
     bool InHand,

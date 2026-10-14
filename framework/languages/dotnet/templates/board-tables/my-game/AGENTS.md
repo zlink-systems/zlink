@@ -17,6 +17,7 @@ Table Spot이 좌석·칩·덱·카드·차례·판돈을 소유한다. Player A
 
 - 공개 NuGet package와 템플릿 내부 프로젝트 참조만 사용한다.
 - 메시지는 typed message와 기본 JSON serializer를 사용한다. relocation adapter는 application 상태만 직렬화한다.
+- `SessionInfoRequest`는 `JoinTableRequest` 뒤에 보낸다. Session node는 bound Actor의 `ActorId`와 `ObjectGeneration`을 `SessionInfo`에 담아 답한다. Table은 Actor identity를 보관하지 않는다.
 - Entry Spot은 공개 `GetOrCreate`와 `JoinSpot(...).Defer()`를 사용한다. 요청 handler는 전달받은 Actor의 `Context.BoundSession.Send`로 요청자에게 답한다. 그 밖의 push는 좌석의 playerId로 `IZLinkActorClient.SendToActor`를 호출하고, 공개 Spot-actor 전달 handler가 실제 Actor의 bound session으로 전송한다.
 - 재접속은 동일 Actor를 새 Session에 bind한다. 게임 상태를 초기화하거나 application route cache를 만들지 않는다.
 - drain은 공개 host relocation과 `SafeToShutdown` 관찰을 사용한다.
@@ -24,7 +25,7 @@ Table Spot이 좌석·칩·덱·카드·차례·판돈을 소유한다. Player A
 
 ## 검증
 
-구성 변경 시 `zlink.structure.json`과 설정을 함께 갱신한다. 구조 검사와 table·reconnect·update 시나리오를 실행한다. 카드 비공개·칩 보존·Actor generation·연결 연속성 검증을 유지한다. 구조 검사에는 self-test를 추가하지 않으며 개발 중 임시 변형 파일로 잘못된 입력이 거부되는지 확인한다.
+구성 변경 시 `zlink.structure.json`과 설정을 함께 갱신한다. 구조 검사와 table·reconnect·update 시나리오를 실행한다. 카드 비공개·칩 보존·`SessionInfo`의 Actor generation·연결 연속성 검증을 유지한다. 구조 검사에는 self-test를 추가하지 않으며 개발 중 임시 변형 파일로 잘못된 입력이 거부되는지 확인한다.
 
 Windows와 WSL에서 빌드와 E2E를 확인한다. 실패는 첫 실행의 `.logs/`를 읽고 분류한다. 간헐 실패는 한 번 발생해도 결함으로 보고한다. Runner가 소유한 Compose project와 process만 정리한다. `.logs/`, `bin/`, `obj/`, license는 commit하지 않는다.
 

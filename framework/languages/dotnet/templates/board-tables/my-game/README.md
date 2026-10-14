@@ -51,8 +51,8 @@ Runner는 구조를 검사하고 고유 Compose project의 Redis, Table A·B, Se
 | 시나리오 | 판정 |
 | --- | --- |
 | `table` | 좌석·초기 칩, 카드 중복·비공개 유지, 차례 위반 거부, 승자·분배·칩 보존 |
-| `reconnect` | 새 sessionId, 동일 Actor ID·generation·좌석·칩·카드·차례, 재접속 후 결산 |
-| `update` | 진행 중 Table drain, 연결·게임 상태 유지, 다른 node에서 결산, 기존 node 교체 후 새 테이블 한 판 |
+| `reconnect` | `SessionInfo`의 sessionId 변경과 Actor ID·generation 유지, 좌석·칩·카드·차례 유지, 재접속 후 결산 |
+| `update` | drain 전후 두 client의 `SessionInfo` 유지, 연결·게임 상태 유지, 다른 node에서 결산, 기존 node 교체 후 새 테이블 한 판 |
 
 선택한 시나리오는 위 순서대로 실행된다. 결과는 `✓`·`✗`와 `Scenarios: N/M passed`로 출력한다. 실패와 정리 오류는 종료 코드 1로 보고한다. 원인을 확인하지 않은 재실행 성공은 간헐 실패를 취소하지 않는다.
 
@@ -67,6 +67,8 @@ dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
 ## 게임과 확장
 
 첫 client packet은 `JoinTableRequest{playerId,tableId}`다. Entry Spot이 Table을 `GetOrCreate`하고 Actor를 join시킨다. 같은 플레이어가 재접속하면 기존 Actor에 새 Session을 bind하고 현재 Table 상태와 자기 카드를 받는다. 연결이 끊겨도 좌석과 게임 상태는 유지된다.
+
+`SessionInfoRequest`는 `JoinTableRequest` 뒤에 보낸다. Session node는 현재 sessionId와 bound Actor의 actorId·objectGeneration을 `SessionInfo`로 답한다. Table 상태에는 Actor identity를 보관하지 않는다.
 
 좌석은 4개이며 초기 칩은 1000이다. 2명 이상이면 새 52장 덱에서 각자 2장을 받고, 낮은 좌석부터 한 번씩 베팅한다. 두 카드 끗수 합이 가장 큰 플레이어가 판돈을 받는다. 동점은 균등 분배하고 나머지는 가장 낮은 승자 좌석에 지급한다. 판 진행 중 새로 앉은 플레이어는 다음 판부터 참가한다.
 
