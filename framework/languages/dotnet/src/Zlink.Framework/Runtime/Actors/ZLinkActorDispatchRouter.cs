@@ -121,6 +121,9 @@ internal sealed class ZLinkActorDispatchRouter(
                         ),
                     countAsPendingRequest: false,
                     allowRelocationReplay: relocationReplay,
+                    replayReservation: relocationReplay
+                        ? ZLinkSpotRelocationReplayScope.Current?.QueueReservation
+                        : null,
                     cancellationToken: cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -194,6 +197,9 @@ internal sealed class ZLinkActorDispatchRouter(
                     ),
                 countAsPendingRequest: true,
                 allowRelocationReplay: relocationReplay,
+                replayReservation: relocationReplay
+                    ? ZLinkSpotRelocationReplayScope.Current?.QueueReservation
+                    : null,
                 cancellationToken: cancellationToken
             )
             .ConfigureAwait(false);

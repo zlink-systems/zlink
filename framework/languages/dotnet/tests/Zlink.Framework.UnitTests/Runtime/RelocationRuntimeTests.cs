@@ -199,7 +199,7 @@ public sealed class RelocationRuntimeTests
             CancellationToken.None
         );
 
-        Assert.Equal(435, read.LogicalLength);
+        Assert.Equal(ReadCanonicalRelocationGolden().Length, read.LogicalLength);
         Assert.Equal(1, read.ChunkCount);
         Assert.Equal(
             Enumerable.Range(0, 32).Select(static value => (byte)value),
@@ -589,7 +589,7 @@ public sealed class RelocationRuntimeTests
             ZLinkRelocationEnvelopeCodec.Encode(canonical)
         );
         var actor = restored.Participants.Single(static participant =>
-            participant.CanonicalParticipantId == 2
+            participant.CanonicalParticipantId == 1
         );
         var restoredJob = Assert.Single(actor.AcceptedJobs);
 
@@ -2028,7 +2028,7 @@ public sealed class RelocationRuntimeTests
         );
         var canonicalEncoded = ZLinkRelocationEnvelopeCodec.Encode(canonical);
         var canonicalDecoded = ZLinkRelocationEnvelopeCodec.Decode(canonicalEncoded);
-        var restoredAccepted = canonicalDecoded.Participants[1].AcceptedJobs;
+        var restoredAccepted = canonicalDecoded.Participants[0].AcceptedJobs;
         Assert.Equal(recordCount, restoredAccepted.Count);
         Assert.Equal<ulong>(1, restoredAccepted[0].AcceptedSequence);
         Assert.Equal<ulong>(recordCount, restoredAccepted[^1].AcceptedSequence);

@@ -1131,6 +1131,23 @@ final class ZLinkUserSpotRetireSourceBuilder {
             byte[] relocationPayload,
             ZLinkMeshNodeDescriptor target) {
         ZLinkAuthoritySnapshot source = captured.inventory().spot().snapshot();
+        var inventory = participantFences(captured);
+        var bindings =
+                new java.util.ArrayList<
+                        systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec
+                                .RelocationSessionBinding>();
+        for (int index = 0; index < inventory.size(); index++) {
+            var participant = inventory.get(index);
+            for (var route : captured.sessionRoutes()) {
+                if (participant.objectKind() == ZLinkPlacementObjectKind.ACTOR.value()
+                        && participant.objectId().equals(route.actorId()))
+                    bindings.add(route.binding(index + 1L));
+            }
+        }
+        relocationPayload =
+                systems.zlink.framework.runtime.internal.locations
+                        .ZLinkServiceRelocationEnvelopeCodec.withSessionBindings(
+                        relocationPayload, bindings);
         return new ZLinkSpotRetireControl.StageRequest(
                 new ZLinkSpotRetireControl.Fence(aggregateId, 1),
                 localNodeRid,
@@ -1347,8 +1364,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
             for (var participant : stageRequest.participants()) {
                 targetOwnerGenerations.put(
-                        participant.authorityKey(),
-                        Math.addExact(participant.sourceAuthorityOwnerGeneration(), 1));
+                        participant.authorityKey(), participant.sourceAuthorityOwnerGeneration());
             }
             installRelocationForwards(targetOwnerGenerations);
             bindCommittedReplies(targetOwnerGenerations);
@@ -1440,14 +1456,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             "source relocation barrier is not durably committed");
                                 }
                                 sourceCommitted = true;
-                                Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
-                                for (var participant : stageRequest.participants()) {
-                                    targetOwnerGenerations.put(
-                                            participant.authorityKey(),
-                                            Math.addExact(
-                                                    participant.sourceAuthorityOwnerGeneration(),
-                                                    1));
-                                }
+                                Map<String, Long> targetOwnerGenerations = Map.of();
                                 for (Owned actor : captured.inventory().actors()) {
                                     actors.commitRelocationMessageFollow(
                                             actorRoute(actor, false, targetOwnerGenerations));
@@ -1494,14 +1503,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             })
                     .thenCompose(
                             ignored -> {
-                                Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
-                                for (var participant : stageRequest.participants()) {
-                                    targetOwnerGenerations.put(
-                                            participant.authorityKey(),
-                                            Math.addExact(
-                                                    participant.sourceAuthorityOwnerGeneration(),
-                                                    1));
-                                }
+                                Map<String, Long> targetOwnerGenerations = Map.of();
                                 for (Owned actor : captured.inventory().actors()) {
                                     actors.abortRelocationMessageFollow(
                                             actorRoute(actor, false, targetOwnerGenerations));
@@ -1605,8 +1607,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
             for (var participant : stageRequest.participants()) {
                 targetOwnerGenerations.put(
-                        participant.authorityKey(),
-                        Math.addExact(participant.sourceAuthorityOwnerGeneration(), 1));
+                        participant.authorityKey(), participant.sourceAuthorityOwnerGeneration());
             }
             for (Owned actor : captured.inventory().actors()) {
                 actors.abortRelocationMessageFollow(

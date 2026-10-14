@@ -1636,9 +1636,27 @@ internal sealed class ZLinkActorRuntimeState(
         Func<CancellationToken, ValueTask<T>> operation,
         bool countAsPendingRequest,
         CancellationToken cancellationToken,
-        bool allowRelocationReplay = false
+        bool allowRelocationReplay = false,
+        ZLinkSpotRelocationActorQueueReservation? replayReservation = null
     )
     {
+        if (replayReservation is not null)
+        {
+            T result = default!;
+            await replayReservation
+                .ExecuteAsync(
+                    ActorId,
+                    async ct =>
+                    {
+                        EnsureDispatchAvailable(allowRelocationReplay);
+                        using var dispatch = EnterDispatch(header);
+                        result = await operation(ct).ConfigureAwait(false);
+                    },
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            return result;
+        }
         using var turn = await _dispatchMailbox
             .EnterAsync(cancellationToken, countAsPendingRequest)
             .ConfigureAwait(false);

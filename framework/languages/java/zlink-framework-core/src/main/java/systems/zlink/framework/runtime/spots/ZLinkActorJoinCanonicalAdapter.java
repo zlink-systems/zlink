@@ -381,7 +381,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                 "participant authority owner generation");
         requireRecoveryFence(
                 recovery.targetAuthorityOwnerGeneration()
-                        == Math.addExact(participant.sourceAuthorityOwnerGeneration(), 1L),
+                        == participant.sourceAuthorityOwnerGeneration(),
                 "target authority owner generation");
         ZLinkMessage reply =
                 recovery.reply().length == 0

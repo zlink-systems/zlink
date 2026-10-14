@@ -121,7 +121,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             new ZLinkSessionOutboundTenure(
                 identity.ActorId,
                 identity.ObjectGeneration,
-                identity.BindingToken,
                 identity.BindingGeneration,
                 identity.SessionOwnerNodeGeneration,
                 RoutingId.FromHex(identity.SessionRid)
@@ -1217,7 +1216,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         new(
             actorId,
             session.ObjectGeneration,
-            session.BindingToken,
             session.BindingGeneration,
             session.SessionOwnerNodeGeneration,
             session.SessionRid

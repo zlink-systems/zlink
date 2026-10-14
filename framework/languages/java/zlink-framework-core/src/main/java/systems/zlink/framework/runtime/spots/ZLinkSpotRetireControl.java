@@ -603,6 +603,19 @@ final class ZLinkSpotRetireControl {
             long sessionOwnerLeaseGeneration,
             RoutingId sessionRid,
             long bindingGeneration) {
+        systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec.RelocationSessionBinding
+                binding(long participantId) {
+            return new systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec
+                    .RelocationSessionBinding(
+                    participantId,
+                    sessionOwnerNodeRid.toBytes(),
+                    sessionOwnerNodeGeneration,
+                    sessionOwnerId,
+                    sessionOwnerLeaseGeneration,
+                    sessionRid.toBytes(),
+                    bindingGeneration);
+        }
+
         SessionRouteFence {
             requireText(actorId, "actorId");
             requireText(sourceAuthorityStoreVersion, "sourceAuthorityStoreVersion");

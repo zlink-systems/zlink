@@ -51,6 +51,58 @@ internal readonly record struct ZLinkSessionRelocationContext(
 
 internal static class ZLinkSessionRelocationWire
 {
+    private const ulong FirstParticipantId = 1;
+
+    internal static Systems.Zlink.Framework.Runtime.Protocol.ServiceWirePilotCodec.RelocationSessionBinding? CaptureBinding(
+        ZLinkRemoteActorBoundSessionRoute route
+    ) =>
+        route.IsBound
+            ? new(
+                FirstParticipantId,
+                route.NodeRid!.Value.ToBytes().ToArray(),
+                route.SessionOwnerNodeGeneration,
+                route.SessionOwnerId!,
+                route.SessionOwnerLeaseGeneration,
+                route.SessionRid!.Value.ToBytes().ToArray(),
+                route.BindingGeneration
+            )
+            : null;
+
+    internal static ZLinkRemoteActorBoundSessionRoute RestoreBinding(
+        Zlink.Framework.Runtime.Locations.ZLinkRelocationParticipantEnvelope participant,
+        string meshName,
+        ulong sourceNodeGeneration,
+        ulong sourceLeaseGeneration
+    )
+    {
+        if (participant.SessionBinding is not { } binding)
+            return default;
+        var sessionRid = RoutingId.From(binding.SessionRid);
+        var ownerNodeRid = RoutingId.From(binding.SessionOwnerNodeRid);
+        return new(
+            ownerNodeRid,
+            sessionRid,
+            ZLinkActorBoundSessionBindingToken.Canonical(
+                ownerNodeRid,
+                binding.SessionOwnerNodeGeneration,
+                binding.SessionOwnerId,
+                binding.SessionOwnerLeaseGeneration,
+                sessionRid,
+                binding.BindingGeneration
+            ),
+            binding.BindingGeneration,
+            participant.ObjectGeneration,
+            participant.AuthorityOwnerGeneration,
+            meshName,
+            sourceNodeGeneration,
+            sourceLeaseGeneration,
+            binding.SessionOwnerNodeGeneration,
+            0,
+            binding.SessionOwnerId,
+            binding.SessionOwnerLeaseGeneration
+        );
+    }
+
     internal static ZLinkServiceWireCodec.SessionRelocationSealRecord CreateSeal(
         string actorId,
         RoutingId actorNodeRid,

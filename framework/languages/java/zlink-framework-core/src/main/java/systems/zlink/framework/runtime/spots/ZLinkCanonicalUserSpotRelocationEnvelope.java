@@ -144,6 +144,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             writer.u64(tick.scheduledAtUnixMilliseconds());
             writer.u64(tick.skippedTicks());
         }
+        writer.u32(0);
         byte[] encoded = writer.bytes();
         ZLinkServiceRelocationEnvelopeCodec.decode(encoded);
         return encoded;

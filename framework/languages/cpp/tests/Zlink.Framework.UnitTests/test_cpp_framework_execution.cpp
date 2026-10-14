@@ -5492,9 +5492,11 @@ class actor_cutover_authority_t final
     {
         if (on_publish)
             on_publish ();
+        auto issued_target = target;
+        issued_target.authority_owner_generation = source.authority_owner_generation + 1;
         authority_relocation_reference_t reference{
           .source = source,
-          .target = target,
+          .target = issued_target,
           .relocation_reference = std::move (relocation_reference),
           .checksum_crc32c = checksum_crc32c,
           .inventory_digest = inventory_digest,

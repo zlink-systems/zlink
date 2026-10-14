@@ -1121,11 +1121,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             );
             var prepareReply = RequestDirectWireAsync(
                     peer.PhysicalRoutingId,
-                    [ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare)],
+                    [Message.From(ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare))],
                     timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(30),
+                    out var prepareAdmission,
                     prepareRequestCancellation.Token
                 )
                 .AsTask();
+            await prepareAdmission.WaitAsync(deadline.Token).ConfigureAwait(false);
             //  Spec 28 §4.2: the payload chunks follow command 40 on the same
             //  ordered connection and must all be submitted before the target
             //  can assemble, verify, and reply on command 40's native request
@@ -9986,6 +9988,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken,
         ZLinkServiceLiveness? admission = null,
         ZLinkRequestAdmission? requestAdmission = null
+    ) =>
+        await RequestDirectWireAsync(
+                target,
+                messages,
+                timeout,
+                out _,
+                cancellationToken,
+                admission,
+                requestAdmission
+            )
+            .ConfigureAwait(false);
+
+    private ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
+        RoutingId target,
+        IReadOnlyList<Message> messages,
+        TimeSpan timeout,
+        out Task nativeAdmission,
+        CancellationToken cancellationToken,
+        ZLinkServiceLiveness? admission = null,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         var ownershipTransferred = false;
@@ -10003,21 +10025,32 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
                     socket.Request(target).Messages(messages).Timeout(timeout),
                     timeout,
+                    out nativeAdmission,
                     cancellationToken,
                     admission,
                     requestAdmission: requestAdmission
                 );
                 ownershipTransferred = true;
             }
-            var reply = await request.ConfigureAwait(false);
-            admission?.RecordReceived(Stopwatch.GetTimestamp());
-            return reply;
+            return new ValueTask<IReadOnlyList<Message>>(
+                ObserveDirectWireReplyAsync(request, admission)
+            );
         }
         finally
         {
             if (!ownershipTransferred)
                 DisposeParts(messages);
         }
+    }
+
+    private static async Task<IReadOnlyList<Message>> ObserveDirectWireReplyAsync(
+        Task<IReadOnlyList<Message>> request,
+        ZLinkServiceLiveness? admission
+    )
+    {
+        var reply = await request.ConfigureAwait(false);
+        admission?.RecordReceived(Stopwatch.GetTimestamp());
+        return reply;
     }
 
     private static ZLinkServiceWireCodec.RelocationReadyRecord DecodeCanonicalRelocationPrepareReply(

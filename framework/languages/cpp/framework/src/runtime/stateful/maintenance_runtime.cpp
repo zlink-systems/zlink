@@ -412,7 +412,7 @@ task_t<relocation_reason_t> maintenance_runtime_t::prepare_target (
 {
     auto reason = relocation_reason_t::restore_failed;
     try {
-        reason = co_await context.prepare_target (participants, manifest, context.session_routes);
+        reason = co_await context.prepare_target (participants, manifest);
     }
     catch (...) {
         reason = relocation_reason_t::restore_failed;
@@ -480,10 +480,11 @@ task_t<bool> maintenance_runtime_t::relocate_send_state_chunks (
     if (!state->context.send_state_chunk)
         co_return false;
     const auto &participants = state->seal_attempt.seal.participants;
-    const auto found = std::find_if (participants.begin (), participants.end (),
-                                     [] (const frozen_object_state_t &candidate) {
-                                         return candidate.owner.kind == object_kind_t::user_spot;
-                                     });
+    const auto found = std::find_if (
+      participants.begin (), participants.end (), [] (const frozen_object_state_t &candidate) {
+          return candidate.owner.kind == object_kind_t::user_spot
+                 || candidate.owner.kind == object_kind_t::instance_spot;
+      });
     const auto &principal = found != participants.end () ? *found : participants.front ();
     const protocol::relocation_object_t object{
       to_wire_object_kind (principal.owner.kind), principal.stable_type, principal.owner.key,
@@ -835,7 +836,7 @@ bool maintenance_runtime_t::relocate_encode (
         }
         state->payload =
           encode_envelope (state->seal_attempt.seal.participants, state->context.relocation,
-                           state->context.application_version);
+                           state->context.application_version, state->context.session_routes);
         if (state->payload.empty () || state->payload.size () > state->encoded_upper_bound) {
             (void) _objects.abort_relocation (state->seal_attempt.seal.token);
             state->result.emplace (
@@ -1098,7 +1099,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         }
         state->payload =
           encode_envelope (state->seal_attempt.seal.participants, persisted_context.relocation,
-                           persisted_context.application_version);
+                           persisted_context.application_version, persisted_context.session_routes);
         state->manifest = plan_relocation_payload (state->payload, state->effective_chunk_limit);
     }
     catch (...) {
@@ -1175,7 +1176,8 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     const auto principal =
       std::find_if (seal.participants.begin (), seal.participants.end (),
                     [] (const frozen_object_state_t &candidate) {
-                        return candidate.owner.kind == object_kind_t::user_spot;
+                        return candidate.owner.kind == object_kind_t::user_spot
+                               || candidate.owner.kind == object_kind_t::instance_spot;
                     });
     const auto &root =
       principal != seal.participants.end () ? *principal : seal.participants.front ();
@@ -1272,10 +1274,11 @@ constexpr std::string_view bare_timer_handler_type = "LogicalTimer";
 
 } // namespace
 
-std::vector<std::uint8_t>
-maintenance_runtime_t::encode_envelope (const std::vector<frozen_object_state_t> &participants,
-                                        const protocol::relocation_id_t &relocation,
-                                        std::uint64_t application_version)
+std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
+  const std::vector<frozen_object_state_t> &participants,
+  const protocol::relocation_id_t &relocation,
+  std::uint64_t application_version,
+  const std::vector<protocol::session_relocation_route_t> &session_routes)
 {
     if (participants.empty () || (relocation.high == 0 && relocation.low == 0))
         return {};
@@ -1300,7 +1303,8 @@ maintenance_runtime_t::encode_envelope (const std::vector<frozen_object_state_t>
     }
     const auto principal = std::find_if (
       participants.begin (), participants.end (), [] (const frozen_object_state_t &candidate) {
-          return candidate.owner.kind == object_kind_t::user_spot;
+          return candidate.owner.kind == object_kind_t::user_spot
+                 || candidate.owner.kind == object_kind_t::instance_spot;
       });
     const auto &root = principal != participants.end () ? *principal : participants.front ();
 
@@ -1312,6 +1316,24 @@ maintenance_runtime_t::encode_envelope (const std::vector<frozen_object_state_t>
         > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ()))
         return {};
     envelope.application_version = static_cast<std::int64_t> (application_version);
+    for (std::size_t index = 0; index != ordered.size (); ++index) {
+        const auto &participant = *ordered[index];
+        const auto route = std::find_if (
+          session_routes.begin (), session_routes.end (), [&participant] (const auto &candidate) {
+              return participant.owner.kind == object_kind_t::actor
+                     && candidate.actor.actor_id == participant.owner.key
+                     && candidate.actor.object_generation == participant.owner.object_generation;
+          });
+        if (route != session_routes.end ())
+            envelope.session_bindings.push_back (
+              {static_cast<std::uint64_t> (index + 1), route->session_owner_node_routing_id,
+               route->session_owner_node_generation, route->session_owner_id,
+               route->session_owner_lease_generation, route->session_routing_id,
+               route->binding_generation});
+    }
+    if (envelope.session_bindings.size () != session_routes.size ())
+        return {};
+
 
     try {
         for (std::size_t index = 0; index != ordered.size (); ++index) {

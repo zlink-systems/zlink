@@ -868,6 +868,24 @@ public sealed class StandaloneActorRelocationPrecommitTests
         ZLinkActorAuthorityPayload TargetAuthority
     );
 
+    [Fact]
+    public async Task Target_owner_generation_is_issued_from_the_Store_high_water()
+    {
+        var store = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(store);
+        var later = await PrepareCapturedSourceAsync(store);
+        var committed = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
+            store
+        ).CommitTargetAsync(
+            source.Captured,
+            source.Envelope,
+            source.Prepare,
+            source.TargetAuthority,
+            CancellationToken.None
+        );
+        Assert.True(committed.AuthorityOwnerGeneration > later.Steady.AuthorityOwnerGeneration);
+    }
+
     private static async Task<CapturedSource> PrepareCapturedSourceAsync(
         ZLinkInMemoryLocationStore store
     )

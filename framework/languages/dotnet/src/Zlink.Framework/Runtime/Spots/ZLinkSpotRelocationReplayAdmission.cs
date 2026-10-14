@@ -13,7 +13,7 @@ internal sealed class ZLinkSpotRelocationActorQueueReservation(string actorId)
         TaskCreationOptions.RunContinuationsAsynchronously
     );
     private Task? _execution;
-    private Action? _notifyReady;
+    private ZLinkSerialExecutionQueue? _queue;
 
     internal bool IsReady => _work.Task.IsCompletedSuccessfully;
 
@@ -22,10 +22,10 @@ internal sealed class ZLinkSpotRelocationActorQueueReservation(string actorId)
     internal ValueTask RunAsync(CancellationToken cancellationToken) =>
         RunReservedAsync(cancellationToken);
 
-    internal void BindExecution(Task execution, Action notifyReady)
+    internal void BindExecution(Task execution, ZLinkSerialExecutionQueue queue)
     {
         ArgumentNullException.ThrowIfNull(execution);
-        _notifyReady = notifyReady;
+        _queue = queue;
         if (Interlocked.CompareExchange(ref _execution, execution, null) is not null)
             throw new InvalidOperationException(
                 "SPOT relocation Actor queue reservation was already bound."
@@ -44,11 +44,16 @@ internal sealed class ZLinkSpotRelocationActorQueueReservation(string actorId)
             throw new InvalidOperationException(
                 "SPOT relocation Actor queue reservation changed Actor."
             );
+        if (_queue?.OwnsCurrentTurn == true)
+        {
+            await operation(cancellationToken).ConfigureAwait(false);
+            return;
+        }
         if (!_work.TrySetResult(operation))
             throw new InvalidOperationException(
                 "SPOT relocation Actor queue reservation was already consumed."
             );
-        _notifyReady?.Invoke();
+        _queue?.NotifyReadiness();
         var execution =
             Volatile.Read(ref _execution)
             ?? throw new InvalidOperationException(
@@ -61,7 +66,7 @@ internal sealed class ZLinkSpotRelocationActorQueueReservation(string actorId)
     {
         if (_work.TrySetResult(static _ => ValueTask.CompletedTask))
         {
-            _notifyReady?.Invoke();
+            _queue?.NotifyReadiness();
         }
     }
 

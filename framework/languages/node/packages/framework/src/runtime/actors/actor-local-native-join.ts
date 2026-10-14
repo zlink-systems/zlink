@@ -458,7 +458,7 @@ export class ZLinkLocalNativeActorJoin {
                 expectedOwnerLeaseGeneration: actorAuthorityFence!.ownerLeaseGeneration,
                 targetNodeGeneration: target.targetNodeGeneration!,
                 targetSpotGeneration: control.location.spotGeneration,
-                targetAuthorityOwnerGeneration: actorAuthorityFence!.authorityOwnerGeneration + 1n,
+                targetAuthorityOwnerGeneration: actorAuthorityFence!.authorityOwnerGeneration,
                 targetSpotAuthorityOwnerGeneration: target.authorityOwnerGeneration ?? 1n
               }
             }),

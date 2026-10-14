@@ -1476,8 +1476,7 @@ raw_mesh_node_owner_t::send_relocation_control (const std::vector<std::uint8_t> 
 task_t<relocation_prepare_response_t> raw_mesh_node_owner_t::request_relocation_prepare (
   const std::vector<std::uint8_t> &target_routing_id,
   const protocol::relocation_prepare_t &prepare,
-  std::chrono::milliseconds timeout,
-  std::vector<protocol::session_relocation_route_t> session_routes)
+  std::chrono::milliseconds timeout)
 {
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -1488,8 +1487,6 @@ task_t<relocation_prepare_response_t> raw_mesh_node_owner_t::request_relocation_
         co_return relocation_prepare_response_t{};
     detail::backend::raw_message_t parts;
     parts.emplace_back (protocol::encode_relocation_control (prepare));
-    for (const auto &route : session_routes)
-        parts.emplace_back (protocol::encode_session_relocation_route (route));
     auto pending = port->request (target_routing_id, std::move (parts), timeout);
     const auto completed = co_await pending;
     if (completed.terminal != zlink::request_result_t::ok || completed.parts.size () != 1)

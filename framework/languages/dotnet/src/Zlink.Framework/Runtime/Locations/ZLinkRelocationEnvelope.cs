@@ -103,6 +103,7 @@ internal sealed record ZLinkRelocationParticipantEnvelope(
 )
 {
     internal ulong CanonicalParticipantId { get; init; }
+    internal ServiceWirePilotCodec.RelocationSessionBinding? SessionBinding { get; init; }
 }
 
 internal sealed record ZLinkRelocationEnvelope(
@@ -646,6 +647,13 @@ internal static class ZLinkRelocationEnvelopeCodec
             static id => id,
             static _ => new List<ZLinkRelocationQueuedJob>()
         );
+        var bindings = generated.SessionBindings.ToDictionary(static binding =>
+            binding.ParticipantId
+        );
+        if (bindings.Keys.Any(id => !jobs.ContainsKey(id)))
+            throw new InvalidDataException(
+                "The relocation Session binding participant is outside its inventory."
+            );
         var acceptedOrders = new HashSet<(ulong ParticipantId, ulong Order)>();
         var operations = new HashSet<CanonicalSavedWorkOperation>();
         foreach (var work in generated.SavedWork)
@@ -740,6 +748,7 @@ internal static class ZLinkRelocationEnvelopeCodec
                     )
                     {
                         CanonicalParticipantId = state.ParticipantId,
+                        SessionBinding = bindings.GetValueOrDefault(state.ParticipantId),
                     }
             )
             .ToArray();

@@ -318,15 +318,10 @@ struct eligible_relocation_unit_t
          * before the first suspension so the relocationState chunks the
          * caller sends next arrive after it. The returned task completes
          * once the target's relay-ready reply arrives (after the target
-         * assembled, verified, and restored the payload). The captured
-         * bound-session commit routes ride beside the request: the schema
-         * relocation-envelope-v1 payload deliberately has no session-route
-         * section, and command 44 commit must still originate from the
-         * target runtime (20 §5), so the target stages them here. */
-        std::function<task_t<relocation_reason_t> (
-          const std::vector<frozen_object_state_t> &,
-          const relocation_payload_manifest_t &,
-          const std::vector<protocol::session_relocation_route_t> &)>
+         * assembled, verified, and restored the payload). Sealed Session
+         * identities are carried in the canonical envelope. */
+        std::function<task_t<relocation_reason_t> (const std::vector<frozen_object_state_t> &,
+                                                   const relocation_payload_manifest_t &)>
           prepare_target;
         /* Sends one relocationState chunk on the same ordered mesh
          * connection as the Restore request and the relay lane. */
@@ -565,7 +560,8 @@ class maintenance_runtime_t
     static std::vector<std::uint8_t>
     encode_envelope (const std::vector<frozen_object_state_t> &participants,
                      const protocol::relocation_id_t &relocation,
-                     std::uint64_t application_version = 1);
+                     std::uint64_t application_version = 1,
+                     const std::vector<protocol::session_relocation_route_t> &session_routes = {});
     static std::optional<protocol::relocation_envelope_t>
     decode_envelope (const std::vector<std::uint8_t> &payload) noexcept;
     /* Target-side model mapping: the caller supplies the store-derived

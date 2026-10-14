@@ -1557,7 +1557,6 @@ public sealed class SessionActorCoordinatorTests
             TargetNodeGeneration: identity.TargetNodeGeneration + 5,
             AuthorityOwnerGeneration: identity.AuthorityOwnerGeneration + 3,
             OwnerLeaseGeneration: identity.OwnerLeaseGeneration + 2,
-            identity.BindingToken,
             identity.BindingGeneration,
             identity.SessionOwnerNodeGeneration,
             identity.Context.RoutingId!.Value.ToHex(),
@@ -1707,7 +1706,6 @@ public sealed class SessionActorCoordinatorTests
             targetNodeGeneration,
             targetAuthority,
             targetOwnerLease,
-            identity.BindingToken,
             identity.BindingGeneration,
             identity.SessionOwnerNodeGeneration,
             identity.Context.RoutingId.Value.ToHex(),
@@ -1877,7 +1875,6 @@ public sealed class SessionActorCoordinatorTests
         var targetTenure = new ZLinkSessionOutboundTenure(
             route.Ref.ActorId,
             route.Ref.ObjectGeneration,
-            actor.BindingToken,
             BindingGeneration: 5,
             SessionOwnerNodeGeneration: 7,
             sessionRid

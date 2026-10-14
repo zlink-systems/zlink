@@ -28,9 +28,30 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
                     savedWork(generated.savedWork()),
                     timerRegistrations(generated.timerRegistrations()),
                     pendingTimerTicks(generated.pendingTimerTicks()),
+                    generated.sessionBindings(),
                     canonical);
         } catch (IOException failure) {
             throw invalid("envelope", failure);
+        }
+    }
+
+    public static byte[] withSessionBindings(
+            byte[] encoded, List<ServiceWirePilotCodec.RelocationSessionBinding> bindings) {
+        try {
+            var value = ServiceWirePilotCodec.decodeRelocationEnvelopeV1(List.of(encoded));
+            return ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
+                    new ServiceWirePilotCodec.RelocationEnvelopeV1(
+                            value.relocationHigh(),
+                            value.relocationLow(),
+                            value.object(),
+                            value.applicationVersion(),
+                            value.applicationStates(),
+                            value.savedWork(),
+                            value.timerRegistrations(),
+                            value.pendingTimerTicks(),
+                            bindings));
+        } catch (IOException failure) {
+            throw invalid("Session binding vector", failure);
         }
     }
 
@@ -129,12 +150,14 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
             List<SavedWorkEntry> savedWork,
             List<TimerRegistration> timerRegistrations,
             List<PendingTimerTick> pendingTimerTicks,
+            List<ServiceWirePilotCodec.RelocationSessionBinding> sessionBindings,
             byte[] canonicalBytes) {
         public Envelope {
             applicationStates = List.copyOf(applicationStates);
             savedWork = List.copyOf(savedWork);
             timerRegistrations = List.copyOf(timerRegistrations);
             pendingTimerTicks = List.copyOf(pendingTimerTicks);
+            sessionBindings = List.copyOf(sessionBindings);
             canonicalBytes = canonicalBytes.clone();
         }
 

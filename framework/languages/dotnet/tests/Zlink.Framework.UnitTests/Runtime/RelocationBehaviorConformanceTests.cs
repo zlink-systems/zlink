@@ -2137,6 +2137,7 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         services.AddTransient<TargetBehaviorWorkHandler>();
         services.AddTransient<JoinCallbackSendHandler>();
         services.AddTransient<OrdinaryLocalSendHandler>();
+        services.AddTransient<SealStagePushHandler>();
         services.AddZLinkFramework(options =>
         {
             if (timeProvider is not null)
@@ -2332,6 +2333,7 @@ internal sealed class BehaviorTargetSpot(IZLinkSpotContext context, RelocationBe
             nameof(BehaviorWork)
         );
         trace.ConfigureTarget?.Invoke(Context);
+        Context.Handlers.AddActorPacket<SealStagePushHandler, BehaviorActor>(nameof(SealStageWork));
     }
 
     public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(

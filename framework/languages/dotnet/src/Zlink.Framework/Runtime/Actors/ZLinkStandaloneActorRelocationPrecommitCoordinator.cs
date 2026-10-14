@@ -127,7 +127,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             root,
             prepare,
             targetAuthority,
-            checked(captured.AuthorityOwnerGeneration + 1),
+            0,
             static () => true,
             TimeSpan.Zero,
             cancellationToken
@@ -177,7 +177,10 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             || prepare.Target.NodeGeneration != targetAuthority.NodeGeneration
             || !StringComparer.Ordinal.Equals(targetOwner.OwnerId, targetAuthority.OwnerId)
             || checked((ulong)targetOwner.LeaseGeneration) != targetAuthority.OwnerLeaseGeneration
-            || targetAuthorityOwnerGeneration <= captured.AuthorityOwnerGeneration
+            || (
+                targetAuthorityOwnerGeneration != 0
+                && targetAuthorityOwnerGeneration <= captured.AuthorityOwnerGeneration
+            )
         )
             throw DataLost("Target cutover changed its prepared attempt fence.");
         var state = projection.State with

@@ -1284,7 +1284,7 @@ runtime::protocol::session_relocation_route_t mesh_node_runtime_t::make_session_
       checkpoint.session.session.to_bytes (),
       checkpoint.session.binding_generation,
       {action, commit ? checkpoint.source.authority_owner_generation : 0,
-       commit ? checkpoint.source.authority_owner_generation + 1 : 0,
+       commit ? checkpoint.source.authority_owner_generation : 0,
        commit ? target_node.to_bytes () : std::vector<std::uint8_t>{},
        commit ? target_node_generation : 0,
        commit ? 0 : checkpoint.source.authority_owner_generation,
@@ -1347,10 +1347,8 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
         [this, target, source_status = status, source = *source,
          stable_type =
            std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)),
-         relocation, coordinator] (
-          const std::vector<runtime::stateful::frozen_object_state_t> &,
-          const runtime::stateful::relocation_payload_manifest_t &manifest,
-          const std::vector<runtime::protocol::session_relocation_route_t> &session_routes)
+         relocation, coordinator] (const std::vector<runtime::stateful::frozen_object_state_t> &,
+                                   const runtime::stateful::relocation_payload_manifest_t &manifest)
         -> task_t<runtime::stateful::relocation_reason_t> {
           runtime::protocol::relocation_object_kind_t kind;
           switch (source.kind) {
@@ -1383,7 +1381,7 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
               manifest.chunk_count,
               manifest.checksum_crc32c,
               static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version))},
-            std::chrono::seconds (5), session_routes);
+            std::chrono::seconds (5));
       },
       .send_state_chunk =
         [this, target] (const runtime::protocol::relocation_state_t &chunk) -> task_t<bool> {
@@ -1596,10 +1594,9 @@ mesh_node_runtime_t::relocate_application_unit (
                                            restore_deadline);
         },
       .prepare_target =
-        [this, target, status, sources, stable_types, principal_index, relocation, coordinator] (
-          const std::vector<frozen_object_state_t> &,
-          const runtime::stateful::relocation_payload_manifest_t &manifest,
-          const std::vector<runtime::protocol::session_relocation_route_t> &session_routes)
+        [this, target, status, sources, stable_types, principal_index, relocation,
+         coordinator] (const std::vector<frozen_object_state_t> &,
+                       const runtime::stateful::relocation_payload_manifest_t &manifest)
         -> task_t<runtime::stateful::relocation_reason_t> {
           runtime::protocol::relocation_object_kind_t kind;
           switch (sources[principal_index].kind) {
@@ -1633,7 +1630,7 @@ mesh_node_runtime_t::relocate_application_unit (
               manifest.chunk_count,
               manifest.checksum_crc32c,
               static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version))},
-            std::chrono::seconds (5), session_routes);
+            std::chrono::seconds (5));
       },
       .send_state_chunk =
         [this, target] (const runtime::protocol::relocation_state_t &chunk) -> task_t<bool> {
@@ -2446,7 +2443,6 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
     std::string completion_root_reference;
     std::uint32_t completion_root_checksum = 0;
     session_relocation_seal_outcome_t session_seal;
-    std::vector<std::uint8_t> encoded_session_relocation_route;
     std::string relocation_content_type;
     std::chrono::steady_clock::time_point deadline;
 };
@@ -3144,12 +3140,6 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_jo
                                                  "bound Session relocation seal did not complete"),
           "bound Session relocation seal did not complete");
     }
-    if (!s->session_seal.checkpoints.empty ())
-        s->encoded_session_relocation_route =
-          runtime::protocol::encode_session_relocation_route (make_session_relocation_route (
-            s->session_seal.checkpoints.front (), s->target.node_rid, s->target.node_generation,
-            static_cast<std::uint64_t> (s->target.owner.lease_generation),
-            runtime::protocol::session_relocation_route_action_t::commit));
     co_return co_await prepare_remote_application_actor_join (std::move (s));
 }
 
@@ -3203,7 +3193,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .target_node_routing_id = s->target.node_rid.to_bytes (),
       .target_node_generation = s->target.node_generation,
       .target_spot_generation = s->target.object_generation,
-      .target_authority_owner_generation = s->actor_authority_owner_generation + 1,
+      .target_authority_owner_generation = s->actor_authority_owner_generation,
       .target_spot_authority_owner_generation = s->target_spot_authority_owner_generation,
       .coordinator = s->relocation_coordinator,
       .operation = {s->target_completion_operation_id_high, s->target_completion_operation_id_low},
@@ -3228,25 +3218,11 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
     }
 
     std::vector<runtime::protocol::session_relocation_route_t> session_routes;
-    bool session_route_malformed = false;
-    if (!s->encoded_session_relocation_route.empty ()) {
-        try {
-            session_routes.push_back (runtime::protocol::decode_session_relocation_route (
-              s->encoded_session_relocation_route));
-        }
-        catch (...) {
-            session_route_malformed = true;
-        }
-    }
-    if (session_route_malformed) {
-        spot.fail_remote_actor_transfer (s->actor, false);
-        (void) co_await abort_remote_actor_join_seal (s);
-        co_return co_await fail_remote_actor_join (
-          *s,
-          result_t<actor_join_reply_t>::failure (framework_error_kind_t::protocol_error,
-                                                 "bound Session relocation route is malformed"),
-          "bound Session relocation route is malformed");
-    }
+    for (const auto &checkpoint : s->session_seal.checkpoints)
+        session_routes.push_back (make_session_relocation_route (
+          checkpoint, s->target.node_rid, s->target.node_generation,
+          static_cast<std::uint64_t> (s->target.owner.lease_generation),
+          runtime::protocol::session_relocation_route_action_t::commit));
     const runtime::protocol::relocation_object_t object{
       runtime::protocol::relocation_object_kind_t::actor, recovery.actor_type, recovery.actor_id,
       recovery.actor_generation, recovery.actor_authority_owner_generation};
@@ -3281,10 +3257,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
                                                std::nullopt, std::nullopt, recovery_frozen});
             return true;
         },
-      .prepare_target =
-        [this, s, object] (const std::vector<runtime::stateful::frozen_object_state_t> &,
-                           const runtime::stateful::relocation_payload_manifest_t &manifest,
-                           const std::vector<runtime::protocol::session_relocation_route_t> &routes)
+      .prepare_target = [this, s,
+                         object] (const std::vector<runtime::stateful::frozen_object_state_t> &,
+                                  const runtime::stateful::relocation_payload_manifest_t &manifest)
         -> task_t<runtime::stateful::relocation_reason_t> {
           co_return co_await _node->prepare_relocation_remote (
             s->target.node_rid,
@@ -3302,7 +3277,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
               manifest.chunk_count,
               manifest.checksum_crc32c,
               s->target_application_version},
-            s->timeout, routes);
+            s->timeout);
       },
       .send_state_chunk = [this,
                            s] (const runtime::protocol::relocation_state_t &chunk) -> task_t<bool> {

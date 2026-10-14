@@ -97,7 +97,10 @@ internal static class ZLinkCanonicalActorRelocationWriter
                 ],
                 savedWork,
                 [],
-                []
+                [],
+                participant.SessionBinding is { } binding
+                    ? [binding with { ParticipantId = 1 }]
+                    : []
             )
         );
         using var stream = new MemoryStream(encoded, writable: false);
