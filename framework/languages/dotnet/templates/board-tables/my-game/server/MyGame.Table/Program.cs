@@ -5,14 +5,12 @@ using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Spots;
 
 var settings = NodeSettings.Load(args);
-using var flow = new MessageFlow();
 var builder = Host.CreateApplicationBuilder(args);
 GameHosting.Configure(
     builder,
     settings,
     options =>
     {
-        options.AddHandlersFromAssemblyOf<TableSpot>();
         options
             .AddRouteMesh(GameNames.WorldMesh)
             .SetRoutingIdPrefix(settings.Id)

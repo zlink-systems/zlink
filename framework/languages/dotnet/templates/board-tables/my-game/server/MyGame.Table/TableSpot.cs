@@ -1,17 +1,44 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using MyGame.Shared;
+using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 
 namespace MyGame.Table;
 
-public sealed class TableSpot(IZLinkSpotContext context, NodeSettings settings)
-    : IZLinkSpot<PlayerActor>
+public sealed class TableSpot(
+    IZLinkSpotContext context,
+    NodeSettings settings,
+    IZLinkActorClient actors
+) : IZLinkSpot<PlayerActor>
 {
     public IZLinkSpotContext Context { get; } = context;
     private TableState state = new();
-    private readonly Dictionary<string, PlayerActor> recipients = new(StringComparer.Ordinal);
+
+    public void Configure()
+    {
+        Context.Handlers.AddActorPacket<ReconnectHandler, PlayerActor>(nameof(JoinTableRequest));
+        Context.Handlers.AddActorPacket<ViewHandler, PlayerActor>(nameof(TableViewRequest));
+        Context.Handlers.AddActorPacket<StartHandler, PlayerActor>(nameof(StartHandRequest));
+        Context.Handlers.AddActorPacket<BetHandler, PlayerActor>(nameof(BetRequest));
+        Context.Handlers.AddActorPacket<
+            PlayerDelivery<TableSpot, PlayerActor, TableView>,
+            PlayerActor
+        >(nameof(TableView));
+        Context.Handlers.AddActorPacket<
+            PlayerDelivery<TableSpot, PlayerActor, HandDealt>,
+            PlayerActor
+        >(nameof(HandDealt));
+        Context.Handlers.AddActorPacket<
+            PlayerDelivery<TableSpot, PlayerActor, HandResult>,
+            PlayerActor
+        >(nameof(HandResult));
+        Context.Handlers.AddActorPacket<
+            PlayerDelivery<TableSpot, PlayerActor, ActionRejected>,
+            PlayerActor
+        >(nameof(ActionRejected));
+    }
 
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
@@ -35,17 +62,11 @@ public sealed class TableSpot(IZLinkSpotContext context, NodeSettings settings)
         return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
     }
 
-    public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken)
-    {
-        recipients[actor.Context.ActorId] = actor;
-        return BroadcastAsync(cancellationToken);
-    }
+    public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
+        BroadcastAsync(cancellationToken);
 
-    public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken cancellationToken)
-    {
-        recipients.Remove(actor.Context.ActorId);
-        return ValueTask.CompletedTask;
-    }
+    public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
+        ValueTask.CompletedTask;
 
     private PlayerSeat? Find(string id) => state.Seats.Find(seat => seat.PlayerId == id);
 
@@ -68,39 +89,37 @@ public sealed class TableSpot(IZLinkSpotContext context, NodeSettings settings)
             await RejectAsync(actor, Rejection.NotSeated);
             return;
         }
-        recipients[actor.Context.ActorId] = actor;
-        await SendViewAsync(seat, Seats());
+        ct.ThrowIfCancellationRequested();
+        await PlayerDelivery<TableSpot, PlayerActor, TableView>.SendAsync(
+            actor,
+            CreateView(seat, Seats())
+        );
         if (state.InHand && seat.Cards.Length != 0)
             await actor
                 .Context.BoundSession.Send(new HandDealt(state.HandNumber, seat.Cards))
                 .Async();
     }
 
-    private ValueTask SendViewAsync(PlayerSeat player, SeatView[] seats) =>
-        recipients[player.PlayerId]
-            .Context.BoundSession.Send(
-                new TableView(
-                    Context.SpotId,
-                    settings.Id,
-                    player.PlayerId,
-                    recipients[player.PlayerId].Context.ObjectGeneration,
-                    player.Seat,
-                    state.HandNumber,
-                    state.InHand,
-                    state.TurnSeat,
-                    state.Pot,
-                    seats
-                )
-            )
-            .Async();
+    private TableView CreateView(PlayerSeat player, SeatView[] seats) =>
+        new(
+            Context.SpotId,
+            settings.Id,
+            player.PlayerId,
+            default,
+            player.Seat,
+            state.HandNumber,
+            state.InHand,
+            state.TurnSeat,
+            state.Pot,
+            seats
+        );
 
     private async ValueTask BroadcastAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var seats = Seats();
         foreach (var player in state.Seats)
-            if (recipients.ContainsKey(player.PlayerId))
-                await SendViewAsync(player, seats);
+            await actors.SendToActor(player.PlayerId, CreateView(player, seats)).Async();
     }
 
     private static ValueTask RejectAsync(PlayerActor actor, string reason) =>
@@ -135,8 +154,8 @@ public sealed class TableSpot(IZLinkSpotContext context, NodeSettings settings)
                 state.Deck.Count - GameNames.CardsPerHand,
                 GameNames.CardsPerHand
             );
-            await recipients[player.PlayerId]
-                .Context.BoundSession.Send(new HandDealt(state.HandNumber, player.Cards))
+            await actors
+                .SendToActor(player.PlayerId, new HandDealt(state.HandNumber, player.Cards))
                 .Async();
         }
         await BroadcastAsync(ct);
@@ -190,7 +209,7 @@ public sealed class TableSpot(IZLinkSpotContext context, NodeSettings settings)
             Seats()
         );
         foreach (var seat in state.Seats)
-            await recipients[seat.PlayerId].Context.BoundSession.Send(result).Async();
+            await actors.SendToActor(seat.PlayerId, result).Async();
         await BroadcastAsync(ct);
     }
 

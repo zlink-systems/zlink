@@ -1,10 +1,10 @@
 using MyGame.Shared;
+using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace MyGame.Table;
 
-[ZLinkSpotActorSendHandler(nameof(JoinTableRequest))]
 public sealed class ReconnectHandler
     : IZLinkSpotActorSendHandler<TableSpot, PlayerActor, JoinTableRequest>
 {
@@ -22,7 +22,6 @@ public sealed class ReconnectHandler
     }
 }
 
-[ZLinkSpotActorSendHandler(nameof(TableViewRequest))]
 public sealed class ViewHandler
     : IZLinkSpotActorSendHandler<TableSpot, PlayerActor, TableViewRequest>
 {
@@ -35,7 +34,6 @@ public sealed class ViewHandler
     ) => spot.ViewAsync(actor, ct);
 }
 
-[ZLinkSpotActorSendHandler(nameof(StartHandRequest))]
 public sealed class StartHandler
     : IZLinkSpotActorSendHandler<TableSpot, PlayerActor, StartHandRequest>
 {
@@ -48,7 +46,6 @@ public sealed class StartHandler
     ) => spot.StartAsync(actor, ct);
 }
 
-[ZLinkSpotActorSendHandler(nameof(BetRequest))]
 public sealed class BetHandler : IZLinkSpotActorSendHandler<TableSpot, PlayerActor, BetRequest>
 {
     public ValueTask HandleAsync(
@@ -58,4 +55,33 @@ public sealed class BetHandler : IZLinkSpotActorSendHandler<TableSpot, PlayerAct
         BetRequest request,
         CancellationToken ct
     ) => spot.BetAsync(actor, request, ct);
+}
+
+public sealed class PlayerDelivery<TSpot, TActor, TMessage>
+    : IZLinkSpotActorSendHandler<TSpot, TActor, TMessage>
+    where TSpot : class
+    where TActor : IZLinkActor
+{
+    public ValueTask HandleAsync(
+        TSpot spot,
+        TActor actor,
+        IZLinkMessageContext context,
+        TMessage message,
+        CancellationToken ct
+    ) => SendAsync(actor, message);
+
+    public static ValueTask SendAsync(TActor actor, TMessage message)
+    {
+        // Resolve Framework-owned generation from the Actor at the delivery boundary.
+        if (message is TableView view)
+            return actor
+                .Context.BoundSession.Send(
+                    view with
+                    {
+                        ObjectGeneration = actor.Context.ObjectGeneration,
+                    }
+                )
+                .Async();
+        return actor.Context.BoundSession.Send(message).Async();
+    }
 }

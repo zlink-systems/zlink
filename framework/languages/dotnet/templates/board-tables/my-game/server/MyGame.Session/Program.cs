@@ -3,7 +3,6 @@ using MyGame.Session;
 using MyGame.Shared;
 
 var settings = NodeSettings.Load(args);
-using var flow = new MessageFlow();
 var builder = Host.CreateApplicationBuilder();
 GameHosting.Configure(
     builder,

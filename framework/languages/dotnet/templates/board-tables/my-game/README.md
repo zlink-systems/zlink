@@ -94,8 +94,8 @@ dotnet server/MyGame.Table/bin/Debug/net8.0/MyGame.Table.dll --config server/con
 
 PowerShell 7을 사용한다. NuGet 연결이 IPv6 환경에서 실패하면 해당 shell에서 `DOTNET_SYSTEM_NET_DISABLEIPV6=1`을 설정할 수 있다. 실행 스크립트는 이 머신별 설정을 변경하지 않는다. Runner가 시작하는 process는 콘솔 창을 생성하지 않는다.
 
-Node stderr에는 dispatch diagnostics `Normal`과 `Zlink.Framework` ActivityListener의 message flow가 기록된다. 첫 실패 실행의 `<node>.err.log`에서 같은 flow와 packet의 마지막 transition을 확인한다. 공개 package 결함은 internal API, 수동 codec, sleep, 재시도 또는 deadline 확대로 보상하지 않는다.
+Node stderr에는 dispatch diagnostics `Normal` logger의 message flow가 기록된다. 첫 실패 실행의 `<node>.err.log`에서 같은 flow와 packet의 마지막 transition을 확인한다. 공개 package 결함은 internal API, 수동 codec, sleep, 재시도 또는 deadline 확대로 보상하지 않는다.
 
 ## 알려진 공개 package 결함
 
-공개 `0.30.0`에서 Windows·WSL의 `table`과 `reconnect`는 통과했다. `update`는 drain 이후 `RELOCATED`에 도달하지 않았다. 실행 종료 과정에는 두 client의 transport 오류도 기록되었다. `RELOCATED` 미도달은 기존 [#1712](https://github.com/zlink-systems/zlink/issues/1712)의 증상과 일치하며, 상세 원인은 Framework 진단이 필요하다. Runner는 이 실패를 유지하며 기본 시나리오에서 `update`를 제외하지 않는다. node 교체와 교체 후 새 테이블 판정은 이 경계 이후이므로 검증이 남아 있다.
+공개 `0.30.0`에는 cross-node join의 `OnJoinedActorAsync`에서 Actor로 보낸 push가 전달되지 않는 [#1723](https://github.com/zlink-systems/zlink/issues/1723)이 등록되어 있다. 이 경로에서는 `table`·`reconnect`가 실패할 수 있다. 또한 drain 이후 `RELOCATED`가 도달하지 않는 [#1712](https://github.com/zlink-systems/zlink/issues/1712)의 증상이 관측되었다. Runner는 실패를 유지하며 기본 시나리오에서 어느 항목도 제외하지 않는다. node 교체와 교체 후 새 테이블 판정은 해당 경계 이후이므로 검증이 남아 있다.

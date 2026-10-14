@@ -9,6 +9,9 @@ public sealed class TableEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot
 {
     public IZLinkEntrySpotContext Context { get; } = context;
 
+    public void Configure() =>
+        Context.Handlers.AddActorPacket<EnterTableHandler, PlayerActor>(nameof(JoinTableRequest));
+
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
 
@@ -16,7 +19,6 @@ public sealed class TableEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot
         ValueTask.CompletedTask;
 }
 
-[ZLinkSpotActorSendHandler(nameof(JoinTableRequest))]
 public sealed class EnterTableHandler(IZLinkSpotManager spots)
     : IZLinkEntrySpotActorSendHandler<TableEntry, PlayerActor, JoinTableRequest>
 {
