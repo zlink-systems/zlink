@@ -296,8 +296,18 @@ final class ZLinkActorDispatchSerials {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
+        return enqueue(turn, payloadBytes, operation, relocationRelease, null);
+    }
+
+    CompletionStage<Void> enqueue(
+            QueuedTurn turn,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> requestAdmission) {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
-        CompletableFuture<Void> admission = new CompletableFuture<>();
+        CompletableFuture<Void> admission =
+                requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
         return enqueueAfterAdmission(
                 turn,
                 admission,
@@ -341,8 +351,25 @@ final class ZLinkActorDispatchSerials {
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
+        return enqueueLazyRecord(
+                turn,
+                acceptedJournalRecord,
+                acceptedJournalRecordSizeHint,
+                operation,
+                relocationRelease,
+                null);
+    }
+
+    CompletionStage<Void> enqueueLazyRecord(
+            QueuedTurn turn,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> requestAdmission) {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
-        CompletableFuture<Void> admission = new CompletableFuture<>();
+        CompletableFuture<Void> admission =
+                requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
         return enqueueAfterAdmission(
                 turn,
                 admission,

@@ -593,7 +593,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
             if (duplicate != null)
                 return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
-            requestAdmission = new CompletableFuture<>();
+            requestAdmission = ZLinkRequestStages.newAdmission();
             return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
         }
 

@@ -366,7 +366,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
         if (duplicate != null)
             return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
-        requestAdmission = new CompletableFuture<>();
+        requestAdmission = ZLinkRequestStages.newAdmission();
         return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
     }
 
@@ -913,7 +913,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
         if (duplicate != null)
             return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
-        requestAdmission = new CompletableFuture<>();
+        requestAdmission = ZLinkRequestStages.newAdmission();
         return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
     }
 

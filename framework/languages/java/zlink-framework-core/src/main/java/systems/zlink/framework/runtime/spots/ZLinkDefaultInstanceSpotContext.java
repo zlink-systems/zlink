@@ -296,12 +296,21 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     @Override
     public CompletionStage<Void> enqueueActorDispatch(
             String actorId,
+            long payloadBytes,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return enqueueActorDispatch(actorId, operation);
+    }
+
+    @Override
+    public CompletionStage<Void> enqueueActorDispatch(
+            String actorId,
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return CompletableFuture.failedFuture(
-                new IllegalStateException("Instance Spot does not own Actor dispatch"));
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
+        return enqueueActorDispatch(actorId, operation);
     }
 
     @Override

@@ -17,10 +17,15 @@ import java.util.function.Function;
 public final class ZLinkRequestStages {
     private ZLinkRequestStages() {}
 
+    public static CompletableFuture<Void> newAdmission() {
+        return ZLinkCompletionBridge.completionSource();
+    }
+
     public static void forwardAdmission(
             CompletableFuture<Void> caller, CompletionStage<Void> owner) {
         if (caller == null) return;
-        owner.whenComplete(
+        ZLinkCompletionBridge.whenCompleteOwner(
+                owner,
                 (ignored, failure) -> {
                     if (failure == null) caller.complete(null);
                 });
