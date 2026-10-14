@@ -7,7 +7,7 @@ This Java template demonstrates independent MMORPG worlds with channels, typed S
 | Role | Responsibility and extension point |
 | --- | --- |
 | accounts | World list HTTP endpoint in `server/accounts` |
-| session | Client authentication and Actor binding in `server/session` |
+| session | Actor GetOrCreate, binding and relay in `server/session`; add client authentication here |
 | channel | Player gold, channel admission, and handlers in `server/channel` |
 | world-db | Separate Redis for each world in `docker-compose.yml` |
 | players | Public connector client and assertions in `e2e` |

@@ -108,10 +108,9 @@ public final class Structure {
           require(text(spot, "type").equals(Names.ZONE), "Unregistered stable type");
           if (spot.has("dynamic"))
             require(spot.path("dynamic").isBoolean(), "Invalid dynamic flag");
-          if (spot.path("dynamic").asBoolean()) {
-            require(!spot.has("logicalId"), "Dynamic Spot declares logicalId");
+          if (spot.path("dynamic").asBoolean())
             throw new IllegalStateException("Zones must have fixed logical IDs");
-          } else logical.add(text(spot, "mesh") + ":" + text(spot, "logicalId"));
+          logical.add(text(spot, "mesh") + ":" + text(spot, "logicalId"));
         }
         default -> throw new IllegalStateException("Unregistered Spot kind");
       }
