@@ -310,11 +310,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         ZLinkRequestMetrics.start(metric);
         CompletionStage<Optional<ZLinkSessionActorsRuntime.LocalActorReply>> request;
         try {
-            ZLinkBackendActorRef acceptedActor = ref;
             request =
                     localActorDispatcher.dispatch(
-                            acceptedActor,
-                            acceptedActor.nodeRid(),
+                            ref,
+                            ref.nodeRid(),
                             sessionRid,
                             bindingGeneration,
                             sourceSessionSequence,

@@ -580,8 +580,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         boundSession,
                                                         sourceNodeRid,
                                                         sourceSessionRid,
-                                                        bindingGeneration,
-                                                        0)
+                                                        bindingGeneration)
                                                 .thenApply(
                                                         bindingToken -> {
                                                             boundSession.setBindingToken(

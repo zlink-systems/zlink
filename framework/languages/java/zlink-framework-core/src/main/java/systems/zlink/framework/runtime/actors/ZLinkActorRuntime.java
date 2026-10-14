@@ -2819,8 +2819,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkBoundSession boundSession,
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
-            long bindingGeneration,
-            long lastAcceptedSessionSequence) {
+            long bindingGeneration) {
         return inOwnerTurn(
                 () ->
                         bindSessionOnLane(
@@ -2828,8 +2827,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 boundSession,
                                 sourceNodeRid,
                                 sourceSessionRid,
-                                bindingGeneration,
-                                lastAcceptedSessionSequence));
+                                bindingGeneration));
     }
 
     private long bindSessionOnLane(
@@ -2837,8 +2835,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkBoundSession boundSession,
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
-            long bindingGeneration,
-            long lastAcceptedSessionSequence) {
+            long bindingGeneration) {
         DefaultActorContext context = actorRegistry.context(actor);
         if (context == null) {
             throw new ZLinkConfigurationException(
@@ -2846,11 +2843,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         long bindingToken =
                 context.bindSession(
-                        boundSession,
-                        sourceNodeRid,
-                        sourceSessionRid,
-                        bindingGeneration,
-                        lastAcceptedSessionSequence);
+                        boundSession, sourceNodeRid, sourceSessionRid, bindingGeneration);
         ZLinkHandlerStages.fromStageSupplier(
                         () ->
                                 locations.bindSessionRoute(
@@ -2961,8 +2954,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                 actorRef,
                                                 route.sessionOwnerNodeRid(),
                                                 route.sessionRid(),
-                                                route.bindingGeneration(),
-                                                0);
+                                                route.bindingGeneration());
                                     }
 
                                     @Override
@@ -3050,8 +3042,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     new BoundSessionRouteSnapshot(
                             source.sourceNodeRid(),
                             source.sourceSessionRid(),
-                            source.bindingGeneration(),
-                            source.sessionSequence()));
+                            source.bindingGeneration()));
         }
         return Optional.empty();
     }
@@ -3282,15 +3273,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             CompletableFuture<Void> completion) {}
 
     public record BoundSessionRouteSnapshot(
-            RoutingId sessionOwnerNodeRid,
-            RoutingId sessionRid,
-            long bindingGeneration,
-            long lastAcceptedSessionSequence) {
+            RoutingId sessionOwnerNodeRid, RoutingId sessionRid, long bindingGeneration) {
         public BoundSessionRouteSnapshot {
             Objects.requireNonNull(sessionOwnerNodeRid, "sessionOwnerNodeRid");
             Objects.requireNonNull(sessionRid, "sessionRid");
-            if (bindingGeneration <= 0 || lastAcceptedSessionSequence < 0) {
-                throw new IllegalArgumentException("bound Session route generations are invalid");
+            if (bindingGeneration <= 0) {
+                throw new IllegalArgumentException("bound Session route generation is invalid");
             }
         }
     }
@@ -4452,8 +4440,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkBackendActorRef actorRef,
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
-            long bindingGeneration,
-            long lastAcceptedSessionSequence) {
+            long bindingGeneration) {
         return inOwnerTurn(
                 () ->
                         bindNativeSessionOnLane(
@@ -4462,8 +4449,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 actorRef,
                                 sourceNodeRid,
                                 sourceSessionRid,
-                                bindingGeneration,
-                                lastAcceptedSessionSequence));
+                                bindingGeneration));
     }
 
     private long bindNativeSessionOnLane(
@@ -4472,8 +4458,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkBackendActorRef actorRef,
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
-            long bindingGeneration,
-            long lastAcceptedSessionSequence) {
+            long bindingGeneration) {
         DefaultActorContext context = actorRegistry.context(actor);
         if (context == null) {
             throw new ZLinkConfigurationException(
@@ -4494,12 +4479,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         metadataPolicy);
         long bindingToken =
                 bindSessionOnLane(
-                        actor,
-                        boundSession,
-                        sourceNodeRid,
-                        sourceSessionRid,
-                        bindingGeneration,
-                        lastAcceptedSessionSequence);
+                        actor, boundSession, sourceNodeRid, sourceSessionRid, bindingGeneration);
         boundSession.setBindingToken(bindingToken);
         return bindingToken;
     }
@@ -5240,21 +5220,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 ZLinkBoundSession boundSession,
                 RoutingId sourceNodeRid,
                 RoutingId sourceSessionRid) {
-            return bindSession(boundSession, sourceNodeRid, sourceSessionRid, 0, 0);
+            return bindSession(boundSession, sourceNodeRid, sourceSessionRid, 0);
         }
 
         long bindSession(
                 ZLinkBoundSession boundSession,
                 RoutingId sourceNodeRid,
                 RoutingId sourceSessionRid,
-                long bindingGeneration,
-                long lastAcceptedSessionSequence) {
+                long bindingGeneration) {
             return state.bindSession(
-                    boundSession,
-                    sourceNodeRid,
-                    sourceSessionRid,
-                    bindingGeneration,
-                    lastAcceptedSessionSequence);
+                    boundSession, sourceNodeRid, sourceSessionRid, bindingGeneration);
         }
 
         ZLinkActorContextState.BoundSessionSource boundSessionSourceSnapshot() {

@@ -78,7 +78,6 @@ final class ZLinkBoundSessionSendCallContractTest {
                         new ZLinkBackendActorRef(RoutingId.from("node-a"), "accepted-handler", 7),
                         null,
                         null,
-                        0,
                         0)
                 .toCompletableFuture()
                 .join();
@@ -154,7 +153,6 @@ final class ZLinkBoundSessionSendCallContractTest {
                         new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7),
                         null,
                         null,
-                        0,
                         0)
                 .toCompletableFuture()
                 .join();
@@ -213,7 +211,6 @@ final class ZLinkBoundSessionSendCallContractTest {
                         new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7),
                         null,
                         null,
-                        0,
                         0)
                 .toCompletableFuture()
                 .join();
@@ -262,8 +259,7 @@ final class ZLinkBoundSessionSendCallContractTest {
                         new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7),
                         RoutingId.from("session-node"),
                         RoutingId.from("session-1"),
-                        11,
-                        0)
+                        11)
                 .toCompletableFuture()
                 .join();
 
@@ -312,8 +308,7 @@ final class ZLinkBoundSessionSendCallContractTest {
                                                         RoutingId.from("node-a"), "actor-1", 7),
                                                 RoutingId.from("session-node"),
                                                 RoutingId.from("session-1"),
-                                                11,
-                                                0)
+                                                11)
                                         .toCompletableFuture());
         assertFalse(bound.isDone());
         assertFalse(actors.hasBoundSession(actor));

@@ -300,8 +300,7 @@ public final class ZLinkUserSpotRetireRuntime {
                                     actors.currentRef(actor),
                                     route.sessionOwnerNodeRid(),
                                     route.sessionRid(),
-                                    route.bindingGeneration(),
-                                    0)
+                                    route.bindingGeneration())
                             .toCompletableFuture());
         }
         return CompletableFuture.allOf(restored.toArray(CompletableFuture[]::new));

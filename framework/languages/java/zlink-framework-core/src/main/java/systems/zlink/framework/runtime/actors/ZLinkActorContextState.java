@@ -27,7 +27,6 @@ final class ZLinkActorContextState {
     // can recreate its local binding while retaining the owner's fence.
     private long sessionBindingToken;
     private long sessionBindingGeneration;
-    private long sessionSourceSequence;
     private RoutingId boundSessionSourceNodeRid;
     private RoutingId boundSessionSourceSessionRid;
     private RoutingId entrySpotNodeRid;
@@ -224,20 +223,16 @@ final class ZLinkActorContextState {
 
     long bindSession(
             ZLinkBoundSession boundSession, RoutingId sourceNodeRid, RoutingId sourceSessionRid) {
-        return bindSession(boundSession, sourceNodeRid, sourceSessionRid, 0, 0);
+        return bindSession(boundSession, sourceNodeRid, sourceSessionRid, 0);
     }
 
     long bindSession(
             ZLinkBoundSession boundSession,
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
-            long bindingGeneration,
-            long initialSessionSequence) {
-        if (bindingGeneration < 0
-                || initialSessionSequence < 0
-                || bindingGeneration == 0 && initialSessionSequence != 0) {
-            throw new IllegalArgumentException(
-                    "bound Session fence must be zero or fully initialized");
+            long bindingGeneration) {
+        if (bindingGeneration < 0) {
+            throw new IllegalArgumentException("bound Session binding generation is negative");
         }
         //  A fence-less re-bind of the session that is already bound must
         //  keep the session-owner-issued fence and accepted sequence. Every
@@ -261,7 +256,6 @@ final class ZLinkActorContextState {
         boundSessionSourceSessionRid = sourceSessionRid;
         sessionBindingToken++;
         sessionBindingGeneration = bindingGeneration == 0 ? sessionBindingToken : bindingGeneration;
-        sessionSourceSequence = initialSessionSequence;
         this.boundSession = boundSession;
         return sessionBindingToken;
     }
@@ -275,10 +269,7 @@ final class ZLinkActorContextState {
             return null;
         }
         return new BoundSessionSource(
-                boundSessionSourceNodeRid,
-                boundSessionSourceSessionRid,
-                sessionBindingGeneration,
-                sessionSourceSequence);
+                boundSessionSourceNodeRid, boundSessionSourceSessionRid, sessionBindingGeneration);
     }
 
     boolean clearBoundSession(long bindingToken) {
@@ -287,7 +278,6 @@ final class ZLinkActorContextState {
             boundSessionSourceNodeRid = null;
             boundSessionSourceSessionRid = null;
             sessionBindingGeneration = 0;
-            sessionSourceSequence = 0;
             return true;
         }
         return false;
@@ -298,10 +288,7 @@ final class ZLinkActorContextState {
     }
 
     record BoundSessionSource(
-            RoutingId sourceNodeRid,
-            RoutingId sourceSessionRid,
-            long bindingGeneration,
-            long sessionSequence) {}
+            RoutingId sourceNodeRid, RoutingId sourceSessionRid, long bindingGeneration) {}
 
     CompletionStage<Void> rebindNativeActor(ZLinkBackendActorRef targetActor, Duration timeout) {
         if (boundSession instanceof ZLinkBoundSessionRuntime runtime) {

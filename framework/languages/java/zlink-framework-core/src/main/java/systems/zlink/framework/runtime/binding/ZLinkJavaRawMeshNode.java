@@ -6794,12 +6794,7 @@ final class ZLinkJavaRawMeshNode
                                             binding,
                                             accepted ->
                                                     replyBoundSessionBind(
-                                                            inbound, binding, accepted))
-                                    .whenComplete(
-                                            (accepted, error) -> {
-                                                if (error != null)
-                                                    replyBoundSessionBind(inbound, binding, false);
-                                            });
+                                                            inbound, binding, accepted));
                             return null;
                         });
     }

@@ -47,7 +47,7 @@ final class ZLinkActorContextStateRelocationTest {
     }
 
     @Test
-    void snapshotsBoundSessionFenceWithoutAdvancingAcceptedSequence() {
+    void snapshotsBoundSessionFence() {
         RoutingId actorNode = RoutingId.from("actor-node");
         RoutingId sessionOwner = RoutingId.from("session-owner");
         RoutingId session = RoutingId.from("session-a");
@@ -58,15 +58,12 @@ final class ZLinkActorContextStateRelocationTest {
         long binding = state.bindSession(new TestBoundSession(), sessionOwner, session);
         var initial = state.boundSessionSourceSnapshot();
         assertEquals(binding, initial.bindingGeneration());
-        assertEquals(0, initial.sessionSequence());
 
-        state.bindSession(new TestBoundSession(), sessionOwner, session, binding, 1);
+        state.bindSession(new TestBoundSession(), sessionOwner, session, binding);
         var sealed = state.boundSessionSourceSnapshot();
         assertEquals(sessionOwner, sealed.sourceNodeRid());
         assertEquals(session, sealed.sourceSessionRid());
         assertEquals(binding, sealed.bindingGeneration());
-        assertEquals(1, sealed.sessionSequence());
-        assertEquals(1, state.boundSessionSourceSnapshot().sessionSequence());
     }
 
     @Test
@@ -80,11 +77,10 @@ final class ZLinkActorContextStateRelocationTest {
 
         state.bindSession(new TestBoundSession(), sessionOwner, session);
         long localBindingToken =
-                state.bindSession(new TestBoundSession(), sessionOwner, session, 41, 9);
+                state.bindSession(new TestBoundSession(), sessionOwner, session, 41);
 
         var imported = state.boundSessionSourceSnapshot();
         assertEquals(41, imported.bindingGeneration());
-        assertEquals(9, imported.sessionSequence());
         assertNotEquals(41, localBindingToken);
         assertTrue(state.clearBoundSession(localBindingToken));
     }
