@@ -1,11 +1,13 @@
 using System.Reflection;
 using System.Reflection.Emit;
+using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Contracts.Timers;
 using Zlink.Framework.Runtime.Configuration;
+using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
@@ -58,6 +60,71 @@ public sealed class SpotAutoRegistrationScannerTests
             registration.ScannedHandlerCatalog.SpotHandlers,
             handler => handler.HandlerType == handlerType
         );
+    }
+
+    [Fact]
+    public async Task RegistrationSkipsOpenGenericActorHandlerAndClosedExplicitHandlerProcessesMessage()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        registration.HandlerAssemblies.Add(typeof(SpotAutoRegistrationScannerTests).Assembly);
+
+        ZLinkFrameworkRegistrationValidator.Validate(registration);
+
+        Assert.DoesNotContain(
+            registration.ScannedHandlerCatalog.SpotHandlers,
+            static handler => handler.HandlerType == typeof(OpenGenericActorSendHandler<>)
+        );
+
+        var registry = new ZLinkSpotActorHandlerRegistry(
+            ZLinkSpotActorHandlerSurface.UserSpot,
+            typeof(AutoRoomSpot)
+        );
+        registry.AddPacket(typeof(ClosedExplicitActorSendHandler), typeof(AutoActor), null);
+        var descriptor = ZLinkSpotActorHandlerDescriptorFactory.CreatePacket(
+            ZLinkSpotActorHandlerSurface.UserSpot,
+            typeof(AutoRoomSpot),
+            typeof(ClosedExplicitActorSendHandler),
+            typeof(AutoActor),
+            null
+        );
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            descriptor.MessageName,
+            ZlinkStreamMetadata.Empty
+        );
+
+        Assert.True(registry.TryResolve(typeof(AutoActor), header, out var registered));
+        var message = new AutoActorMessage();
+        var handler = new ClosedExplicitActorSendHandler();
+        await ZLinkHandlerInvocationEngine.InvokeAsync(
+            handler,
+            registered!.Invoker,
+            new AutoRoomSpot(),
+            new AutoActor("actor"),
+            null,
+            message,
+            CancellationToken.None
+        );
+
+        Assert.Same(message, handler.ReceivedMessage);
+    }
+
+    [Fact]
+    public void ExplicitRegistrationStillRejectsOpenGenericActorHandler()
+    {
+        var registry = new ZLinkSpotActorHandlerRegistry(
+            ZLinkSpotActorHandlerSurface.UserSpot,
+            typeof(AutoRoomSpot)
+        );
+
+        var error = Assert.Throws<ZLinkConfigurationException>(() =>
+            registry.AddPacket(typeof(OpenGenericActorSendHandler<>), typeof(AutoActor), null)
+        );
+
+        Assert.Contains("must not contain open generic parameters", error.Message);
     }
 
     private static (Assembly Assembly, Type HandlerType) CreateSubscriptionHandlerAssembly(
@@ -284,6 +351,36 @@ public sealed class SpotAutoRegistrationScannerTests
             AutoActorMessage message,
             CancellationToken cancellationToken
         ) => ValueTask.CompletedTask;
+    }
+
+    private sealed class OpenGenericActorSendHandler<TMessage>
+        : IZLinkSpotActorSendHandler<AutoRoomSpot, AutoActor, TMessage>
+    {
+        public ValueTask HandleAsync(
+            AutoRoomSpot spot,
+            AutoActor actor,
+            IZLinkMessageContext context,
+            TMessage message,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+    }
+
+    private sealed class ClosedExplicitActorSendHandler
+        : IZLinkSpotActorSendHandler<AutoRoomSpot, AutoActor, AutoActorMessage>
+    {
+        public AutoActorMessage? ReceivedMessage { get; private set; }
+
+        public ValueTask HandleAsync(
+            AutoRoomSpot spot,
+            AutoActor actor,
+            IZLinkMessageContext context,
+            AutoActorMessage message,
+            CancellationToken cancellationToken
+        )
+        {
+            ReceivedMessage = message;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class AutoEntryActorRequestHandler
