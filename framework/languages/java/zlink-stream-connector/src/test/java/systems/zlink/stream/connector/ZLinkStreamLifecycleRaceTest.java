@@ -6,9 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.jdi.Bootstrap;
+import com.sun.jdi.event.BreakpointEvent;
 import com.sun.jdi.event.ClassPrepareEvent;
 import com.sun.jdi.event.EventSet;
-import com.sun.jdi.event.MethodEntryEvent;
 import com.sun.jdi.request.EventRequest;
 
 import org.junit.jupiter.params.ParameterizedTest;
@@ -67,9 +67,7 @@ final class ZLinkStreamLifecycleRaceTest {
                                     }
                                 });
         try {
-            var entries = vm.eventRequestManager().createMethodEntryRequest();
-            entries.addClassFilter(ZLinkStreamConnectionLifecycle.class.getName());
-            entries.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+            com.sun.jdi.request.BreakpointRequest boundary = null;
             var preparation = vm.eventRequestManager().createClassPrepareRequest();
             preparation.addClassFilter(ZLinkStreamConnectionLifecycle.class.getName());
             preparation.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
@@ -94,14 +92,24 @@ final class ZLinkStreamLifecycleRaceTest {
                     continue;
                 }
                 for (var event : events) {
-                    if (event instanceof ClassPrepareEvent) {
-                        entries.enable();
+                    if (event instanceof ClassPrepareEvent prepared) {
+                        String method =
+                                scenario.equals("connect")
+                                        ? "startConnectionAttempt"
+                                        : "reconnectOrDisconnect";
+                        boundary =
+                                vm.eventRequestManager()
+                                        .createBreakpointRequest(
+                                                prepared.referenceType()
+                                                        .methodsByName(method)
+                                                        .getFirst()
+                                                        .location());
+                        boundary.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+                        boundary.enable();
                         preparation.disable();
-                    } else if (event instanceof MethodEntryEvent entry
-                            && (scenario.equals("connect")
-                                    ? entry.method().name().equals("startConnectionAttempt")
-                                            && entry.thread().name().equals("late-connect")
-                                    : entry.method().name().equals("reconnectOrDisconnect"))) {
+                    } else if (event instanceof BreakpointEvent entry
+                            && (!scenario.equals("connect")
+                                    || entry.thread().name().equals("late-connect"))) {
                         paused = events;
                     }
                 }
@@ -110,7 +118,7 @@ final class ZLinkStreamLifecycleRaceTest {
                 }
             }
             assertTrue(paused != null, "racing path did not reach its boundary: " + output);
-            entries.disable();
+            boundary.disable();
             process.getOutputStream()
                     .write("proceed\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             process.getOutputStream().flush();

@@ -35,6 +35,19 @@ import java.util.concurrent.CompletionStage;
 
 final class ZLinkChannelSubmissionContractTest {
     @Test
+    void recordingPublisherKeepsApplicationAdmissionWhenLivenessPublishes() {
+        RecordingPublishBackend backend = new RecordingPublishBackend();
+        RecordingPublisher publisher = new RecordingPublisher(backend);
+        publisher.publish("events", List.of(), SendFlags.NONE);
+        publisher.publish(
+                new String(ZLinkClassicFanoutLiveness.reservedTopic(), StandardCharsets.UTF_8),
+                List.of(),
+                SendFlags.DONT_WAIT);
+        assertEquals(SendFlags.NONE, backend.flags);
+        assertEquals(1, backend.submissions);
+    }
+
+    @Test
     void oneWaySendWaitsForCapacityWithoutAnAdmissionDeadline() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addClientServerChannel("profile").client().connect("inproc://profile");
@@ -531,9 +544,9 @@ final class ZLinkChannelSubmissionContractTest {
         }
 
         private void record(String topic, SendFlags flags) {
-            owner.flags = flags;
             if (!ZLinkClassicFanoutLiveness.isReservedTopic(
                     topic.getBytes(StandardCharsets.UTF_8))) {
+                owner.flags = flags;
                 owner.submissions++;
             }
         }

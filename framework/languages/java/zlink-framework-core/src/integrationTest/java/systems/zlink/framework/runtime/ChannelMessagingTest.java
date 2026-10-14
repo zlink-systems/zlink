@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -47,9 +49,12 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopolog
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.spots.SpotHandle;
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -1899,12 +1904,35 @@ final class ChannelMessagingTest {
 
     private static ZLinkBackendReceived awaitRawReply(
             ZLinkBackendDealerSocket dealer, List<Message> parts) throws Exception {
+        Duration timeout = Duration.ofSeconds(2);
         CompletableFuture<ZLinkBackendReceived> pending =
-                dealer.request(parts, Duration.ofSeconds(2), dealer.receiveAdmission(), null)
+                dealer.request(parts, timeout, dealer.receiveAdmission(), null)
                         .toCompletableFuture();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        long deadline = System.nanoTime() + timeout.toNanos();
         while (!pending.isDone() && System.nanoTime() < deadline) {
-            dealer.waitForReadable(Duration.ofNanos(Math.max(1, deadline - System.nanoTime())));
+            if (dealer.waitForReadable(
+                    Duration.ofNanos(Math.max(1, deadline - System.nanoTime())))) {
+                // Core polling §4: DATA at the physical head must be received
+                // before the following REPLY can reach the completion queue.
+                try (ZLinkBackendReceived control = dealer.recv(ZLinkBackendRecvMode.DONT_WAIT)) {
+                    assertNotNull(control);
+                    assertFalse(control.isRequest());
+                    var codec = new ZLinkServiceWireCodec();
+                    var probe =
+                            codec.decode(
+                                    control.parts().stream().map(Message::toByteArray).toList());
+                    assertEquals(ServiceWireConstants.COMMAND_LIVENESS_PROBE, probe.command());
+                    var reply =
+                            codec.encode(
+                                    new ZLinkServiceWireFrame(
+                                            ServiceWireConstants.COMMAND_LIVENESS_ACK,
+                                            probe.flags(),
+                                            probe.frames()));
+                    try (Message ack = Message.from(reply.getFirst())) {
+                        dealer.send(List.of(ack));
+                    }
+                }
+            }
         }
         return pending.get(0, TimeUnit.SECONDS);
     }

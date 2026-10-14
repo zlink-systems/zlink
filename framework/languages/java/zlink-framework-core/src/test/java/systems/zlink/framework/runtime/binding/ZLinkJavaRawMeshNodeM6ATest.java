@@ -941,6 +941,32 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void repeatedDescriptorReplacementKeepsTheAdmittedIntent() throws Exception {
+        try (var context = Zlink.createContext();
+                var local = meshNode(context);
+                var peer = meshNode(context)) {
+            RoutingId peerRid = RoutingId.from("jvm-same-descriptor-peer");
+            local.setRoutingId(RoutingId.from("jvm-same-descriptor-local"));
+            local.setBind("inproc://jvm-same-descriptor-local-" + System.nanoTime());
+            peer.setRoutingId(peerRid);
+            String endpoint = "inproc://jvm-same-descriptor-peer-" + System.nanoTime();
+            peer.setBind(endpoint);
+            local.start();
+            peer.start();
+            long generation = peer.status().lifecycleGeneration();
+            String identity = ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY;
+            long intent = local.connectPeer(endpoint, peerRid, generation, identity);
+            awaitState(local, MeshPeerState.ADMITTED);
+
+            assertEquals(
+                    intent, local.replacePeerConnection(endpoint, peerRid, generation, identity));
+            assertEquals(List.of(intent), local.connectionIntentIds());
+            assertFalse(local.isPeerConnectionClosing(intent));
+            assertEquals(intent, awaitState(local, MeshPeerState.ADMITTED).connectionIntentId());
+        }
+    }
+
+    @Test
     void replacementDoesNotSkipAConnectionBeforeItsReadyEvent() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-pre-ready-replace-local");
         RoutingId peerRid = RoutingId.from("jvm-pre-ready-replace-peer");
