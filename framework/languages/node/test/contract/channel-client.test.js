@@ -193,10 +193,9 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
       return 'infrastructure';
     });
     client.connectPeer(server.topology.localDescriptor().advertisedEndpoint, server.topology.localDescriptor());
-    server.connectPeer(client.topology.localDescriptor().advertisedEndpoint, client.topology.localDescriptor());
-    //  turn 예산은 CPU 부하에 민감하다 — 한 turn이 하는 일이 줄어들면 같은 예산으로
-    //  admission이 끝나지 않는다. 검증 대상은 준비가 되느냐이지 몇 turn에 되느냐가
-    //  아니므로 예산을 넉넉히 둔다.
+    // Channel topology §automatic-connect: only the smaller RID initiates this
+    // pair. A competing reverse connection may retire an admitted request with
+    // NotConnected (Core socket §RID duplicate policy).
     for (let turn = 0; turn < 3000
       && (!client.isPeerRouteReady('channel-server') || !server.isPeerRouteReady('channel-client')); turn += 1) {
       await client.observeSelectedRoutes(); await server.observeSelectedRoutes();
@@ -209,11 +208,10 @@ test('two Node RouteMesh nodes round-trip a channel request and retain the pendi
     const pending = client.requestToChannel('api', {
       packetName: 'Ping', contentType: 'application/json', payload: Buffer.from('{"ping":true}')
     }, 1_000);
-    for (let turn = 0; turn < 300; turn += 1) {
+    for (let turn = 0; turn < 300 && client.operations.isPending(pending.id); turn += 1) {
       await client.tickLiveness(); await server.tickLiveness();
       await client.pumpOne(); await server.pumpOne();
       await new Promise(( resolve ) => setImmediate(resolve));
-      if (await Promise.race([pending.promise.then(() => true), Promise.resolve(false)])) break;
     }
     const reply = await pending.promise;
     assert.equal(reply.terminalResult, 0);

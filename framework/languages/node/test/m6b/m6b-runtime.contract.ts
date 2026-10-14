@@ -6018,6 +6018,8 @@ test('concurrent Instance activation CAS loser returns Unavailable without waiti
 });
 
 test('raw backend dispatches Spot requests and Actor sends through M6B owners', async () => {
+  const subscriptionChannel = 'events';
+  const multicastTopic = 'room-42';
   const nonce = `${process.pid}-${Date.now()}`;
   const endpoint = `inproc://zlink-m6b-node-${nonce}`;
   const backend = new ZLinkNodeRawMeshBackend(
@@ -6027,6 +6029,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     hostApplicationJobQueue()
   );
   backend.setBind(endpoint);
+  backend.addChannelName(subscriptionChannel);
   backend.start();
   const instanceRoute = {
     targetNodeRid: 'm6b-node',
@@ -6271,13 +6274,13 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     assert.equal(sessionService.bindings('session-a').length, 0);
     sessionService.close();
 
-    targetSpot.setSubscription('events', 'room-*');
+    targetSpot.setSubscription(subscriptionChannel, 'room-*');
     const publisher = backend.createPublisher();
-    publisher.publish('events', 'room-42', Buffer.from('multicast'));
+    publisher.publish(subscriptionChannel, multicastTopic, Buffer.from('multicast'));
     const multicast = await drainOne(backend, ReadyDomain.Application);
     assert.equal(multicast.kind, ReceiveKind.SpotMulticast);
-    assert.equal(multicast.channelName, 'events');
-    assert.equal(multicast.topic, 'room-42');
+    assert.equal(multicast.channelName, subscriptionChannel);
+    assert.equal(multicast.topic, multicastTopic);
     assert.equal(multicast.parts[0]!.toBytes().toString(), 'multicast');
     closeParts(multicast);
     publisher.close();
