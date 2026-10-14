@@ -809,6 +809,80 @@ public sealed class SubmitAdmissionRuntimeTests
         }
     }
 
+    // Spec 04-messaging/08 section 3 E4: only Backpressured consumes the
+    // binding's admitted task. The public default submission has Result=Ok and
+    // no admitted task, so consuming it would fault inside the Framework.
+    [Fact]
+    public async Task OkSubmission_CompletesAdmissionWithoutConsumingBindingAdmitted()
+    {
+        var unobserved = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            foreach (var error in args.Exception.Flatten().InnerExceptions)
+            {
+                if (
+                    error is NullReferenceException
+                    && error.StackTrace?.Contains(nameof(ZLinkRequestSubmissionOutcome)) == true
+                )
+                    unobserved.Add(error);
+            }
+        }
+
+        var admitted = false;
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            admitted = await SubmitDefaultOkSubmissionAdmitsBeforeReply();
+            for (var round = 0; round < 3; round++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+            await Task.Yield();
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+        Assert.Empty(unobserved);
+        Assert.True(admitted);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
+    private static async Task<bool> SubmitDefaultOkSubmissionAdmitsBeforeReply()
+    {
+        var pending = new TaskCompletionSource<IReadOnlyList<Message>>();
+        Task<IReadOnlyList<Message>>? reply = null;
+        var request = ZLinkRequestAdmission.Run<IReadOnlyList<Message>>(admission =>
+        {
+            reply = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                new FixedSubmissionOperation(default),
+                TimeSpan.FromSeconds(5),
+                requestAdmission: admission
+            );
+            return new ValueTask<IReadOnlyList<Message>>(pending.Task);
+        });
+        Assert.Null(reply);
+        var admitted = request.Admitted.IsCompletedSuccessfully;
+        pending.SetResult([]);
+        await request;
+        return admitted;
+    }
+
+    private sealed class FixedSubmissionOperation(RequestSubmission submission)
+        : RequestSubmitOperation
+    {
+        public RequestSubmitOperation Message(Message message) => this;
+
+        public RequestSubmitOperation Timeout(TimeSpan timeout) => this;
+
+        public IReadOnlyList<Message> Submit() => throw new NotSupportedException();
+
+        public RequestSubmission Async(CancellationToken cancellationToken = default) => submission;
+    }
+
     private static Zlink.Framework.Contracts.Channels.ZLinkRequest<
         IReadOnlyList<Message>
     > StartPublicRequest(
