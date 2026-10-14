@@ -108,24 +108,22 @@ internal sealed class ZLinkChannelRuntimeManager(
                         // the state-lane AsyncLocal at task construction so its
                         // synchronous callback prefix is an independent caller.
                         using (ExecutionContext.SuppressFlow())
-                            state.ListenerTasks.Add(
-                                state.TaskRunner.RunLongRunning(
-                                    $"client-server:{channelName}",
-                                    ct => new ValueTask(
-                                        receiveLoop.RunClientServerLoopAsync(
-                                            channelName,
-                                            (IRouterSocket)bundle.Socket,
-                                            bundle.ClientServerServer
-                                                ?? throw new InvalidOperationException(
-                                                    "ClientServer server identity is not initialized."
-                                                ),
-                                            state.ApplicationJobQueue,
-                                            state.ErrorSink,
-                                            ct,
-                                            state.ForceStopTokenSource.Token
-                                        )
+                            bundle.StartReceiveLoop(
+                                state.TaskRunner,
+                                $"client-server:{channelName}",
+                                ct =>
+                                    receiveLoop.RunClientServerLoop(
+                                        channelName,
+                                        (IRouterSocket)bundle.Socket,
+                                        bundle.ClientServerServer
+                                            ?? throw new InvalidOperationException(
+                                                "ClientServer server identity is not initialized."
+                                            ),
+                                        state.ApplicationJobQueue,
+                                        state.ErrorSink,
+                                        ct,
+                                        state.ForceStopTokenSource.Token
                                     )
-                                )
                             );
                     })
                 );
@@ -154,6 +152,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                                     receiveLoop,
                                     fanoutRuntime,
                                     state.ErrorSink,
+                                    state.TaskRunner,
                                     state.StopTokenSource.Token,
                                     state.ForceStopTokenSource.Token,
                                     applicationJobQueue: state.ApplicationJobQueue
@@ -172,20 +171,18 @@ internal sealed class ZLinkChannelRuntimeManager(
                     {
                         state.SubscriberBundles.Add(channelName, bundle);
                         using (ExecutionContext.SuppressFlow())
-                            state.ListenerTasks.Add(
-                                state.TaskRunner.RunLongRunning(
-                                    $"channel-subscriber:{channelName}",
-                                    ct => new ValueTask(
-                                        receiveLoop.RunSubscriberLoopAsync(
-                                            channelName,
-                                            (ISubSocket)bundle.Socket,
-                                            state.ApplicationJobQueue,
-                                            state.ErrorSink,
-                                            ct,
-                                            state.ForceStopTokenSource.Token
-                                        )
+                            bundle.StartReceiveLoop(
+                                state.TaskRunner,
+                                $"channel-subscriber:{channelName}",
+                                ct =>
+                                    receiveLoop.RunSubscriberLoop(
+                                        channelName,
+                                        (ISubSocket)bundle.Socket,
+                                        state.ApplicationJobQueue,
+                                        state.ErrorSink,
+                                        ct,
+                                        state.ForceStopTokenSource.Token
                                     )
-                                )
                             );
                     })
                 );
@@ -207,6 +204,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                     channel.Client!.SocketConfig,
                     state.StopTokenSource.Token,
                     state.ErrorSink,
+                    state.TaskRunner,
                     outboundFlow?.Invoke(),
                     registration.TimeProvider
                 );
@@ -247,15 +245,13 @@ internal sealed class ZLinkChannelRuntimeManager(
                 {
                     state.PublisherBundles.Add(entry.Key, publisherBundle);
                     using (ExecutionContext.SuppressFlow())
-                        state.ListenerTasks.Add(
-                            state.TaskRunner.Run(
-                                $"fanout-beacon:{entry.Key}",
-                                cancellationToken =>
-                                    RunFanoutBeaconLoopAsync(
-                                        (IPubSocket)publisherBundle.Socket,
-                                        cancellationToken
-                                    )
-                            )
+                        state.TaskRunner.RunDetached(
+                            $"fanout-beacon:{entry.Key}",
+                            cancellationToken =>
+                                RunFanoutBeaconLoopAsync(
+                                    (IPubSocket)publisherBundle.Socket,
+                                    cancellationToken
+                                )
                         );
                 })
             );

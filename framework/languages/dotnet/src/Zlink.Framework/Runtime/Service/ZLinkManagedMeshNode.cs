@@ -436,12 +436,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 foreach (var intent in _peersByIntent.Values)
                     ConnectPeerCore(intent);
                 using (ExecutionContext.SuppressFlow())
-                    _receiveLoop = Task.Factory.StartNew(
-                        () => ReceiveLoop(_stop.Token),
-                        CancellationToken.None,
-                        TaskCreationOptions.LongRunning,
-                        TaskScheduler.Default
+                {
+                    var stopToken = _stop.Token;
+                    _receiveLoop = ZLinkRuntimeTaskRunner.StartDedicatedThread(
+                        _ => ReceiveLoop(stopToken),
+                        null
                     );
+                }
             }
             catch (Exception error)
             {

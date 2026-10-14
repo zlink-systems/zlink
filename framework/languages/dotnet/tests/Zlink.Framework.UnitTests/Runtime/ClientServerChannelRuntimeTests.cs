@@ -220,6 +220,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             null!,
             CancellationToken.None,
             new ZLinkRuntimeErrorSink(),
+            new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None),
             timeProvider: time
         );
 
