@@ -1,0 +1,97 @@
+{
+  "language": "dotnet",
+  "id": "board-tables",
+  "run": {
+    "scenarios": [
+      "table",
+      "reconnect",
+      "update"
+    ],
+    "commands": {
+      "powershell": [
+        "dotnet build server/MyGame.sln",
+        "pwsh -NoProfile -File ./run-e2e.ps1",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update"
+      ],
+      "sh": [
+        "dotnet build server/MyGame.sln",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario table,reconnect,update"
+      ]
+    }
+  },
+  "version": 1,
+  "spots": [
+    {
+      "type": null,
+      "id": "table-entry-a",
+      "kind": "entry",
+      "owner": "tableA"
+    },
+    {
+      "type": null,
+      "id": "table-entry-b",
+      "kind": "entry",
+      "owner": "tableB"
+    },
+    {
+      "type": "Table",
+      "id": "table",
+      "dynamic": true,
+      "kind": "user",
+      "owner": "tableA"
+    }
+  ],
+  "nodes": [
+    {
+      "config": null,
+      "id": "players",
+      "role": "external",
+      "title": "Players"
+    },
+    {
+      "config": "server/config/session.json",
+      "id": "session",
+      "role": "session",
+      "title": "Session node"
+    },
+    {
+      "config": "server/config/table-a.json",
+      "id": "tableA",
+      "role": "table",
+      "title": "Table node A"
+    },
+    {
+      "config": "server/config/table-b.json",
+      "id": "tableB",
+      "role": "table",
+      "title": "Table node B"
+    },
+    {
+      "config": "docker-compose.yml",
+      "id": "location",
+      "role": "location-store",
+      "title": "Location Store"
+    }
+  ],
+  "name": "my-game",
+  "channels": [],
+  "edges": [
+    {
+      "label": "STREAM",
+      "to": "session",
+      "from": "players"
+    },
+    {
+      "label": "relay",
+      "to": "tableA",
+      "from": "session"
+    },
+    {
+      "semantic": "location-authority",
+      "label": "Location / lease",
+      "to": "location",
+      "from": "tableA"
+    }
+  ]
+}
