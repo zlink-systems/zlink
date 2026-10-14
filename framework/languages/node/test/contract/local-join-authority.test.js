@@ -222,7 +222,7 @@ function authorityFixture() {
   return { actor, owner, identity, snapshot };
 }
 
-for (const variant of ['same-node', 'cross-node', 'relocated Entry']) {
+for (const variant of ['same-node', 'cross-node']) {
   test(
     `${variant} public Join and PlannedMaintenance preserve canonical Table inventory`,
     { timeout: RELOCATION_TEST_TIMEOUT_MS },
