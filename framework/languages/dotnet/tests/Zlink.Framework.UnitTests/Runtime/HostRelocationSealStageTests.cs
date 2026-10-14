@@ -158,22 +158,11 @@ public sealed class HostRelocationSealStageTests
         using var session = builder.Build();
         await session.StartAsync();
         using (var readyDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
-            while (
-                source
-                    .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                    .Node.Status()
-                    .ActivePeerCount != 2
-                || target
-                    .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                    .Node.Status()
-                    .ActivePeerCount != 2
-                || session
-                    .Services.GetRequiredService<ZLinkFrameworkRuntime>()
-                    .GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                    .Node.Status()
-                    .ActivePeerCount != 2
-            )
-                await Task.Delay(10, readyDeadline.Token);
+            await Task.WhenAll(
+                WaitForReadyPeersAsync(source.Services, 2, readyDeadline.Token),
+                WaitForReadyPeersAsync(target.Services, 2, readyDeadline.Token),
+                WaitForReadyPeersAsync(session.Services, 2, readyDeadline.Token)
+            );
         var sessionRuntime = session.Services.GetRequiredService<IZLinkFrameworkRuntime>();
         await using var connector = ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
@@ -206,6 +195,15 @@ public sealed class HostRelocationSealStageTests
             .AsTask();
         try
         {
+            // The overlap handler holds its turn until relocation has started,
+            // so relocation must wait for that accepted turn to complete.
+            using (var relocatingDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+                await WaitForStateAsync(
+                    source.Services,
+                    ZLinkFrameworkRuntimeState.Relocating,
+                    relocatingDeadline.Token
+                );
+            trace.ReleaseSealStageWork.TrySetResult();
             _ = await pushed;
             Assert.Equal(
                 ZLinkFrameworkRelocationOutcome.Relocated,
@@ -269,8 +267,39 @@ public sealed class HostRelocationSealStageTests
         }
         finally
         {
+            trace.ReleaseSealStageWork.TrySetResult();
             await session.StopAsync();
         }
+    }
+
+    private static async Task WaitForReadyPeersAsync(
+        IServiceProvider services,
+        int count,
+        CancellationToken cancellationToken
+    )
+    {
+        await foreach (
+            var observed in services
+                .GetRequiredService<IZLinkRouteMeshRuntime>()
+                .ObserveAsync(RelocationBehaviorHost.MeshName, cancellationToken)
+        )
+            if (observed.Status.ReadyPeerCount == count)
+                return;
+    }
+
+    private static async Task WaitForStateAsync(
+        IServiceProvider services,
+        ZLinkFrameworkRuntimeState state,
+        CancellationToken cancellationToken
+    )
+    {
+        await foreach (
+            var observed in services
+                .GetRequiredService<IZLinkFrameworkRuntime>()
+                .ObserveAsync(cancellationToken)
+        )
+            if (observed.Status.State == state)
+                return;
     }
 }
 
@@ -290,7 +319,7 @@ internal sealed class SealStagePushHandler(RelocationBehaviorTrace trace)
     )
     {
         trace.Record("overlapHandlerStarted");
-        await Task.Delay(TimeSpan.FromMilliseconds(1500), cancellationToken);
+        await trace.ReleaseSealStageWork.Task.WaitAsync(cancellationToken);
         await actor.Context.BoundSession.Send(new BehaviorAck(request.Marker)).Async();
         if (request.Marker == "after-relocation")
             trace.Record("afterRelocationPush");

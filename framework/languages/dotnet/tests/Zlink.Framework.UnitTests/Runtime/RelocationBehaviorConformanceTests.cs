@@ -1812,6 +1812,7 @@ internal sealed class RelocationBehaviorTrace
     internal TaskCompletionSource ReleaseJoinHandler { get; } = Signal();
     internal TaskCompletionSource ReleaseTargetLifecycle { get; } = Signal();
     internal TaskCompletionSource ReleaseSourceLeave { get; } = Signal();
+    internal TaskCompletionSource ReleaseSealStageWork { get; } = Signal();
     private TaskCompletionSource TargetAuthorityObserved { get; } = Signal();
     private TaskCompletionSource TargetAuthorityMutationObserved { get; } = Signal();
 
