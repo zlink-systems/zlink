@@ -54,11 +54,13 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -3075,6 +3077,14 @@ int main ()
         .timeout (std::chrono::milliseconds (10))
         .async<reply_t> ()
         .result ();
+    // A failed admission ends the reply at once (request-admitted-stage); the route producer
+    // removes its pending registration after that, so the registration is observed afterwards.
+    const auto missing_peer_cleanup_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (public_route.pending_request_count () != 0
+           && std::chrono::steady_clock::now () < missing_peer_cleanup_deadline) {
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
     if (missing_peer_reply
         || missing_peer_reply.error_kind () != zlink::framework::framework_error_kind_t::unavailable
         || public_route.pending_request_count () != 0) {
@@ -3696,6 +3706,74 @@ int main ()
     }
     if (!copied_route_rejected || route_submit_attempts.load () != 1) {
         return 149;
+    }
+
+    // A route client released while its request is pending leaves its last reference to the
+    // request operation, which completes on a route-client worker. Releasing that reference on
+    // the worker must not wait for the worker's own work; runtime teardown drains route work.
+    {
+        auto released_builder = std::make_unique<zlink::framework::zlink_builder_t> (
+          zlink::framework::test::runtime_failure_builder ());
+        released_builder->route_channel ("released.route")
+          .bind ("tcp://released-bind:7710")
+          .connect ("tcp://released-peer:7711")
+          .add_handler_group ("released")
+          .add_request_handler<local_handler_t, request_t, reply_t> (
+            "request", &local_handler_t::handle_route_request);
+        auto released_manager =
+          zlink::framework::detail::channel_runtime_manager_t::from (*released_builder);
+        released_manager.initialize_route_channels (*released_builder);
+        auto &released_route = released_manager.get_route_channel ("released.route");
+        std::promise<void> released_backend_entered;
+        std::promise<void> release_backend;
+        auto backend_released = release_backend.get_future ().share ();
+        released_route.set_request_backend (
+          [&released_backend_entered, backend_released, &envelope_codec,
+           &serializers] (const zlink::routing_id_t &, const std::optional<std::string> &,
+                          const zlink::framework::runtime::messaging::message_parts_t &parts,
+                          std::chrono::milliseconds)
+            -> zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t> {
+              released_backend_entered.set_value ();
+              backend_released.wait ();
+              auto header = envelope_codec.decode_header (parts);
+              zlink::framework::runtime::messaging::envelope_header_t reply_header;
+              reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
+              reply_header.channel_name = "released.route";
+              reply_header.message_name = header.value ().message_name;
+              reply_header.content_type = header.value ().content_type;
+              reply_t reply{7};
+              return zlink::framework::
+                result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
+                  envelope_codec.encode_parts (reply_header, std::type_index (typeid (reply_t)),
+                                               &reply, serializers));
+          });
+        std::optional<zlink::framework::request_task_t<reply_t>> released_request;
+        {
+            auto released_client = released_builder->route_client (serializers);
+            released_request.emplace (
+              released_client
+                .request_to_node ("released.route",
+                                  zlink::routing_id_t::from (std::string ("target-node")),
+                                  request_t{7})
+                .timeout (std::chrono::milliseconds (2000))
+                .async<reply_t> ());
+        }
+        if (released_backend_entered.get_future ().wait_for (std::chrono::seconds (5))
+            != std::future_status::ready) {
+            return 152;
+        }
+        release_backend.set_value ();
+        auto released_reply = released_request->result ();
+        released_request.reset ();
+        if (!released_reply || released_reply.value ().value != 7) {
+            return 153;
+        }
+        auto teardown =
+          std::async (std::launch::async, [&released_builder] { released_builder.reset (); });
+        if (teardown.wait_for (std::chrono::seconds (5)) != std::future_status::ready) {
+            // The route worker is waiting for itself; the process cannot unwind.
+            std::_Exit (154);
+        }
     }
 
     return 0;
