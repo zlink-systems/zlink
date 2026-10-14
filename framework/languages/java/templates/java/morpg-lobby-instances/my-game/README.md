@@ -47,7 +47,7 @@ For structure checks only, pass `--check-structure` to the shell runner or `-Che
 
 ## Known issues
 
-Public 0.30.0 validation reached party readiness on Linux, then failed cross-node deferred Dungeon joins with `DATA_LOST` (#1729). Other runs stopped before the first lobby response; Actor placement on nodes without an Entry Spot (#1772) remains a candidate for that earlier failure. No runtime workaround is included. Validation of the pinned 0.30.1 candidate remains necessary.
+Public 0.30.0 validation reached party readiness on Linux, then failed cross-node deferred Dungeon joins with `DATA_LOST` ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). Other runs stopped before the first lobby response because the Session's first Actor GetOrCreate never completed and no node recorded the request ([#1782](https://github.com/zlink-systems/zlink/issues/1782)). No runtime workaround is included. Validation of the pinned 0.30.1 candidate remains necessary.
 
 ## Deployment sequence
 
