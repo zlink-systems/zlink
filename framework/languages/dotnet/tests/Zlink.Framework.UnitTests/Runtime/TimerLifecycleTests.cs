@@ -68,6 +68,156 @@ public sealed class TimerLifecycleTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Catch_up_exception_consumes_only_the_started_callback(bool stop)
+    {
+        const int PeriodMilliseconds = 10;
+        const ulong ExpectedDeliveryCount = 3;
+        var time = new ManualTimeProvider();
+        await using var scheduler = new ZLinkTimerScheduler(time);
+        var period = TimeSpan.FromMilliseconds(PeriodMilliseconds);
+        var options = new ZLinkTimerOptions
+        {
+            OverrunPolicy = ZLinkTimerOverrunPolicy.CatchUpBounded,
+            MaxCatchUpTicks = (int)ExpectedDeliveryCount,
+            StopOnUnhandledException = stop,
+        };
+        var ticks = new List<ZLinkTimerTick>();
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var snapshot = new ZLinkTimerLogicalSnapshot(
+            "catch-up-exception",
+            period,
+            options,
+            time.GetUtcNow(),
+            0,
+            0,
+            null,
+            null
+        );
+        await using var timer = new ZLinkTimer(
+            snapshot,
+            CancellationToken.None,
+            (tick, _) =>
+            {
+                ticks.Add(tick);
+                if (tick.DeliveryIndex == 1)
+                {
+                    return ValueTask.FromException<bool>(
+                        new InvalidOperationException("first catch-up callback failed")
+                    );
+                }
+                if (tick.DeliveryIndex == ExpectedDeliveryCount)
+                    finished.TrySetResult();
+                return ValueTask.FromResult(true);
+            },
+            (_, _, stopped, _) =>
+            {
+                if (stopped)
+                    finished.TrySetResult();
+                return ValueTask.CompletedTask;
+            },
+            startFrozen: true,
+            scheduler: scheduler
+        );
+
+        time.AdvanceMonotonicOnly(TimeSpan.FromMilliseconds(PeriodMilliseconds * 5));
+        timer.Resume();
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() =>
+            timer.Snapshot().DeliveryIndex == (stop ? 1 : ExpectedDeliveryCount)
+        );
+        Assert.Equal(stop, timer.IsDisposed);
+        await timer.CancelAsync();
+        Assert.Equal(stop ? 1 : (int)ExpectedDeliveryCount, ticks.Count);
+        Assert.Equal<ulong>(1, ticks[0].DeliveryIndex);
+        Assert.Equal<ulong>(3, ticks[0].ScheduledIndex);
+        Assert.Equal<ulong>(2, ticks[0].SkippedTicks);
+        for (var index = 1; index < ticks.Count; index++)
+        {
+            Assert.Equal((ulong)index + 1, ticks[index].DeliveryIndex);
+            Assert.Equal((ulong)index + 3, ticks[index].ScheduledIndex);
+            Assert.Equal<ulong>(0, ticks[index].SkippedTicks);
+        }
+    }
+
+    [Fact]
+    public async Task Catch_up_tick_without_execution_permission_keeps_its_cursor_until_retry()
+    {
+        const int PeriodMilliseconds = 10;
+        const int MaxCatchUpTicks = 3;
+        var time = new ManualTimeProvider();
+        await using var scheduler = new ZLinkTimerScheduler(time);
+        var period = TimeSpan.FromMilliseconds(PeriodMilliseconds);
+        var snapshot = new ZLinkTimerLogicalSnapshot(
+            "catch-up-admission",
+            period,
+            new ZLinkTimerOptions
+            {
+                OverrunPolicy = ZLinkTimerOverrunPolicy.CatchUpBounded,
+                MaxCatchUpTicks = MaxCatchUpTicks,
+            },
+            time.GetUtcNow(),
+            0,
+            0,
+            null,
+            null
+        );
+        var attempts = new List<ZLinkTimerTick>();
+        var permissionDenied = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attemptCount = 0;
+        ZLinkTimer timer = null!;
+        timer = new ZLinkTimer(
+            snapshot,
+            CancellationToken.None,
+            (tick, cancellationToken) =>
+            {
+                attempts.Add(tick);
+                if (++attemptCount == 1)
+                {
+                    permissionDenied.TrySetResult();
+                    return ValueTask.FromResult(false);
+                }
+                if (tick.DeliveryIndex == MaxCatchUpTicks)
+                {
+                    finished.TrySetResult();
+                    _ = timer.CancelAsync();
+                }
+                return ValueTask.FromResult(true);
+            },
+            static (_, _, _, _) => ValueTask.CompletedTask,
+            startFrozen: true,
+            scheduler: scheduler
+        );
+
+        time.AdvanceMonotonicOnly(TimeSpan.FromMilliseconds(PeriodMilliseconds * 5));
+        timer.Resume();
+        await permissionDenied.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => scheduler.ScheduledEntryCount == 1);
+        time.AdvanceMonotonicOnly(TimeSpan.FromMilliseconds(PeriodMilliseconds));
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await timer.CancelAsync();
+
+        Assert.True(timer.IsDisposed);
+        Assert.Equal(4, attempts.Count);
+        Assert.Equal<ulong>(1, attempts[0].DeliveryIndex);
+        Assert.Equal<ulong>(3, attempts[0].ScheduledIndex);
+        Assert.Equal<ulong>(2, attempts[0].SkippedTicks);
+        Assert.Equal(attempts[0].DeliveryIndex, attempts[1].DeliveryIndex);
+        Assert.Equal(attempts[0].ScheduledIndex, attempts[1].ScheduledIndex);
+        Assert.Equal(attempts[0].SkippedTicks, attempts[1].SkippedTicks);
+        Assert.Equal<ulong>(2, attempts[2].DeliveryIndex);
+        Assert.Equal<ulong>(4, attempts[2].ScheduledIndex);
+        Assert.Equal<ulong>(0, attempts[2].SkippedTicks);
+        Assert.Equal<ulong>(3, attempts[3].DeliveryIndex);
+        Assert.Equal<ulong>(5, attempts[3].ScheduledIndex);
+        Assert.Equal<ulong>(0, attempts[3].SkippedTicks);
+    }
+
+    [Theory]
     [InlineData(true, false)]
     [InlineData(false, false)]
     [InlineData(true, true)]

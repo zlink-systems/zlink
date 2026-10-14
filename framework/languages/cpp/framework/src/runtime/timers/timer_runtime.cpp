@@ -289,7 +289,7 @@ template <typename T> void append_observation (std::deque<T> &history, T value)
     history.push_back (std::move (value));
 }
 
-std::vector<timer_tick_t> make_ticks (timer_state_t &state, std::uint64_t fire_count)
+std::vector<timer_tick_t> make_ticks (const timer_state_t &state, std::uint64_t fire_count)
 {
     const auto previous_index = state.last_scheduled_index;
     const auto available = std::max<std::uint64_t> (1, fire_count);
@@ -312,20 +312,28 @@ std::vector<timer_tick_t> make_ticks (timer_state_t &state, std::uint64_t fire_c
     for (std::uint64_t offset = 0; offset < delivery_count; ++offset) {
         const auto scheduled_index = first_index + offset;
         const auto skipped_ticks = offset == 0 ? scheduled_index - previous_index - 1 : 0;
-        ++state.delivery_index;
         timer_tick_t tick{state.name,
-                          state.delivery_index,
+                          0,
                           scheduled_index,
                           state.period,
                           state.period * scheduled_index,
                           started_elapsed,
                           started_elapsed - state.period * scheduled_index,
                           skipped_ticks};
-        append_observation (state.delivered_ticks, tick);
         ticks.push_back (std::move (tick));
     }
-    state.last_scheduled_index = ticks.back ().scheduled_index;
     return ticks;
+}
+
+bool claim_tick (timer_state_t &state, timer_tick_t &tick)
+{
+    if (state.disposed.load (std::memory_order_acquire))
+        return false;
+    tick.delivery_index = ++state.delivery_index;
+    tick.skipped_ticks = tick.scheduled_index - state.last_scheduled_index - 1;
+    state.last_scheduled_index = tick.scheduled_index;
+    append_observation (state.delivered_ticks, tick);
+    return true;
 }
 
 void record_timer_failure (const std::shared_ptr<spot_context_state_t> &context,
@@ -386,11 +394,19 @@ timer_runtime_t::dispatch_fire_count (timer_t &timer,
 
     try {
         auto ticks = make_ticks (*timer._state, fire_count);
-        for (const auto &tick : ticks)
+        std::size_t started_count = 0;
+        for (auto &tick : ticks) {
+            if (!claim_tick (*timer._state, tick))
+                break;
+            ++started_count;
             if (handler)
                 handler (tick);
+        }
         reset_running ();
-        return result_t<timer_tick_t>::success (std::move (ticks.back ()));
+        if (started_count == 0)
+            return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
+                                                           "SPOT timer is disposed");
+        return result_t<timer_tick_t>::success (std::move (ticks[started_count - 1]));
     }
     catch (const std::exception &error) {
         const auto stopped = timer._state->options.stop_on_unhandled_exception;
@@ -510,13 +526,20 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "SPOT timer handler activation is no longer available");
         }
-        for (const auto &tick : ticks) {
+        std::size_t started_count = 0;
+        for (auto &tick : ticks) {
+            if (!claim_tick (*state, tick))
+                break;
+            ++started_count;
             auto handler_task = state->handler_invoker (
               spot_instance.get (), handler_instance.get (), *channel_runtime->serializers, tick);
             (void) co_await handler_task;
         }
         reset_running ();
-        co_return result_t<timer_tick_t>::success (std::move (ticks.back ()));
+        if (started_count == 0)
+            co_return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
+                                                              "SPOT timer is disposed");
+        co_return result_t<timer_tick_t>::success (std::move (ticks[started_count - 1]));
     }
     catch (const framework_exception_t &error) {
         const auto stopped = state->options.stop_on_unhandled_exception;

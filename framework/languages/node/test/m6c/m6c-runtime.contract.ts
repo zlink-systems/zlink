@@ -25,7 +25,10 @@ import {
   ServiceRelocationObjectRestoreOwner,
   type ServiceRelocationCaptureUnit
 } from '../../packages/framework/src/runtime/foundation/service-relocation-object-owner';
-import { ZLinkManagedTimer } from '../../packages/framework/src/runtime/spots/spot-timer';
+import {
+  ZLinkManagedTimer,
+  type ZLinkTimerClock
+} from '../../packages/framework/src/runtime/spots/spot-timer';
 import { ZLinkStatefulAuthorityRouteRuntime } from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { encodeActorAuthorityIdentity } from '../../packages/framework/src/runtime/actors';
@@ -977,6 +980,143 @@ test('managed timer pauses and restores its logical schedule without native hand
   assert.deepEqual(restored, captured);
   await source.dispose();
   await target.dispose();
+});
+
+class ManualTimerClock implements ZLinkTimerClock {
+  private timestamp = 0;
+  private nextHandle = 0;
+  private readonly timers = new Map<
+    number,
+    { readonly dueAt: number; readonly callback: () => void }
+  >();
+
+  now(): number {
+    return this.timestamp;
+  }
+
+  utcNow(): number {
+    return Date.now() + this.timestamp;
+  }
+
+  setTimeout(callback: () => void, delayMs: number): unknown {
+    const handle = ++this.nextHandle;
+    this.timers.set(handle, {
+      dueAt: this.timestamp + Math.max(0, delayMs),
+      callback
+    });
+    if (delayMs <= 0) setImmediate(() => this.fireDue());
+    return handle;
+  }
+
+  clearTimeout(handle: unknown): void {
+    if (typeof handle === 'number') this.timers.delete(handle);
+  }
+
+  advanceTo(timestamp: number): void {
+    this.timestamp = timestamp;
+    this.fireDue();
+  }
+
+  private fireDue(): void {
+    const due = [...this.timers.entries()]
+      .filter(([, timer]) => timer.dueAt <= this.timestamp)
+      .sort(
+        ([leftHandle, left], [rightHandle, right]) =>
+          left.dueAt - right.dueAt || leftHandle - rightHandle
+      );
+    for (const [handle, timer] of due) {
+      if (this.timers.delete(handle)) timer.callback();
+    }
+  }
+}
+
+for (const stop of [false, true]) {
+  test(`CatchUpBounded exception consumes only the started callback: stop=${stop}`, async () => {
+    const clock = new ManualTimerClock();
+    const ticks: ZLinkTimerTick[] = [];
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const timer = new ZLinkManagedTimer(
+      'catch-up-exception',
+      100,
+      {
+        overrunPolicy: ZLinkTimerOverrunPolicy.CatchUpBounded,
+        maxCatchUpTicks: 3,
+        stopOnUnhandledException: stop
+      },
+      async (tick) => {
+        ticks.push(tick);
+        if (tick.deliveryIndex === 1n) throw new Error('first catch-up callback failed');
+        if (tick.deliveryIndex === 3n) finish();
+      },
+      async () => {
+        if (stop) finish();
+      },
+      undefined,
+      clock
+    );
+    try {
+      clock.advanceTo(500);
+      await finished;
+      if (stop) await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(timer.isDisposed, stop);
+      assert.equal(ticks.length, stop ? 1 : 3);
+      assert.equal(ticks[0].deliveryIndex, 1n);
+      assert.equal(ticks[0].scheduledIndex, 3n);
+      assert.equal(ticks[0].skippedTicks, 2n);
+      for (const [index, tick] of ticks.slice(1).entries()) {
+        assert.equal(tick.deliveryIndex, BigInt(index + 2));
+        assert.equal(tick.scheduledIndex, BigInt(index + 4));
+        assert.equal(tick.skippedTicks, 0n);
+      }
+      await timer.cancel();
+    } finally {
+      await timer.dispose();
+    }
+  });
+}
+
+test('CatchUpBounded cancellation stops before the next callback starts', async () => {
+  const clock = new ManualTimerClock();
+  const ticks: ZLinkTimerTick[] = [];
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let timer!: ZLinkManagedTimer;
+  timer = new ZLinkManagedTimer(
+    'catch-up-cancel',
+    100,
+    {
+      overrunPolicy: ZLinkTimerOverrunPolicy.CatchUpBounded,
+      maxCatchUpTicks: 3,
+      stopOnUnhandledException: false
+    },
+    async (tick) => {
+      ticks.push(tick);
+      if (ticks.length === 1) {
+        void timer.cancel();
+        finish();
+      }
+    },
+    undefined,
+    undefined,
+    clock
+  );
+  try {
+    clock.advanceTo(500);
+    await finished;
+    await timer.cancel();
+    assert.equal(timer.isDisposed, true);
+    assert.equal(ticks.length, 1);
+    assert.equal(ticks[0].deliveryIndex, 1n);
+    assert.equal(ticks[0].scheduledIndex, 3n);
+    assert.equal(ticks[0].skippedTicks, 2n);
+  } finally {
+    await timer.dispose();
+  }
 });
 
 for (const policy of Object.values(ZLinkTimerOverrunPolicy)) {

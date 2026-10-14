@@ -194,6 +194,8 @@ struct timer_activation_handler_t
             dependency_mismatch = true;
         }
         ++calls;
+        if (throw_first_invocation.exchange (false))
+            throw std::runtime_error ("first catch-up callback failed");
         co_return;
     }
 
@@ -201,6 +203,7 @@ struct timer_activation_handler_t
     static inline std::atomic_int created{0};
     static inline std::atomic_int destroyed{0};
     static inline std::atomic_int calls{0};
+    static inline std::atomic_bool throw_first_invocation{false};
     static inline std::atomic<timer_activation_dependency_t *> observed_dependency{nullptr};
     static inline std::atomic_bool dependency_mismatch{false};
 };
@@ -212,6 +215,7 @@ bool verify_timer_handler_activation_lifetime ()
     timer_activation_handler_t::created = 0;
     timer_activation_handler_t::destroyed = 0;
     timer_activation_handler_t::calls = 0;
+    timer_activation_handler_t::throw_first_invocation = false;
     timer_activation_handler_t::observed_dependency = nullptr;
     timer_activation_handler_t::dependency_mismatch = false;
 
@@ -309,6 +313,93 @@ bool verify_timer_handler_activation_lifetime ()
             || caught_up[0].skipped_ticks != 2 || caught_up[1].scheduled_index != 4
             || caught_up[2].scheduled_index != 5) {
             std::cerr << "bounded timer catch-up mismatch\n";
+            return false;
+        }
+        const auto verify_catch_up_exception = [&] (bool stop) {
+            auto options = catch_up_options;
+            options.stop_on_unhandled_exception = stop;
+            auto failing = context.add_timer<timer_activation_handler_t> (
+              stop ? "catch-up-stop-on-exception" : "catch-up-continue-on-exception",
+              std::chrono::hours (24), options);
+            std::vector<zlink::framework::timer_tick_t> attempted;
+            const auto failure = timer_runtime.dispatch_fire_count (
+              failing, 5, [&] (const zlink::framework::timer_tick_t &tick) {
+                  attempted.push_back (tick);
+                  if (attempted.size () == 1)
+                      throw std::runtime_error ("first catch-up callback failed");
+              });
+            const auto delivered = timer_runtime.delivered_ticks (failing);
+            const auto failures = timer_runtime.failure_events (failing);
+            if (failure || attempted.size () != 1 || delivered.size () != 1
+                || attempted.front ().delivery_index != 1 || attempted.front ().scheduled_index != 3
+                || attempted.front ().skipped_ticks != 2 || failures.size () != 1
+                || failures.front ().delivery_index != 1 || failures.front ().stopped != stop
+                || failing.is_disposed () != stop) {
+                std::cerr << "catch-up exception consumed an unstarted tick\n";
+                return false;
+            }
+            if (stop)
+                return !timer_runtime.dispatch_fire_count (failing, 1);
+
+            for (std::uint64_t index = 2; index <= 3; ++index) {
+                std::optional<zlink::framework::timer_tick_t> tick;
+                const auto result = timer_runtime.dispatch_fire_count (
+                  failing, 1, [&] (const zlink::framework::timer_tick_t &next) { tick = next; });
+                if (!result || !tick || tick->delivery_index != index
+                    || tick->scheduled_index != index + 2 || tick->skipped_ticks != 0) {
+                    std::cerr << "catch-up exception did not preserve the remaining tick\n";
+                    return false;
+                }
+            }
+            return timer_runtime.delivered_ticks (failing).size () == 3;
+        };
+        if (!verify_catch_up_exception (false) || !verify_catch_up_exception (true))
+            return false;
+
+        const auto verify_async_catch_up_exception = [&] (bool stop) {
+            auto options = catch_up_options;
+            options.stop_on_unhandled_exception = stop;
+            auto failing = context.add_timer<timer_activation_handler_t> (
+              stop ? "async-catch-up-stop-on-exception" : "async-catch-up-continue-on-exception",
+              std::chrono::hours (24), options);
+            timer_activation_handler_t::throw_first_invocation = true;
+            const auto failure = timer_runtime.dispatch_fire_count_async (failing, 5).result ();
+            timer_activation_handler_t::throw_first_invocation = false;
+            const auto delivered = timer_runtime.delivered_ticks (failing);
+            const auto failures = timer_runtime.failure_events (failing);
+            if (failure || delivered.size () != 1 || delivered.front ().delivery_index != 1
+                || delivered.front ().scheduled_index != 3 || delivered.front ().skipped_ticks != 2
+                || failures.size () != 1 || failures.front ().delivery_index != 1
+                || failures.front ().stopped != stop || failing.is_disposed () != stop) {
+                std::cerr << "async catch-up exception consumed an unstarted tick\n";
+                return false;
+            }
+            if (stop)
+                return !timer_runtime.dispatch_fire_count_async (failing, 1).result ();
+
+            const auto next = timer_runtime.dispatch_fire_count_async (failing, 1).result ();
+            const auto after_next = timer_runtime.delivered_ticks (failing);
+            return next && after_next.size () == 2 && after_next.back ().delivery_index == 2
+                   && after_next.back ().scheduled_index == 4
+                   && after_next.back ().skipped_ticks == 0;
+        };
+        if (!verify_async_catch_up_exception (false) || !verify_async_catch_up_exception (true))
+            return false;
+
+        auto cancelling = context.add_timer<timer_activation_handler_t> (
+          "catch-up-cancel-mid-batch", std::chrono::hours (24), catch_up_options);
+        std::optional<zlink::framework::task_t<void>> cancellation;
+        std::vector<zlink::framework::timer_tick_t> cancelled_attempts;
+        const auto cancellation_result = timer_runtime.dispatch_fire_count (
+          cancelling, 5, [&] (const zlink::framework::timer_tick_t &tick) {
+              cancelled_attempts.push_back (tick);
+              if (cancelled_attempts.size () == 1)
+                  cancellation.emplace (cancelling.cancel ());
+          });
+        if (!cancellation_result || cancelled_attempts.size () != 1 || !cancellation
+            || !cancellation->await_ready () || !cancellation->result ()
+            || timer_runtime.delivered_ticks (cancelling).size () != 1) {
+            std::cerr << "catch-up cancellation started a later callback\n";
             return false;
         }
         for (int index = 0; index < 300; ++index) {
@@ -558,6 +649,9 @@ bool verify_close_waits_for_timer_callback_barrier ()
     state->drain_serial ();
     if (timer_activation_handler_t::calls.load () != timer_calls_before + 1 || timer.is_disposed ())
         return false;
+    const auto delivery_index_before_queued_fire = pending_timer->delivery_index;
+    const auto scheduled_index_before_queued_fire = pending_timer->last_scheduled_index;
+    const auto history_size_before_queued_fire = pending_timer->delivered_ticks.size ();
     std::atomic_int closing_calls{0};
     state->lifecycle.on_closing = [&] (void *, const zlink::framework::spot_closing_context_t &,
                                        std::stop_token) {
@@ -591,7 +685,11 @@ bool verify_close_waits_for_timer_callback_barrier ()
     const bool tick_queued = state->serial_queue->pending_count (
                                zlink::framework::runtime::serial_work_lane_t::application)
                              == pending_before + 1;
-    if (state->closed || closing_calls != 0
+    const bool tick_not_started =
+      pending_timer->delivery_index == delivery_index_before_queued_fire
+      && pending_timer->last_scheduled_index == scheduled_index_before_queued_fire
+      && pending_timer->delivered_ticks.size () == history_size_before_queued_fire;
+    if (state->closed || closing_calls != 0 || !tick_not_started
         || timer_activation_handler_t::destroyed.load () != handlers_destroyed_before
         || timer_activation_dependency_t::destroyed.load () != dependencies_destroyed_before) {
         complete ([state] { state->leave_callback (); });
@@ -610,7 +708,7 @@ bool verify_close_waits_for_timer_callback_barrier ()
         return false;
     }
 
-    return tick_queued && timer.is_disposed () && cleanup->stop_calls == 1
+    return tick_queued && tick_not_started && timer.is_disposed () && cleanup->stop_calls == 1
            && cleanup->close_calls == 1 && state->serial_queue->pending_count () == 0
            && timer_activation_handler_t::calls.load () == timer_calls_before + 1
            && timer_activation_handler_t::destroyed.load () == handlers_destroyed_before + 1
