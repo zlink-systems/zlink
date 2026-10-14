@@ -1998,6 +1998,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
     }
 
     internal ZLinkFrameworkRuntime Runtime { get; }
+    internal IServiceProvider Services => _provider;
     internal IZLinkSpotManager Manager { get; }
     internal SpotCloseFaultStore Store { get; }
     internal SpotCloseProbeState State { get; }

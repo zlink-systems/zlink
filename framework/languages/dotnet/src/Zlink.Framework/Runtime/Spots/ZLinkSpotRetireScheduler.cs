@@ -739,6 +739,14 @@ internal sealed class ZLinkSpotRetireScheduler(
                 }
             }
         }
+        finally
+        {
+            // The operation has ended even when authority cannot be restored. Its
+            // admission seal stays closed until shutdown acquires its own boundary.
+            await activation
+                ._serial.CompleteRelocationExecutionAsync(admittedSeal.QueueSeal)
+                .ConfigureAwait(false);
+        }
 
         async ValueTask<ZLinkRelocationUnitResult> ReconcileUncertainCommitAsync()
         {
@@ -844,12 +852,7 @@ internal sealed class ZLinkSpotRetireScheduler(
             if (!targetPublished)
             {
                 targetAuthorityOwnerGeneration = await target
-                    .PublishAsync(
-                        reservation,
-                        committedPublication,
-                        deadline,
-                        CancellationToken.None
-                    )
+                    .PublishAsync(reservation, committedPublication, deadline, completionToken)
                     .ConfigureAwait(false);
                 targetPublished = true;
             }

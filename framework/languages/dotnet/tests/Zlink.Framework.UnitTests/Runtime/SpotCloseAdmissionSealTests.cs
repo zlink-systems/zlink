@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Spots;
@@ -13,6 +14,134 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class SpotCloseAdmissionSealTests
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+
+    [Fact]
+    public async Task Late_close_owner_completion_does_not_submit_to_the_disposed_executor()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        var executor = CreateExecutor(errorSink);
+        await executor.BeginCloseBoundaryAsync(CancellationToken.None);
+        await executor.DisposeAsync();
+        executor.CompleteCloseBoundary();
+    }
+
+    [Fact]
+    public async Task Late_relocation_owner_completion_does_not_submit_to_the_disposed_executor()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        var executor = CreateExecutor(errorSink);
+        var seal = await executor.TrySealRelocationAsync();
+        Assert.NotNull(seal);
+        await executor.DisposeAsync();
+        await executor.CompleteRelocationExecutionAsync(seal);
+    }
+
+    [Fact]
+    public async Task Shutdown_waits_for_the_relocation_owner_terminal_without_reopening_its_admission()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errorSink);
+        var seal = await executor.TrySealRelocationAsync();
+        Assert.NotNull(seal);
+        var shutdown = executor
+            .ExecuteQuiescentLifecycleAsync(
+                static (_, _) => ValueTask.FromResult(false),
+                CancellationToken.None,
+                ZLinkSpotCloseReason.HostShutdown
+            )
+            .AsTask();
+        Assert.False(shutdown.IsCompleted);
+        await executor.CompleteRelocationExecutionAsync(seal);
+        Assert.False(await shutdown.WaitAsync(Wait));
+        Assert.False(await executor.TryAbortRelocationAsync(seal));
+    }
+
+    [Fact]
+    public async Task Canceling_shutdowns_wait_does_not_end_the_close_owners_seal()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errorSink);
+        await executor.BeginCloseBoundaryAsync(CancellationToken.None);
+        using var cancellation = new CancellationTokenSource();
+        var shutdown = executor
+            .ExecuteQuiescentLifecycleAsync(
+                static (_, _) => ValueTask.FromResult(false),
+                cancellation.Token,
+                ZLinkSpotCloseReason.HostShutdown
+            )
+            .AsTask();
+        Assert.False(shutdown.IsCompleted);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => shutdown);
+        Assert.True(executor.HasClosingSeal);
+        executor.AbortCloseBoundary();
+    }
+
+    [Fact]
+    public async Task Shutdown_during_explicit_close_waits_for_the_close_owner()
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var spot = await host.CreateSpotAsync();
+        host.State.HoldOnClosing = true;
+        var close = host.CloseAsync(spot);
+        await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+        var shutdown = host
+            .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+            .ShutdownAsync(Wait)
+            .AsTask();
+        try
+        {
+            Assert.False(shutdown.IsCompleted);
+        }
+        finally
+        {
+            host.State.ReleaseOnClosing.TrySetResult();
+        }
+        Assert.Equal(true, await close.WaitAsync(Wait));
+        Assert.Equal(
+            ZLinkFrameworkTerminationOutcome.Stopped,
+            (await shutdown.WaitAsync(Wait)).Outcome
+        );
+        Assert.Equal(1, host.State.OnClosingCalls);
+    }
+
+    [Fact]
+    public async Task Failed_quiescent_close_cannot_abort_another_owners_relocation_seal()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errorSink);
+        var seal = await executor.TrySealRelocationAsync();
+        Assert.NotNull(seal);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            executor
+                .ExecuteQuiescentLifecycleAsync(
+                    static (_, _) => ValueTask.FromResult(false),
+                    CancellationToken.None
+                )
+                .AsTask()
+        );
+        Assert.True(await executor.TryAbortRelocationAsync(seal));
+    }
+
+    [Fact]
+    public async Task Canceled_quiescent_close_cannot_abort_another_owners_close_seal()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = CreateExecutor(errorSink);
+        await executor.BeginCloseBoundaryAsync(CancellationToken.None);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            executor
+                .ExecuteQuiescentLifecycleAsync(
+                    static (_, _) => ValueTask.FromResult(false),
+                    cancellation.Token
+                )
+                .AsTask()
+        );
+        Assert.True(executor.HasClosingSeal);
+        executor.AbortCloseBoundary();
+    }
 
     [Fact]
     public async Task Failed_close_CAS_preserves_message_admitted_during_the_attempt()

@@ -1805,6 +1805,7 @@ internal sealed class RelocationBehaviorTrace
     internal TaskCompletionSource ReleaseJoinHandler { get; } = Signal();
     internal TaskCompletionSource ReleaseTargetLifecycle { get; } = Signal();
     internal TaskCompletionSource ReleaseSourceLeave { get; } = Signal();
+    internal Func<CancellationToken, ValueTask<byte[]>>? CaptureSourceSpot { get; set; }
     private TaskCompletionSource TargetAuthorityObserved { get; } = Signal();
     private TaskCompletionSource TargetAuthorityMutationObserved { get; } = Signal();
 

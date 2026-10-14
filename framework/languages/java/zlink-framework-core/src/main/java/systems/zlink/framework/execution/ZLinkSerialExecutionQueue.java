@@ -100,13 +100,17 @@ public final class ZLinkSerialExecutionQueue {
     private boolean closingAdmissionSealed;
     private boolean relocated;
     private final List<QuiescenceWaiter> quiescenceWaiters = new ArrayList<>();
-    private OwnedWait<?> suspendedWaits;
+    // The list head also records terminal ownership; no later registration can reopen it.
+    private static final OwnedWait<?> TERMINATED_WAITS = new OwnedWait<>(null, null);
+    private volatile OwnedWait<?> suspendedWaits;
 
     /** Ends only runtime observations; application completion sources remain unchanged. */
     public void terminateOwnedWaits() {
         var pending = new ArrayList<OwnedWait<?>>();
         synchronized (this) {
-            for (var wait = suspendedWaits; wait != null; wait = wait.next) {
+            var suspended = suspendedWaits;
+            suspendedWaits = TERMINATED_WAITS;
+            for (var wait = suspended; wait != null && wait != TERMINATED_WAITS; wait = wait.next) {
                 pending.add(wait);
                 var turn = wait.turn;
                 if (turn != null) collectTurnWaits(turn.entry, pending);
@@ -114,12 +118,7 @@ public final class ZLinkSerialExecutionQueue {
             collectTurnWaits(active, pending);
             collectTurnWaits(suspendedLifecycle, pending);
         }
-        for (var wait : pending)
-            wait.accept(
-                    null,
-                    ZLinkFrameworkErrorOrigin.framework(
-                            ZLinkFrameworkErrorKind.SHUTTING_DOWN,
-                            "Runtime-owned wait ended during host shutdown"));
+        for (var wait : pending) wait.endForShutdown();
     }
 
     private static void collectTurnWaits(Entry entry, List<OwnedWait<?>> pending) {
@@ -155,6 +154,7 @@ public final class ZLinkSerialExecutionQueue {
         }
 
         private void observe(boolean suspended, BiConsumer<T, Throwable> completion) {
+            var queue = turn.queue;
             var observing = source;
             this.completion = completion;
             if (suspended) turn.queue.suspendContinuation(turn.entry, this);
@@ -163,7 +163,18 @@ public final class ZLinkSerialExecutionQueue {
                 next = owner.ownedWait;
                 owner.ownedWait = this;
             }
+            // Publishing the registration precedes the terminal read. Either shutdown's
+            // collection sees this wait or this read observes that collection's terminal state.
+            if (queue.suspendedWaits == TERMINATED_WAITS) endForShutdown();
             observing.whenComplete(this);
+        }
+
+        private void endForShutdown() {
+            accept(
+                    null,
+                    ZLinkFrameworkErrorOrigin.framework(
+                            ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                            "Runtime-owned wait ended during host shutdown"));
         }
 
         @Override
@@ -2208,9 +2219,11 @@ public final class ZLinkSerialExecutionQueue {
         if (suspendedContinuations() == Integer.MAX_VALUE) {
             throw new IllegalStateException("suspended continuation count exhausted");
         }
-        wait.next = suspendedWaits;
-        if (suspendedWaits != null) suspendedWaits.previous = wait;
-        suspendedWaits = wait;
+        if (suspendedWaits != TERMINATED_WAITS) {
+            wait.next = suspendedWaits;
+            if (suspendedWaits != null) suspendedWaits.previous = wait;
+            suspendedWaits = wait;
+        }
         if (isLifecycleTurn(turn)) {
             suspendedLifecycleContinuations++;
         } else {
@@ -2232,8 +2245,9 @@ public final class ZLinkSerialExecutionQueue {
         CompletionStage<Void> result;
         boolean scheduleDrain = false;
         synchronized (this) {
-            if (wait.previous == null) suspendedWaits = wait.next;
-            else wait.previous.next = wait.next;
+            if (wait.previous == null) {
+                if (suspendedWaits == wait) suspendedWaits = wait.next;
+            } else wait.previous.next = wait.next;
             if (wait.next != null) wait.next.previous = wait.previous;
             wait.next = null;
             wait.previous = null;

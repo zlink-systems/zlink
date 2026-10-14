@@ -37,6 +37,86 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
+    private static final int REGISTRATION_WAIT_SECONDS = 1;
+
+    @Test
+    void shutdownBeforeRegistrationEndsTheNewWaitWithoutChangingItsSource() throws Exception {
+        assertRegistrationAfterShutdown(false);
+    }
+
+    @Test
+    void shutdownBeforeRegistrationKeepsAnAlreadyCompletedSourceButEndsItsObservation()
+            throws Exception {
+        assertRegistrationAfterShutdown(true);
+    }
+
+    private static void assertRegistrationAfterShutdown(boolean sourceCompleted) throws Exception {
+        for (var policy :
+                List.of(
+                        ZLinkExecutionLanePolicy.spot(),
+                        ZLinkExecutionLanePolicy.spotReturningGate())) {
+            try (var executor = Executors.newSingleThreadExecutor()) {
+                var queue = new ZLinkSerialExecutionQueue(executor, policy);
+                var entered = new CompletableFuture<Void>();
+                var register = new CountDownLatch(1);
+                var source = new CompletableFuture<String>();
+                var observation = new CompletableFuture<CompletableFuture<String>>();
+                var turn =
+                        queue.enqueue(
+                                () -> {
+                                    entered.complete(null);
+                                    try {
+                                        assertTrue(
+                                                register.await(
+                                                        REGISTRATION_WAIT_SECONDS,
+                                                        TimeUnit.SECONDS));
+                                    } catch (InterruptedException failure) {
+                                        throw new AssertionError(failure);
+                                    }
+                                    var managed =
+                                            ZLinkSerialExecutionQueue.manageCurrent(source)
+                                                    .toCompletableFuture();
+                                    observation.complete(managed);
+                                    return managed.thenApply(ignored -> null);
+                                },
+                                null);
+                entered.get(REGISTRATION_WAIT_SECONDS, TimeUnit.SECONDS);
+                queue.terminateOwnedWaits();
+                if (sourceCompleted) source.complete("application result");
+                register.countDown();
+                try {
+                    var failure =
+                            assertThrows(
+                                    ExecutionException.class,
+                                    () ->
+                                            observation
+                                                    .get(
+                                                            REGISTRATION_WAIT_SECONDS,
+                                                            TimeUnit.SECONDS)
+                                                    .get(
+                                                            REGISTRATION_WAIT_SECONDS,
+                                                            TimeUnit.SECONDS));
+                    var shutdown =
+                            assertInstanceOf(
+                                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                    failure.getCause());
+                    assertEquals(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                            shutdown.kind());
+                    assertEquals(sourceCompleted, source.isDone());
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    turn.toCompletableFuture()
+                                            .get(REGISTRATION_WAIT_SECONDS, TimeUnit.SECONDS));
+                } finally {
+                    source.complete("application result");
+                }
+                assertEquals("application result", source.join());
+            }
+        }
+    }
+
     @Test
     void shutdownEndsAllTurnWaitsWithoutChangingTheirApplicationSources() throws Exception {
         for (var policy :

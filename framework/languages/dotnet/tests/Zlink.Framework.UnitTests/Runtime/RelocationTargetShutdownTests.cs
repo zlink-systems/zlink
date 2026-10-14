@@ -11,6 +11,100 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class RelocationBehaviorConformanceTests
 {
+    private static readonly TimeSpan SourceShutdownWait = TimeSpan.FromSeconds(10);
+
+    [Fact]
+    public async Task Source_shutdown_waits_for_the_started_relocation_owner_before_closing()
+    {
+        var trace = new RelocationBehaviorTrace();
+        trace.ReleaseJoinHandler.TrySetResult();
+        trace.ReleaseSourceLeave.TrySetResult();
+        trace.ReleaseTargetLifecycle.TrySetResult();
+        var captureStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseCapture = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        trace.CaptureSourceSpot = async token =>
+        {
+            captureStarted.TrySetResult();
+            await releaseCapture.Task.WaitAsync(token);
+            return Array.Empty<byte>();
+        };
+        var probe = new CanonicalRelocationTransportProbe(trace);
+        probe.ReleasePrepareCall.TrySetResult();
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var roots = new SynchronizedRelocationStore();
+        var objectId = $"source-shutdown-{Guid.NewGuid():N}";
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            store,
+            roots,
+            true,
+            canonicalTransportProbe: probe,
+            relocateSpots: true
+        );
+        _ = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate(objectId, RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Request(ZLinkMessage.Empty)
+            .Timeout(SourceShutdownWait)
+            .Async();
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            store,
+            roots,
+            true,
+            canonicalTransportProbe: probe,
+            relocateSpots: true
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
+        var runtime = source.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        var relocate = runtime
+            .RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                    Deadline = SourceShutdownWait,
+                }
+            )
+            .AsTask();
+        try
+        {
+            await captureStarted.Task.WaitAsync(SourceShutdownWait);
+            Assert.False(relocate.IsCompleted);
+            var shutdown = runtime.ShutdownAsync(SourceShutdownWait).AsTask();
+            await WaitUntilAsync(() => source.Runtime.DrainAdmission.IsSealedForShutdown);
+            Assert.False(shutdown.IsCompleted);
+            Assert.False(relocate.IsCompleted);
+            releaseCapture.TrySetResult();
+            probe.ReleaseCutoverSend.TrySetResult();
+            _ = await relocate.WaitAsync(SourceShutdownWait);
+            Assert.Equal(
+                ZLinkFrameworkTerminationOutcome.Stopped,
+                (await shutdown.WaitAsync(SourceShutdownWait)).Outcome
+            );
+        }
+        finally
+        {
+            releaseCapture.TrySetResult();
+            probe.ReleaseCutoverSend.TrySetResult();
+        }
+    }
+
     // Common relocation §4.4 and Location runtime §10: the owner orders seal
     // against verification, including a successful CAS whose response is lost.
     [Theory]
@@ -202,7 +296,7 @@ internal sealed class ShutdownBehaviorSpotAdapter(RelocationBehaviorTrace trace)
     : IZLinkSpotRelocationAdapter<BehaviorTargetSpot>
 {
     public ValueTask<byte[]> CaptureAsync(BehaviorTargetSpot spot, CancellationToken token) =>
-        ValueTask.FromResult(Array.Empty<byte>());
+        trace.CaptureSourceSpot?.Invoke(token) ?? ValueTask.FromResult(Array.Empty<byte>());
 
     public async ValueTask RestoreAsync(
         BehaviorTargetSpot spot,
