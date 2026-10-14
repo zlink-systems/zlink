@@ -90,7 +90,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   for (const spot of spots) {
     const host = owner(spot.owner);
     assert(host.role === 'field' || host.role === 'instance');
-    assert(['entry', 'user', 'instance'].includes(text(spot.kind)), 'Unknown Spot kind');
+    assert(['entry', 'user'].includes(text(spot.kind)), 'Unknown Spot kind');
     if (spot.kind === 'entry') {
       assert.equal(host.role, 'field', 'Entry Spot owner must host Field runtime');
       assert.equal(spot.type, null);

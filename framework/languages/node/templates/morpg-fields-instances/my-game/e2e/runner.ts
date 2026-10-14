@@ -195,6 +195,7 @@ async function runScenario(name: string): Promise<boolean> {
     // Bootstrap each fixed Field set before starting the next placement host.
     const roleOrder: Record<NodeRole, number> = { field: 0, instance: 1, session: 2 };
     applicationNodes.sort((a, b) => roleOrder[a.role] - roleOrder[b.role]);
+    const ready = new Map<string, { id: string; endpoint: string }>();
     for (const node of applicationNodes) {
       const cfg = node.config;
       cfg.redisEndpoint = redis;
@@ -202,12 +203,13 @@ async function runScenario(name: string): Promise<boolean> {
       cfg.meshEndpoint = 'tcp://127.0.0.1:0';
       if (node.role === 'session') cfg.streamEndpoint = 'ws://127.0.0.1:0';
       const started = await start(cfg, node.role);
-      assert.equal((await started.ready()).id, cfg.id);
+      const observed = await started.ready();
+      assert.equal(observed.id, cfg.id);
+      ready.set(cfg.id, observed);
     }
-    const ready = await Promise.all([...nodes.values()].map((n) => n.ready()));
     const session = [...nodes.values()].find((n) => n.role === 'session');
     assert(session);
-    const endpoint = ready.find((r) => r.id === session.config.id)!.endpoint;
+    const endpoint = ready.get(session.config.id)!.endpoint;
     const { scenario } = await import('./client.mjs');
     const control = {
       async drain(id: string): Promise<void> {

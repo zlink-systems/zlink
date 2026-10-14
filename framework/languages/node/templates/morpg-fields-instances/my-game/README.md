@@ -9,7 +9,6 @@ flowchart LR
   fieldA -->|relocation| fieldB
   fieldB -->|border pub/sub| fieldA
   fieldB -->|GetOrCreate| instanceA
-  instanceA -->|host relocation| instanceB
   fieldB -->|Location / lease| location[(Redis)]
 ```
 
@@ -56,9 +55,7 @@ The runner checks the structure before startup, creates a unique Redis Compose p
 
 ## Known issues
 
-The 0.30.0 baseline does not pass the complete suite. Instance nodes register the Player factory for dungeon relocation, but the specified composition has no application Entry Spot on these nodes. An initial Player can therefore be created on an instance and its first JoinWorldRequest has no handler. The composition requires a decision before this path can be accepted; the template does not change placement or add an undeclared Entry Spot.
-
-Other observed baseline failures include a disconnected bound-session send during dungeon entry, `ForceStopped/TeardownFailed` during cleanup, and missing SafeToShutdown observation after `RELOCATED`. The existing Node relocation inventory issue #1725 is recorded for comparison; the SafeToShutdown failure has not been established as the same defect. These failures remain visible, and 0.30.1 candidate verification is pending.
+The 0.30.0 baseline does not pass the complete suite. A new Player can be placed on an instance node without an application Entry Spot, leaving its first JoinWorldRequest without a handler ([#1772](https://github.com/zlink-systems/zlink/issues/1772)). Dungeon entry can fail because the bound-session send route is not connected ([#1775](https://github.com/zlink-systems/zlink/issues/1775)). Cleanup can return `ForceStopped/TeardownFailed`, and SafeToShutdown may not be observed after `RELOCATED` ([#1740](https://github.com/zlink-systems/zlink/issues/1740)). These failures remain visible, and 0.30.1 candidate verification is pending.
 
 ## Deployment sequence
 
