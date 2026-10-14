@@ -71,11 +71,14 @@ class Client(endpoint: String, val playerId: String, val tableId: String) {
     suspend fun connect(): TableView {
         connector.kotlin().connect().await()
         send(JoinTableRequest(playerId, tableId))
-        return next<TableView> { it.actorId == playerId }
+        return next<TableView> {
+            val ownSeat = it.seats.indexOfFirst { seat -> seat.playerId == playerId }
+            ownSeat >= 0 && it.yourSeat == ownSeat
+        }
     }
 
-    suspend fun sessionId(): String =
-        connector.kotlin().request<SessionInfo>(SessionInfoRequest()).await().sessionId
+    suspend fun sessionInfo(): SessionInfo =
+        connector.kotlin().request<SessionInfo>(SessionInfoRequest()).await()
 
     suspend fun send(message: Any) = connector.kotlin().send(message).await()
 

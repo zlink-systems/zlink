@@ -45,45 +45,35 @@ class Table(
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
-        if (state.seats.none { it.playerId == actor.context().actorId() })
-            state.seats.add(Seat(actor.context().actorId()))
-        broadcastViews()
-        hand(actor.context().actorId())
+        val actorId = actor.context().actorId()
+        if (state.seats.none { it.playerId == actorId }) state.seats.add(Seat(actorId))
+        broadcastViews(actorId)
     }
 
     override suspend fun onLeaveActorSuspending(actor: Player) {}
 
-    private suspend fun view(playerId: String, seats: List<SeatView> = seatViews()) {
-        val seat = state.seats.indexOfFirst { it.playerId == playerId }
-        send(
-            playerId,
-            TableView(
-                context.spotId(),
-                config.id,
-                playerId,
-                0,
-                seat,
-                state.handNumber,
-                state.inHand,
-                state.turnSeat,
-                state.pot,
-                seats,
-            ),
+    private fun tableView(playerId: String, seats: List<SeatView> = seatViews()) =
+        TableView(
+            context.spotId(),
+            config.id,
+            state.seats.indexOfFirst { it.playerId == playerId },
+            state.handNumber,
+            state.inHand,
+            state.turnSeat,
+            state.pot,
+            seats,
         )
-    }
 
-    suspend fun hand(playerId: String) {
+    suspend fun current(actor: Player) {
+        val playerId = actor.context().actorId()
+        reply(actor, tableView(playerId))
         val seat = state.seats.find { it.playerId == playerId }
         if (state.inHand && seat != null && seat.cards.isNotEmpty())
-            send(playerId, HandDealt(state.handNumber, seat.cards))
+            reply(actor, HandDealt(state.handNumber, seat.cards))
     }
 
-    suspend fun current(playerId: String) {
-        view(playerId)
-        hand(playerId)
-    }
-
-    suspend fun start(playerId: String) {
+    suspend fun start(actor: Player) {
+        val playerId = actor.context().actorId()
         val reason =
             when {
                 state.seats.none { it.playerId == playerId } -> Rules.NOT_SEATED
@@ -92,7 +82,7 @@ class Table(
                 else -> null
             }
         if (reason != null) {
-            reject(playerId, reason)
+            reject(actor, reason)
             return
         }
         val deck = (0 until Rules.DECK_SIZE).toMutableList().apply { shuffle() }
@@ -104,11 +94,12 @@ class Table(
         state.handNumber++
         state.inHand = true
         state.turnSeat = 0
-        state.seats.forEach { hand(it.playerId) }
+        state.seats.forEach { seat -> send(seat.playerId, HandDealt(state.handNumber, seat.cards)) }
         broadcastViews()
     }
 
-    suspend fun bet(playerId: String, request: BetRequest) {
+    suspend fun bet(actor: Player, request: BetRequest) {
+        val playerId = actor.context().actorId()
         val index = state.seats.indexOfFirst { it.playerId == playerId }
         val reason =
             when {
@@ -120,7 +111,7 @@ class Table(
                 else -> null
             }
         if (reason != null) {
-            reject(playerId, reason)
+            reject(actor, reason)
             return
         }
         val seat = state.seats[index]
@@ -159,13 +150,18 @@ class Table(
             SeatView(i, seat.playerId, seat.chips, seat.acted, seat.cards.size)
         }
 
-    private suspend fun broadcastViews() {
+    private suspend fun broadcastViews(exceptActorId: String? = null) {
         val seats = seatViews()
-        state.seats.forEach { view(it.playerId, seats) }
+        state.seats.forEach { seat ->
+            if (seat.playerId != exceptActorId) send(seat.playerId, tableView(seat.playerId, seats))
+        }
     }
 
-    private suspend fun reject(playerId: String, reason: String) =
-        send(playerId, ActionRejected(reason))
+    private suspend fun reject(actor: Player, reason: String) = reply(actor, ActionRejected(reason))
+
+    private suspend fun reply(actor: Player, message: Any) {
+        actor.context().boundSession().kotlin().send(message).await()
+    }
 
     private suspend fun send(playerId: String, message: Any) {
         clients.kotlin().sendToActor(playerId, message).await()
@@ -205,7 +201,7 @@ class Actions {
             request.playerId == actor.context().actorId() &&
                 request.tableId == table.context.spotId()
         )
-        table.current(request.playerId)
+        table.current(actor)
     }
 
     @ZLinkSpotActorSend
@@ -215,7 +211,7 @@ class Actions {
         dispatch: ZLinkMessageContext,
         request: TableViewRequest,
     ) {
-        table.current(actor.context().actorId())
+        table.current(actor)
     }
 
     @ZLinkSpotActorSend
@@ -225,7 +221,7 @@ class Actions {
         dispatch: ZLinkMessageContext,
         request: StartHandRequest,
     ) {
-        table.start(actor.context().actorId())
+        table.start(actor)
     }
 
     @ZLinkSpotActorSend
@@ -235,7 +231,7 @@ class Actions {
         dispatch: ZLinkMessageContext,
         request: BetRequest,
     ) {
-        table.bet(actor.context().actorId(), request)
+        table.bet(actor, request)
     }
 
     @ZLinkSpotActorSend
@@ -245,12 +241,7 @@ class Actions {
         dispatch: ZLinkMessageContext,
         message: TableView,
     ) {
-        actor
-            .context()
-            .boundSession()
-            .kotlin()
-            .send(message.copy(objectGeneration = actor.context().objectGeneration()))
-            .await()
+        actor.context().boundSession().kotlin().send(message).await()
     }
 
     @ZLinkSpotActorSend
@@ -269,16 +260,6 @@ class Actions {
         actor: Player,
         dispatch: ZLinkMessageContext,
         message: HandResult,
-    ) {
-        actor.context().boundSession().kotlin().send(message).await()
-    }
-
-    @ZLinkSpotActorSend
-    suspend fun rejected(
-        table: Table,
-        actor: Player,
-        dispatch: ZLinkMessageContext,
-        message: ActionRejected,
     ) {
         actor.context().boundSession().kotlin().send(message).await()
     }

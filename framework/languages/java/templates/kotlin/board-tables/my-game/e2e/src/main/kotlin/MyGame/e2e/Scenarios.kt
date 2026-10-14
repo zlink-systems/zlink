@@ -47,8 +47,8 @@ suspend fun scenario(id: String, nodes: Nodes) {
             second.yourSeat == 1 &&
                 second.seats.map { it.chips } == listOf(Rules.INITIAL_CHIPS, Rules.INITIAL_CHIPS)
         )
-        val session1 = p1.sessionId()
-        val session2 = p2.sessionId()
+        val session1 = p1.sessionInfo()
+        val session2 = p2.sessionInfo()
         p1.clear()
         p2.clear()
         p1.send(StartHandRequest())
@@ -72,10 +72,13 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 p2.close()
                 p2 = Client(nodes.endpoint, p2.playerId, tableId)
                 val rejoined = p2.connect()
-                check(p2.sessionId() != session2)
+                val rejoinedSession = p2.sessionInfo()
+                check(rejoinedSession.sessionId != session2.sessionId)
+                check(rejoinedSession.actorId == session2.actorId)
+                check(rejoinedSession.objectGeneration == session2.objectGeneration)
                 same(before2, rejoined)
                 check(p2.next<HandDealt>() == cards2)
-                check(p1.sessionId() == session1 && p1.disconnects == 0 && p2.disconnects == 0)
+                check(p1.sessionInfo() == session1 && p1.disconnects == 0 && p2.disconnects == 0)
             }
             "update" -> {
                 nodes.drain(before1.nodeId)
@@ -85,7 +88,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 same(before1, after1)
                 same(before2, after2)
                 check(p1.next<HandDealt>() == cards1 && p2.next<HandDealt>() == cards2)
-                check(p1.sessionId() == session1 && p2.sessionId() == session2)
+                check(p1.sessionInfo() == session1 && p2.sessionInfo() == session2)
                 check(p1.disconnects == 0 && p2.disconnects == 0)
             }
         }

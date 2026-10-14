@@ -45,8 +45,20 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
         payload: ZLinkMessage,
     ) {
         when (dispatch.packetName()) {
-            SessionInfoRequest::class.java.simpleName ->
-                session.client().kotlin().reply(SessionInfo(session.sessionId())).await()
+            SessionInfoRequest::class.java.simpleName -> {
+                val actor = session.actors().bound().single()
+                session
+                    .client()
+                    .kotlin()
+                    .reply(
+                        SessionInfo(
+                            session.sessionId(),
+                            actor.actorId(),
+                            actor.ref().objectGeneration(),
+                        )
+                    )
+                    .await()
+            }
             JoinTableRequest::class.java.simpleName -> {
                 val request = payload.decode<JoinTableRequest>()
                 require(request.playerId.isNotBlank() && request.tableId.isNotBlank())

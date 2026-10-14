@@ -39,7 +39,11 @@ data class JoinTableRequest(val playerId: String = "", val tableId: String = "")
 
 data class BetRequest(val handNumber: Int = 0, val amount: Int = 0)
 
-data class SessionInfo(val sessionId: String = "")
+data class SessionInfo(
+    val sessionId: String = "",
+    val actorId: String = "",
+    val objectGeneration: Long = 0,
+)
 
 data class SeatView(
     val seat: Int = 0,
@@ -52,8 +56,6 @@ data class SeatView(
 data class TableView(
     val tableId: String = "",
     val nodeId: String = "",
-    val actorId: String = "",
-    val objectGeneration: Long = 0,
     val yourSeat: Int = Rules.NO_SEAT,
     val handNumber: Int = 0,
     val inHand: Boolean = false,

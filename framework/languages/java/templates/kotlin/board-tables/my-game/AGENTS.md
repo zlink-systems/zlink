@@ -17,6 +17,8 @@
 
 공개 Framework·binding package만 사용합니다. 기본 typed JSON serializer를 유지합니다. Player Actor에 Table 상태를 복제하거나 relocation adapter에 Framework route·lease·membership·queue를 넣지 않습니다. SPOT_WIDE gate가 게임 상태를 직렬화합니다. 별도 lock·queue·retry·sleep으로 runtime 결함을 보상하지 않습니다.
 
+`SessionInfo`는 sessionId와 bind된 Actor의 actorId·objectGeneration을 소유하고, `TableView`는 테이블 상태만 전달합니다. 요청 handler의 응답은 요청 Actor의 bound session으로 직접 보내며, 나머지 상태 push는 공개 Actor send API를 사용합니다.
+
 ## 검증
 
 `./run-e2e.sh` 또는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행합니다. 기본 시나리오는 `table`, `reconnect`, `update`입니다. 응답과 runtime observation으로 판단하며 고정 대기를 추가하지 않습니다. 구조 검사는 모든 실행의 시작 단계에서 실제 파일을 검증합니다. 나쁜 구조 입력이 거부되는지는 개발 중 임시 사본에서 확인하고 자기 시험 코드는 템플릿에 남기지 않습니다.

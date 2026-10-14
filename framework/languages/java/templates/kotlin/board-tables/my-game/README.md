@@ -48,8 +48,10 @@ runner는 구조를 검사한 다음 고유 Compose project의 Redis와 Table no
 | 시나리오 | 확인하는 동작 |
 | --- | --- |
 | `table` | 좌석 배정, 비공개 카드, 잘못된 차례 거부, 베팅, 결산과 칩 보존 |
-| `reconnect` | 새 session, 같은 Actor generation·좌석·카드·차례, 다른 client 연결 유지 |
-| `update` | 진행 중인 판의 host drain, 상태·연결 유지, source 종료·교체, 새 판 결산 |
+| `reconnect` | `SessionInfo`의 sessionId 변경과 actorId·objectGeneration 유지, 좌석·카드·차례 유지, 다른 client 연결 유지 |
+| `update` | drain 전후 두 client의 `SessionInfo` 유지, 진행 중인 판의 상태·연결 유지, source 종료·교체, 새 판 결산 |
+
+`SessionInfo`는 Session ID와 bind된 Actor의 ID·generation을 담고, `TableView`는 테이블 상태만 담습니다. `SessionInfoRequest`는 Session node가 답합니다. 요청 handler의 응답은 요청 Actor의 bound session으로 보내고, 그 밖의 상태 push는 공개 Actor send API를 사용합니다.
 
 ## 구성과 확장
 
