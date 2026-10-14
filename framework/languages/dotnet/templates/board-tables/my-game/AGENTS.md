@@ -2,10 +2,6 @@
 
 This project is a board table server template that uses published NuGet packages. Follow README.md for how to run it. Write code comments in English.
 
-## Start from GAME.md
-
-If `GAME.md` exists in the project root, read it first. It describes the game the user wants to build and the genre, server structure and server language chosen when the project was created. Build that game on this structure, keep the node responsibilities below, and keep the e2e scenarios passing.
-
 ## Node responsibilities and extension points
 
 | Project | Responsibility | Extension point |
