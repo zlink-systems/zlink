@@ -279,22 +279,30 @@ public sealed class SubmitAdmissionRuntimeTests
         );
 
         using var cancellation = new CancellationTokenSource();
-        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        var completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
-            operation,
-            TimeSpan.FromSeconds(5),
-            cancellation.Token
-        );
-        var frameworkAllocated =
-            GC.GetAllocatedBytesForCurrentThread() - allocatedBefore - operation.AllocatedBytes;
-
+        var frameworkAllocated = 0L;
+        Task<IReadOnlyList<Message>>? completion = null;
+        var requestResult = ZLinkRequestAdmission.Run<IReadOnlyList<Message>>(admission =>
+        {
+            var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                operation,
+                TimeSpan.FromSeconds(5),
+                cancellation.Token,
+                requestAdmission: admission
+            );
+            frameworkAllocated =
+                GC.GetAllocatedBytesForCurrentThread() - allocatedBefore - operation.AllocatedBytes;
+            return new ValueTask<IReadOnlyList<Message>>(completion!);
+        });
         Assert.Equal(1, operation.SubmissionCount);
         Assert.Equal(SubmitResult.Ok, operation.LastSubmission.Result);
-        // Measure only the Framework wrapper: the public binding's allocations
-        // are counted separately inside Async on the same thread.
+        // Measure only the Framework submission adapter. The public binding's
+        // allocations are counted separately inside Async on the same thread.
         Assert.Equal(0, frameworkAllocated);
         Assert.Equal(cancellation.Token, operation.SubmissionToken);
         Assert.Same(operation.LastSubmission.Reply, completion);
+        Assert.True(requestResult.Admitted.IsCompletedSuccessfully);
+        Assert.False(requestResult.Reply.IsCompleted);
         using var received = Received.Create();
         Assert.True(pair.Server.Recv(received));
         Assert.Equal("request-once", received.SinglePartOrThrow().GetString());
@@ -304,13 +312,13 @@ public sealed class SubmitAdmissionRuntimeTests
                 () =>
                 {
                     pair.DrainCompletions();
-                    return completion.IsCompleted;
+                    return requestResult.Reply.IsCompleted;
                 },
                 TimeSpan.FromSeconds(5)
             )
         );
 
-        var terminal = await completion;
+        var terminal = await requestResult;
         try
         {
             Assert.Equal("reply-once", Assert.Single(terminal).GetString());
@@ -324,6 +332,29 @@ public sealed class SubmitAdmissionRuntimeTests
 
         using var extra = Received.Create();
         Assert.False(pair.Server.Recv(extra, RecvFlags.DontWait));
+    }
+
+    [Fact]
+    public async Task ImmediateRequestSubmissionError_FailsPublicAdmissionAndReplyTogether()
+    {
+        var expected = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
+        var requiresAdmission = true;
+        var request = ZLinkRequestAdmission.Run<int>(admission =>
+        {
+            requiresAdmission = ZLinkBindingSubmissionOutcome.RequiresAdmission(
+                SubmitResult.NotConnected,
+                admission
+            );
+            return new ValueTask<int>(Task.FromException<int>(expected));
+        });
+
+        Assert.False(requiresAdmission);
+        var replyFailure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => request.AsTask());
+        var admissionFailure = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
+            request.Admitted.AsTask()
+        );
+        Assert.Same(expected, replyFailure);
+        Assert.Same(replyFailure, admissionFailure);
     }
 
     [Fact]
