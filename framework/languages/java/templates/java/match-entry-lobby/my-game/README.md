@@ -48,7 +48,7 @@ The e2e configuration limits each match host to one Room so the replacement has 
 
 ## Known issues
 
-Public 0.30.0 validation reaches READY but cross-node deferred Actor join to Matchmaking fails with DATA_LOST (#1729). On Linux, one update run reached RELOCATED but did not observe SafeToShutdown within the host deadline (#1740). The template keeps the public 0.30.1 version; its candidate feed is required to finish `hit,reconnect,update` verification. The template does not compensate for these Framework failures.
+Public 0.30.0 validation reaches READY but cross-node deferred Actor join to Matchmaking fails with DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). On Linux, one update run reached RELOCATED but did not observe SafeToShutdown within the host deadline ([#1740](https://github.com/zlink-systems/zlink/issues/1740)). The template keeps the public 0.30.1 version; its candidate feed is required to finish `hit,reconnect,update` verification. The template does not compensate for these Framework failures.
 
 ## Deployment sequence
 
