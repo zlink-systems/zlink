@@ -1,0 +1,14 @@
+{
+  "id": "fieldA",
+  "redisEndpoint": "127.0.0.1:6379",
+  "keyPrefix": "my-game:",
+  "meshEndpoint": "tcp://127.0.0.1:0",
+  "streamEndpoint": null,
+  "fieldIds": [
+    "field-1",
+    "field-2"
+  ],
+  "fieldCapacity": 2,
+  "dungeonCapacity": 0,
+  "bootstrap": true
+}
