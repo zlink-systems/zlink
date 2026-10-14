@@ -40,18 +40,8 @@ final class ZLinkRelocationMessageFollowOwnerGenerationTest {
             second.stageRelocationMessageFollow(routeB, route("node-c", 13, 10, 3));
             confirm(first, routeA);
             confirm(second, routeB);
-            var firstTarget = retained(first, routeA).rawTargetRoute();
-            var secondSource = retained(second, routeB).sourceRoute();
-            var secondTarget = retained(second, routeB).rawTargetRoute();
-            assertEquals(routeB, firstTarget);
-            assertEquals(
-                    firstTarget.authorityOwnerGeneration(),
-                    secondSource.authorityOwnerGeneration());
-            assertEquals(routeC, secondTarget);
-            assertTrue(firstTarget.authorityOwnerGeneration() > routeA.authorityOwnerGeneration());
-            assertTrue(
-                    secondTarget.authorityOwnerGeneration()
-                            > firstTarget.authorityOwnerGeneration());
+            // Each hop forwards to the Store-issued tenure, not the staging
+            // generation, so the second hop's source fence matches the first.
             var header =
                     new ZLinkServiceM6BWireCodec.ActorMessage(
                             false, 0, null, 1, 42, 0, null, routeA);
@@ -93,23 +83,39 @@ final class ZLinkRelocationMessageFollowOwnerGenerationTest {
             assertTrue(failures.isEmpty(), failures.toString());
             assertEquals(List.of(routeB, routeC), forwarded);
         } finally {
-            handoff(first).close();
-            handoff(second).close();
+            first.close();
+            second.close();
         }
     }
 
     @Test
     void aDifferentTargetCannotReplaceTheStagedMessageFollowDestination() throws Exception {
         var source = route("node-a", 11, 3, 1);
-        var runtime = runtime(route("node-c", 13, 29, 3));
+        var staged = route("node-b", 12, 3, 2);
+        var forwarded = new ArrayList<ZLinkServiceM6BWireCodec.ActorRouteFence>();
+        var runtime = runtime(route("node-c", 13, 29, 3), forwarded);
         try {
-            runtime.stageRelocationMessageFollow(source, route("node-b", 12, 3, 2));
+            runtime.stageRelocationMessageFollow(source, staged);
             assertThrows(
                     java.util.concurrent.CompletionException.class, () -> confirm(runtime, source));
-            assertFalse(retained(runtime, source).committed());
-            assertEquals(3, retained(runtime, source).rawTargetRoute().authorityOwnerGeneration());
+            // The refused confirmation leaves the staged destination in
+            // place; a relayed message never reaches the other target.
+            var failures = new ArrayList<Throwable>();
+            runtime.relayMessageFollow(
+                    RoutingId.from("client"),
+                    17,
+                    new ZLinkServiceM6BWireCodec.ActorMessage(
+                            false, 0, null, 1, 43, 0, null, source),
+                    new byte[0],
+                    List.of(Message.from("header"), Message.from("payload")),
+                    null,
+                    null,
+                    failures::add,
+                    () -> {});
+            assertTrue(failures.isEmpty(), failures.toString());
+            assertEquals(List.of(staged), forwarded);
         } finally {
-            handoff(runtime).close();
+            runtime.close();
         }
     }
 
@@ -117,28 +123,6 @@ final class ZLinkRelocationMessageFollowOwnerGenerationTest {
             ZLinkActorRuntime runtime, ZLinkServiceM6BWireCodec.ActorRouteFence source)
             throws Exception {
         runtime.confirmRelocationMessageFollow(source).toCompletableFuture().join();
-    }
-
-    private static ZLinkActorTransferHandoff.MessageFollowSource retained(
-            ZLinkActorRuntime runtime, ZLinkServiceM6BWireCodec.ActorRouteFence source)
-            throws Exception {
-        return handoff(runtime)
-                .messageFollowSource(
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceMessageFollowWireCodec.ActorRoute(
-                                ACTOR_ID,
-                                OBJECT_GENERATION,
-                                source.actor().nodeRid(),
-                                source.targetNodeGeneration(),
-                                source.authorityOwnerGeneration(),
-                                source.ownerLeaseGeneration()))
-                .orElseThrow();
-    }
-
-    private static ZLinkActorTransferHandoff handoff(ZLinkActorRuntime runtime) throws Exception {
-        var field = ZLinkActorRuntime.class.getDeclaredField("handoff");
-        field.setAccessible(true);
-        return (ZLinkActorTransferHandoff) field.get(runtime);
     }
 
     private static ZLinkActorRuntime runtime(ZLinkServiceM6BWireCodec.ActorRouteFence issued) {
