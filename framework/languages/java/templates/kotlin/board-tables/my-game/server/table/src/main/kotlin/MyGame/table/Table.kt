@@ -47,7 +47,7 @@ class Table(
     override suspend fun onJoinedActorSuspending(actor: Player) {
         val actorId = actor.context().actorId()
         if (state.seats.none { it.playerId == actorId }) state.seats.add(Seat(actorId))
-        broadcastViews(actorId)
+        broadcastViews()
     }
 
     override suspend fun onLeaveActorSuspending(actor: Player) {}
@@ -150,11 +150,9 @@ class Table(
             SeatView(i, seat.playerId, seat.chips, seat.acted, seat.cards.size)
         }
 
-    private suspend fun broadcastViews(exceptActorId: String? = null) {
+    private suspend fun broadcastViews() {
         val seats = seatViews()
-        state.seats.forEach { seat ->
-            if (seat.playerId != exceptActorId) send(seat.playerId, tableView(seat.playerId, seats))
-        }
+        state.seats.forEach { seat -> send(seat.playerId, tableView(seat.playerId, seats)) }
     }
 
     private suspend fun reject(actor: Player, reason: String) = reply(actor, ActionRejected(reason))
