@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Zlink.Framework" />
+    <PackageReference Include="Zlink.Framework.AspNetCore" />
+    <PackageReference Include="Zlink.Framework.Locations.Redis" />
+  </ItemGroup>
+</Project>
