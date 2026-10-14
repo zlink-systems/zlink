@@ -41,7 +41,7 @@ function fixture({ storeFailure = false, lifecycleFailure = false, entry = false
     joinActorSpot() { events.push('mesh-record'); return { high: 1n, low: 1n }; },
     joinActorEntrySpot() { events.push('mesh-record'); return { high: 1n, low: 1n }; }
   };
-  const publish = async (_actorType, _actorId, spotId, spotGeneration) => {
+  const publish = async (_actorType, _actorRef, _authorityOwnerGeneration, spotId, spotGeneration) => {
     events.push('store');
     storeMemberships.push({ spotId, spotGeneration });
     if (storeFailure) throw new Error('Store commit failed');
@@ -81,7 +81,7 @@ function fixture({ storeFailure = false, lifecycleFailure = false, entry = false
     }),
     spotRouteResolver: { async resolve() { return target; } },
     entrySpotIdProvider: () => entrySpotId,
-    locationLifecycle: { notifyActorJoinedSpot: publish, notifyActorLeftSpot: publish },
+    locationLifecycle: { commitActorMembership: publish },
     localSpotJoin: (...args) => { joinSignal = args[4]; return membership.admitActorJoin(...args); },
     async localSourceLeave() { events.push('source-left'); await sourceLeave?.(); },
     localEntryJoin: joined,

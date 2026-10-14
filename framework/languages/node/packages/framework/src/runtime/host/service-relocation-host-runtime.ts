@@ -4159,7 +4159,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             candidate.snapshot.payload,
             candidate.snapshot.objectGeneration
           );
-          if (actor?.spotId === request.object.spotId) {
+          if (
+            actor?.spotId === request.object.spotId &&
+            actor.spotGeneration === request.object.objectGeneration
+          ) {
             entries.push(candidate);
           }
         }
