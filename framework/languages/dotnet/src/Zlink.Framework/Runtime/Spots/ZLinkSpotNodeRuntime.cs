@@ -704,10 +704,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         {
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
         }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(parts);
-        }
     }
 
     internal void ObserveActorAuthority(

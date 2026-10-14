@@ -662,6 +662,15 @@ internal sealed class MeshReceiveBatch : IDisposable
             : entry.Parts.Select(Message.From).ToArray();
     }
 
+    internal IReadOnlyList<Message> TakeMessage(int index)
+    {
+        var entry = _entries[index];
+        if (entry.Record.ApplicationPayloadView is { } view)
+            return view.RetainMessages();
+        _entries[index] = (entry.Record, Array.Empty<Message>(), entry.PayloadOwner);
+        return entry.Parts;
+    }
+
     internal bool CanAdd(long bytes)
     {
         if (Count == 0)

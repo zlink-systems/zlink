@@ -438,7 +438,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             return;
         }
 
-        List<ZLinkBackendRouteReceived>? nodeRoutes = new(ZLinkReceiveBatchBudget.MaximumRecords);
+        List<ZLinkBackendRouteReceived>? nodeRoutes = null;
         SpotDispatchState? routeDispatch = null;
         try
         {
@@ -493,7 +493,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                                 ownerSpotId,
                                 readyRecord.Actor,
                                 admission,
-                                nodeRoutes,
+                                ref nodeRoutes,
                                 pending,
                                 ref routeDispatch
                             )
@@ -623,7 +623,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         string ownerSpotId,
         ActorRef ownerActor,
         ZLinkApplicationJobQueueLease? admission,
-        List<ZLinkBackendRouteReceived> nodeRoutes,
+        ref List<ZLinkBackendRouteReceived>? nodeRoutes,
         List<Task> pending,
         ref SpotDispatchState? routeDispatch
     )
@@ -638,7 +638,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             case MeshRecordKind.NodeRequest:
             case MeshRecordKind.ChannelSend:
             case MeshRecordKind.ChannelRequest:
-                return EnqueueNodeRoute(batch, index, record, admission, nodeRoutes);
+                return EnqueueNodeRoute(batch, index, record, admission, ref nodeRoutes);
             case MeshRecordKind.SpotSend:
             case MeshRecordKind.SpotRequest:
                 return EnqueueRoute(
@@ -742,7 +742,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         int index,
         MeshReceiveRecord record,
         ZLinkApplicationJobQueueLease? admission,
-        List<ZLinkBackendRouteReceived> nodeRoutes
+        ref List<ZLinkBackendRouteReceived>? nodeRoutes
     )
     {
         // Malformed application metadata is a protocol error: reject the ingress
@@ -785,16 +785,16 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             return admission is not null;
         }
 
-        nodeRoutes.Add(received);
+        (nodeRoutes ??= new(ZLinkReceiveBatchBudget.MaximumRecords)).Add(received);
         return admission is not null;
     }
 
     private ValueTask DispatchNodeRoutes(
-        List<ZLinkBackendRouteReceived> nodeRoutes,
+        List<ZLinkBackendRouteReceived>? nodeRoutes,
         CancellationToken cancellationToken
     )
     {
-        if (nodeRoutes.Count == 0)
+        if (nodeRoutes is null)
             return ValueTask.CompletedTask;
         var handler = _nodeRouteHandler;
         if (handler is not null)
