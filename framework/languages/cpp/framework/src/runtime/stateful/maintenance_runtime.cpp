@@ -1332,7 +1332,8 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
                route->binding_generation});
     }
     if (envelope.session_bindings.size () != session_routes.size ())
-        return {};
+        throw protocol::service_wire_error_t (
+          "relocation Session binding does not match the participant inventory");
 
 
     try {

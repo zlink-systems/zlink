@@ -102,6 +102,7 @@ internal sealed class ZLinkActorDispatchRouter(
             ZLinkFlowOrigin.Inbound
         );
         var shouldPrune = false;
+        var replayAdmission = relocationReplay ? ZLinkSpotRelocationReplayScope.Current : null;
         ensureActorContext(actor, state);
 
         try
@@ -116,14 +117,13 @@ internal sealed class ZLinkActorDispatchRouter(
                             header,
                             payload,
                             relocationReplay,
+                            replayAdmission,
                             ct,
                             sourceSessionRid
                         ),
                     countAsPendingRequest: false,
                     allowRelocationReplay: relocationReplay,
-                    replayReservation: relocationReplay
-                        ? ZLinkSpotRelocationReplayScope.Current?.QueueReservation
-                        : null,
+                    replayReservation: replayAdmission?.QueueReservation,
                     cancellationToken: cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -182,6 +182,7 @@ internal sealed class ZLinkActorDispatchRouter(
             _dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound
         );
+        var replayAdmission = relocationReplay ? ZLinkSpotRelocationReplayScope.Current : null;
         return await state
             .ExecuteDispatchAsync(
                 header,
@@ -192,14 +193,13 @@ internal sealed class ZLinkActorDispatchRouter(
                         header,
                         payload,
                         relocationReplay,
+                        replayAdmission,
                         ct,
                         sourceSessionRid
                     ),
                 countAsPendingRequest: true,
                 allowRelocationReplay: relocationReplay,
-                replayReservation: relocationReplay
-                    ? ZLinkSpotRelocationReplayScope.Current?.QueueReservation
-                    : null,
+                replayReservation: replayAdmission?.QueueReservation,
                 cancellationToken: cancellationToken
             )
             .ConfigureAwait(false);
@@ -230,6 +230,7 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
+        ZLinkSpotRelocationReplayAdmission? replayAdmission,
         CancellationToken cancellationToken,
         RoutingId? sourceSessionRid
     )
@@ -262,7 +263,6 @@ internal sealed class ZLinkActorDispatchRouter(
             return placement.Prune;
         }
 
-        var replayAdmission = relocationReplay ? ZLinkSpotRelocationReplayScope.Current : null;
         if (
             relocationReplay
             && replayAdmission is null
@@ -291,6 +291,7 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
+        ZLinkSpotRelocationReplayAdmission? replayAdmission,
         CancellationToken cancellationToken,
         RoutingId? sourceSessionRid
     )
@@ -304,7 +305,6 @@ internal sealed class ZLinkActorDispatchRouter(
 
         if (placement.Activation is not null)
         {
-            var replayAdmission = relocationReplay ? ZLinkSpotRelocationReplayScope.Current : null;
             if (
                 relocationReplay
                 && replayAdmission is null

@@ -1425,16 +1425,16 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         throw DataLost(
                             "Standalone Actor target cutover lost its source authority."
                         );
+                    var committed = found.Snapshot;
                     if (
                         !ZLinkStandaloneActorRelocationTakeoverCoordinator.IsCurrentAttempt(
-                            found.Snapshot,
+                            committed,
                             stage.Envelope.AggregateId,
                             stage.Prepare.TargetAttemptGeneration,
                             stage.TargetAuthority
                         )
                     )
                     {
-                        ZLinkAuthoritySnapshot committed;
                         try
                         {
                             committed =
@@ -1469,20 +1469,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                 );
                             throw;
                         }
-                        stage.TargetAuthorityOwnerGeneration = committed.AuthorityOwnerGeneration;
                     }
 
-                    if (
-                        ZLinkStandaloneActorRelocationTakeoverCoordinator.IsCurrentAttempt(
-                            found.Snapshot,
-                            stage.Envelope.AggregateId,
-                            stage.Prepare.TargetAttemptGeneration,
-                            stage.TargetAuthority
-                        )
-                    )
-                        stage.TargetAuthorityOwnerGeneration = found
-                            .Snapshot
-                            .AuthorityOwnerGeneration;
                     var committedActorRef =
                         stage.ActorState.NativeActorRef
                         ?? throw DataLost(
@@ -1492,9 +1480,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         .GetSpotNodeRuntime(stage.TargetAuthority.NodeRid)
                         .Node.SetLocalActorAuthority(
                             committedActorRef,
-                            stage.TargetAuthorityOwnerGeneration
+                            committed.AuthorityOwnerGeneration
                         );
-                    MarkAuthorityPublished(stage);
+                    MarkAuthorityPublished(stage, committed);
                     //  Spec 25 §5: target-local S2 (CAS confirmed) → S3 (dispatch
                     //  open) resume interval for this unit.
                     var resumeStartedTimestamp = Stopwatch.GetTimestamp();
@@ -1965,14 +1953,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             ZLinkSessionRelocationWire.RestoreBinding(
                 participant with
                 {
-                    AuthorityOwnerGeneration = (
-                        (Systems.Zlink.Framework.Runtime.Protocol.ServiceWirePilotCodec.RelocationActorIdentity)
-                            Systems
-                                .Zlink.Framework.Runtime.Protocol.ServiceWirePilotCodec.DecodeRelocationEnvelopeV1(
-                                    candidate.Envelope.CanonicalLogicalStream.ToArray()
-                                )
-                                .Object
-                    ).ExpectedAuthorityOwnerGeneration,
+                    AuthorityOwnerGeneration = candidate
+                        .Envelope
+                        .CanonicalSourceAuthorityOwnerGeneration,
                 },
                 targetAuthority.MeshName,
                 canonical.State.SourceNodeGeneration,
@@ -2585,7 +2568,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         return activation;
     }
 
-    private static void MarkAuthorityPublished(TargetStage stage)
+    private static void MarkAuthorityPublished(
+        TargetStage stage,
+        ZLinkAuthoritySnapshot publication
+    )
     {
         if (stage.AuthorityPublished)
             return;
@@ -2598,7 +2584,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         stage.ActorState.MarkRelocationSessionAuthorityCommitted(
             aggregateId,
             actorRef,
-            stage.TargetAuthorityOwnerGeneration,
+            publication.AuthorityOwnerGeneration,
             ZLinkMeshName.FromBoundary(
                 stage.TargetAuthority.MeshName,
                 nameof(stage.TargetAuthority.MeshName)
@@ -2614,7 +2600,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             );
         if (stage.TargetActivation is { } activation && stage.ActorState.Actor is { } actor)
             activation.PublishRelocatedPerActorMember(actor, stage.ActorState);
-        stage.AuthorityPublished = true;
+        stage.PublishAuthority(publication);
     }
 
     // Direct transfer owns its verified payload in memory; unlike recovery it
@@ -3649,12 +3635,17 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             remoteJoinRecovery;
         internal bool CreatedTransferredActor { get; } = createdTransferredActor;
         internal ZLinkActorAuthorityPayload TargetAuthority { get; } = targetAuthority;
-        internal ulong TargetAuthorityOwnerGeneration { get; set; } =
-            targetAuthorityOwnerGeneration;
+        private ZLinkAuthoritySnapshot? _authorityPublication;
+        internal ulong TargetAuthorityOwnerGeneration =>
+            _authorityPublication?.AuthorityOwnerGeneration ?? targetAuthorityOwnerGeneration;
+
+        internal void PublishAuthority(ZLinkAuthoritySnapshot publication) =>
+            _authorityPublication = publication;
+
         internal IReadOnlyList<ZLinkActorHandoffFrame> AcceptedFrames => _acceptedFrames;
         internal long NextArrivalIndex =>
             _acceptedFrames.Count == 0 ? 1 : checked(_acceptedFrames[^1].ArrivalIndex + 1);
-        internal bool AuthorityPublished { get; set; }
+        internal bool AuthorityPublished => _authorityPublication is not null;
 
         private readonly List<ReadOnlyMemory<byte>> _relayRecords = [];
 

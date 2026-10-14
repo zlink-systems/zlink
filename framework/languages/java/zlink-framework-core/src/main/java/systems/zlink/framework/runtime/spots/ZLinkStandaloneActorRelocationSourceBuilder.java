@@ -380,29 +380,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                                     directJoin
                                                                                             .rawReply()));
                                                 }
-                                                byte[] initialRoot =
-                                                        ZLinkCanonicalActorRelocationEnvelope
-                                                                .encode(
-                                                                        relocationId,
-                                                                        admission.owned().actorId(),
-                                                                        admission
-                                                                                .owned()
-                                                                                .snapshot()
-                                                                                .objectGeneration(),
-                                                                        admission
-                                                                                .owned()
-                                                                                .snapshot()
-                                                                                .authorityOwnerGeneration(),
-                                                                        admission
-                                                                                .target()
-                                                                                .applicationVersion(),
-                                                                        admission
-                                                                                .owned()
-                                                                                .snapshotPolicy(),
-                                                                        applicationState,
-                                                                        seal.captured(),
-                                                                        timerEnvelope,
-                                                                        actorJoinRecovery);
+                                                final byte[] capturedActorJoinRecovery =
+                                                        actorJoinRecovery;
                                                 Optional<ZLinkSpotRetireControl.SessionRouteFence>
                                                         capturedRoute =
                                                                 admission
@@ -445,7 +424,41 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                                 stageRequest(
                                                                                         admission,
                                                                                         relocationId,
-                                                                                        initialRoot,
+                                                                                        ZLinkCanonicalActorRelocationEnvelope
+                                                                                                .encode(
+                                                                                                        relocationId,
+                                                                                                        admission
+                                                                                                                .owned()
+                                                                                                                .actorId(),
+                                                                                                        admission
+                                                                                                                .owned()
+                                                                                                                .snapshot()
+                                                                                                                .objectGeneration(),
+                                                                                                        admission
+                                                                                                                .owned()
+                                                                                                                .snapshot()
+                                                                                                                .authorityOwnerGeneration(),
+                                                                                                        admission
+                                                                                                                .target()
+                                                                                                                .applicationVersion(),
+                                                                                                        admission
+                                                                                                                .owned()
+                                                                                                                .snapshotPolicy(),
+                                                                                                        applicationState,
+                                                                                                        seal
+                                                                                                                .captured(),
+                                                                                                        timerEnvelope,
+                                                                                                        capturedActorJoinRecovery,
+                                                                                                        sessionRoute
+                                                                                                                .stream()
+                                                                                                                .map(
+                                                                                                                        sealedSession ->
+                                                                                                                                sealedSession
+                                                                                                                                        .route()
+                                                                                                                                        .binding(
+                                                                                                                                                ZLinkCanonicalActorRelocationEnvelope
+                                                                                                                                                        .PARTICIPANT_ID))
+                                                                                                                .toList()),
                                                                                         sessionRoute
                                                                                                 .map(
                                                                                                         SealedSessionRoute
@@ -767,11 +780,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             long advertisedReceiveChunkLimitBytes) {
         Owned actor = admission.owned();
         ZLinkMeshNodeDescriptor target = admission.target();
-        relocationPayload =
-                systems.zlink.framework.runtime.internal.locations
-                        .ZLinkServiceRelocationEnvelopeCodec.withSessionBindings(
-                        relocationPayload,
-                        sessionRoute.stream().map(route -> route.binding(1)).toList());
         return new ZLinkSpotRetireControl.StageRequest(
                 new ZLinkSpotRetireControl.Fence(relocationId, 1),
                 localNodeRid,

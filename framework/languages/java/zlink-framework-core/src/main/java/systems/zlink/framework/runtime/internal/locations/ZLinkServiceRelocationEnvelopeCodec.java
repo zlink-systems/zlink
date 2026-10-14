@@ -35,26 +35,6 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
         }
     }
 
-    public static byte[] withSessionBindings(
-            byte[] encoded, List<ServiceWirePilotCodec.RelocationSessionBinding> bindings) {
-        try {
-            var value = ServiceWirePilotCodec.decodeRelocationEnvelopeV1(List.of(encoded));
-            return ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
-                    new ServiceWirePilotCodec.RelocationEnvelopeV1(
-                            value.relocationHigh(),
-                            value.relocationLow(),
-                            value.object(),
-                            value.applicationVersion(),
-                            value.applicationStates(),
-                            value.savedWork(),
-                            value.timerRegistrations(),
-                            value.pendingTimerTicks(),
-                            bindings));
-        } catch (IOException failure) {
-            throw invalid("Session binding vector", failure);
-        }
-    }
-
     private static ObjectIdentity objectIdentity(
             ServiceWirePilotCodec.RelocationObjectIdentity value) {
         if (value instanceof ServiceWirePilotCodec.RelocationActorIdentity actor) {

@@ -856,12 +856,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                         throw;
                     }
                 }
-                await Task.WhenAll(queued).ConfigureAwait(false);
             }
             finally
             {
                 turn.Dispose();
             }
+            await Task.WhenAll(queued).ConfigureAwait(false);
 
             // Authority publication can make new-owner ingress arrive before
             // the previous owner has delivered its Message Follow backlog.
@@ -961,12 +961,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                         }
                     }
                 );
-                await Task.WhenAll(queued).ConfigureAwait(false);
             }
             finally
             {
                 turn.Dispose();
             }
+            await Task.WhenAll(queued).ConfigureAwait(false);
         }
     }
 

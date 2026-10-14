@@ -2304,6 +2304,18 @@ void test_envelope_round_trip (test_context_t &test)
       .timers = {{11, 100, 50, 3}}};
 
     const protocol::relocation_id_t relocation{0, 9};
+    bool unmatched_binding_rejected = false;
+    try {
+        protocol::session_relocation_route_t route;
+        route.actor.actor_id = "missing-actor";
+        route.actor.object_generation = 1;
+        (void) maintenance_runtime_t::encode_envelope ({frozen}, relocation, 1, {route});
+    }
+    catch (const protocol::service_wire_error_t &) {
+        unmatched_binding_rejected = true;
+    }
+    test.require (unmatched_binding_rejected,
+                  "an unmatched Session binding must report a protocol error");
     const auto encoded = maintenance_runtime_t::encode_envelope ({frozen}, relocation);
     test.require (!encoded.empty (), "the schema relocation envelope must encode");
     const auto envelope = maintenance_runtime_t::decode_envelope (encoded);

@@ -2,14 +2,13 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.spots.ZLinkSpot;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -29,6 +28,16 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             UUID relocationId,
             long expectedAuthorityOwnerGeneration,
             List<ZLinkSpotRetireControl.ParticipantFence> participants) {
+        return encode(
+                request, relocationId, expectedAuthorityOwnerGeneration, participants, List.of());
+    }
+
+    static byte[] encode(
+            ZLinkUserSpotAggregateStagingOwner.Request request,
+            UUID relocationId,
+            long expectedAuthorityOwnerGeneration,
+            List<ZLinkSpotRetireControl.ParticipantFence> participants,
+            List<ServiceWirePilotCodec.RelocationSessionBinding> bindings) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(relocationId, "relocationId");
         List<ZLinkSpotRetireControl.ParticipantFence> inventory = List.copyOf(participants);
@@ -79,75 +88,84 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             boundaries.put(participant, nextSequence);
         }
 
-        Writer writer = new Writer();
-        writer.u64(relocationId.getMostSignificantBits());
-        writer.u64(relocationId.getLeastSignificantBits());
-        Writer object = new Writer();
-        object.text8(request.spotId());
-        object.u64(request.objectGeneration());
-        object.u64(expectedAuthorityOwnerGeneration);
-        writer.u8(2);
-        writer.body16(object);
-        writer.u64(1);
-        writer.u32(inventory.size());
+        List<ServiceWirePilotCodec.RelocationApplicationState> states = new ArrayList<>();
         for (int index = 0; index < inventory.size(); index++) {
             var participant = inventory.get(index);
-            long id = index + 1L;
             byte[] state;
-            boolean hasState = participant.restoreSnapshot();
-            if (participant.objectKind() == 2) {
+            if (participant.objectKind() == ZLinkPlacementObjectKind.USER_SPOT.value()) {
                 state = request.spotState();
             } else {
                 var actor = actors.get(participant.objectId());
-                if (actor == null) {
-                    throw invalid("Actor inventory differs from captured state");
-                }
+                if (actor == null) throw invalid("Actor inventory differs from captured state");
                 state = actor.state();
             }
-            writer.u64(id);
-            writer.u8(hasState ? 1 : 0);
-            Writer stateBody = new Writer();
-            if (hasState) {
-                stateBody.bytes64(state);
-            }
-            writer.body64(stateBody);
+            states.add(
+                    new ServiceWirePilotCodec.RelocationApplicationState(
+                            index + 1L,
+                            participant.restoreSnapshot(),
+                            participant.restoreSnapshot() ? state : new byte[0]));
         }
-        writer.u32(journal.size());
-        for (Journal entry : journal) {
-            writer.u64(entry.participantId());
-            writer.u64(entry.sequence());
-            writer.raw(entry.record());
+        var work =
+                journal.stream()
+                        .map(
+                                entry ->
+                                        new ServiceWirePilotCodec.RelocationSavedWork(
+                                                entry.participantId(),
+                                                entry.sequence(),
+                                                entry.record()))
+                        .toList();
+        var registrations =
+                timers.stream()
+                        .map(
+                                value -> {
+                                    var timer = value.timer();
+                                    return new ServiceWirePilotCodec.RelocationTimerRegistration(
+                                            value.participantId(),
+                                            timer.name(),
+                                            timer.handlerType(),
+                                            timer.periodMilliseconds(),
+                                            timer.overrunPolicy(),
+                                            timer.maxCatchUpTicks(),
+                                            timer.stopOnUnhandledException(),
+                                            timer.lastCompletedDeliveryIndex(),
+                                            timer.lastCompletedScheduledIndex(),
+                                            timer.nextScheduledAtUnixMilliseconds());
+                                })
+                        .toList();
+        var pending =
+                pendingTimers.stream()
+                        .map(
+                                value -> {
+                                    var timer = value.timer();
+                                    var tick = timer.pending();
+                                    return new ServiceWirePilotCodec.RelocationPendingTimerTick(
+                                            value.participantId(),
+                                            value.sequence(),
+                                            timer.name(),
+                                            tick.deliveryIndex(),
+                                            tick.scheduledIndex(),
+                                            tick.scheduledAtUnixMilliseconds(),
+                                            tick.skippedTicks());
+                                })
+                        .toList();
+        try {
+            return ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
+                    new ServiceWirePilotCodec.RelocationEnvelopeV1(
+                            relocationId.getMostSignificantBits(),
+                            relocationId.getLeastSignificantBits(),
+                            new ServiceWirePilotCodec.RelocationUserSpotIdentity(
+                                    request.spotId(),
+                                    request.objectGeneration(),
+                                    expectedAuthorityOwnerGeneration),
+                            1,
+                            states,
+                            work,
+                            registrations,
+                            pending,
+                            bindings));
+        } catch (IOException failure) {
+            throw invalid("canonical User Spot relocation envelope: " + failure.getMessage());
         }
-        writer.u32(timers.size());
-        for (ParticipantTimer value : timers) {
-            var timer = value.timer();
-            writer.u64(value.participantId());
-            writer.text8(timer.name());
-            writer.text8(timer.handlerType());
-            writer.u64(timer.periodMilliseconds());
-            writer.u8(timer.overrunPolicy());
-            writer.u64(timer.maxCatchUpTicks());
-            writer.u8(timer.stopOnUnhandledException() ? 1 : 0);
-            writer.u64(timer.lastCompletedDeliveryIndex());
-            writer.u64(timer.lastCompletedScheduledIndex());
-            writer.u64(timer.nextScheduledAtUnixMilliseconds());
-        }
-        writer.u32(pendingTimers.size());
-        for (PendingTimer pending : pendingTimers) {
-            var timer = pending.timer();
-            var tick = timer.pending();
-            writer.u64(pending.participantId());
-            writer.u64(pending.sequence());
-            writer.text8(timer.name());
-            writer.u64(tick.deliveryIndex());
-            writer.u64(tick.scheduledIndex());
-            writer.u64(tick.scheduledAtUnixMilliseconds());
-            writer.u64(tick.skippedTicks());
-        }
-        writer.u32(0);
-        byte[] encoded = writer.bytes();
-        ZLinkServiceRelocationEnvelopeCodec.decode(encoded);
-        return encoded;
     }
 
     static ZLinkUserSpotAggregateStagingOwner.Request decode(
@@ -158,7 +176,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         var root = ZLinkServiceRelocationEnvelopeCodec.decode(encoded);
         if (root.relocationHigh() != stage.fence().aggregateId().getMostSignificantBits()
                 || root.relocationLow() != stage.fence().aggregateId().getLeastSignificantBits()
-                || root.object().kind() != 2
+                || root.object().kind() != ZLinkPlacementObjectKind.USER_SPOT.value()
                 || !root.object().objectId().equals(stage.spotId())) {
             throw invalid("canonical relocation identity differs from stage");
         }
@@ -181,7 +199,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             if (state == null || state.hasState() != participant.restoreSnapshot()) {
                 throw invalid("canonical participant state policy differs");
             }
-            if (participant.objectKind() == 2) {
+            if (participant.objectKind() == ZLinkPlacementObjectKind.USER_SPOT.value()) {
                 if (!participant.objectId().equals(stage.spotId())) {
                     throw invalid("canonical Spot inventory differs");
                 }
@@ -332,68 +350,4 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             long participantId, ZLinkSpotTimerRelocationEnvelope.CanonicalTimer timer) {}
 
     private record TimerKey(long participantId, String timerName) {}
-
-    private static final class Writer {
-        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        private final DataOutputStream output = new DataOutputStream(bytes);
-
-        void u8(long value) {
-            write(() -> output.writeByte((int) value));
-        }
-
-        void u32(long value) {
-            write(() -> output.writeInt((int) value));
-        }
-
-        void u64(long value) {
-            write(() -> output.writeLong(value));
-        }
-
-        void raw(byte[] value) {
-            write(() -> output.write(value));
-        }
-
-        void text8(String value) {
-            byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
-            if (encoded.length < 1 || encoded.length > 255) throw invalid("text8");
-            u8(encoded.length);
-            raw(encoded);
-        }
-
-        void bytes64(byte[] value) {
-            u64(value.length);
-            raw(value);
-        }
-
-        void body16(Writer body) {
-            u32As16(body.bytes().length);
-            raw(body.bytes());
-        }
-
-        void body64(Writer body) {
-            u64(body.bytes().length);
-            raw(body.bytes());
-        }
-
-        private void u32As16(int value) {
-            write(() -> output.writeShort(value));
-        }
-
-        byte[] bytes() {
-            return bytes.toByteArray();
-        }
-
-        private void write(Io operation) {
-            try {
-                operation.run();
-            } catch (IOException impossible) {
-                throw new IllegalStateException(impossible);
-            }
-        }
-    }
-
-    @FunctionalInterface
-    private interface Io {
-        void run() throws IOException;
-    }
 }

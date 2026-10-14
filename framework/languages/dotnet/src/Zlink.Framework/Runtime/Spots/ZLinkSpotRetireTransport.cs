@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -784,13 +785,17 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 "Published SPOT relocation root does not extend its staged root."
             );
         RestoreHeldRecords(stage, candidate.Envelope);
+        stage.RememberAuthorityPublication(
+            candidate.Authorities.Select(static authority => new KeyValuePair<
+                ZLinkAuthorityKey,
+                ZLinkAuthoritySnapshot
+            >(authority.Key, authority.Snapshot))
+        );
         Volatile.Write(ref stage.AuthorityPublished, 1);
 
         stage.RememberFinalRoot(candidate.Reference.Reference, candidate.Reference.ChecksumCrc32c);
         cancellationToken.ThrowIfCancellationRequested();
 
-        await FinalizeStageAsync(stage, normalizeAuthority: false, cancellationToken)
-            .ConfigureAwait(false);
         await CompleteInboundThenNormalizeAsync(stage, cancellationToken).ConfigureAwait(false);
     }
 
@@ -1551,25 +1556,10 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         );
         if (stage.AdmissionDrainTask is { } existingDrain)
             await existingDrain.ConfigureAwait(false);
-        await runtime
-            .PublishInboundSpotAggregateCoreAsync(
-                stage,
-                normalizeAuthority: null,
-                cancellationToken
-            )
+        await FinalizeStageCoreAsync(stage, normalizeAuthority: false, cancellationToken)
             .ConfigureAwait(false);
-
-        // Post-Ready convergence: admission already opened from the publish
-        // path, so the replay and admission calls below are idempotent
-        // no-ops that only re-drive an interrupted drain. This path owns
-        // steady normalization, the final-root delete, and the tombstone.
-        await runtime
-            .CompleteInboundSpotAggregateReplayAsync(stage, cancellationToken)
-            .ConfigureAwait(false);
-        runtime.ScheduleRelocationSessionRouteConvergence(stage);
         await NormalizeAuthorityAsync(stage, cancellationToken, releaseFinalRoot: false)
             .ConfigureAwait(false);
-        await runtime.OpenInboundSpotAggregateAdmissionAsync(stage).ConfigureAwait(false);
         var root =
             stage.GetFinalRoot()
             ?? throw new ZLinkRelocationDataLostException(
@@ -1987,6 +1977,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             throw new ZLinkRelocationDataLostException(
                 "Canonical relocation publication is unavailable."
             );
+        var authorities = new Dictionary<ZLinkAuthorityKey, ZLinkAuthoritySnapshot>();
         foreach (var participant in stage.Envelope.Participants)
         {
             var authority =
@@ -2014,22 +2005,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 throw new ZLinkRelocationDataLostException(
                     "Canonical target authority differs from its publication."
                 );
-            if (participant.ObjectKind == ZLinkPlacementObjectKind.Actor)
-            {
-                var actor = stage.ActorStates.Single(state =>
-                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(state.ActorId)
-                    == participant.AuthorityKey
-                );
-                ((IDictionary<ZLinkActorId, ulong>)stage.ActorTargetAuthorityOwnerGenerations)[
-                    actor.RuntimeActorId
-                ] = current.Snapshot.AuthorityOwnerGeneration;
-                stage.Node.Node.SetLocalActorAuthority(
-                    actor.NativeActorRef!.Value,
-                    current.Snapshot.AuthorityOwnerGeneration
-                );
-            }
-            else
-                stage.TargetAuthorityOwnerGeneration = current.Snapshot.AuthorityOwnerGeneration;
+            authorities.Add(participant.AuthorityKey, current.Snapshot);
         }
         var durable = await ZLinkRelocationTreeStore
             .GetAsync(
@@ -2048,6 +2024,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             throw new ZLinkRelocationDataLostException(
                 "Canonical relocation publication does not match target staging."
             );
+        stage.RememberAuthorityPublication(authorities);
         stage.RememberFinalRoot(publication.Reference, publication.ChecksumCrc32c);
     }
 
@@ -2235,6 +2212,15 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             )
                 return false;
         }
+        stage.RememberAuthorityPublication(
+            reads.Select(static entry => new KeyValuePair<
+                ZLinkAuthorityKey,
+                ZLinkAuthoritySnapshot
+            >(
+                entry.Participant.AuthorityKey,
+                ((ZLinkAuthorityReadResult.Found)entry.Read).Snapshot
+            ))
+        );
         return true;
     }
 
@@ -2939,7 +2925,63 @@ internal sealed record TargetStage(
     ulong TargetAttemptGeneration
 ) : ITargetStageEntry
 {
-    public ulong TargetAuthorityOwnerGeneration { get; set; } = TargetAuthorityOwnerGeneration;
+    private readonly ulong _preparedSpotAuthorityOwnerGeneration = TargetAuthorityOwnerGeneration;
+    private readonly IReadOnlyDictionary<
+        ZLinkActorId,
+        ulong
+    > _preparedActorAuthorityOwnerGenerations = ActorTargetAuthorityOwnerGenerations;
+    private FrozenDictionary<ZLinkAuthorityKey, ulong>? _authorityPublication;
+    public ulong TargetAuthorityOwnerGeneration
+    {
+        get => ResolveAuthorityOwnerGeneration(SpotParticipant.AuthorityKey);
+        init => _preparedSpotAuthorityOwnerGeneration = value;
+    }
+    public IReadOnlyDictionary<ZLinkActorId, ulong> ActorTargetAuthorityOwnerGenerations
+    {
+        get => _preparedActorAuthorityOwnerGenerations;
+        init => _preparedActorAuthorityOwnerGenerations = value;
+    }
+
+    internal void RememberAuthorityPublication(
+        IEnumerable<KeyValuePair<ZLinkAuthorityKey, ZLinkAuthoritySnapshot>> publication
+    )
+    {
+        if (_authorityPublication is not null)
+            return;
+        _authorityPublication = publication.ToFrozenDictionary(
+            static entry => entry.Key,
+            static entry => entry.Value.AuthorityOwnerGeneration
+        );
+        foreach (var actor in ActorStates)
+            Node.Node.SetLocalActorAuthority(
+                actor.NativeActorRef!.Value,
+                TargetActorAuthorityOwnerGeneration(actor.RuntimeActorId)
+            );
+    }
+
+    private ulong ResolveAuthorityOwnerGeneration(ZLinkAuthorityKey key)
+    {
+        if (_authorityPublication is { } published)
+            return published.TryGetValue(key, out var actual)
+                ? actual
+                : throw new ZLinkRelocationDataLostException(
+                    "Published target authority is missing from its inventory."
+                );
+        if (key == SpotParticipant.AuthorityKey)
+            return _preparedSpotAuthorityOwnerGeneration;
+        if (
+            ZLinkAuthorityKeyCodec.TryDecodeActor(key, out var actorId)
+            && _preparedActorAuthorityOwnerGenerations.TryGetValue(
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                out var prepared
+            )
+        )
+            return prepared;
+        throw new ZLinkRelocationDataLostException(
+            "Prepared target authority is missing from its inventory."
+        );
+    }
+
     internal IReadOnlyDictionary<
         ZLinkAuthorityKey,
         ReadOnlyMemory<byte>
@@ -3037,30 +3079,13 @@ internal sealed record TargetStage(
         TargetActorAuthorityOwnerGeneration(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
 
     internal ulong TargetActorAuthorityOwnerGeneration(ZLinkActorId actorId) =>
-        ActorTargetAuthorityOwnerGenerations.TryGetValue(actorId, out var generation)
-            ? generation
-            : throw new ZLinkRelocationDataLostException(
-                $"Actor '{actorId}' does not have a prepared target authority generation."
-            );
-
-    internal ulong TargetAuthorityOwnerGenerationFor(ZLinkRelocationParticipantEnvelope participant)
-    {
-        if (
-            participant.ObjectKind
-            is ZLinkPlacementObjectKind.UserSpot
-                or ZLinkPlacementObjectKind.InstanceSpot
-        )
-            return TargetAuthorityOwnerGeneration;
-        var actor = ActorTargetAuthorityOwnerGenerations.SingleOrDefault(candidate =>
-            ZLinkActorAuthorityPayloadCodec.AuthorityKey(candidate.Key.Value)
-            == participant.AuthorityKey
+        ResolveAuthorityOwnerGeneration(
+            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value)
         );
-        return actor.Key != default
-            ? actor.Value
-            : throw new ZLinkRelocationDataLostException(
-                $"Actor authority '{participant.AuthorityKey.Value}' does not have a prepared target generation."
-            );
-    }
+
+    internal ulong TargetAuthorityOwnerGenerationFor(
+        ZLinkRelocationParticipantEnvelope participant
+    ) => ResolveAuthorityOwnerGeneration(participant.AuthorityKey);
 
     internal async ValueTask<bool> RunAbortCleanupAsync(
         Func<ValueTask> cleanup,

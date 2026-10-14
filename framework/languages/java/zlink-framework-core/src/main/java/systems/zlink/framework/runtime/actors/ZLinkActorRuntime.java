@@ -1957,6 +1957,45 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 messageFollowRoute(source), messageFollowRoute(target), target);
     }
 
+    public CompletionStage<Void> confirmRelocationMessageFollow(
+            ZLinkServiceM6BWireCodec.ActorRouteFence source) {
+        var staged =
+                handoff.messageFollowSource(messageFollowRoute(source))
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "staged Message Follow source is unavailable"));
+        var stagedTarget = staged.rawTargetRoute();
+        return resolveCommittedTargetActorRoute(source.actor().actorId())
+                .thenAccept(
+                        route -> {
+                            if (route == null
+                                    || route.actorRef() == null
+                                    || !route.actorRef()
+                                            .nodeRid()
+                                            .equals(stagedTarget.actor().nodeRid())
+                                    || route.actorRef().objectGeneration()
+                                            != source.actor().generation()
+                                    || route.targetNodeGeneration()
+                                            != stagedTarget.targetNodeGeneration()
+                                    || route.ownerLeaseGeneration()
+                                            != stagedTarget.ownerLeaseGeneration()
+                                    || route.authorityOwnerGeneration()
+                                            <= source.authorityOwnerGeneration()) {
+                                throw new IllegalStateException(
+                                        "committed Message Follow target differs from its staging");
+                            }
+                            var target =
+                                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                            stagedTarget.actor(),
+                                            route.targetNodeGeneration(),
+                                            route.authorityOwnerGeneration(),
+                                            route.ownerLeaseGeneration());
+                            refreshRelocationMessageFollow(source, target);
+                            commitRelocationMessageFollow(source);
+                        });
+    }
+
     public void abortRelocationMessageFollow(ZLinkServiceM6BWireCodec.ActorRouteFence source) {
         handoff.abortRelocationRoute(messageFollowRoute(source));
     }
@@ -3308,7 +3347,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return false;
         }
         if (!followSource.matchesSourceRoute(sourceRoute)
-                || followSource.targetAddress() == null
                 || followSource.targetActorRef().generation() != staleActor.generation()) {
             return rejectRetainedMessageFollowIngress(
                     parts,
@@ -3327,6 +3365,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     parts,
                     reply,
                     failure,
+                    terminalRelease);
+        }
+        if (followSource.targetAddress() == null) {
+            return rejectRetainedMessageFollowIngress(
+                    parts,
+                    failure,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Message Follow target address is unavailable",
                     terminalRelease);
         }
         ZLinkStreamHeader streamHeader;

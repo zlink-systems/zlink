@@ -24,6 +24,30 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RelocationRuntimeTests
 {
     [Fact]
+    public void Target_generation_is_a_read_only_publication_result()
+    {
+        Assert.Contains(
+            typeof(System.Runtime.CompilerServices.IsExternalInit),
+            typeof(TargetStage)
+                .GetProperty(nameof(TargetStage.TargetAuthorityOwnerGeneration))!
+                .SetMethod!.ReturnParameter.GetRequiredCustomModifiers()
+        );
+        var standaloneStage = typeof(ZLinkStandaloneActorRelocationRuntime).GetNestedType(
+            "TargetStage",
+            System.Reflection.BindingFlags.NonPublic
+        )!;
+        Assert.False(
+            standaloneStage
+                .GetProperty(
+                    "TargetAuthorityOwnerGeneration",
+                    System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.NonPublic
+                )!
+                .CanWrite
+        );
+    }
+
+    [Fact]
     public async Task Concurrent_target_stages_share_reconciliation_scheduling_without_failure()
     {
         const int callers = 8;

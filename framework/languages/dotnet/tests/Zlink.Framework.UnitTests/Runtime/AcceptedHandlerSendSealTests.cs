@@ -273,9 +273,15 @@ public sealed partial class EntrySpotActorDispatchTests
                 handoffId,
                 reservation
             );
+            using var replayScope = ZLinkSpotRelocationReplayScope.Enter(replay);
+            var router = new ZLinkActorDispatchRouter(
+                runtime,
+                null!,
+                static (_, actorState) => actorState.Context!
+            );
             if (request)
             {
-                var reply = await activation.SubmitActorForReplyAsync(
+                var reply = await router.SubmitForReplyAsync(
                     probe.Actor,
                     state,
                     new ZlinkStreamHeader(
@@ -287,19 +293,19 @@ public sealed partial class EntrySpotActorDispatchTests
                         ZlinkStreamMetadata.Empty
                     ),
                     body,
-                    replay,
+                    relocationReplay: true,
                     CancellationToken.None,
                     RoutingId.From(AcceptedSendSessionId)
                 );
                 Assert.Equal(ZlinkStreamMessageKind.Response, reply.Kind);
             }
             else
-                await activation.SubmitActorAsync(
+                await router.Async(
                     probe.Actor,
                     state,
                     CreateHeader(AcceptedSendPacket),
                     body,
-                    replay,
+                    relocationReplay: true,
                     CancellationToken.None,
                     RoutingId.From(AcceptedSendSessionId)
                 );

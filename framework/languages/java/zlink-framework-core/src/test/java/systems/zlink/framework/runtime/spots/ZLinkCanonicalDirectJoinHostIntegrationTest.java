@@ -1156,8 +1156,26 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             binding.sessionRid(),
                             binding.bindingGeneration() + 1);
             byte[] changedPayload =
-                    ZLinkServiceRelocationEnvelopeCodec.withSessionBindings(
-                            original.relocationPayload(), List.of(changedBinding));
+                    org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                            () -> {
+                                var value =
+                                        systems.zlink.framework.runtime.protocol
+                                                .ServiceWirePilotCodec.decodeRelocationEnvelopeV1(
+                                                List.of(original.relocationPayload()));
+                                return systems.zlink.framework.runtime.protocol
+                                        .ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
+                                        new systems.zlink.framework.runtime.protocol
+                                                .ServiceWirePilotCodec.RelocationEnvelopeV1(
+                                                value.relocationHigh(),
+                                                value.relocationLow(),
+                                                value.object(),
+                                                value.applicationVersion(),
+                                                value.applicationStates(),
+                                                value.savedWork(),
+                                                value.timerRegistrations(),
+                                                value.pendingTimerTicks(),
+                                                List.of(changedBinding)));
+                            });
             var checksum = new java.util.zip.CRC32C();
             checksum.update(changedPayload);
             var changedPrepare =

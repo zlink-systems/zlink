@@ -120,6 +120,7 @@ internal sealed record ZLinkRelocationEnvelope(
     internal ulong CanonicalRelocationHigh { get; init; }
     internal ulong CanonicalRelocationLow { get; init; }
     internal long CanonicalApplicationVersion { get; init; }
+    internal ulong CanonicalSourceAuthorityOwnerGeneration { get; init; }
 }
 
 internal static class ZLinkRelocationEnvelopeCodec
@@ -770,6 +771,7 @@ internal static class ZLinkRelocationEnvelopeCodec
             CanonicalRelocationHigh = generated.RelocationHigh,
             CanonicalRelocationLow = generated.RelocationLow,
             CanonicalApplicationVersion = generated.ApplicationVersion,
+            CanonicalSourceAuthorityOwnerGeneration = ownerGeneration,
         };
         ValidateEnvelope(result);
         return result;
