@@ -83,7 +83,7 @@ Relocation unit 하나의 handoff state는 다음 값을 소유한다.
 |---|---|
 | Object identity | ActorId 또는 SpotId와 `ObjectGeneration`을 고정한다. |
 | Source fence | Source node RID·node generation과 처음 읽은 owner generation을 고정한다. |
-| Target fence | Target node RID·node generation과 요청할 새 owner generation을 고정한다. |
+| Target fence | Target node RID·node generation을 고정한다. 새 owner generation은 [Location runtime §6.1](01-location-runtime.ko.md#61-read와-cas)의 `NewOwner`가 발급한다. |
 | Relocation identity | Retry와 late completion이 같은 handoff에 속하는지 구분한다. |
 | Saved-work reference | 갈무리한 state·기존 queue·timer가 direct payload chunk transfer를 기다리며 source memory에 머무는 것을 가리킨다. |
 | Relay connection | Source relay와 cutover boundary의 TCP 순서를 고정한다. |
@@ -470,8 +470,8 @@ terminal ownership으로 이전되거나 정리될 때까지 유지한다.
 ## 6. Location Store 전환 계약
 
 Location Store CAS는 owner가 동시에 source와 target 두 곳에 존재하지 않게 만드는 전환점이다.
-Target은 예상한 source owner와 generation을 조건으로 주고, 자기 node와 새 owner generation을
-새 값으로 요청한다.
+Target은 예상한 source owner와 generation을 조건으로 주고 자기 node를 새 owner로 요청한다.
+새 owner generation은 이 CAS가 발급하며, target은 CAS 결과의 값을 이후 fence에 쓴다.
 
 | CAS 결과 | 처리 |
 |---|---|
