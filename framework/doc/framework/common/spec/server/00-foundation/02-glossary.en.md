@@ -2462,10 +2462,10 @@ distinguishes whether an object was re-created after deletion.
 
 | Item | Content |
 |---|---|
-| Shape | Provider-issued monotonic generation |
+| Shape | Framework-issued monotonic generation |
 | .NET notation | `ulong AuthorityOwnerGeneration` |
 | Public composition | A single integer in the range `1..long.MaxValue`. |
-| Creation/management | Issued by the Location Store provider's global durable counter on initial reserve and on a `NewOwner` transition. |
+| Creation/management | Issued by the Framework on initial reserve and on a `NewOwner` transition, as [Location runtime §3.2](../05-location-relocation/01-location-runtime.en.md#32-object-re-creation-and-owner-change-use-different-generation-numbers) defines. |
 | Lifetime | A new value is used when the owner changes within the same ObjectGeneration. Doesn't wrap at the maximum value — fails with `GenerationExhausted` instead. |
 
 <a id="owner-lease-generation"></a>

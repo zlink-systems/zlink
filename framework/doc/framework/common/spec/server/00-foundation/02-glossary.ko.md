@@ -2350,10 +2350,10 @@ ObjectGeneration과는 다른 값이다.
 
 | 항목 | 내용 |
 |---|---|
-| 형태 | Provider-issued monotonic generation |
+| 형태 | Framework-issued monotonic generation |
 | .NET 표기 | `ulong AuthorityOwnerGeneration` |
 | 공개 구성 | `1..long.MaxValue` 범위의 정수 하나다. |
-| 생성·관리 | Location Store provider의 global durable counter가 initial reserve와 `NewOwner` transition에서 발급한다. |
+| 생성·관리 | [Location runtime §3.2](../05-location-relocation/01-location-runtime.ko.md#32-object-재생성과-owner-변경은-다른-세대-번호를-사용한다)가 정한 대로 Framework가 initial reserve와 `NewOwner` transition에서 발급한다. |
 | 수명 | 같은 ObjectGeneration 안에서 owner가 바뀔 때 새 값을 사용한다. 최대값에서 값을 처음으로 되돌리지 않고 `GenerationExhausted`로 실패한다. |
 
 <a id="owner-lease-generation"></a>
