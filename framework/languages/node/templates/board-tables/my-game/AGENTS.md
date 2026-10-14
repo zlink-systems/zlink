@@ -2,10 +2,6 @@
 
 This project is a runnable server starting point for a board-table game: a Session node and Table nodes that share a Redis Location Store. `zlink.structure.json` describes the initial composition; Redis and the Framework own the current runtime locations.
 
-## Start from GAME.md
-
-If `GAME.md` exists in the project root, read it first. It describes the game the user wants to build and the genre, server structure and server language chosen when the project was created. Build that game on this structure, keep the node responsibilities below, and keep the e2e scenarios passing.
-
 ## Node responsibilities
 
 | Node | Owned responsibility |
