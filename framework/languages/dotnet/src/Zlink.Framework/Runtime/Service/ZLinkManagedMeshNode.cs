@@ -4081,7 +4081,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ServiceWireCodec.InstanceRouteV1Case0? readyRoute = null
     )
     {
-        if (targetRid == _routingId)
+        if (IsLocalTarget(targetRid))
         {
             var result = SubmitSpot(
                 targetRid,
@@ -4500,6 +4500,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ulong DeadlineUnixMs
     );
 
+    private bool IsLocalTarget(RoutingId targetRid) => targetRid == _routingId;
+
     internal async ValueTask SendToActorDirectAsync(
         ActorRef actorRef,
         IReadOnlyList<Message> parts,
@@ -4507,6 +4509,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken
     )
     {
+        if (IsLocalTarget(actorRef.NodeRid))
+        {
+            var result = SubmitActor(
+                actorRef,
+                parts,
+                request: false,
+                operation: null,
+                flags,
+                out _
+            );
+            if (result != SubmitResult.Ok)
+                throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
+            return;
+        }
         var peer = await RequireDirectPeerAsync(actorRef.NodeRid).ConfigureAwait(false);
         if (
             !_observedActorAuthorities.TryGetValue(

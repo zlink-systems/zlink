@@ -4065,32 +4065,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         _actorBoundSessionCoordinator.UnbindSessionActor(actorId, context, bindingToken);
     }
 
-    internal bool TrySubmitLocalActorSend(
-        ZLinkBackendActorRef actor,
-        ZlinkStreamHeader header,
-        Message payload
-    )
-    {
-        if (!_actorSessionManager.IsCurrentLocalActor(actor))
-            return false;
-        return TryRunDetached(
-            "local-actor-client-send",
-            async cancellationToken =>
-            {
-                try
-                {
-                    await _actorSessionManager
-                        .SubmitActorByIdAsync(actor.ActorId, header, payload, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
-                    payload.Dispose();
-                }
-            }
-        );
-    }
-
     /// <summary>Actor-node entry for a relayed session frame whose bound actor
     /// migrated here: dispatches it through the standard actor inbound
     /// pipeline. The frame carries the session identity, so the dispatch

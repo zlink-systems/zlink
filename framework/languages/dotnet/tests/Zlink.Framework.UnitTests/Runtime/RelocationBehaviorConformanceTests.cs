@@ -1780,6 +1780,8 @@ public sealed partial class RelocationBehaviorConformanceTests
 
 internal sealed class RelocationBehaviorTrace
 {
+    internal const string OrdinarySendBatchEventPrefix = "ordinarySendBatch:";
+
     private readonly object _gate = new();
     private readonly List<string> _events = [];
     private readonly List<string> _deliveredMarkers = [];
@@ -1799,6 +1801,11 @@ internal sealed class RelocationBehaviorTrace
     internal int TargetAuthorityMutationCount;
     internal long TargetAuthorityMutationTimestamp;
     internal bool SendTargetLifecyclePush { get; init; }
+    internal Action<IZLinkSpotContext>? ConfigureTarget { get; init; }
+    internal Action<IZLinkEntrySpotContext>? ConfigureEntry { get; init; }
+    internal int OrdinarySendCount;
+    internal int OrdinarySendBatchSize { get; init; }
+    internal Func<BehaviorActor, ValueTask>? OnTargetJoined { get; set; }
     internal string? PublicJoinCompletionNode { get; private set; }
     internal bool HasTargetAuthorityMutation =>
         Volatile.Read(ref TargetAuthorityMutationCount) != 0;
@@ -2128,6 +2135,8 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         services.AddTransient<BeginBehaviorJoinHandler>();
         services.AddTransient<EntryBehaviorWorkHandler>();
         services.AddTransient<TargetBehaviorWorkHandler>();
+        services.AddTransient<JoinCallbackSendHandler>();
+        services.AddTransient<OrdinaryLocalSendHandler>();
         services.AddZLinkFramework(options =>
         {
             if (timeProvider is not null)
@@ -2275,6 +2284,7 @@ internal sealed class BehaviorEntrySpot(
         Context.Handlers.AddActorPacket<EntryBehaviorWorkHandler, BehaviorActor>(
             nameof(BehaviorWork)
         );
+        trace.ConfigureEntry?.Invoke(Context);
     }
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
@@ -2316,10 +2326,13 @@ internal sealed class BehaviorTargetSpot(IZLinkSpotContext context, RelocationBe
 {
     public IZLinkSpotContext Context { get; } = context;
 
-    public void Configure() =>
+    public void Configure()
+    {
         Context.Handlers.AddActorPacket<TargetBehaviorWorkHandler, BehaviorActor>(
             nameof(BehaviorWork)
         );
+        trace.ConfigureTarget?.Invoke(Context);
+    }
 
     public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
         ZLinkMessage request,
@@ -2346,6 +2359,8 @@ internal sealed class BehaviorTargetSpot(IZLinkSpotContext context, RelocationBe
         trace.Record("targetLifecycleStarted");
         await trace.ReleaseTargetLifecycle.Task.WaitAsync(cancellationToken);
         trace.Record("targetLifecycleCompleted");
+        if (trace.OnTargetJoined is { } onTargetJoined)
+            await onTargetJoined(actor);
         if (trace.SendTargetLifecyclePush)
             await actor
                 .Context.BoundSession.Send(new BehaviorLifecyclePush("target-ready"))

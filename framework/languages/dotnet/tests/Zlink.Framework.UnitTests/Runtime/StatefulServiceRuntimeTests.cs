@@ -547,6 +547,51 @@ public sealed partial class StatefulServiceRuntimeTests
     }
 
     [Fact]
+    public async Task LocalActorDirectSendRetainsPayloadUntilMailboxRelease()
+    {
+        const int payloadSize = 4096;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "local-direct-actor-node");
+        var actor = node.CreateActor("local-direct-actor");
+        DrainAndDispose(node);
+
+        var payload = Message.Allocate(payloadSize);
+        using var witness = payload.Copy();
+        try
+        {
+            var send = node.SendToActorDirectAsync(
+                actor,
+                [payload],
+                SendFlags.None,
+                CancellationToken.None
+            );
+            Assert.True(send.IsCompletedSuccessfully);
+            await send;
+            Assert.Equal(3, witness.RefCount);
+        }
+        finally
+        {
+            payload.Dispose();
+        }
+        Assert.Equal(2, witness.RefCount);
+
+        using (var ready = new MeshReadyBatch())
+        {
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            Assert.Equal(1, ready.Count);
+            Assert.Equal(actor, ready[0].Actor);
+            using var claim = ready.TakeClaim(0);
+            using var received = new MeshReceiveBatch();
+            Assert.True(claim.Receive(received, RecvFlags.DontWait));
+            Assert.Equal(MeshRecordKind.ActorSend, received[0].Kind);
+            Assert.Equal(2, witness.RefCount);
+        }
+        Assert.Equal(1, witness.RefCount);
+        DrainAndDispose(node);
+        Assert.Equal(1, witness.RefCount);
+    }
+
+    [Fact]
     public async Task EntrySpot_RekeyKeepsActorOwnerAtTheLogicalEntrySpot()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
