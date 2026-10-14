@@ -124,7 +124,10 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
     {
         ThrowIfDisposingOrDisposed();
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        using var ownerLeaseDeadline = new CancellationTokenSource(_options.OwnerLeaseRenewTimeout);
+        using var ownerLeaseDeadline = new CancellationTokenSource(
+            _options.OwnerLeaseRenewTimeout,
+            _time
+        );
         try
         {
             var start = await _lane
@@ -149,13 +152,14 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             // against the lease never see this owner's rows as stale on start.
             // An unavailable store leaves this generation without an admission
             // deadline; the shared heartbeat path will claim it after recovery.
+            // The claim attempt observes caller cancellation and cleans up
+            // the claim it started (spec 01-location-runtime §5, startup).
             _ = await RenewOwnerLeaseOnceAsync(
                     cancellationToken,
                     ownerLeaseDeadline.Token,
                     cancellationCleanupToken
                 )
                 .ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
 
             var heartbeatStarted = await _lane
                 .RunAsync(() =>
@@ -166,34 +170,15 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 .ConfigureAwait(false);
             heartbeatStarted.TrySetResult();
         }
-        catch (OperationCanceledException cancellation)
-            when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            var ownerToken = await _lane
+            await _lane
                 .RunAsync(() =>
                 {
-                    var token = _ownerToken;
                     _ownerToken = null;
                     _ownerAdmissionDeadline = null;
-                    return token;
                 })
                 .ConfigureAwait(false);
-            if (ownerToken is { } token)
-                await RecordCancellationCleanupFailureAsync(
-                        async () =>
-                        {
-                            _ = await _store
-                                .ReleaseOwnerLeaseAsync(
-                                    token,
-                                    cancellationCleanupToken ?? ownerLeaseDeadline.Token
-                                )
-                                .AsTask()
-                                .WaitAsync(cancellationCleanupToken ?? ownerLeaseDeadline.Token)
-                                .ConfigureAwait(false);
-                        },
-                        cancellation
-                    )
-                    .ConfigureAwait(false);
             throw;
         }
         finally
@@ -530,7 +515,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         CancellationToken cancellationToken = default
     )
     {
-        using var deadline = new CancellationTokenSource(_options.OwnerLeaseRenewTimeout);
+        using var deadline = new CancellationTokenSource(_options.OwnerLeaseRenewTimeout, _time);
         return await RenewOwnerLeaseOnceAsync(cancellationToken, deadline.Token)
             .ConfigureAwait(false);
     }
@@ -551,137 +536,166 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             cancellationToken,
             deadlineToken
         );
-        ZLinkOwnerLeaseRenewResult.Renewed result;
-        while (true)
+        try
         {
-            try
+            var renewed = await RenewOrClaimAsync().ConfigureAwait(false);
+            // A claim this attempt started ends as cancelled once the caller
+            // cancelled, whichever result the claim reached first.
+            if (ClaimPending())
+                cancellationToken.ThrowIfCancellationRequested();
+            return renewed;
+        }
+        catch (OperationCanceledException cancellation)
+            when (cancellationToken.IsCancellationRequested && ClaimPending())
+        {
+            // Spec 01-location-runtime §5: a claim already started is read
+            // again and a confirmed lease is released. This is the one
+            // cancellation cleanup of a claim, at startup and in the heartbeat.
+            await RecordCancellationCleanupFailureAsync(
+                    async () =>
+                        await ReleaseClaimIfConfirmedAfterCancellationAsync(
+                                owner.Id,
+                                cancellationCleanupToken ?? deadlineToken,
+                                cancellationCleanupToken.HasValue ? pendingClaim : null
+                            )
+                            .ConfigureAwait(false),
+                    cancellation
+                )
+                .ConfigureAwait(false);
+            throw;
+        }
+
+        bool ClaimPending() => claimStarted && owner.Token is null;
+
+        async ValueTask<bool> RenewOrClaimAsync()
+        {
+            ZLinkOwnerLeaseRenewResult.Renewed result;
+            while (true)
             {
-                owner = await _lane
-                    .RunAsync(() => new OwnerLeaseState(_ownerId, _ownerToken))
-                    .ConfigureAwait(false);
-                if (owner.Token is null)
+                try
                 {
-                    if (claimFailure is not null || rejectedClaim is not null)
+                    owner = await _lane
+                        .RunAsync(() => new OwnerLeaseState(_ownerId, _ownerToken))
+                        .ConfigureAwait(false);
+                    if (owner.Token is null)
                     {
-                        var confirmed = await ConfirmClaimAsync(owner.Id, deadlineToken)
+                        if (claimFailure is not null || rejectedClaim is not null)
+                        {
+                            var confirmed = await ConfirmClaimAsync(owner.Id, deadlineToken)
+                                .ConfigureAwait(false);
+                            if (confirmed is not null)
+                                return await CompleteOwnerLeaseRenewalAsync(
+                                        confirmed,
+                                        leaseOperationStartedAt
+                                    )
+                                    .ConfigureAwait(false);
+                            if (rejectedClaim is not null)
+                                throw new ZLinkOwnerLeaseClaimRejectedException(rejectedClaim);
+
+                            RecordLeaseFailure(claimFailure!.Message);
+                            OwnerLeaseRenewalFailed?.Invoke();
+                            return false;
+                        }
+
+                        claimStarted = true;
+                        pendingClaim = _store
+                            .ClaimOwnerLeaseAsync(owner.Id, _options.OwnerLeaseTtl, operation.Token)
+                            .AsTask();
+                        var claim = await pendingClaim
+                            .WaitAsync(operation.Token)
                             .ConfigureAwait(false);
-                        if (confirmed is not null)
+                        if (claim is ZLinkOwnerLeaseClaimResult.Claimed claimed)
+                        {
+                            result = await InstallConfirmedClaimAsync(
+                                    claimed.Token,
+                                    claimed.LeaseExpiresAt,
+                                    claimed.StoreNow
+                                )
+                                .ConfigureAwait(false);
                             return await CompleteOwnerLeaseRenewalAsync(
-                                    confirmed,
+                                    result,
                                     leaseOperationStartedAt
                                 )
                                 .ConfigureAwait(false);
-                        if (rejectedClaim is not null)
-                            throw new ZLinkOwnerLeaseClaimRejectedException(rejectedClaim);
+                        }
+                        if (claim is ZLinkOwnerLeaseClaimResult.GenerationExhausted)
+                            throw new ZLinkOwnerLeaseClaimRejectedException(claim);
 
-                        RecordLeaseFailure(claimFailure!.Message);
-                        OwnerLeaseRenewalFailed?.Invoke();
-                        return false;
+                        rejectedClaim = claim;
+                        continue;
                     }
-
-                    claimStarted = true;
-                    pendingClaim = _store
-                        .ClaimOwnerLeaseAsync(owner.Id, _options.OwnerLeaseTtl, operation.Token)
-                        .AsTask();
-                    var claim = await pendingClaim.WaitAsync(operation.Token).ConfigureAwait(false);
-                    if (claim is ZLinkOwnerLeaseClaimResult.Claimed claimed)
+                    else
                     {
-                        result = await InstallConfirmedClaimAsync(
-                                claimed.Token,
-                                claimed.LeaseExpiresAt,
-                                claimed.StoreNow
+                        var renewal = await _store
+                            .RenewOwnerLeaseAsync(
+                                owner.Token.Value,
+                                _options.OwnerLeaseTtl,
+                                operation.Token
                             )
+                            .AsTask()
+                            .WaitAsync(deadlineToken)
                             .ConfigureAwait(false);
+                        if (renewal is not ZLinkOwnerLeaseRenewResult.Renewed renewed)
+                            throw new InvalidOperationException(
+                                "The owner lease token became stale."
+                            );
+                        result = renewed;
                         return await CompleteOwnerLeaseRenewalAsync(result, leaseOperationStartedAt)
                             .ConfigureAwait(false);
                     }
-                    if (claim is ZLinkOwnerLeaseClaimResult.GenerationExhausted)
-                        throw new ZLinkOwnerLeaseClaimRejectedException(claim);
-
-                    rejectedClaim = claim;
-                    continue;
                 }
-                else
+                catch (ZLinkOwnerLeaseClaimRejectedException)
                 {
-                    var renewal = await _store
-                        .RenewOwnerLeaseAsync(
-                            owner.Token.Value,
-                            _options.OwnerLeaseTtl,
-                            operation.Token
-                        )
-                        .AsTask()
-                        .WaitAsync(deadlineToken)
-                        .ConfigureAwait(false);
-                    if (renewal is not ZLinkOwnerLeaseRenewResult.Renewed renewed)
-                        throw new InvalidOperationException("The owner lease token became stale.");
-                    result = renewed;
-                    return await CompleteOwnerLeaseRenewalAsync(result, leaseOperationStartedAt)
-                        .ConfigureAwait(false);
+                    throw;
                 }
-            }
-            catch (ZLinkOwnerLeaseClaimRejectedException)
-            {
-                throw;
-            }
-            catch (OperationCanceledException cancellation)
-                when (cancellationToken.IsCancellationRequested)
-            {
-                if (claimStarted && owner.Token is null)
-                    await RecordCancellationCleanupFailureAsync(
-                            async () =>
-                                await ReleaseClaimIfConfirmedAfterCancellationAsync(
-                                        owner.Id,
-                                        cancellationCleanupToken ?? deadlineToken,
-                                        cancellationCleanupToken.HasValue ? pendingClaim : null
-                                    )
-                                    .ConfigureAwait(false),
-                            cancellation
-                        )
-                        .ConfigureAwait(false);
-                throw;
-            }
-            catch (OperationCanceledException exception)
-            {
-                if (
-                    !deadlineToken.IsCancellationRequested
-                    && claimStarted
-                    && owner.Token is null
-                    && claimFailure is null
-                    && rejectedClaim is null
-                )
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    claimFailure = exception;
-                    continue;
+                    // Caller cancellation is not a claim failure or a timeout.
+                    throw;
                 }
-                if (rejectedClaim is not null)
-                    throw new ZLinkOwnerLeaseClaimRejectedException(rejectedClaim);
-
-                RecordLeaseFailure(
-                    $"Owner lease renewal timeout after {_options.OwnerLeaseRenewTimeout}."
-                );
-                OwnerLeaseRenewalFailed?.Invoke();
-                return false;
-            }
-            catch (Exception exception)
-            {
-                if (
-                    claimStarted
-                    && owner.Token is null
-                    && claimFailure is null
-                    && rejectedClaim is null
-                )
+                catch (OperationCanceledException exception)
                 {
-                    claimFailure = exception;
-                    continue;
-                }
-                if (rejectedClaim is not null)
-                    throw new ZLinkOwnerLeaseClaimRejectedException(rejectedClaim);
+                    if (
+                        !deadlineToken.IsCancellationRequested
+                        && claimStarted
+                        && owner.Token is null
+                        && claimFailure is null
+                        && rejectedClaim is null
+                    )
+                    {
+                        claimFailure = exception;
+                        continue;
+                    }
+                    if (rejectedClaim is not null)
+                        throw new ZLinkOwnerLeaseClaimRejectedException(rejectedClaim);
 
-                // Fail-static: record the failure and retry on the next tick.
-                // Existing rows stay valid until the lease actually expires.
-                RecordLeaseFailure(exception.Message);
-                OwnerLeaseRenewalFailed?.Invoke();
-                return false;
+                    RecordLeaseFailure(
+                        $"Owner lease renewal timeout after {_options.OwnerLeaseRenewTimeout}."
+                    );
+                    OwnerLeaseRenewalFailed?.Invoke();
+                    return false;
+                }
+                catch (Exception exception)
+                {
+                    if (
+                        claimStarted
+                        && owner.Token is null
+                        && claimFailure is null
+                        && rejectedClaim is null
+                    )
+                    {
+                        claimFailure = exception;
+                        continue;
+                    }
+                    if (rejectedClaim is not null)
+                        throw new ZLinkOwnerLeaseClaimRejectedException(rejectedClaim);
+
+                    // Fail-static: record the failure and retry on the next tick.
+                    // Existing rows stay valid until the lease actually expires.
+                    RecordLeaseFailure(exception.Message);
+                    OwnerLeaseRenewalFailed?.Invoke();
+                    return false;
+                }
             }
         }
     }

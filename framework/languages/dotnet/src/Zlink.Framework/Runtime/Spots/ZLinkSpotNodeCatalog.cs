@@ -61,7 +61,6 @@ internal sealed class ZLinkSpotNodeCatalog(
         frameworkRegistration
     );
 
-    private readonly Dictionary<ZLinkSpotId, TaskCompletionSource<bool>> _closing = [];
     private readonly Dictionary<ZLinkSpotId, string> _instanceSpotTypes = [];
     private readonly Dictionary<ZLinkSpotId, Type> _preparedSpotTypes = [];
     private readonly Dictionary<Type, int> _generatedSpotCreations = [];
@@ -79,9 +78,9 @@ internal sealed class ZLinkSpotNodeCatalog(
 
     internal ValueTask<string[]> SnapshotPendingCloseNamesAsync() =>
         _lane.RunAsync(() =>
-            _closing
-                .Where(static entry => !entry.Value.Task.IsCompleted)
-                .Select(static entry => entry.Key.Value)
+            _spots
+                .Values.Where(static activation => activation.HasPendingClose)
+                .Select(static activation => activation.SpotId)
                 .ToArray()
         );
 
@@ -344,7 +343,6 @@ internal sealed class ZLinkSpotNodeCatalog(
             {
                 _spots.Remove(activation.SpotId);
                 _instanceSpotTypes.Remove(activation.SpotId);
-                _closing.Remove(activation.SpotId);
             })
             .ConfigureAwait(false);
     }
@@ -449,10 +447,10 @@ internal sealed class ZLinkSpotNodeCatalog(
 
             await CaptureAsync(async () =>
                 {
-                    if (registration.Owner is not null)
+                    if (registration.Owner is { } owner)
                         _ = await ExecuteCloseTransactionAsync(
                                 spotId,
-                                activation,
+                                owner,
                                 transaction,
                                 ZLinkSpotCloseReason.HostShutdown,
                                 DateTimeOffset.UtcNow + activation.DefaultRequestTimeout
@@ -566,7 +564,6 @@ internal sealed class ZLinkSpotNodeCatalog(
                 {
                     _spots.Remove(spotId);
                     _instanceSpotTypes.Remove(spotId);
-                    _closing.Remove(spotId);
                 })
                 .ConfigureAwait(false);
         }
@@ -1575,20 +1572,22 @@ internal sealed class ZLinkSpotNodeCatalog(
             objectGeneration
         );
 
+    // A handler or timer Close of its own incarnation. It claims and posts
+    // within the call, so the Close is the next lifecycle item of that
+    // incarnation before the turn ends (spec 06 §7 step 1).
     internal ValueTask<bool> CloseFromContextAsync(
-        string spotId,
-        ulong objectGeneration,
+        ZLinkSpotActivation activation,
         CancellationToken cancellationToken
     ) =>
         CloseCoreAsync(
-            spotId,
+            activation.SpotId,
             null,
             releaseLocation: true,
             requireNoActors: true,
             ZLinkSpotCloseReason.ExplicitClose,
             cancellationToken,
-            objectGeneration,
-            fromContext: true
+            activation.ObjectGeneration,
+            context: activation
         );
 
     internal async ValueTask<bool> CloseAsync(
@@ -1625,8 +1624,8 @@ internal sealed class ZLinkSpotNodeCatalog(
             fence
         );
 
-    // Owner: the Close registered for a Spot, or none. A pending transaction is
-    // the Close in progress that later requests join.
+    // Owner: the activation whose Close this caller runs, or none. Transaction
+    // is that Close, or the Close in progress that this caller joins.
     private readonly record struct CloseRegistration(
         ZLinkSpotActivation? Owner,
         TaskCompletionSource<bool>? Transaction
@@ -1643,14 +1642,19 @@ internal sealed class ZLinkSpotNodeCatalog(
             return default;
         if (objectGeneration is { } expected)
             ThrowIfOtherIncarnation(spotId, expected, current.ObjectGeneration);
-        if (_closing.TryGetValue(spotId, out var pending))
-            return new CloseRegistration(null, pending);
+        return ClaimClose(current);
+    }
+
+    // The incarnation's close claim is the one join decision for every Close
+    // kind: the first caller runs the Close, later callers join it.
+    private static CloseRegistration ClaimClose(ZLinkSpotActivation activation)
+    {
         var transaction = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        _closing.Remove(spotId);
-        _closing.Add(spotId, transaction);
-        return new CloseRegistration(current, transaction);
+        return activation.ClaimClose(transaction) is { } pending
+            ? new CloseRegistration(null, pending)
+            : new CloseRegistration(activation, transaction);
     }
 
     private async ValueTask<bool> CloseCoreAsync(
@@ -1662,12 +1666,12 @@ internal sealed class ZLinkSpotNodeCatalog(
         CancellationToken cancellationToken,
         ulong? objectGeneration = null,
         UserSpotCloseFence? fence = null,
-        bool fromContext = false
+        ZLinkSpotActivation? context = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (
-            !fromContext
+            context is null
             && objectGeneration is not null
             && ZLinkSpotAmbientContext.CurrentOrDefault is { } caller
             && caller.SpotId == spotId
@@ -1676,9 +1680,11 @@ internal sealed class ZLinkSpotNodeCatalog(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Spot '{spotId}' closes itself through its context Close."
             );
-        var registration = await _lane
-            .RunAsync(() => RegisterCloseLocked(spotId, objectGeneration))
-            .ConfigureAwait(false);
+        var registration = context is null
+            ? await _lane
+                .RunAsync(() => RegisterCloseLocked(spotId, objectGeneration))
+                .ConfigureAwait(false)
+            : ClaimClose(context);
         if (registration.Transaction is not { } transaction)
             return objectGeneration is { } expectedGeneration
                 && await CloseWithoutActivationAsync(spotId, expectedGeneration, cancellationToken)
@@ -1703,9 +1709,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         var attempt = PostExplicitClose(spotId, activation, transaction, fence, deadline);
         if (attempt is null)
         {
-            await _lane
-                .RunAsync(() => ForgetCloseLocked(spotId, transaction))
-                .ConfigureAwait(false);
+            activation.ReleaseClose(transaction);
             var closedLane = new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ShuttingDown,
                 $"Spot '{spotId}' no longer admits lifecycle work."
@@ -1816,7 +1820,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                     .ConfigureAwait(false)
             )
             {
-                await _lane.RunAsync(() => _closing.Remove(spotId)).ConfigureAwait(false);
+                activation.ReleaseClose(transaction);
                 transaction.TrySetResult(false);
                 return false;
             }
@@ -1833,7 +1837,6 @@ internal sealed class ZLinkSpotNodeCatalog(
                 {
                     _spots.Remove(spotId);
                     _instanceSpotTypes.Remove(spotId);
-                    _closing.Remove(spotId);
                 })
                 .ConfigureAwait(false);
             transaction.TrySetException(exception);
@@ -1845,7 +1848,6 @@ internal sealed class ZLinkSpotNodeCatalog(
             {
                 _spots.Remove(spotId);
                 _instanceSpotTypes.Remove(spotId);
-                _closing.Remove(spotId);
             })
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotClosed(registration.SpotNodeName, activation.KindName);
@@ -1931,17 +1933,13 @@ internal sealed class ZLinkSpotNodeCatalog(
         catch
         {
             activation.AbortCloseBoundary();
-            await _lane
-                .RunAsync(() => ForgetCloseLocked(spotId, transaction))
-                .ConfigureAwait(false);
+            activation.ReleaseClose(transaction);
             throw;
         }
         if (authority.State == CloseAuthorityState.Kept)
         {
             activation.AbortCloseBoundary();
-            await _lane
-                .RunAsync(() => ForgetCloseLocked(spotId, transaction))
-                .ConfigureAwait(false);
+            activation.ReleaseClose(transaction);
             return (false, null, null, null);
         }
 
@@ -2014,10 +2012,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                             _lane.RunAsync(async () =>
                             {
                                 if (outcome.Successor is { } successor)
-                                {
-                                    ForgetCloseLocked(spotId, transaction);
                                     _spots[activation.RuntimeSpotId] = successor;
-                                }
                                 await ZLinkRuntimeTaskRunner
                                     .WithoutExecutionContextFlow(completeSuccessor)
                                     .ConfigureAwait(false);
@@ -2088,7 +2083,6 @@ internal sealed class ZLinkSpotNodeCatalog(
                                 _spots.Remove(spotId);
                                 _instanceSpotTypes.Remove(spotId);
                             }
-                            ForgetCloseLocked(spotId, transaction);
                         })
                     )
                     .ConfigureAwait(false);
@@ -2125,7 +2119,6 @@ internal sealed class ZLinkSpotNodeCatalog(
                     _spots.Remove(spotId);
                     _instanceSpotTypes.Remove(spotId);
                 }
-                ForgetCloseLocked(spotId, transaction);
             })
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotClosed(registration.SpotNodeName, activation.KindName);
@@ -2177,12 +2170,6 @@ internal sealed class ZLinkSpotNodeCatalog(
         {
             FrameworkFailureCode = (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
         };
-    }
-
-    private void ForgetCloseLocked(string spotId, TaskCompletionSource<bool> transaction)
-    {
-        if (_closing.TryGetValue(spotId, out var current) && ReferenceEquals(current, transaction))
-            _closing.Remove(spotId);
     }
 
     private async ValueTask<CloseAuthority> BeginCloseAuthorityAsync(
@@ -2558,7 +2545,6 @@ internal sealed class ZLinkSpotNodeCatalog(
             {
                 _spots.Remove(activation.SpotId);
                 _instanceSpotTypes.Remove(activation.SpotId);
-                _closing.Remove(activation.SpotId);
             })
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotClosed(registration.SpotNodeName, activation.KindName);

@@ -52,6 +52,7 @@ internal abstract partial class ZLinkSpotActivation
     private int _releasedLocalResources;
     private object? _spot;
     private TaskCompletionSource<ZLinkSpotActivation?>? _successor;
+    private TaskCompletionSource<bool>? _close;
     private ZLinkPerActorShellRelocationPlan? _perActorShellRelocation;
 
     protected ZLinkSpotActivation(

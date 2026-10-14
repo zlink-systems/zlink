@@ -416,7 +416,7 @@ internal abstract partial class ZLinkSpotActivation
                 "Spot context Close requires a handler or timer turn."
             );
         return turn.YieldFrameworkCallAsync(
-            ct => _runtime.CloseCurrentSpotAsync(SpotNodeName, SpotId, ObjectGeneration, ct),
+            ct => _runtime.CloseCurrentSpotAsync(this, ct),
             cancellationToken
         );
     }
@@ -1040,6 +1040,18 @@ internal abstract partial class ZLinkSpotActivation
 
     internal ValueTask AwaitStartedCloseCallsAsync(CancellationToken cancellationToken) =>
         _serial.AwaitStartedCloseCallsAsync(cancellationToken);
+
+    // The Close of this incarnation (spec 06 §7 step 1: one Close job). The
+    // first Close request claims it and later requests join it. A Close that
+    // ends without closing the incarnation releases it; a closed incarnation
+    // keeps its Close as the result. Null result means the caller holds it.
+    internal TaskCompletionSource<bool>? ClaimClose(TaskCompletionSource<bool> close) =>
+        Interlocked.CompareExchange(ref _close, close, null);
+
+    internal void ReleaseClose(TaskCompletionSource<bool> close) =>
+        Interlocked.CompareExchange(ref _close, null, close);
+
+    internal bool HasPendingClose => Volatile.Read(ref _close) is { Task.IsCompleted: false };
 
     internal bool HasCommittedClose => _successor is not null;
     internal bool HasCompletedClose => _successor?.Task.IsCompleted == true;

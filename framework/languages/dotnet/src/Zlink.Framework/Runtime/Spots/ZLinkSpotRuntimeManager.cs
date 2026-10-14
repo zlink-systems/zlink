@@ -859,17 +859,15 @@ internal sealed class ZLinkSpotRuntimeManager(
             $"User Spot '{spotId}' close was not admitted before its deadline."
         );
 
-    internal async ValueTask<bool> CloseLocalByIdAsync(
+    internal async ValueTask<bool> CloseFromContextAsync(
         ZLinkFrameworkComponentState state,
-        string spotNodeName,
-        string spotId,
-        ulong objectGeneration,
+        ZLinkSpotActivation activation,
         CancellationToken cancellationToken
     )
     {
-        return state.SpotNodes.TryGetValue(spotNodeName, out var node)
+        return state.SpotNodes.TryGetValue(activation.SpotNodeName, out var node)
             && await node
-                .Catalog.CloseFromContextAsync(spotId, objectGeneration, cancellationToken)
+                .Catalog.CloseFromContextAsync(activation, cancellationToken)
                 .ConfigureAwait(false);
     }
 
