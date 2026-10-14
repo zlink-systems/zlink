@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "id": "mmo-seamless",
+  "name": "my-game",
+  "language": "kotlin",
+  "run": {
+    "commands": {
+      "sh": [
+        "./gradlew --no-daemon installDist",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario cross,border,reconnect"
+      ],
+      "powershell": [
+        "./gradlew.bat --no-daemon installDist",
+        "pwsh -NoProfile -File ./run-e2e.ps1",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect"
+      ]
+    },
+    "scenarios": [
+      "cross",
+      "border",
+      "reconnect",
+      "update"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "players",
+      "role": "external",
+      "title": "Players",
+      "config": null
+    },
+    {
+      "id": "session",
+      "role": "session",
+      "title": "Session node",
+      "config": "server/config/session.json"
+    },
+    {
+      "id": "zoneA",
+      "role": "zone",
+      "title": "Zone node A",
+      "config": "server/config/zone-a.json"
+    },
+    {
+      "id": "zoneB",
+      "role": "zone",
+      "title": "Zone node B",
+      "config": "server/config/zone-b.json"
+    },
+    {
+      "id": "instance",
+      "role": "instance",
+      "title": "Instance node \ud69eN",
+      "config": "server/config/instance.json"
+    },
+    {
+      "id": "location",
+      "role": "location-store",
+      "title": "Location Store",
+      "config": "docker-compose.yml"
+    }
+  ],
+  "channels": [
+    {
+      "name": "border",
+      "owner": "zoneA",
+      "mesh": "my-game-world"
+    },
+    {
+      "name": "border",
+      "owner": "zoneB",
+      "mesh": "my-game-world"
+    }
+  ],
+  "spots": [
+    {
+      "id": "zone-entry-a",
+      "kind": "entry",
+      "type": null,
+      "owner": "zoneA"
+    },
+    {
+      "id": "zone-entry-b",
+      "kind": "entry",
+      "type": null,
+      "owner": "zoneB"
+    },
+    {
+      "id": "zone-1",
+      "logicalId": "zone-1",
+      "kind": "user",
+      "type": "Zone",
+      "owner": "zoneA"
+    },
+    {
+      "id": "zone-2",
+      "logicalId": "zone-2",
+      "kind": "user",
+      "type": "Zone",
+      "owner": "zoneA"
+    },
+    {
+      "id": "zone-3",
+      "logicalId": "zone-3",
+      "kind": "user",
+      "type": "Zone",
+      "owner": "zoneA"
+    },
+    {
+      "id": "zone-4",
+      "logicalId": "zone-4",
+      "kind": "user",
+      "type": "Zone",
+      "owner": "zoneB"
+    },
+    {
+      "id": "zone-5",
+      "logicalId": "zone-5",
+      "kind": "user",
+      "type": "Zone",
+      "owner": "zoneB"
+    },
+    {
+      "id": "zone-6",
+      "logicalId": "zone-6",
+      "kind": "user",
+      "type": "Zone",
+      "owner": "zoneB"
+    },
+    {
+      "id": "dungeon",
+      "kind": "user",
+      "type": "Dungeon",
+      "owner": "instance",
+      "dynamic": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "players",
+      "to": "session",
+      "label": "STREAM"
+    },
+    {
+      "from": "session",
+      "to": "zoneA",
+      "label": "relay"
+    },
+    {
+      "from": "zoneA",
+      "to": "zoneB",
+      "label": "relocation"
+    },
+    {
+      "from": "zoneB",
+      "to": "zoneA",
+      "label": "border pub/sub",
+      "semantic": "border-updates"
+    },
+    {
+      "from": "zoneB",
+      "to": "instance",
+      "label": "GetOrCreate"
+    },
+    {
+      "from": "zoneB",
+      "to": "location",
+      "label": "Location / lease",
+      "semantic": "location-authority"
+    }
+  ]
+}
