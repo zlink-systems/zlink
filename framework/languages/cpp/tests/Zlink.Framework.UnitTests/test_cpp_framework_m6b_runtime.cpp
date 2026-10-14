@@ -1732,6 +1732,15 @@ class recording_actor_client_t final : public zlink::framework::actor_client_t
     zlink::framework::serializer_registry_t serializers;
 };
 
+// A handler awaits its Yield: the Spot gate is released where it suspends.
+zlink::framework::task_t<zlink::framework::message_t>
+await_other_actor_yield (recording_actor_client_t &client)
+{
+    using namespace zlink::framework;
+    actor_request_call_t request (client, actor_id_t ("actor-2"), "OtherRequest", message_t{});
+    co_return co_await request.yield_message ();
+}
+
 zlink::framework::task_t<zlink::framework::message_t>
 request_after_actor_await (recording_actor_client_t &client)
 {
@@ -2141,9 +2150,7 @@ void verify_actor_yield_releases_spot_gate_before_reply ()
 
     assert (queue.try_post_async ("different-member-actor-yield", [&] (auto complete) {
         runtime::actor_execution_scope_t actor_scope ("player:actor-1", "spot-1");
-        actor_request_call_t request (actor_client, actor_id_t ("actor-2"), "OtherRequest",
-                                      message_t{});
-        request_task = std::make_shared<task_t<message_t>> (request.yield_message ());
+        request_task = std::make_shared<task_t<message_t>> (await_other_actor_yield (actor_client));
         detail::observe_task_completion (
           *request_task,
           [&, request_task, complete = std::move (complete)] (const auto &result) mutable {

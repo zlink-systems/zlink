@@ -797,6 +797,15 @@ create_game_with_coroutine_submit (const zlink::http_client::client_t &client)
     co_return response;
 }
 
+// The execution turn's scheduler resumes the awaiting coroutine, so the turn
+// policy is observed by awaiting the server call instead of blocking on it.
+zlink::framework::task_t<zlink::http_client::http_response_t<create_game_reply_t>>
+await_server_response (
+  zlink::framework::task_t<zlink::http_client::http_response_t<create_game_reply_t>> pending)
+{
+    co_return co_await pending;
+}
+
 template <typename TAction>
 bool throws_protocol_error (TAction &&action, const std::string &message_part)
 {
@@ -1220,15 +1229,27 @@ TEST (ZLinkHttpClient, ServerClientDelegatesTurnPolicyToInjectedExecutionTurn)
 {
     loopback_http_server_t server;
     auto turn = std::make_shared<recording_execution_turn_t> ();
-    auto client = zlink::http_client::client_t::create (server.base_url ()).build_server (turn);
+    auto execute = std::make_shared<queued_execute_scheduler_t> ();
+    auto resume = std::make_shared<queued_resume_scheduler_t> ();
+    auto client = zlink::http_client::client_t::create (server.base_url ())
+                    .coroutines (execute, resume)
+                    .build_server (turn);
+    const auto complete_exchange = [&] {
+        EXPECT_TRUE (execute->run_one ());
+        resume->drain ();
+    };
 
-    const auto async_response = client.get ("/games").async<create_game_reply_t> ().result ();
-    ASSERT_TRUE (async_response);
+    auto async_response =
+      await_server_response (client.get ("/games").async<create_game_reply_t> ());
     EXPECT_FALSE (turn->last_release.load ());
+    complete_exchange ();
+    ASSERT_TRUE (async_response.result ());
 
-    const auto yield_response = client.get ("/games").yield<create_game_reply_t> ().result ();
-    ASSERT_TRUE (yield_response);
+    auto yield_response =
+      await_server_response (client.get ("/games").yield<create_game_reply_t> ());
     EXPECT_TRUE (turn->last_release.load ());
+    complete_exchange ();
+    ASSERT_TRUE (yield_response.result ());
     EXPECT_EQ (turn->prepare_calls.load (), 2);
     EXPECT_EQ (turn->resume_calls.load (), 2);
 
@@ -1237,6 +1258,7 @@ TEST (ZLinkHttpClient, ServerClientDelegatesTurnPolicyToInjectedExecutionTurn)
       callback_result;
     client.get ("/games").async<create_game_reply_t> (
       [&callback_result] (const auto &result) { callback_result.set_value (result); });
+    complete_exchange ();
     ASSERT_TRUE (callback_result.get_future ().get ());
     EXPECT_EQ (turn->callback_scheduler_calls.load (), 1);
     EXPECT_EQ (turn->callback_resume_calls.load (), 1);

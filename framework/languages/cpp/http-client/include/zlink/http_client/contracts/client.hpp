@@ -38,11 +38,9 @@ class execution_turn_t
 class framework_execution_turn_t final : public execution_turn_t
 {
   public:
-    zlink::framework::detail::task_scheduler_t prepare (bool release_turn) override
-    {
-        auto plan = zlink::framework::detail::prepare_serial_turn_await (release_turn);
-        return plan ? std::move (plan->scheduler) : zlink::framework::detail::task_scheduler_t{};
-    }
+    // A held turn resumes through the ordinary awaiter; a Yield turn is
+    // released by the awaiter where the handler suspends (execution gate §3).
+    zlink::framework::detail::task_scheduler_t prepare (bool) override { return {}; }
 
     zlink::framework::detail::task_scheduler_t callback_scheduler () override
     {
@@ -374,11 +372,8 @@ class server_request_builder_t : public request_builder_t
     template <typename T, typename TCallback> void async (TCallback &&callback) const
     {
         auto task = request_builder_t::async<T> ();
-        auto scheduler = _execution_turn->callback_scheduler ();
-        if (scheduler) {
-            task =
-              zlink::framework::detail::reschedule_task (std::move (task), std::move (scheduler));
-        }
+        task = zlink::framework::detail::with_task_resume_scheduler (
+          std::move (task), _execution_turn->callback_scheduler ());
         zlink::framework::detail::observe_task_completion (task,
                                                            std::forward<TCallback> (callback));
     }
@@ -387,22 +382,22 @@ class server_request_builder_t : public request_builder_t
     template <typename T>
     zlink::framework::task_t<http_response_t<T>> schedule (bool release_turn) const
     {
-        auto task = request_builder_t::async<T> ();
-        auto scheduler = _execution_turn->prepare (release_turn);
-        if (!scheduler) {
-            return task;
-        }
-        return zlink::framework::detail::reschedule_task (std::move (task), std::move (scheduler));
+        return turn_await (request_builder_t::async<T> (), release_turn);
     }
 
     zlink::framework::task_t<raw_http_response_t> schedule_raw (bool release_turn) const
     {
-        auto task = request_builder_t::async_raw ();
-        auto scheduler = _execution_turn->prepare (release_turn);
-        if (!scheduler) {
-            return task;
-        }
-        return zlink::framework::detail::reschedule_task (std::move (task), std::move (scheduler));
+        return turn_await (request_builder_t::async_raw (), release_turn);
+    }
+
+    template <typename T>
+    zlink::framework::task_t<T> turn_await (zlink::framework::task_t<T> task,
+                                            bool release_turn) const
+    {
+        task = zlink::framework::detail::with_task_resume_scheduler (
+          std::move (task), _execution_turn->prepare (release_turn));
+        return release_turn ? zlink::framework::detail::release_turn_on_suspend (std::move (task))
+                            : std::move (task);
     }
 
     std::shared_ptr<execution_turn_t> _execution_turn;

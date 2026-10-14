@@ -873,6 +873,44 @@ bool verify_rejection_retain_cancellation_race ()
     return true;
 }
 
+/* Cancellation §5.1: the owner ends a wait whose resume was rejected. A stop
+ * request whose owner callback has not run yet still leaves the wait to that
+ * callback, so the registration must outlive the rejected delivery. The extra
+ * stop callback is registered after the wait's callback and holds the stop
+ * request open between setting the stop flag and running the wait's callback. */
+bool verify_rejection_after_owner_stop_request ()
+{
+    using namespace zlink::framework;
+    std::stop_source owner;
+    task_completion_source_t<void> source;
+    auto view = detail::with_task_resume_scheduler (source.task (), [] (std::function<void ()>) {
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "executor rejection after owner stop request");
+    });
+    auto owned = [&] {
+        const detail::ambient_context_scope_t scope (nullptr, nullptr, owner.get_token ());
+        return observe_void_task (std::move (view));
+    }();
+    std::promise<void> stop_entered, delivery_finished;
+    auto entered = stop_entered.get_future ();
+    auto finished = delivery_finished.get_future ();
+    std::stop_callback hold_stop (owner.get_token (), [&] {
+        stop_entered.set_value ();
+        finished.wait ();
+    });
+    std::thread stopping ([&] { owner.request_stop (); });
+    entered.wait ();
+    const bool first = source.complete (result_t<void>::success ());
+    delivery_finished.set_value ();
+    stopping.join ();
+    // Every stop callback has returned, so the owner has ended the wait.
+    const auto cancelled = owned.result_for (std::chrono::milliseconds (0));
+    if (!cancelled)
+        std::cerr << "owner stop request lost a rejected wait\n";
+    return first && cancelled && !*cancelled
+           && cancelled->error_kind () == framework_error_kind_t::shutting_down;
+}
+
 enum class delivery_defect_t
 {
     pending_observer,
@@ -957,9 +995,10 @@ void run_delivery_defect (delivery_defect_t defect)
             detail::observe_task_terminal (task, callback);
             break;
         case delivery_defect_t::scheduled_observer:
-            task = detail::reschedule_task (std::move (task), [] (std::function<void ()>) {
-                throw std::logic_error ("internal scheduler defect");
-            });
+            task =
+              detail::with_task_resume_scheduler (std::move (task), [] (std::function<void ()>) {
+                  throw std::logic_error ("internal scheduler defect");
+              });
             detail::observe_task_completion (task, [] (const result_t<void> &) {});
             break;
         case delivery_defect_t::scheduled_after_delivery:
@@ -1120,6 +1159,7 @@ struct yield_resume_probe_t
     std::atomic_bool running{false};
     std::atomic_bool overlapped{false};
     std::atomic_bool ran_after_await{false};
+    std::atomic_bool resumed_in_open_turn{false};
     std::atomic_int failure_kind{-1};
     std::promise<void> done;
 };
@@ -1139,6 +1179,8 @@ yielding_lifecycle_handler (zlink::framework::request_call_t<int> call,
         co_return;
     }
     probe.ran_after_await.store (true);
+    const auto turn = detail::capture_current_serial_turn ();
+    probe.resumed_in_open_turn.store (turn && !turn->released ());
     probe.running.store (true);
     (void) queue.try_post ("yield-probe-application",
                            [&probe] { probe.overlapped.store (probe.running.load ()); });
@@ -1147,10 +1189,19 @@ yielding_lifecycle_handler (zlink::framework::request_call_t<int> call,
     probe.done.set_value ();
 }
 
-/* Handler turn and execution gate §3·§4: a Yield continuation resumes in a new
- * turn of the same Spot queue, and a Spot that closes during the wait ends the
- * handler with a failure instead of resuming it. */
-bool verify_yield_continuation_owned_by_spot_queue (bool close_before_reply)
+enum class yield_reply_order_t
+{
+    after_suspend,
+    after_close,
+    before_suspend,
+};
+
+/* Handler turn and execution gate §3·§4: a Yield releases the shared gate where
+ * the handler suspends, its continuation resumes in a new turn of the same
+ * Spot queue, and a Spot that closes during the wait ends the handler with a
+ * failure instead of resuming it. A reply that completes before the handler
+ * suspends leaves the turn unreleased, so the handler continues in that turn. */
+bool verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t order)
 {
     using namespace zlink::framework;
     namespace runtime = zlink::framework::runtime;
@@ -1159,13 +1210,14 @@ bool verify_yield_continuation_owned_by_spot_queue (bool close_before_reply)
                                              runtime::serial_execution_queue_t::error_handler_t{},
                                              runtime::serial_lane_policy_t::spot_wide ());
     task_completion_source_t<int> reply;
-    std::promise<void> submitted;
+    std::promise<void> suspended;
     yield_resume_probe_t probe;
     std::optional<task_t<void>> handler;
     request_call_t<int> call (
       "test.yield.leave", [&] (const std::string &, std::chrono::milliseconds,
                                const request_call_t<int>::metadata_map_t &) {
-          submitted.set_value ();
+          if (order == yield_reply_order_t::before_suspend)
+              reply.complete (result_t<int>::success (1));
           auto admitted = std::make_shared<task_completion_source_t<void>> ();
           admitted->complete (result_t<void>::success ());
           return request_task_t<int> (reply.task (), std::move (admitted));
@@ -1174,18 +1226,21 @@ bool verify_yield_continuation_owned_by_spot_queue (bool close_before_reply)
       "yielding-leave",
       [&] (auto complete) {
           handler.emplace (yielding_lifecycle_handler (call, queue, probe));
+          // The handler has returned from its first suspension or finished.
+          suspended.set_value ();
           complete ([] {});
       },
       runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle});
-    if (submitted.get_future ().wait_for (std::chrono::seconds (5)) != std::future_status::ready)
+    if (suspended.get_future ().wait_for (std::chrono::seconds (5)) != std::future_status::ready)
         return false;
-    if (close_before_reply)
+    if (order == yield_reply_order_t::after_close)
         queue.close ();
-    reply.complete (result_t<int>::success (1));
+    if (order != yield_reply_order_t::before_suspend)
+        reply.complete (result_t<int>::success (1));
     if (probe.done.get_future ().wait_for (std::chrono::seconds (5)) != std::future_status::ready)
         return false;
     queue.drain ();
-    if (close_before_reply) {
+    if (order == yield_reply_order_t::after_close) {
         if (probe.ran_after_await.load ()
             || probe.failure_kind.load ()
                  != static_cast<int> (framework_error_kind_t::shutting_down))
@@ -1196,11 +1251,15 @@ bool verify_yield_continuation_owned_by_spot_queue (bool close_before_reply)
                && probe.failure_kind.load ()
                     == static_cast<int> (framework_error_kind_t::shutting_down);
     }
-    if (!probe.ran_after_await.load () || probe.overlapped.load ())
-        std::cerr << "yield continuation left its Spot turn after_await="
-                  << probe.ran_after_await.load () << " overlapped=" << probe.overlapped.load ()
-                  << '\n';
-    return probe.ran_after_await.load () && !probe.overlapped.load ();
+    // A reply that is ready before the suspension leaves the turn unreleased.
+    const bool kept_turn =
+      order != yield_reply_order_t::before_suspend || probe.resumed_in_open_turn.load ();
+    if (!probe.ran_after_await.load () || !kept_turn || probe.overlapped.load ())
+        std::cerr << "yield continuation left its Spot turn order=" << static_cast<int> (order)
+                  << " after_await=" << probe.ran_after_await.load ()
+                  << " open_turn=" << probe.resumed_in_open_turn.load ()
+                  << " overlapped=" << probe.overlapped.load () << '\n';
+    return probe.ran_after_await.load () && kept_turn && !probe.overlapped.load ();
 }
 
 } // namespace
@@ -1284,7 +1343,7 @@ int main (int argc, char **argv)
     std::deque<std::function<void ()>> rescheduled_work;
     auto immediate_task =
       zlink::framework::task_t<int> (zlink::framework::result_t<int>::success (500));
-    auto rescheduled_task = zlink::framework::detail::reschedule_task (
+    auto rescheduled_task = zlink::framework::detail::with_task_resume_scheduler (
       std::move (immediate_task), [&rescheduled_work] (std::function<void ()> work) {
           rescheduled_work.push_back (std::move (work));
       });
@@ -1550,17 +1609,24 @@ int main (int argc, char **argv)
         || !verify_void_completion_rejection_race (true)
         || !verify_void_completion_rejection_race (false) || !verify_rejected_delivery_lifetime ()
         || !verify_rejected_ready_registration () || !verify_rejection_retain_cancellation_race ()
-        || !verify_cancelled_registration_lease () || !verify_stopped_registration_state_lifetime ()
+        || !verify_rejection_after_owner_stop_request () || !verify_cancelled_registration_lease ()
+        || !verify_stopped_registration_state_lifetime ()
         || !verify_ownerless_wait_after_context_stop ())
         return 30;
 
     zlink::framework::runtime::configure_handler_coroutine_executor (2);
-    const bool yield_kept_turn = verify_yield_continuation_owned_by_spot_queue (false);
-    const bool closed_yield_failed = verify_yield_continuation_owned_by_spot_queue (true);
+    const bool yield_kept_turn =
+      verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t::after_suspend);
+    const bool closed_yield_failed =
+      verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t::after_close);
+    const bool ready_reply_kept_turn =
+      verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t::before_suspend);
     zlink::framework::runtime::shutdown_handler_coroutine_executor ();
     if (!yield_kept_turn)
         return 31;
     if (!closed_yield_failed)
         return 32;
+    if (!ready_reply_kept_turn)
+        return 35;
     return 0;
 }
