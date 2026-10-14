@@ -4,7 +4,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -1267,69 +1266,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     reentryActorRef)
                             .thenApply(prepared -> publishPreparedTransferredActor(prepared));
                 });
-    }
-
-    public CompletionStage<PreparedTransferredActor> prepareDeferredJoinTarget(
-            ZLinkActorSpotRoutePackets.TransferRequest request,
-            ZLinkMessage incomingState,
-            DeferredJoinRelocationRoot root) {
-        byte[] incomingEncoded = incomingState.toEncodedPayload(serializer).bytes();
-        if (!Arrays.equals(incomingEncoded, root.applicationState())) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DATA_LOST,
-                            "direct Actor Join payload differs from canonical relocation root"));
-        }
-        String actorId = request.actorId();
-        String actorType = request.actorType();
-        String adapterKey = request.adapterKey();
-        requireActorId(actorId);
-        Class<? extends ZLinkActorFactory> factoryType = requireFactory(actorType);
-        return dispatches
-                .awaitTeardown(actorId)
-                .thenCompose(
-                        ignored -> {
-                            return detachMessageFollowProxyForReentry(actorId)
-                                    .thenCompose(
-                                            reentryActorRef -> {
-                                                if (actorRegistry.contains(actorId)) {
-                                                    return CompletableFuture
-                                                            .<PreparedTransferredActor>failedFuture(
-                                                                    new ZLinkConfigurationException(
-                                                                            "target runtime already"
-                                                                                    + " owns actor: "
-                                                                                    + actorId));
-                                                }
-                                                if (adapterKey != null
-                                                        && !adapterKey.equals(actorType)) {
-                                                    return CompletableFuture
-                                                            .<PreparedTransferredActor>failedFuture(
-                                                                    new ZLinkConfigurationException(
-                                                                            "actor transfer adapter"
-                                                                                    + " key does not"
-                                                                                    + " match actor"
-                                                                                    + " type: "
-                                                                                    + adapterKey));
-                                                }
-                                                ZLinkMessage transferState =
-                                                        ZLinkMessage.fromEncoded(
-                                                                ZLinkEncodedPayload.from(
-                                                                        root.applicationState()),
-                                                                serializer);
-                                                return prepareTransferredActor(
-                                                        actorId,
-                                                        actorType,
-                                                        adapterKey,
-                                                        transferState,
-                                                        factoryType,
-                                                        reentryActorRef == null
-                                                                ? new ZLinkBackendActorRef(
-                                                                        spotNode.routingId(),
-                                                                        actorId,
-                                                                        request.actorGeneration())
-                                                                : reentryActorRef);
-                                            });
-                        });
     }
 
     /**

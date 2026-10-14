@@ -16,7 +16,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
-import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -312,8 +311,6 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         }
         ZLinkActorJoinRecoveryCodec.Recovery recovery = decoded.orElseThrow();
         var participant = request.participants().getFirst();
-        byte[] expectedReply =
-                candidate.reply().toEncodedPayload(spots.serializerForSpot()).bytes();
         requireRecoveryFence(recovery.relocationId().equals(relocationId), "handoff id");
         requireRecoveryFence(recovery.actorId().equals(candidate.actorId()), "actor id");
         requireRecoveryFence(recovery.actorType().equals(candidate.actorType()), "actor type");
@@ -352,11 +349,6 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                 "request content type");
         requireRecoveryFence(
                 Arrays.equals(recovery.request(), candidate.rawRequest()), "request body");
-        requireRecoveryFence(
-                ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE.equals(
-                        recovery.replyContentType()),
-                "reply content type");
-        requireRecoveryFence(Arrays.equals(recovery.reply(), expectedReply), "reply body");
         requireRecoveryFence(
                 recovery.sourceNodeRid().equals(request.sourceNodeRid()),
                 "stage source node routing id");

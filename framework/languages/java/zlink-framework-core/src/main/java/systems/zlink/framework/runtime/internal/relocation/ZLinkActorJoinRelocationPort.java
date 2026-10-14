@@ -169,7 +169,6 @@ public interface ZLinkActorJoinRelocationPort {
             long targetOwnerLeaseGeneration,
             Object targetSpot,
             Function<ZLinkActor, CompletionStage<Void>> joined,
-            ZLinkMessage reply,
             String requestContentType,
             byte[] rawRequest,
             Duration timeout) {
@@ -182,7 +181,6 @@ public interface ZLinkActorJoinRelocationPort {
             Objects.requireNonNull(targetNodeRid, "targetNodeRid");
             Objects.requireNonNull(targetSpot, "targetSpot");
             Objects.requireNonNull(joined, "joined");
-            Objects.requireNonNull(reply, "reply");
             Objects.requireNonNull(requestContentType, "requestContentType");
             rawRequest = Objects.requireNonNull(rawRequest, "rawRequest").clone();
             if (relocationId.equals(new UUID(0L, 0L))
