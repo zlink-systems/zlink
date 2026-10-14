@@ -48,75 +48,6 @@ public interface ZLinkActorJoinRelocationPort {
             String requestContentType,
             byte[] rawRequest,
             String replyContentType) {
-        public Goal(
-                UUID relocationId,
-                ZLinkActorJoinOperationId operationId,
-                ZLinkBackendActorRef sourceActor,
-                String actorType,
-                String targetSpotId,
-                long targetSpotGeneration,
-                RoutingId targetNodeRid,
-                long targetNodeGeneration,
-                long targetSpotAuthorityOwnerGeneration,
-                long targetOwnerLeaseGeneration,
-                byte[] rawReply,
-                ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurnSeal) {
-            this(
-                    relocationId,
-                    operationId,
-                    sourceActor,
-                    actorType,
-                    targetSpotId,
-                    targetSpotGeneration,
-                    targetNodeRid,
-                    targetNodeGeneration,
-                    targetSpotAuthorityOwnerGeneration,
-                    targetOwnerLeaseGeneration,
-                    rawReply,
-                    activeTurnSeal,
-                    0L,
-                    systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile
-                            .CONTENT_TYPE,
-                    new byte[0],
-                    systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile
-                            .CONTENT_TYPE);
-        }
-
-        public Goal(
-                UUID relocationId,
-                ZLinkActorJoinOperationId operationId,
-                ZLinkBackendActorRef sourceActor,
-                String actorType,
-                String targetSpotId,
-                long targetSpotGeneration,
-                RoutingId targetNodeRid,
-                long targetNodeGeneration,
-                long targetSpotAuthorityOwnerGeneration,
-                long targetOwnerLeaseGeneration,
-                byte[] rawReply,
-                ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurnSeal,
-                long advertisedReceiveChunkLimitBytes) {
-            this(
-                    relocationId,
-                    operationId,
-                    sourceActor,
-                    actorType,
-                    targetSpotId,
-                    targetSpotGeneration,
-                    targetNodeRid,
-                    targetNodeGeneration,
-                    targetSpotAuthorityOwnerGeneration,
-                    targetOwnerLeaseGeneration,
-                    rawReply,
-                    activeTurnSeal,
-                    advertisedReceiveChunkLimitBytes,
-                    systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile
-                            .CONTENT_TYPE,
-                    new byte[0],
-                    systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile
-                            .CONTENT_TYPE);
-        }
-
         public Goal {
             Objects.requireNonNull(relocationId, "relocationId");
             Objects.requireNonNull(operationId, "operationId");
@@ -127,15 +58,13 @@ public interface ZLinkActorJoinRelocationPort {
             rawReply = Objects.requireNonNull(rawReply, "rawReply").clone();
             requestContentType = Objects.requireNonNull(requestContentType, "requestContentType");
             rawRequest = Objects.requireNonNull(rawRequest, "rawRequest").clone();
-            replyContentType = Objects.requireNonNull(replyContentType, "replyContentType");
             if (relocationId.equals(new UUID(0L, 0L))
                     || targetSpotGeneration <= 0
                     || targetNodeGeneration == 0
                     || targetSpotAuthorityOwnerGeneration <= 0
                     || targetOwnerLeaseGeneration <= 0
                     || advertisedReceiveChunkLimitBytes < 0
-                    || requestContentType.isBlank()
-                    || replyContentType.isBlank()) {
+                    || requestContentType.isBlank()) {
                 throw new IllegalArgumentException(
                         "direct Join relocation target fence is invalid");
             }
