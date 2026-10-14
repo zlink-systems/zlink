@@ -1,6 +1,6 @@
 # MyGame board tables
 
-Session node와 Table node 두 process가 Redis Location Store를 사용한다. TypeScript e2e client가 공개 stream connector로 게임과 재접속, node 교체를 검증한다.
+This project runs a Session node and Table nodes that share a Redis Location Store. A TypeScript e2e client uses the public stream connector to verify the game, reconnection, and node replacement. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
 
 ```mermaid
 flowchart LR
@@ -9,14 +9,14 @@ flowchart LR
     table -->|Location / lease| location[(Location Store)]
 ```
 
-## 준비물
+## Prerequisites
 
-- Node.js 22 이상과 npm. 공개 binding 1.19.0의 지원 범위는 `>=22`다.
-- Docker Engine과 Docker Compose v2. 현재 shell에서 Docker에 접근할 수 있어야 한다.
-- Windows는 PowerShell 7, Linux와 WSL은 Bash를 사용한다.
-- 공개 native binding이 지원하는 Windows x64 또는 Linux x64 환경을 사용한다.
+- Node.js 22 or later with npm. The supported range of public binding 1.19.0 is `>=22`.
+- Docker Engine with Docker Compose v2, reachable from the current shell.
+- PowerShell 7 on Windows; Bash on Linux and WSL.
+- A Windows x64 or Linux x64 environment supported by the published native binding.
 
-Framework package는 `0.30.0`, binding은 `1.19.0`으로 고정한다. 이 디렉터리만 복사하여 public npm registry에서 설치한다.
+The Framework package is pinned to `0.30.0` and the binding to `1.19.0`. Copy only this directory and install from the public npm registry.
 
 ## Build
 
@@ -24,7 +24,7 @@ Framework package는 `0.30.0`, binding은 `1.19.0`으로 고정한다. 이 디�
 npm ci && npm run build
 ```
 
-TypeScript를 컴파일하고 계약 DTO에서 Framework 기본 typed JSON schema를 생성한다. 서버는 생성된 schema를 공개 `ZLinkPacket` 등록 경로로 로드한다. 메시지별 codec은 추가하지 않는다.
+This compiles TypeScript and generates the Framework default typed JSON schema from the contract DTOs. The server loads the generated schema through the public `ZLinkPacket` registration path. Do not add per-message codecs.
 
 ## Local e2e
 
@@ -38,30 +38,36 @@ pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect
 ```
 
-두 script는 `npm ci`, build, 동일 runner를 실행한다. Runner는 구조 검사 뒤 고유 Compose project로 Redis를 시작하며 loopback 임시 포트만 공개한다. 노드 endpoint와 고유 Redis prefix를 `.logs/run-<id>/` 설정에 기록한다. `READY`를 받은 뒤 시나리오를 실행하고 자신이 시작한 process와 Compose project를 정리한다.
+Both scripts run `npm ci`, the build, and the same runner. After the structure check, the runner starts Redis in a uniquely named Compose project and exposes only an ephemeral loopback port. It records the node endpoints and a unique Redis prefix in the configuration under `.logs/run-<id>/`. After receiving `READY`, it runs the scenarios and then cleans up the processes and the Compose project it started.
 
-| 시나리오  | 판정                                                                                                     |
-| --------- | -------------------------------------------------------------------------------------------------------- |
-| table     | 2명 착석, 비공개 카드, 차례 위반 거부, 결산 승자와 칩 보존                                               |
-| reconnect | 새 Session에 같은 Actor ID·generation·좌석·칩·카드·차례 복원                                             |
-| update    | PlannedMaintenance drain, RELOCATED와 SAFE_TO_SHUTDOWN, 연결·상태 보존, 종료·대체 process에서 새 판 완료 |
+| Scenario | Verified behavior |
+| --- | --- |
+| table | Two players take seats, cards stay private, an out-of-turn action is rejected, and settlement preserves the winner and chips. |
+| reconnect | A new Session restores the same Actor ID, generation, seat, chips, cards, and turn. |
+| update | PlannedMaintenance drain, RELOCATED and SAFE_TO_SHUTDOWN, connection and state preserved, and a new hand completes on the replacement process after shutdown. |
 
-결과는 `✓ <id>` 또는 `✗ <id>`와 `Scenarios: N/M passed`로 출력한다. 실패 또는 정리 실패는 종료 코드 1을 반환한다. 첫 실패의 node stderr와 client JSONL을 보존한다. node stderr에는 dispatch `Normal` message flow를 OpenTelemetry log exporter로 기록한다.
+Results print as `✓ <id>` or `✗ <id>` followed by `Scenarios: N/M passed`. A failure or a cleanup failure returns exit code 1. The node stderr and client JSONL of the first failure are retained. Node stderr records dispatch `Normal` message flow through the OpenTelemetry log exporter.
 
-구조만 검사하려면 `npm run build` 후 `node dist/e2e/runner.js --check-structure`를 실행한다. 검사기는 실제 structure·configuration 파일을 검사하며 자체 시험은 실행하지 않는다.
+To check only the structure, run `npm run build` and then `node dist/e2e/runner.js --check-structure`. The checker validates the actual structure and configuration files and does not run its own self-tests.
 
-## 배포 순서
+## Known issues
 
-1. Redis를 준비하고 각 node 설정의 `redisEndpoint`, 배포별 고유 `keyPrefix`를 지정한다.
-2. Table A·B를 `node dist/server/table/main.js server/config/table-a.json`과 `table-b.json`으로 시작한다. 서로 접근 가능한 `meshEndpoint`를 지정한다.
-3. Session을 `node dist/server/session/main.js server/config/session.json`으로 시작한다. 외부 client용 `streamEndpoint`는 `ws://` 또는 공개 계약이 지원하는 `wss://` endpoint다.
-4. 각 process의 `READY`를 확인한다. 운영 제어는 표준 입력 `drain`, `shutdown`을 사용한다. Table drain은 `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN` 순서로 확인한 뒤 종료한다.
+Windows Node 25.6.0 and WSL Node 22.23.2 passed `table` and `reconnect` on public `0.30.0`. `update` did not reach `RELOCATED` because the target runtime failed with `Relocation payload participant inventory does not match Location Store`. This is the existing #1725, a Node host relocation participant inventory mismatch. The template reports the failure without deadlines, retries, or state workarounds, so the node replacement scenario is not considered verified on public `0.30.0`.
 
-기본 설정은 loopback 자동 포트를 사용한다. 운영에서는 접근 가능한 endpoint와 Redis를 명시한다. Table stable type의 placement와 route 갱신은 Framework가 결정한다.
+In the selected `table,reconnect` run, all game assertions also passed, but Table shutdown returned `ForceStopped/TeardownFailed` after the physical close. This corresponds to #1690, which is fixed in public `0.30.1`; this template uses `0.30.0` as specified. The runner therefore still returns exit code 1 in this case. Distinguish the passing scenario lines from overall run success.
 
-## 확장 지점과 검증
+## Deployment sequence
 
-`server/table/domain/table-state.ts`가 게임 규칙과 application snapshot을 소유한다. Framework handler와 relocation adapter는 `server/table/infrastructure/`에 있다. Session 인증을 추가할 때는 첫 `JoinTableRequest`에서 player identity를 검증한다. 현재 playerId는 e2e 입력이며 제품 인증 기능은 포함하지 않는다.
+1. Prepare Redis and set `redisEndpoint` and a deployment-specific unique `keyPrefix` in each node configuration.
+2. Start Table A and B with `node dist/server/table/main.js server/config/table-a.json` and `table-b.json`. Set mutually reachable `meshEndpoint` values.
+3. Start Session with `node dist/server/session/main.js server/config/session.json`. The external client `streamEndpoint` is a `ws://` endpoint, or a `wss://` endpoint if the public contract supports it.
+4. Confirm `READY` from each process. Operational control uses the standard input commands `drain` and `shutdown`. For a Table drain, confirm `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN` in that order before shutting down.
+
+The default configuration uses loopback automatic ports. In production, specify reachable endpoints and Redis explicitly. The Framework decides placement and route updates for the Table stable type.
+
+## Extension points and verification
+
+`server/table/domain/table-state.ts` owns the game rules and the application snapshot. The Framework handlers and the relocation adapter are in `server/table/infrastructure/`. To add Session authentication, validate the player identity in the first `JoinTableRequest`. The current playerId is an e2e input; no product authentication is included.
 
 ```sh
 npm run typecheck
@@ -70,14 +76,14 @@ npm run format:check
 node --test dist/e2e/domain.test.js
 ```
 
-확장할 때 [AGENTS.md](AGENTS.md)의 공개 API 경계와 상태 소유 규칙을 따른다.
+When extending, follow the public API boundaries and state ownership rules in [AGENTS.md](AGENTS.md).
 
 ## Windows
 
-Runner는 child process를 `windowsHide: true`로 시작한다. PowerShell 7에서 실행하며 Unix shell을 요구하지 않는다. Native addon이 포함되므로 Node 지원 범위와 CPU architecture를 확인한다. 프로젝트는 저장소 root의 npm 설치나 local package feed를 사용하지 않는다.
+The runner starts child processes with `windowsHide: true`. Run it in PowerShell 7; no Unix shell is required. The project includes a native addon, so check the Node support range and the CPU architecture. The project does not use an npm install at the repository root or a local package feed.
 
-## 공개 0.30.0 검증 제한
+## 한국어 실행 안내
 
-Windows Node 25.6.0과 WSL Node 22.23.2에서 `table`과 `reconnect`는 통과했다. `update`는 target runtime의 `Relocation payload participant inventory does not match Location Store` 실패로 `RELOCATED`에 도달하지 못했다. 기존 #1725의 Node host relocation participant inventory 불일치이며, template는 deadline·retry·상태 우회 없이 실패를 보고한다. 따라서 공개 0.30.0에서 이 template의 node 교체 시나리오는 검증 완료로 판정하지 않는다.
+이 프로젝트는 Session node와 Table node 두 개, 그리고 Redis Location Store를 실행한다. `run-e2e.sh`와 `run-e2e.ps1`은 같은 runner를 사용하며, 착석과 카드 비공개, 재접속, node 교체(update)를 공개 stream connector로 확인한 뒤 자신이 시작한 process와 Compose project를 정리한다.
 
-`table,reconnect` 선택 실행에서도 게임 판정은 모두 통과했지만 physical close 뒤 Table shutdown이 `ForceStopped/TeardownFailed`를 반환했다. 공개 0.30.1에서 수정된 #1690에 해당하며, 이 템플릿은 명세에 따라 0.30.0을 사용한다. 따라서, runner는 이 경우에도 종료 코드 1을 반환한다. 시나리오 통과 줄과 전체 실행 성공을 구분하여 확인한다.
+처음에는 `npm ci && npm run build`로 빌드하고, 전체 시나리오 또는 `--scenario table,reconnect`로 선택하여 실행한다. 실패하면 종료 코드 1을 반환하고 첫 실패의 node stderr와 client JSONL을 `.logs/run-<id>/` 아래에 남긴다. 공개 0.30.0에서는 `update`가 #1725 때문에, `table,reconnect`는 종료 단계의 #1690 때문에 종료 코드 1이 될 수 있으므로 시나리오 통과 줄과 전체 성공을 구분하여 확인한다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.
