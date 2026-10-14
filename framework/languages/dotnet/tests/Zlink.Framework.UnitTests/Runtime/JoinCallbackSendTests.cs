@@ -74,6 +74,12 @@ public sealed class JoinCallbackSendTests
                 path,
                 $"iterations={iterations} submitBytesPerMessage={(double)submitBytes / iterations} totalBytesPerMessage={(double)totalBytes / iterations} incomplete={incomplete} callerThreadHops={callerThreadHops} sameSubmitThread={sameSubmitThread}\n"
             );
+        if (Environment.GetEnvironmentVariable("ZLINK_LOCAL_SEND_SUBMIT_BASELINE") is { } baseline)
+            Assert.True(
+                (double)submitBytes / iterations
+                    <= double.Parse(baseline, System.Globalization.CultureInfo.InvariantCulture),
+                $"Submit allocated {(double)submitBytes / iterations} B/message; baseline {baseline}."
+            );
     }
 
     [Theory]

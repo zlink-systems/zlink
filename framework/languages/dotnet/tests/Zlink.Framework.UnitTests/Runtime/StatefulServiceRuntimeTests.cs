@@ -22,6 +22,8 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed partial class StatefulServiceRuntimeTests
 {
+    private const int LocalActorPayloadSize = 4096;
+
     [Fact]
     public void ActorCreationWireAndDurableTerminalPreserveIdentityAndRejectedReply()
     {
@@ -549,13 +551,12 @@ public sealed partial class StatefulServiceRuntimeTests
     [Fact]
     public async Task LocalActorDirectSendRetainsPayloadUntilMailboxRelease()
     {
-        const int payloadSize = 4096;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = NewNode(context, "local-direct-actor-node");
         var actor = node.CreateActor("local-direct-actor");
         DrainAndDispose(node);
 
-        var payload = Message.Allocate(payloadSize);
+        var payload = Message.Allocate(LocalActorPayloadSize);
         using var witness = payload.Copy();
         try
         {
@@ -588,6 +589,91 @@ public sealed partial class StatefulServiceRuntimeTests
         }
         Assert.Equal(1, witness.RefCount);
         DrainAndDispose(node);
+        Assert.Equal(1, witness.RefCount);
+    }
+
+    [Fact]
+    public async Task OwnedLocalActorDirectSendTransfersTheOriginalPayload()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "owned-local-actor-node");
+        var actor = node.CreateActor("owned-local-actor");
+        DrainAndDispose(node);
+        var payload = Message.Allocate(LocalActorPayloadSize);
+        using var witness = payload.Copy();
+        await node.SendToActorDirectAsync(
+            actor,
+            [payload],
+            SendFlags.None,
+            CancellationToken.None,
+            ownsParts: true
+        );
+        Assert.Equal(2, witness.RefCount);
+        using (var ready = new MeshReadyBatch())
+        {
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            using var claim = ready.TakeClaim(0);
+            using var received = new MeshReceiveBatch();
+            Assert.True(claim.Receive(received, RecvFlags.DontWait));
+            var transferred = received.TakeMessage(0);
+            Assert.Same(payload, Assert.Single(transferred));
+            received.Reset();
+            Assert.Equal(2, witness.RefCount);
+            foreach (var part in transferred)
+                part.Dispose();
+        }
+        Assert.Equal(1, witness.RefCount);
+        DrainAndDispose(node);
+        Assert.Equal(1, witness.RefCount);
+    }
+
+    [Fact]
+    public async Task OwnedLocalActorDirectSendRejectionReleasesTheOriginalPayload()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "owned-rejected-actor-node");
+        var actor = new ActorRef("missing-actor", 1, "play", node.RoutingId);
+        var payload = Message.Allocate(LocalActorPayloadSize);
+        using var witness = payload.Copy();
+        await Assert.ThrowsAsync<ZlinkSubmitException>(async () =>
+            await node.SendToActorDirectAsync(
+                actor,
+                [payload],
+                SendFlags.None,
+                CancellationToken.None,
+                ownsParts: true
+            )
+        );
+        Assert.Equal(1, witness.RefCount);
+    }
+
+    [Fact]
+    public async Task OwnedLocalActorDirectSendAfterShutdownReleasesTheOriginalPayload()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "owned-closed-actor",
+            applicationJobQueue: jobs
+        );
+        node.SetRoutingId(RoutingId.From("owned-closed-actor-node"));
+        node.Start();
+        var actor = node.CreateActor("owned-closed-actor");
+        await node.DisposeAsync();
+        var payload = Message.Allocate(LocalActorPayloadSize);
+        using var witness = payload.Copy();
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await node.SendToActorDirectAsync(
+                actor,
+                [payload],
+                SendFlags.None,
+                CancellationToken.None,
+                ownsParts: true
+            )
+        );
         Assert.Equal(1, witness.RefCount);
     }
 

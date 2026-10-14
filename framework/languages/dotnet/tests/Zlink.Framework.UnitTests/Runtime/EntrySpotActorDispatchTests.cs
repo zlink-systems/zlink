@@ -13763,13 +13763,20 @@ public sealed partial class EntrySpotActorDispatchTests
             CancellationToken cancellationToken
         )
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var result = SendToActor(actor, parts, flags);
-            return result == SubmitResult.Ok
-                ? ValueTask.CompletedTask
-                : ValueTask.FromException(
-                    new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result)
-                );
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var result = SendToActor(actor, parts, flags);
+                return result == SubmitResult.Ok
+                    ? ValueTask.CompletedTask
+                    : ValueTask.FromException(
+                        new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result)
+                    );
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+            }
         }
 
         public ValueTask<IReadOnlyList<Message>> RequestToActorAsync(

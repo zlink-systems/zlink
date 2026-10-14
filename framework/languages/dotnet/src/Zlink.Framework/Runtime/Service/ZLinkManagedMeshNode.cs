@@ -4506,7 +4506,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ActorRef actorRef,
         IReadOnlyList<Message> parts,
         SendFlags flags,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool ownsParts = false
     )
     {
         if (IsLocalTarget(actorRef.NodeRid))
@@ -4517,41 +4518,50 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 request: false,
                 operation: null,
                 flags,
-                out _
+                out _,
+                ownsParts
             );
             if (result != SubmitResult.Ok)
                 throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
             return;
         }
-        var peer = await RequireDirectPeerAsync(actorRef.NodeRid).ConfigureAwait(false);
-        if (
-            !_observedActorAuthorities.TryGetValue(
-                new ObservedActorAuthorityKey(actorRef.NodeRid, actorRef.ActorId),
-                out var authority
+        try
+        {
+            var peer = await RequireDirectPeerAsync(actorRef.NodeRid).ConfigureAwait(false);
+            if (
+                !_observedActorAuthorities.TryGetValue(
+                    new ObservedActorAuthorityKey(actorRef.NodeRid, actorRef.ActorId),
+                    out var authority
+                )
+                || peer.LifecycleGeneration != authority.TargetNodeGeneration
             )
-            || peer.LifecycleGeneration != authority.TargetNodeGeneration
-        )
-            throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
-        var operationId = NextStandaloneOperationId();
-        var head = ZLinkServiceWireCodec.EncodeActor(
-            ServiceWireConstants.Command.ActorSend,
-            0,
-            operationId,
-            actorRef,
-            actorRef.NodeRid,
-            authority.TargetNodeGeneration,
-            authority.AuthorityOwnerGeneration,
-            authority.OwnerLeaseGeneration,
-            hasMetadata: false,
-            deadlineUnixMs: 0
-        );
-        await SendDirectWireAsync(
-                peer.PhysicalRoutingId,
-                CreateStatefulWire(head, parts, default),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: actorRef.NodeRid);
+                throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
+            var operationId = NextStandaloneOperationId();
+            var head = ZLinkServiceWireCodec.EncodeActor(
+                ServiceWireConstants.Command.ActorSend,
+                0,
+                operationId,
+                actorRef,
+                actorRef.NodeRid,
+                authority.TargetNodeGeneration,
+                authority.AuthorityOwnerGeneration,
+                authority.OwnerLeaseGeneration,
+                hasMetadata: false,
+                deadlineUnixMs: 0
+            );
+            await SendDirectWireAsync(
+                    peer.PhysicalRoutingId,
+                    CreateStatefulWire(head, parts, default),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: actorRef.NodeRid);
+        }
+        finally
+        {
+            if (ownsParts)
+                DisposeParts(parts);
+        }
     }
 
     private SubmitResult SubmitActor(
@@ -4560,43 +4570,131 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         bool request,
         PendingOperation? operation,
         SendFlags flags,
-        out ulong acceptedSequence
+        out ulong acceptedSequence,
+        bool ownsParts = false
     )
     {
-        ArgumentNullException.ThrowIfNull(parts);
-        if (parts.Count == 0)
-            throw new ArgumentException("Application payload is required.", nameof(parts));
-        var routedOperationId = operation?.OperationId ?? NextStandaloneOperationId();
-        acceptedSequence = 0;
-        if (actorRef.NodeRid != _routingId)
+        try
         {
-            var peer = RunState(() =>
+            ArgumentNullException.ThrowIfNull(parts);
+            if (parts.Count == 0)
+                throw new ArgumentException("Application payload is required.", nameof(parts));
+            var routedOperationId = operation?.OperationId ?? NextStandaloneOperationId();
+            acceptedSequence = 0;
+            if (actorRef.NodeRid != _routingId)
             {
-                _peersByRid.TryGetValue(actorRef.NodeRid, out var value);
-                return value;
-            });
-            if (peer is null || !peer.Admitted)
-                return SubmitResult.NotConnected;
-            if (
-                !_observedActorAuthorities.TryGetValue(
-                    new ObservedActorAuthorityKey(actorRef.NodeRid, actorRef.ActorId),
-                    out var authority
+                var peer = RunState(() =>
+                {
+                    _peersByRid.TryGetValue(actorRef.NodeRid, out var value);
+                    return value;
+                });
+                if (peer is null || !peer.Admitted)
+                    return SubmitResult.NotConnected;
+                if (
+                    !_observedActorAuthorities.TryGetValue(
+                        new ObservedActorAuthorityKey(actorRef.NodeRid, actorRef.ActorId),
+                        out var authority
+                    )
+                    || peer.LifecycleGeneration != authority.TargetNodeGeneration
                 )
-                || peer.LifecycleGeneration != authority.TargetNodeGeneration
+                    return SubmitResult.NotFound;
+                var head = ZLinkServiceWireCodec.EncodeActor(
+                    request
+                        ? ServiceWireConstants.Command.ActorRequest
+                        : ServiceWireConstants.Command.ActorSend,
+                    operation?.OperationId.Low ?? 0,
+                    routedOperationId,
+                    actorRef,
+                    actorRef.NodeRid,
+                    authority.TargetNodeGeneration,
+                    authority.AuthorityOwnerGeneration,
+                    authority.OwnerLeaseGeneration,
+                    hasMetadata: false,
+                    deadlineUnixMs: request
+                        ? operation?.DeadlineUnixMs
+                            ?? throw new InvalidOperationException(
+                                "Actor requests require an absolute deadline."
+                            )
+                        : 0
+                );
+                return SubmitStatefulWire(
+                    peer,
+                    head,
+                    parts,
+                    flags,
+                    default,
+                    request ? operation : null
+                );
+            }
+            if (
+                !_actors.TryGetValue(
+                    ZLinkActorId.FromBoundary(actorRef.ActorId, nameof(actorRef)),
+                    out var actor
+                )
+                || actor.Ref.NodeRid != actorRef.NodeRid
+                || actor.Draining
             )
                 return SubmitResult.NotFound;
-            var head = ZLinkServiceWireCodec.EncodeActor(
-                request
-                    ? ServiceWireConstants.Command.ActorRequest
-                    : ServiceWireConstants.Command.ActorSend,
-                operation?.OperationId.Low ?? 0,
+            var hasLocalAuthority = _observedActorAuthorities.TryGetValue(
+                new ObservedActorAuthorityKey(actorRef.NodeRid, actorRef.ActorId),
+                out var localAuthority
+            );
+            if (
+                hasLocalAuthority
+                && (
+                    localAuthority.TargetNodeGeneration != _lifecycleGeneration
+                    || localAuthority.AuthorityOwnerGeneration != actor.AuthorityOwnerGeneration
+                    || localAuthority.OwnerLeaseGeneration
+                        != checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration))
+                )
+            )
+                return SubmitResult.NotFound;
+            if (!hasLocalAuthority)
+                localAuthority = new ObservedAuthority(
+                    _lifecycleGeneration,
+                    actor.AuthorityOwnerGeneration,
+                    checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration))
+                );
+            acceptedSequence = actor.NextSequence();
+            Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
+            if (request && operation is not null)
+                reply = replyParts =>
+                {
+                    // The replier observes no completion result; the requester
+                    // observes it through the operation it awaits.
+                    _ = CompleteManagedOperationAsync(
+                        operation,
+                        RequestResult.Ok,
+                        0,
+                        CloneParts(replyParts)
+                    );
+                    return SubmitResult.Ok;
+                };
+            var retained = ownsParts ? parts : CloneParts(parts);
+            if (ownsParts)
+                parts = Array.Empty<Message>();
+            var record = new MeshReceiveRecord(
+                request ? MeshRecordKind.ActorRequest : MeshRecordKind.ActorSend,
+                MeshReadyDomains.Application,
+                _routingId,
+                string.Empty,
+                _lifecycleGeneration,
+                default,
                 routedOperationId,
-                actorRef,
-                actorRef.NodeRid,
-                authority.TargetNodeGeneration,
-                authority.AuthorityOwnerGeneration,
-                authority.OwnerLeaseGeneration,
-                hasMetadata: false,
+                request ? MeshOperationKind.ActorRequest : default,
+                null,
+                null,
+                null,
+                0,
+                retained.Count,
+                0,
+                0,
+                null,
+                reply,
+                targetNodeGeneration: localAuthority.TargetNodeGeneration,
+                authorityOwnerGeneration: localAuthority.AuthorityOwnerGeneration,
+                ownerLeaseGeneration: localAuthority.OwnerLeaseGeneration,
+                replyRouteId: request ? operation?.OperationId.Low ?? 0 : 0,
                 deadlineUnixMs: request
                     ? operation?.DeadlineUnixMs
                         ?? throw new InvalidOperationException(
@@ -4604,96 +4702,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         )
                     : 0
             );
-            return SubmitStatefulWire(
-                peer,
-                head,
-                parts,
-                flags,
-                default,
-                request ? operation : null
+            EnqueueOwned(
+                MailboxKey.ForActor(actor, MeshReadyDomains.Application),
+                record,
+                retained,
+                requestAdmission: operation?.RequestAdmission
             );
+            return SubmitResult.Ok;
         }
-        if (
-            !_actors.TryGetValue(
-                ZLinkActorId.FromBoundary(actorRef.ActorId, nameof(actorRef)),
-                out var actor
-            )
-            || actor.Ref.NodeRid != actorRef.NodeRid
-            || actor.Draining
-        )
-            return SubmitResult.NotFound;
-        var hasLocalAuthority = _observedActorAuthorities.TryGetValue(
-            new ObservedActorAuthorityKey(actorRef.NodeRid, actorRef.ActorId),
-            out var localAuthority
-        );
-        if (
-            hasLocalAuthority
-            && (
-                localAuthority.TargetNodeGeneration != _lifecycleGeneration
-                || localAuthority.AuthorityOwnerGeneration != actor.AuthorityOwnerGeneration
-                || localAuthority.OwnerLeaseGeneration
-                    != checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration))
-            )
-        )
-            return SubmitResult.NotFound;
-        if (!hasLocalAuthority)
-            localAuthority = new ObservedAuthority(
-                _lifecycleGeneration,
-                actor.AuthorityOwnerGeneration,
-                checked((ulong)Volatile.Read(ref _localOwnerLeaseGeneration))
-            );
-        acceptedSequence = actor.NextSequence();
-        Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
-        if (request && operation is not null)
-            reply = replyParts =>
-            {
-                // The replier observes no completion result; the requester
-                // observes it through the operation it awaits.
-                _ = CompleteManagedOperationAsync(
-                    operation,
-                    RequestResult.Ok,
-                    0,
-                    CloneParts(replyParts)
-                );
-                return SubmitResult.Ok;
-            };
-        var retained = CloneParts(parts);
-        var record = new MeshReceiveRecord(
-            request ? MeshRecordKind.ActorRequest : MeshRecordKind.ActorSend,
-            MeshReadyDomains.Application,
-            _routingId,
-            string.Empty,
-            _lifecycleGeneration,
-            default,
-            routedOperationId,
-            request ? MeshOperationKind.ActorRequest : default,
-            null,
-            null,
-            null,
-            0,
-            retained.Count,
-            0,
-            0,
-            null,
-            reply,
-            targetNodeGeneration: localAuthority.TargetNodeGeneration,
-            authorityOwnerGeneration: localAuthority.AuthorityOwnerGeneration,
-            ownerLeaseGeneration: localAuthority.OwnerLeaseGeneration,
-            replyRouteId: request ? operation?.OperationId.Low ?? 0 : 0,
-            deadlineUnixMs: request
-                ? operation?.DeadlineUnixMs
-                    ?? throw new InvalidOperationException(
-                        "Actor requests require an absolute deadline."
-                    )
-                : 0
-        );
-        EnqueueOwned(
-            MailboxKey.ForActor(actor, MeshReadyDomains.Application),
-            record,
-            retained,
-            requestAdmission: operation?.RequestAdmission
-        );
-        return SubmitResult.Ok;
+        finally
+        {
+            if (ownsParts)
+                DisposeParts(parts);
+        }
     }
 
     private SubmitResult SubmitStatefulWire(
@@ -11253,18 +11274,31 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         var terminal = operation?.Token ?? CancellationToken.None;
-        var shutdown = _stop?.Token ?? CancellationToken.None;
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(terminal, shutdown);
+        CancellationToken shutdown;
+        try
+        {
+            shutdown = _stop?.Token ?? CancellationToken.None;
+        }
+        catch (ObjectDisposedException)
+        {
+            DisposeParts(parts);
+            payloadOwner?.Dispose();
+            throw;
+        }
+        var cancellation = operation is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(terminal, shutdown);
+        var cancellationToken = cancellation?.Token ?? shutdown;
         var transferred = false;
         // Register on the submitting turn; the queue posts publications in
         // grant order without waiting for the destination lane.
         var acquisition = _applicationJobQueue!.AcquireAndPostAsync(
-            cancellation.Token,
+            cancellationToken,
             _operationLane,
             admission =>
             {
                 if (
-                    cancellation.IsCancellationRequested
+                    cancellationToken.IsCancellationRequested
                     || (
                         operation is not null
                         && (
@@ -11298,7 +11332,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 await acquisition.ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
             catch (ObjectDisposedException) when (shutdown.IsCancellationRequested) { }
             finally
             {
@@ -11307,7 +11341,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     DisposeParts(parts);
                     payloadOwner?.Dispose();
                 }
-                cancellation.Dispose();
+                cancellation?.Dispose();
             }
         }
     }
@@ -11351,7 +11385,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             var mailbox = _ownedMailboxes.GetOrAdd(
                 key,
-                _ => new OwnedMailbox(RecordOwnedRecordEnqueued, RecordOwnedRecordDequeued)
+                static (_, node) =>
+                    new OwnedMailbox(
+                        node.RecordOwnedRecordEnqueued,
+                        node.RecordOwnedRecordDequeued
+                    ),
+                this
             );
             if (
                 admitApplication
