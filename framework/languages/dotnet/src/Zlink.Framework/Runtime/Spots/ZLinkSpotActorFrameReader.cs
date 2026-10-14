@@ -114,6 +114,9 @@ internal sealed class ZLinkSpotActorFrameBatch(
         }
     }
 
+    public ZLinkSpotActorFrameBatch WithCompletion(Action onCompleted) =>
+        new(frames, onCompleted, payloadOwner);
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
