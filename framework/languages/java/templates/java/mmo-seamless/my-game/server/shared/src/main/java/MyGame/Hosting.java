@@ -96,9 +96,9 @@ public final class Hosting {
                                         .submit()
                                         .toCompletableFuture()
                                         .join();
-                        if (created.state() != ZLinkSpotCreateState.CREATED)
+                        if (created.state() == ZLinkSpotCreateState.REJECTED)
                             throw new IllegalStateException(
-                                    "Zone bootstrap failed: " + zoneId + " " + created);
+                                    "Zone bootstrap rejected: " + zoneId + " " + created);
                     }
                 }
                 var endpoints = new LinkedHashMap<String, Object>();

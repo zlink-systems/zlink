@@ -130,8 +130,8 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
             for (zoneId in config.zoneIds) {
                 val result =
                     spots.kotlin().getOrCreate(zoneId, Names.ZONE).inMesh(Names.MESH).await()
-                check(result.state() == ZLinkSpotCreateState.CREATED) {
-                    "Zone bootstrap failed: $zoneId $result"
+                check(result.state() != ZLinkSpotCreateState.REJECTED) {
+                    "Zone bootstrap rejected: $zoneId $result"
                 }
             }
         }

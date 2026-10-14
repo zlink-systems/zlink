@@ -56,8 +56,8 @@ runHost((_builder, config, mesh) => {
           .getOrCreate(id, Names.zone)
           .inMesh(Names.mesh)
           .submit();
-        if (result.state !== ZLinkSpotCreateState.Created)
-          throw new Error(`Zone bootstrap not created: ${id}`);
+        if (result.state === ZLinkSpotCreateState.Rejected)
+          throw new Error(`Zone bootstrap rejected: ${id}`);
       }
     },
   };
