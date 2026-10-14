@@ -54,9 +54,9 @@ Public 0.30.0 validation is blocked by #1729: cross-node deferred Actor Join rep
 
 ## Deployment sequence
 
-Start Redis, then matchA with `bootstrap: true`, matchB, and session. Each node has a separate entry point; both match nodes use the match application. Set production endpoints and a deployment-specific Redis key prefix in `server/config/`. The e2e runner overrides Redis addressing and the prefix for each run and obtains the actual port-zero endpoints from `READY`.
+Start Redis, then matchA with `bootstrap: true`, matchB, and session. Each node has a separate entry point; both match nodes use the match application. Set production endpoints and a deployment-specific Redis key prefix in `server/config/`. The e2e runner overrides Redis addressing and the prefix for each run, sets Room capacity to one per match host, and obtains the actual port-zero endpoints from `READY`. The capacity setting lets the update scenario verify that the replacement accepts a new room while the surviving host retains the relocated room.
 
-For planned maintenance, send `drain` to the room host's stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED`, and start the replacement with the same configuration and `bootstrap: false`; the fixed Matchmaking object already exists on the surviving host. The runner performs this sequence through the public relocation API.
+For planned maintenance, send `drain` to the room host's stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED`, and start the replacement with the same configuration; bootstrap uses GetOrCreate and accepts the existing Matchmaking object on the surviving host. The runner performs this sequence through the public relocation API.
 
 Players start with 100 HP. Shots have range 80 and damage 25. A closed vertical wall at x=50, y=0..100 blocks intersecting shots. RoomState validates monotonically increasing action sequences, finite movement, and terminal matches. Extend combat rules in `server/match/.../Domain.kt`; transport, binding, and lifecycle remain Framework responsibilities.
 
@@ -64,4 +64,4 @@ Players start with 100 HP. Shots have range 80 and damage 25. A closed vertical 
 
 JDK 25와 Docker Compose를 준비한 뒤 위 Build 명령과 Local e2e 명령을 실행합니다. runner는 시나리오마다 Redis와 node process를 생성하고 자신이 만든 자원만 정리합니다. 실행 설정과 message-flow 기록은 `.logs/run-<id>/`에 남습니다.
 
-대기열은 Matchmaking User Spot이 소유하며 Room Spot이 위치·HP·명중을 판정합니다. 운영 중 갱신할 때는 room host에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`을 확인한 뒤 종료합니다. 대체 process는 같은 설정에서 `bootstrap`을 false로 두어 시작합니다.
+대기열은 Matchmaking User Spot이 소유하며 Room Spot이 위치·HP·명중을 판정합니다. 운영 중 갱신할 때는 room host에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`을 확인한 뒤 종료합니다. 대체 process는 같은 설정으로 시작하며 bootstrap의 GetOrCreate가 기존 Matchmaking object를 사용합니다.

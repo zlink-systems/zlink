@@ -8,6 +8,9 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
+// One live room exhausts a match host during the update scenario.
+private const val RUN_ROOM_CAPACITY = 1
+
 private class Node(val id: String, module: String, config: Path, root: Path, logs: Path) {
     private val output = LinkedBlockingQueue<String>()
     private val process =
@@ -137,7 +140,11 @@ class Nodes(private val root: Path) : AutoCloseable {
                     root.resolve(node["config"].asText()).toFile(),
                     NodeConfig::class.java,
                 )
-            val config = source.copy(redisEndpoint = redis, keyPrefix = "my-game:$runId:")
+            val config = source.copy(
+                redisEndpoint = redis,
+                keyPrefix = "my-game:$runId:",
+                roomCapacity = RUN_ROOM_CAPACITY,
+            )
             val path = logs.resolve("$id.json")
             Json.mapper.writeValue(path.toFile(), config)
             configs[id] = path
@@ -166,9 +173,6 @@ class Nodes(private val root: Path) : AutoCloseable {
 
     fun replace(id: String) {
         requireNotNull(nodes[id]).stop()
-        val path = requireNotNull(configs[id])
-        val config = Json.mapper.readValue(path.toFile(), NodeConfig::class.java)
-        Json.mapper.writeValue(path.toFile(), config.copy(bootstrap = false))
         startNode(id)
     }
 
