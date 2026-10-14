@@ -124,6 +124,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     public interface LocalActorDispatcher {
         CompletionStage<Optional<LocalActorReply>> dispatch(
                 ZLinkBackendActorRef actor,
+                RoutingId sourceNodeRid,
+                RoutingId sourceSessionRid,
+                long bindingGeneration,
                 long sourceSessionSequence,
                 ZLinkStreamHeader header,
                 Message payload);
@@ -893,8 +896,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
     /**
      * Accepts one Session-to-Actor ingress record or holds it behind the relocation seal. This
-     * method and command 42 use {@link #sealTerminals} as their shared linearization lock, so the
-     * ACK high-water cannot race a post-seal relay into the captured prefix.
+     * method and command 42 use the Session owner turn, so the ACK high-water cannot race a
+     * post-seal relay into the captured prefix.
      */
     private CompletionStage<Void> admitIngress(
             ZLinkBoundActor actor, LongFunction<CompletionStage<Void>> operation) {
@@ -902,57 +905,47 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         IngressAdmissionState admission =
                 inStateLane(
                         () -> {
-                            CompletableFuture<Void> held = null;
-                            IngressGate admittedGate = null;
-                            long acceptedSequence = 0;
                             if (!isCurrentBinding(actor)) {
-                                return IngressAdmissionState.failed(
-                                        new ZLinkConfigurationException(
-                                                "bound Actor is no longer the current Session"
-                                                        + " binding: "
-                                                        + actor.actorId()));
+                                return new IngressAdmissionState(
+                                        null,
+                                        CompletableFuture.<Void>failedFuture(
+                                                new ZLinkFrameworkException(
+                                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                        "bound Actor is no longer the current"
+                                                                + " Session binding: "
+                                                                + actor.actorId())));
                             }
                             StoredBindingRoute route = bindingRoutes.get(actor.actorId());
                             IngressGate gate = ingressGates.get(actor.actorId());
                             if (route == null || gate == null) {
-                                return IngressAdmissionState.failed(
-                                        new ZLinkConfigurationException(
-                                                "Session ingress binding state is unavailable: "
-                                                        + actor.actorId()));
+                                return new IngressAdmissionState(
+                                        null,
+                                        CompletableFuture.<Void>failedFuture(
+                                                new ZLinkFrameworkException(
+                                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                        "Session ingress binding state is"
+                                                                + " unavailable: "
+                                                                + actor.actorId())));
                             }
                             if (gate.seal != null) {
-                                held = new CompletableFuture<>();
+                                CompletableFuture<Void> held = new CompletableFuture<>();
                                 gate.held.addLast(new HeldIngress(actor, operation, held));
-                            } else {
-                                long accepted = allocateIngressSequence(gate);
-                                gate.activeIngress++;
-                                admittedGate = gate;
-                                acceptedSequence = accepted;
+                                return new IngressAdmissionState(null, held);
                             }
-                            return new IngressAdmissionState(
-                                    held, admittedGate, acceptedSequence, null);
+                            long accepted = allocateIngressSequence(gate);
+                            gate.activeIngress++;
+                            CompletionStage<Void> submission = invokeIngress(operation, accepted);
+                            return new IngressAdmissionState(gate, submission);
                         });
-        if (admission.failure() != null) {
-            return CompletableFuture.failedFuture(admission.failure());
+        if (admission.gate() != null) {
+            admission
+                    .submission()
+                    .whenComplete((ignored, failure) -> completeIngress(actor, admission.gate()));
         }
-        if (admission.held() != null) {
-            return admission.held();
-        }
-        IngressGate completionGate = admission.gate();
-        CompletionStage<Void> submission = invokeIngress(operation, admission.sequence());
-        submission.whenComplete((ignored, failure) -> completeIngress(actor, completionGate));
-        return submission;
+        return admission.submission();
     }
 
-    private record IngressAdmissionState(
-            CompletableFuture<Void> held,
-            IngressGate gate,
-            long sequence,
-            RuntimeException failure) {
-        private static IngressAdmissionState failed(RuntimeException failure) {
-            return new IngressAdmissionState(null, null, 0, failure);
-        }
-    }
+    private record IngressAdmissionState(IngressGate gate, CompletionStage<Void> submission) {}
 
     private long allocateIngressSequence(IngressGate gate) {
         long sequence = stream.allocateBoundSessionIngressSequence();

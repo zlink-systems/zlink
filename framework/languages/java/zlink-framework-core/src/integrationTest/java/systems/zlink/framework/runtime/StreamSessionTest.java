@@ -17,6 +17,7 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
+import systems.zlink.framework.handlers.ZLinkSpotActorSend;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
@@ -55,6 +56,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 final class StreamSessionTest {
+    private static final int REPLACEMENT_ATTEMPTS = 1000;
+    private static final int PARALLEL_RELAYS = 64;
+    private static final int CLIENT_TIMEOUT_MILLIS = 3000;
+    private static final String PARALLEL_SEND_PACKET = "StreamActorParallelSend";
+    private static final String PARALLEL_REQUEST_PACKET = "StreamActorParallelRequest";
+    private static final String HEARTBEAT_PING_PACKET = "$zlink.heartbeat.ping";
+    private static final String HEARTBEAT_PONG_PACKET = "$zlink.heartbeat.pong";
+
+    private enum CloseOrder {
+        BEFORE_BIND,
+        DURING_BIND,
+        AFTER_BIND
+    }
+
     @Test
     void streamNodeStartsWithoutExplicitSessionRelayAttach() {
         Zlink.version();
@@ -95,7 +110,7 @@ final class StreamSessionTest {
                         RuntimeTestSupport.startFramework(
                                 options, new ZLinkJavaBackendAdapterFactory());
                 Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
-            client.setSoTimeout(3000);
+            client.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
             client.getOutputStream().write(frame(requestHeader(7L, "Ping"), bytes("ping")));
             client.getOutputStream().flush();
 
@@ -132,7 +147,7 @@ final class StreamSessionTest {
                         RuntimeTestSupport.startFramework(
                                 options, new ZLinkJavaBackendAdapterFactory());
                 Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
-            client.setSoTimeout(3000);
+            client.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
 
             client.getOutputStream().write(frame(requestHeader(11L, "MustFail"), bytes("bad")));
             client.getOutputStream().flush();
@@ -140,14 +155,174 @@ final class StreamSessionTest {
 
             client.getOutputStream().write(frame(requestHeader(12L, "Ping"), bytes("again")));
             client.getOutputStream().flush();
-            assertReply(client.getInputStream(), 12L, "\"pong\"");
+            assertReply(client, 12L, "\"pong\"");
         }
     }
 
     @Test
     void streamActorGatewayRelaysRequestAndReplies() throws Exception {
+        try (ZLinkFrameworkRuntime runtime = startActorRelayRuntime();
+                Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
+            client.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+
+            client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
+            client.getOutputStream().flush();
+            assertBoundControl(client.getInputStream(), "player-1");
+            assertReply(client, 1L, "\"bound\"");
+
+            client.getOutputStream()
+                    .write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"hello\"")));
+            client.getOutputStream().flush();
+            assertReply(client, 2L, "\"player-1:hello\"");
+        }
+    }
+
+    @Test
+    void sameActorRelayAfterPhysicalCloseAndReplacementBind() throws Exception {
+        assertReplacementRelay(CloseOrder.BEFORE_BIND);
+    }
+
+    @Test
+    void sameActorRelayAfterReplacementBindBeforePhysicalClose() throws Exception {
+        assertReplacementRelay(CloseOrder.AFTER_BIND);
+    }
+
+    @Test
+    void sameActorRelayWhilePhysicalCloseOverlapsReplacementBind() throws Exception {
+        assertReplacementRelay(CloseOrder.DURING_BIND);
+    }
+
+    @Test
+    void sameSessionConcurrentRelaysPreserveAcceptedSequence() throws Exception {
+        try (ZLinkFrameworkRuntime runtime = startActorRelayRuntime();
+                Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
+            client.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+            client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
+            client.getOutputStream().flush();
+            assertBoundControl(client.getInputStream(), "player-1");
+            assertReply(client, 1L, "\"bound\"");
+            for (int iteration = 0; iteration < REPLACEMENT_ATTEMPTS; iteration++) {
+                CompletableFuture<Void> completed = new CompletableFuture<>();
+                ActorRelaySession.parallelRelayCompleted = completed;
+                byte[] header =
+                        ZLinkStreamHeaderCodec.encode(
+                                new ZLinkStreamHeader(
+                                        ZLinkStreamMessageKind.SEND,
+                                        ZLinkStreamCodec.JSON,
+                                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                        Optional.empty(),
+                                        PARALLEL_SEND_PACKET,
+                                        Map.of(),
+                                        Optional.empty()));
+                client.getOutputStream().write(frame(header, bytes("\"hello\"")));
+                client.getOutputStream().flush();
+                completed.get(CLIENT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            }
+        }
+    }
+
+    @Test
+    void sameSessionConcurrentRequestsPreserveAcceptedSequenceAfterBind() throws Exception {
+        try (ZLinkFrameworkRuntime runtime = startActorRelayRuntime();
+                Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
+            client.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+            client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
+            client.getOutputStream().flush();
+            assertBoundControl(client.getInputStream(), "player-1");
+            assertReply(client, 1L, "\"bound\"");
+            client.getOutputStream()
+                    .write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"hello\"")));
+            client.getOutputStream().flush();
+            assertReply(client, 2L, "\"player-1:hello\"");
+            for (int iteration = 0; iteration < REPLACEMENT_ATTEMPTS; iteration++) {
+                CompletableFuture<Void> completed = new CompletableFuture<>();
+                ActorRelaySession.parallelRelayCompleted = completed;
+                long requestSequence = iteration + 3L;
+                client.getOutputStream()
+                        .write(
+                                frame(
+                                        requestHeader(requestSequence, PARALLEL_REQUEST_PACKET),
+                                        bytes("\"hello\"")));
+                client.getOutputStream().flush();
+                for (int reply = 0; reply < PARALLEL_RELAYS; reply++) {
+                    assertReply(client, requestSequence, "\"player-1:hello\"");
+                }
+                completed.get(CLIENT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            }
+        }
+    }
+
+    private static void assertReplacementRelay(CloseOrder closeOrder) throws Exception {
+        try (ZLinkFrameworkRuntime runtime = startActorRelayRuntime()) {
+            Socket previous = null;
+            try {
+                for (int iteration = 0; iteration < REPLACEMENT_ATTEMPTS; iteration++) {
+                    try (Socket next = new Socket("127.0.0.1", streamPort(runtime))) {
+                        next.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+                        if (closeOrder == CloseOrder.BEFORE_BIND && previous != null) {
+                            previous.close();
+                            previous = null;
+                        }
+                        next.getOutputStream()
+                                .write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
+                        next.getOutputStream().flush();
+                        CompletableFuture<Void> physicalClose = null;
+                        if (closeOrder == CloseOrder.DURING_BIND && previous != null) {
+                            Socket closing = previous;
+                            physicalClose =
+                                    CompletableFuture.runAsync(
+                                            () -> {
+                                                try {
+                                                    closing.close();
+                                                } catch (java.io.IOException failure) {
+                                                    throw new java.io.UncheckedIOException(failure);
+                                                }
+                                            });
+                            previous = null;
+                        }
+                        assertBoundControl(next.getInputStream(), "player-1");
+                        assertReply(next, 1L, "\"bound\"");
+                        if (previous != null) {
+                            previous.close();
+                            previous = null;
+                        }
+                        next.getOutputStream()
+                                .write(
+                                        frame(
+                                                requestHeader(2L, "StreamActorEcho"),
+                                                bytes("\"hello\"")));
+                        next.getOutputStream().flush();
+                        assertReply(next, 2L, "\"player-1:hello\"");
+                        if (physicalClose != null) {
+                            physicalClose.get(CLIENT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+                        }
+                    }
+                    // Keep A bound until the next iteration accepts and binds B.
+                    previous = new Socket("127.0.0.1", streamPort(runtime));
+                    previous.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+                    previous.getOutputStream()
+                            .write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
+                    previous.getOutputStream().flush();
+                    assertBoundControl(previous.getInputStream(), "player-1");
+                    assertReply(previous, 1L, "\"bound\"");
+                    previous.getOutputStream()
+                            .write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"hello\"")));
+                    previous.getOutputStream().flush();
+                    assertReply(previous, 2L, "\"player-1:hello\"");
+                }
+            } finally {
+                if (previous != null) {
+                    previous.close();
+                }
+            }
+        }
+    }
+
+    private static ZLinkFrameworkRuntime startActorRelayRuntime() {
         Zlink.version();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureDispatch()
+                .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
         options.addHandlersFromPackageOf(StreamSessionTest.class);
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         {
@@ -171,22 +346,7 @@ final class StreamSessionTest {
         }
         ;
 
-        try (ZLinkFrameworkRuntime runtime =
-                        RuntimeTestSupport.startFramework(
-                                options, new ZLinkJavaBackendAdapterFactory());
-                Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
-            client.setSoTimeout(3000);
-
-            client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
-            client.getOutputStream().flush();
-            assertBoundControl(client.getInputStream(), "player-1");
-            assertReply(client.getInputStream(), 1L, "\"bound\"");
-
-            client.getOutputStream()
-                    .write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"hello\"")));
-            client.getOutputStream().flush();
-            assertReply(client.getInputStream(), 2L, "\"player-1:hello\"");
-        }
+        return RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
     }
 
     public static final class GameSpot implements ZLinkSpot<ZLinkActor> {
@@ -291,6 +451,16 @@ final class StreamSessionTest {
     }
 
     public static final class ActorEchoHandler {
+        @ZLinkSpotActorSend(packetName = PARALLEL_SEND_PACKET)
+        public CompletionStage<Void> handleSend(PlayerActor actor, String request) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @ZLinkSpotActorRequest(packetName = PARALLEL_REQUEST_PACKET)
+        public CompletionStage<String> handleParallelRequest(PlayerActor actor, String request) {
+            return CompletableFuture.completedFuture(actor.context().actorId() + ":" + request);
+        }
+
         @ZLinkSpotActorRequest(packetName = "StreamActorEcho")
         public CompletionStage<String> handle(PlayerActor actor, String request) {
             return CompletableFuture.completedFuture(actor.context().actorId() + ":" + request);
@@ -442,6 +612,7 @@ final class StreamSessionTest {
     }
 
     public static final class ActorRelaySession implements ZLinkSession {
+        static volatile CompletableFuture<Void> parallelRelayCompleted;
         private final ZLinkSessionContext context;
         private final ZLinkActorManager actors;
 
@@ -473,6 +644,27 @@ final class StreamSessionTest {
         @Override
         public CompletionStage<Void> onDispatch(
                 ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+            if (PARALLEL_SEND_PACKET.equals(dispatch.packetName())
+                    || PARALLEL_REQUEST_PACKET.equals(dispatch.packetName())) {
+                var actor = context.actors().bound().get(0);
+                CompletableFuture<?>[] relays = new CompletableFuture<?>[PARALLEL_RELAYS];
+                for (int index = 0; index < relays.length; index++) {
+                    relays[index] =
+                            CompletableFuture.supplyAsync(() -> actor.relay(dispatch, payload))
+                                    .thenCompose(stage -> stage)
+                                    .toCompletableFuture();
+                }
+                CompletableFuture<Void> observed = parallelRelayCompleted;
+                return CompletableFuture.allOf(relays)
+                        .whenComplete(
+                                (ignored, failure) -> {
+                                    if (failure == null) {
+                                        observed.complete(null);
+                                    } else {
+                                        observed.completeExceptionally(failure);
+                                    }
+                                });
+            }
             if ("Bind".equals(dispatch.packetName())) {
                 String actorId = payload.decode(String.class);
                 return actors.getOrCreate(actorId, "player")
@@ -530,23 +722,48 @@ final class StreamSessionTest {
         return bytes;
     }
 
-    private static void assertReply(InputStream input, long requestSeq, String expectedBody)
+    private static void assertReply(Socket client, long requestSeq, String expectedBody)
             throws Exception {
-        byte[] prefix = input.readNBytes(6);
-        assertEquals(6, prefix.length);
-        ByteBuffer prefixBuffer = ByteBuffer.wrap(prefix);
-        int headerSize = Short.toUnsignedInt(prefixBuffer.getShort());
-        int bodySize = prefixBuffer.getInt();
-        byte[] header = readExact(input, headerSize);
-        byte[] body = readExact(input, bodySize);
+        InputStream input = client.getInputStream();
+        java.io.OutputStream output = client.getOutputStream();
+        while (true) {
+            byte[] prefix = input.readNBytes(6);
+            assertEquals(6, prefix.length);
+            ByteBuffer prefixBuffer = ByteBuffer.wrap(prefix);
+            int headerSize = Short.toUnsignedInt(prefixBuffer.getShort());
+            int bodySize = prefixBuffer.getInt();
+            byte[] header = readExact(input, headerSize);
+            byte[] body = readExact(input, bodySize);
 
-        assertEquals(
-                3,
-                Byte.toUnsignedInt(header[1]),
-                () -> "unexpected frame kind body=" + new String(body, StandardCharsets.UTF_8));
-        assertEquals(0xF2, Byte.toUnsignedInt(header[0]));
-        assertEquals(requestSeq, ByteBuffer.wrap(header, 4, Long.BYTES).getLong());
-        assertEquals(expectedBody, new String(body, StandardCharsets.UTF_8));
+            ZLinkStreamHeader decoded = ZLinkStreamHeaderCodec.decodeOrPlain(header);
+            if (decoded.kind() == ZLinkStreamMessageKind.CONTROL
+                    && HEARTBEAT_PING_PACKET.equals(decoded.packetName())) {
+                assertEquals(0, body.length);
+                ZLinkStreamHeader pong =
+                        new ZLinkStreamHeader(
+                                ZLinkStreamMessageKind.CONTROL,
+                                ZLinkStreamCodec.RAW,
+                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                Optional.empty(),
+                                HEARTBEAT_PONG_PACKET,
+                                Map.of());
+                output.write(frame(ZLinkStreamHeaderCodec.encode(pong), new byte[0]));
+                output.flush();
+                continue;
+            }
+            assertEquals(
+                    3,
+                    Byte.toUnsignedInt(header[1]),
+                    () ->
+                            "unexpected frame kind header="
+                                    + ZLinkStreamHeaderCodec.decodeOrPlain(header)
+                                    + " body="
+                                    + new String(body, StandardCharsets.UTF_8));
+            assertEquals(0xF2, Byte.toUnsignedInt(header[0]));
+            assertEquals(requestSeq, ByteBuffer.wrap(header, 4, Long.BYTES).getLong());
+            assertEquals(expectedBody, new String(body, StandardCharsets.UTF_8));
+            return;
+        }
     }
 
     private static void assertBoundControl(InputStream input, String actorId) throws Exception {

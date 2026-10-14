@@ -81,10 +81,6 @@ final class ZLinkActorContextState {
         return boundSessionSourceSessionRid;
     }
 
-    RoutingId boundSessionSourceSessionRid(long bindingToken) {
-        return bindingToken == sessionBindingToken ? boundSessionSourceSessionRid : null;
-    }
-
     String spotId() {
         return spotId;
     }
@@ -216,11 +212,8 @@ final class ZLinkActorContextState {
         this.joined = true;
     }
 
-    void markNativeActorRef(
-            ZLinkBackendActorRef actorRef, RoutingId sourceNodeRid, RoutingId sourceSessionRid) {
+    void markNativeActorRef(ZLinkBackendActorRef actorRef) {
         this.actorRef = actorRef;
-        this.boundSessionSourceNodeRid = sourceNodeRid;
-        this.boundSessionSourceSessionRid = sourceSessionRid;
     }
 
     void markLeft() {
@@ -273,28 +266,6 @@ final class ZLinkActorContextState {
         return sessionBindingToken;
     }
 
-    BoundSessionSource nextBoundSessionSource() {
-        return nextBoundSessionSource(
-                sessionSourceSequence == Long.MAX_VALUE ? 0 : sessionSourceSequence + 1);
-    }
-
-    BoundSessionSource nextBoundSessionSource(long acceptedSessionSequence) {
-        if (boundSession == null
-                || boundSessionSourceNodeRid == null
-                || boundSessionSourceSessionRid == null
-                || sessionBindingToken <= 0
-                || sessionBindingGeneration <= 0
-                || acceptedSessionSequence <= sessionSourceSequence) {
-            return null;
-        }
-        sessionSourceSequence = acceptedSessionSequence;
-        return new BoundSessionSource(
-                boundSessionSourceNodeRid,
-                boundSessionSourceSessionRid,
-                sessionBindingGeneration,
-                sessionSourceSequence);
-    }
-
     BoundSessionSource boundSessionSourceSnapshot() {
         if (boundSession == null
                 || boundSessionSourceNodeRid == null
@@ -311,7 +282,7 @@ final class ZLinkActorContextState {
     }
 
     boolean clearBoundSession(long bindingToken) {
-        if (bindingToken == sessionBindingToken) {
+        if (boundSession != null && bindingToken == sessionBindingToken) {
             boundSession = null;
             boundSessionSourceNodeRid = null;
             boundSessionSourceSessionRid = null;

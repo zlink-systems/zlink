@@ -274,24 +274,7 @@ final class ZLinkActorSessionCoordinator {
             Message payload,
             Predicate<String> isLocalSpot,
             Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch) {
-        return dispatchLocalSession(actorRef, 0, header, payload, isLocalSpot, localDispatch, true);
-    }
-
-    CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
-            ZLinkBackendActorRef actorRef,
-            long acceptedSessionSequence,
-            ZLinkStreamHeader header,
-            Message payload,
-            Predicate<String> isLocalSpot,
-            Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch) {
-        return dispatchLocalSession(
-                actorRef,
-                acceptedSessionSequence,
-                header,
-                payload,
-                isLocalSpot,
-                localDispatch,
-                true);
+        return dispatchLocalSession(actorRef, null, header, payload, isLocalSpot, localDispatch);
     }
 
     CompletionStage<Optional<Message>> dispatchTransferBacklog(
@@ -399,14 +382,13 @@ final class ZLinkActorSessionCoordinator {
                 .thenCompose(ignored -> result);
     }
 
-    private CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
+    CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
             ZLinkBackendActorRef actorRef,
-            long acceptedSessionSequence,
+            byte[] acceptedRecord,
             ZLinkStreamHeader header,
             Message payload,
             Predicate<String> isLocalSpot,
-            Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch,
-            boolean captureMovingPacket) {
+            Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch) {
         ZLinkActorRuntime runtime = requireActors();
         Optional<ZLinkActor> localActor = runtime.localActor(actorRef.actorId());
         if (localActor.isEmpty()) {
@@ -416,10 +398,9 @@ final class ZLinkActorSessionCoordinator {
                             "local actor is not available: " + actorRef.actorId()));
         }
         ZLinkActor actor = localActor.get();
-        if (captureMovingPacket && runtime.isMoving(actor)) {
+        if (runtime.isMoving(actor)) {
             CompletionStage<Optional<Message>> captured =
-                    runtime.captureMovingPacket(
-                            actor, header, payload, null, acceptedSessionSequence);
+                    runtime.captureMovingPacket(actor, header, payload, null, acceptedRecord);
             if (captured != null) {
                 return captured.thenApply(
                         reply ->
@@ -430,7 +411,7 @@ final class ZLinkActorSessionCoordinator {
                             ignored ->
                                     dispatchLocalSession(
                                             actorRef,
-                                            acceptedSessionSequence,
+                                            acceptedRecord,
                                             header,
                                             payload,
                                             isLocalSpot,
@@ -444,7 +425,11 @@ final class ZLinkActorSessionCoordinator {
             // switched its route. The committed Message Follow target is the
             // only valid dispatch surface during that bounded interval.
             return runtime.dispatchRemoteJoinedActor(
-                            messageFollowTarget.orElseThrow(), null, header, payload)
+                            messageFollowTarget.orElseThrow(),
+                            null,
+                            header,
+                            payload,
+                            acceptedRecord == null ? new byte[0] : acceptedRecord)
                     .thenApply(reply -> decodeRoutedReply(header, reply));
         }
         if (joinedSpotId.isPresent()
@@ -452,28 +437,22 @@ final class ZLinkActorSessionCoordinator {
                 && !isLocalSpot.test(joinedSpotId.get())
                 && runtime.canRouteRemoteJoinedSpot(joinedSpotId.get())) {
             return runtime.dispatchRemoteJoinedActor(
-                            runtime.currentRef(actor), joinedSpotId.get(), header, payload)
+                            runtime.currentRef(actor),
+                            joinedSpotId.get(),
+                            header,
+                            payload,
+                            acceptedRecord == null ? new byte[0] : acceptedRecord)
                     .thenApply(reply -> decodeRoutedReply(header, reply));
         }
-        if (!captureMovingPacket) {
-            // Transfer commit already owns the actor's serialized turn. Queuing
-            // replay behind that turn would wait on the commit that is waiting
-            // for this replay to finish.
-            return localDispatch.apply(new LocalDispatch(actor, joinedSpotId));
-        }
         CompletableFuture<Optional<LocalActorReply>> result = new CompletableFuture<>();
-        byte[] acceptedRecord =
-                runtime.encodeLocalSessionActorAccepted(
-                        actor, header, payload, acceptedSessionSequence);
-        if (acceptedRecord.length == 0) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "canonical local Session Actor journal context is unavailable"));
-        }
+        byte[] journalRecord =
+                acceptedRecord == null
+                        ? runtime.encodeLocalActorAccepted(actor, header, payload)
+                        : acceptedRecord;
         return runtime.submitActorDispatch(
                         actor.context().actorId(),
                         ZLinkActorAcceptedJournal.encode(
-                                actor.context().actorId(), header, payload, acceptedRecord),
+                                actor.context().actorId(), header, payload, journalRecord),
                         () ->
                                 invokeLocalDispatch(
                                         localDispatch,

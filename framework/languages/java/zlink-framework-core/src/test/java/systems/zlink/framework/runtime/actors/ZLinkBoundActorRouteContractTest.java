@@ -99,16 +99,27 @@ final class ZLinkBoundActorRouteContractTest {
                         new RawSerializer(),
                         0,
                         1,
-                        (ignoredActor, ignoredSequence, ignoredHeader, ignoredPayload) ->
-                                CompletableFuture.completedFuture(
-                                        Optional.of(
-                                                new ZLinkSessionActorsRuntime.LocalActorReply(
-                                                        Message.from(
-                                                                "custom-reply"
-                                                                        .getBytes(
-                                                                                StandardCharsets
-                                                                                        .UTF_8)),
-                                                        ZLinkStreamCodec.PROTOBUF))),
+                        (ignoredActor,
+                                sourceNode,
+                                sourceSession,
+                                generation,
+                                sequence,
+                                ignoredHeader,
+                                ignoredPayload) -> {
+                            assertEquals(RoutingId.from("actor-node-a"), sourceNode);
+                            assertEquals(RoutingId.from("session"), sourceSession);
+                            assertEquals(1L, generation);
+                            assertEquals(1L, sequence);
+                            return CompletableFuture.completedFuture(
+                                    Optional.of(
+                                            new ZLinkSessionActorsRuntime.LocalActorReply(
+                                                    Message.from(
+                                                            "custom-reply"
+                                                                    .getBytes(
+                                                                            StandardCharsets
+                                                                                    .UTF_8)),
+                                                    ZLinkStreamCodec.PROTOBUF)));
+                        },
                         true,
                         ZLinkStreamCodec.JSON,
                         relayHeaders,

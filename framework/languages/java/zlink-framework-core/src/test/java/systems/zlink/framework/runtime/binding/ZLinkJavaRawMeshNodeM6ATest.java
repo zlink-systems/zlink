@@ -21,6 +21,8 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
@@ -63,6 +65,47 @@ import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
 final class ZLinkJavaRawMeshNodeM6ATest {
+    @Test
+    void localActorJournalDistinguishesMissingBindingFromUnavailableAuthority() {
+        try (Context context = Zlink.createContext();
+                ZLinkJavaRawMeshNode node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("actor-owner"));
+            RoutingId owner = node.routingId();
+            RoutingId session = RoutingId.from("session-a");
+            ZLinkBackendActorRef actor = new ZLinkBackendActorRef(owner, "actor-a", 7);
+            ZLinkFrameworkException missingBinding =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () ->
+                                    node.encodeLocalActorAccepted(
+                                            actor,
+                                            owner,
+                                            session,
+                                            0,
+                                            0,
+                                            0,
+                                            "Send",
+                                            java.util.Map.of(),
+                                            new byte[0]));
+            assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION, missingBinding.kind());
+            ZLinkFrameworkException unavailableAuthority =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () ->
+                                    node.encodeLocalActorAccepted(
+                                            actor,
+                                            owner,
+                                            session,
+                                            1,
+                                            1,
+                                            0,
+                                            "Send",
+                                            java.util.Map.of(),
+                                            new byte[0]));
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, unavailableAuthority.kind());
+        }
+    }
+
     @Test
     void oneWayAdapterClassifiesNativeSubmitRejection() {
         for (var rejected :

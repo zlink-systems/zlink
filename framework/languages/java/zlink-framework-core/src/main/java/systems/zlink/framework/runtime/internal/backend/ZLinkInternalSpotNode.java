@@ -5,6 +5,8 @@ import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferPrepare;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferToken;
 import systems.zlink.framework.runtime.internal.binding.spot.PrepareActorTransferResult;
@@ -382,7 +384,9 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             String packetName,
             Map<String, String> metadata,
             byte[] payload) {
-        return new byte[0];
+        throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "local Actor authority journal is unavailable");
     }
 
     void bindRemoteActorBoundSession(

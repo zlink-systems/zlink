@@ -3756,17 +3756,39 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     public CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
             ZLinkBackendActorRef actorRef, ZLinkStreamHeader header, Message payload) {
-        return dispatchLocalSessionActor(actorRef, 0, header, payload);
+        return dispatchLocalSessionActor(actorRef, null, header, payload);
     }
 
     public CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
             ZLinkBackendActorRef actorRef,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long bindingGeneration,
             long acceptedSessionSequence,
+            ZLinkStreamHeader header,
+            Message payload) {
+        byte[] acceptedRecord =
+                actorSessions
+                        .runtime()
+                        .encodeLocalSessionActorAccepted(
+                                actorRef,
+                                sourceNodeRid,
+                                sourceSessionRid,
+                                bindingGeneration,
+                                acceptedSessionSequence,
+                                header,
+                                payload);
+        return dispatchLocalSessionActor(actorRef, acceptedRecord, header, payload);
+    }
+
+    private CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
+            ZLinkBackendActorRef actorRef,
+            byte[] acceptedRecord,
             ZLinkStreamHeader header,
             Message payload) {
         return actorSessions.dispatchLocalSession(
                 actorRef,
-                acceptedSessionSequence,
+                acceptedRecord,
                 header,
                 payload,
                 spotId -> spotSurfaceFor(spotId) != null,

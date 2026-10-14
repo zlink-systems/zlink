@@ -310,7 +310,16 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         ZLinkRequestMetrics.start(metric);
         CompletionStage<Optional<ZLinkSessionActorsRuntime.LocalActorReply>> request;
         try {
-            request = localActorDispatcher.dispatch(ref, sourceSessionSequence, header, payload);
+            ZLinkBackendActorRef acceptedActor = ref;
+            request =
+                    localActorDispatcher.dispatch(
+                            acceptedActor,
+                            acceptedActor.nodeRid(),
+                            sessionRid,
+                            bindingGeneration,
+                            sourceSessionSequence,
+                            header,
+                            payload);
         } catch (RuntimeException failure) {
             payload.close();
             completeRequest(metric, started, failure);
