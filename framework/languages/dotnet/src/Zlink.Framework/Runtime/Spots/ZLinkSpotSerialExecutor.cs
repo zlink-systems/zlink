@@ -370,8 +370,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     internal async ValueTask<bool> ExecuteQuiescentLifecycleAsync(
         Func<ZLinkSpotActivation, CancellationToken, ValueTask<bool>> operation,
-        CancellationToken cancellationToken,
-        bool finishExistingSeal = false
+        CancellationToken cancellationToken
     )
     {
         var barrier = await TryBeginRelocationBarrierAsync(
@@ -379,8 +378,6 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 allowActorClaims: false
             )
             .ConfigureAwait(false);
-        if (barrier is null && finishExistingSeal)
-            barrier = await RunBarrierStateAsync(() => _relocationBarrier).ConfigureAwait(false);
         if (barrier is null)
             throw new InvalidOperationException("SPOT execution lanes are already sealed.");
 
@@ -1779,7 +1776,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         return RunBarrierStateAsync<ZLinkExecutionBarrierState?>(() =>
         {
-            if (_relocationBarrier is not null || _nextBarrierGeneration == ulong.MaxValue)
+            if (_relocationBarrier is { } existing)
+                return kind == ZLinkExecutionSealKind.Quiescent ? existing : null;
+            if (_nextBarrierGeneration == ulong.MaxValue)
                 return null;
 
             var created = new ZLinkExecutionBarrierState(

@@ -38,6 +38,66 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSerialExecutionQueueTest {
     @Test
+    void shutdownEndsAllTurnWaitsWithoutChangingTheirApplicationSources() throws Exception {
+        for (var policy :
+                List.of(
+                        ZLinkExecutionLanePolicy.spot(),
+                        ZLinkExecutionLanePolicy.spotReturningGate())) {
+            try (var executor = Executors.newSingleThreadExecutor()) {
+                var queue = new ZLinkSerialExecutionQueue(executor, policy);
+                var first = new CompletableFuture<String>();
+                var second = new CompletableFuture<String>();
+                var entered = new CompletableFuture<Void>();
+                var observations = new ArrayList<CompletableFuture<String>>();
+                var terminals = new AtomicInteger();
+                var turn =
+                        queue.enqueue(
+                                () -> {
+                                    observations.add(
+                                            ZLinkSerialExecutionQueue.manageCurrent(first)
+                                                    .toCompletableFuture());
+                                    observations.add(
+                                            ZLinkSerialExecutionQueue.manageCurrent(second)
+                                                    .toCompletableFuture());
+                                    entered.complete(null);
+                                    return CompletableFuture.allOf(
+                                                    observations.toArray(CompletableFuture[]::new))
+                                            .whenComplete(
+                                                    (ignored, failure) ->
+                                                            terminals.incrementAndGet());
+                                },
+                                null);
+                entered.get(1, TimeUnit.SECONDS);
+                queue.terminateOwnedWaits();
+                assertThrows(
+                        ExecutionException.class,
+                        () -> turn.toCompletableFuture().get(1, TimeUnit.SECONDS));
+                assertFalse(first.isDone());
+                assertFalse(second.isDone());
+                for (var observed : observations) {
+                    var failure =
+                            assertThrows(
+                                    ExecutionException.class,
+                                    () -> observed.get(1, TimeUnit.SECONDS));
+                    var shutdown =
+                            assertInstanceOf(
+                                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                    failure.getCause());
+                    assertEquals(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                            shutdown.kind());
+                }
+                first.complete("first");
+                second.complete("second");
+                executor.submit(() -> {}).get(1, TimeUnit.SECONDS);
+                assertEquals("first", first.join());
+                assertEquals("second", second.join());
+                assertEquals(1, terminals.get());
+            }
+        }
+    }
+
+    @Test
     void incarnationTransitionRetainsOriginalMessagesAndNeverRunsOldClosures() throws Exception {
         CountingExecutor executor = new CountingExecutor();
         ZLinkSerialExecutionQueue queue =

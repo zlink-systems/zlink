@@ -317,7 +317,6 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
                 using (ExecutionContext.SuppressFlow())
                     _shutdownOperation = ExecuteShutdownAsync(
                         Stopwatch.GetElapsedTime(0) + timeout,
-                        timeout,
                         forcedReason
                     );
             }
@@ -415,7 +414,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
             try
             {
                 await _lifecycle
-                    .ForceStopAsync(ZLinkDrainForceReason.TeardownFailed, TimeSpan.FromSeconds(2))
+                    .ForceStopAsync(ZLinkDrainForceReason.TeardownFailed)
                     .ConfigureAwait(false);
             }
             catch (Exception cleanupFailure)
@@ -477,13 +476,11 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
             return CompleteBlocked(mode, targetApplicationVersion, blocked.Reason, metricStarted);
         if (result is not Drained)
         {
-            RunState(() => TransitionUnderLock(ZLinkFrameworkRuntimeState.Error));
-            return CompleteBlocked(
+            return CompleteForceStoppedRelocation(
                 mode,
                 targetApplicationVersion,
                 ZLinkFrameworkRelocationReason.RelocationFailed,
-                metricStarted,
-                restoreServing: false
+                metricStarted
             );
         }
 
@@ -511,7 +508,6 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
 
     private async Task<ZLinkFrameworkTerminationResult> ExecuteShutdownAsync(
         TimeSpan absoluteDeadline,
-        TimeSpan teardownBound,
         ZLinkDrainForceReason? forcedReason
     )
     {
@@ -525,9 +521,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         {
             if (forcedReason is { } reason)
             {
-                drained = await _lifecycle
-                    .ForceStopAsync(reason, teardownBound)
-                    .ConfigureAwait(false);
+                drained = await _lifecycle.ForceStopAsync(reason).ConfigureAwait(false);
             }
             else
             {
@@ -549,7 +543,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
             when (exception.CancellationToken == deadline.Token)
         {
             drained = await _lifecycle
-                .ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, teardownBound)
+                .ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded)
                 .ConfigureAwait(false);
         }
         catch (Exception error)

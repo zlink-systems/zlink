@@ -1059,7 +1059,6 @@ test('shutdown cleanup ends an HTTP Yield before closing its scope and ignores t
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   let terminals = 0;
-  let settled = false;
   const turn = serial.execute(async () => {
     try {
       return await ioWorkerCall(worker, serial, () =>
@@ -1071,25 +1070,14 @@ test('shutdown cleanup ends an HTTP Yield before closing its scope and ignores t
       terminals += 1;
     }
   });
-  const observed = turn.then(
-    (value) => {
-      settled = true;
-      return value;
-    },
-    (error) => {
-      settled = true;
-      return error;
-    }
-  );
+  const observed = turn.catch((error) => error);
   try {
     await entered.promise;
     scopes.terminateOwnedWaits();
     const closing = scopes.close();
     // Closing must terminate the runtime observation while the source is still pending.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal(settled, true);
-    assert.equal((await observed).kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
-    await closing;
+    const [, terminal] = await Promise.all([closing, observed]);
+    assert.equal(terminal.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
     release.resolve();
     await new Promise((resolve) => server.close(resolve));
     assert.equal(terminals, 1);

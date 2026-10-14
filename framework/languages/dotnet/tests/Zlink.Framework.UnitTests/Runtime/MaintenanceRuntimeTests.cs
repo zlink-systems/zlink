@@ -778,6 +778,31 @@ public sealed class MaintenanceRuntimeTests
         Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, fixture.Executor.ForceStopReason);
     }
 
+    [Fact]
+    public async Task Irrecoverable_Relocation_Completes_Host_Termination_Once()
+    {
+        using var fixture = Create();
+        fixture.Runtime.MarkServing();
+        var relocation = fixture
+            .Runtime.RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                }
+            )
+            .AsTask();
+        await fixture.Executor.Started.Task;
+        fixture.Executor.Complete.TrySetResult(ZLinkDrainForceReason.RelocationFailed);
+        var result = await relocation;
+        Assert.Equal(ZLinkFrameworkRelocationOutcome.Blocked, result.Outcome);
+        Assert.Equal(ZLinkFrameworkRelocationReason.RelocationFailed, result.Reason);
+        Assert.Equal(
+            ZLinkFrameworkTerminationReason.TeardownFailed,
+            fixture.Runtime.Status.TerminationResult!.Value.Reason
+        );
+        Assert.Equal(1, fixture.Executor.ForceStopCount);
+    }
+
     private static Fixture Create(
         Func<
             ZLinkFrameworkRelocationMode,

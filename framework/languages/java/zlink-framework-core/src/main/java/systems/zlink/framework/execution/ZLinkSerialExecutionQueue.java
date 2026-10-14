@@ -1,7 +1,6 @@
 package systems.zlink.framework.execution;
 
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
@@ -23,6 +22,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -100,39 +100,90 @@ public final class ZLinkSerialExecutionQueue {
     private boolean closingAdmissionSealed;
     private boolean relocated;
     private final List<QuiescenceWaiter> quiescenceWaiters = new ArrayList<>();
-    private final List<CompletableFuture<?>> ownedWaits = new ArrayList<>();
+    private OwnedWait<?> suspendedWaits;
 
     /** Ends only runtime observations; application completion sources remain unchanged. */
     public void terminateOwnedWaits() {
-        List<CompletableFuture<?>> pending;
+        var pending = new ArrayList<OwnedWait<?>>();
         synchronized (this) {
-            pending = List.copyOf(ownedWaits);
+            for (var wait = suspendedWaits; wait != null; wait = wait.next) {
+                pending.add(wait);
+                var turn = wait.turn;
+                if (turn != null) collectTurnWaits(turn.entry, pending);
+            }
+            collectTurnWaits(active, pending);
+            collectTurnWaits(suspendedLifecycle, pending);
         }
         for (var wait : pending)
-            wait.completeExceptionally(
+            wait.accept(
+                    null,
                     ZLinkFrameworkErrorOrigin.framework(
                             ZLinkFrameworkErrorKind.SHUTTING_DOWN,
                             "Runtime-owned wait ended during host shutdown"));
     }
 
-    private <T> CompletionStage<T> observeOwned(CompletionStage<T> source) {
-        if (source instanceof CompletableFuture<?> completed && completed.isDone()) return source;
-        var observed = new CompletableFuture<T>();
-        synchronized (this) {
-            ownedWaits.add(observed);
+    private static void collectTurnWaits(Entry entry, List<OwnedWait<?>> pending) {
+        if (entry == null) return;
+        for (var wait = entry.turnOrigin().ownedWait; wait != null; wait = wait.next)
+            pending.add(wait);
+    }
+
+    /** The existing managed result also owns its single completion observation. */
+    private static final class OwnedWait<T> extends CompletableFuture<T>
+            implements BiConsumer<T, Throwable> {
+        private static final VarHandle COMPLETION;
+
+        static {
+            try {
+                COMPLETION =
+                        MethodHandles.lookup()
+                                .findVarHandle(OwnedWait.class, "completion", BiConsumer.class);
+            } catch (ReflectiveOperationException failure) {
+                throw new ExceptionInInitializerError(failure);
+            }
         }
-        observed.whenComplete(
-                (value, error) -> {
-                    synchronized (this) {
-                        ownedWaits.remove(observed);
-                    }
-                });
-        source.whenComplete(
-                (value, error) -> {
-                    if (error == null) observed.complete(value);
-                    else observed.completeExceptionally(error);
-                });
-        return observed;
+
+        private volatile SerialTurn turn;
+        private volatile CompletionStage<T> source;
+        private volatile BiConsumer<T, Throwable> completion;
+        private OwnedWait<?> next;
+        private OwnedWait<?> previous;
+
+        private OwnedWait(SerialTurn turn, CompletionStage<T> source) {
+            this.turn = turn;
+            this.source = source;
+        }
+
+        private void observe(boolean suspended, BiConsumer<T, Throwable> completion) {
+            var observing = source;
+            this.completion = completion;
+            if (suspended) turn.queue.suspendContinuation(turn.entry, this);
+            else if (turn.entry != null) {
+                Entry owner = turn.entry.turnOrigin();
+                next = owner.ownedWait;
+                owner.ownedWait = this;
+            }
+            observing.whenComplete(this);
+        }
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public void accept(T value, Throwable error) {
+            var callback = (BiConsumer<T, Throwable>) COMPLETION.getAndSet(this, null);
+            if (callback != null) {
+                turn = null;
+                source = null;
+                callback.accept(value, error);
+            }
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            var canceling = source;
+            boolean canceled = super.cancel(mayInterruptIfRunning);
+            if (canceled && canceling != null) canceling.toCompletableFuture().cancel(false);
+            return canceled;
+        }
     }
 
     /** Binds a Spot and its Actor mailboxes to one execution authority before admission starts. */
@@ -1936,138 +1987,134 @@ public final class ZLinkSerialExecutionQueue {
         Object serialContext =
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .currentSerialExecutionTurn();
-        CompletableFuture<T> managed = new CompletableFuture<>();
-        ZLinkCompletionBridge.forwardCancellation(managed, stage);
+        OwnedWait<T> managed = new OwnedWait<>(turn, stage);
         if (!queue.lanePolicy.releasesGateOnIncompleteStage()) {
             CompletableFuture<Void> gate = turn.gate;
-            queue.observeOwned(stage)
-                    .whenComplete(
-                            (value, error) -> {
-                                try {
-                                    queue.executor.execute(
-                                            () -> {
-                                                ZLinkSerialExecutionQueue previous = CURRENT.get();
-                                                CompletableFuture<Void> previousGate =
-                                                        CURRENT_GATE.get();
-                                                CURRENT.set(queue);
-                                                if (gate == null) {
-                                                    CURRENT_GATE.remove();
-                                                } else {
-                                                    CURRENT_GATE.set(gate);
-                                                }
-                                                try (var serial =
-                                                                systems.zlink.framework.runtime
-                                                                        .internal.handlers
-                                                                        .ZLinkSuspendInvocationContext
-                                                                        .enterSerialExecutionTurn(
-                                                                                serialContext);
-                                                        var actor =
-                                                                systems.zlink.framework.runtime
-                                                                        .internal.handlers
-                                                                        .ZLinkSuspendInvocationContext
-                                                                        .enterActorDispatch(
-                                                                                actorDispatch);
-                                                        var execution =
-                                                                systems.zlink.framework.runtime
-                                                                        .internal.handlers
-                                                                        .ZLinkSuspendInvocationContext
-                                                                        .enterApplicationExecution(
-                                                                                application);
-                                                        ZLinkFlowContext.Scope ignored =
-                                                                flow == null
-                                                                        ? () -> {}
-                                                                        : ZLinkFlowContext.enter(
-                                                                                flow)) {
-                                                    if (error != null) {
-                                                        managed.completeExceptionally(error);
-                                                    } else {
-                                                        managed.complete(value);
-                                                    }
-                                                } finally {
-                                                    if (previous == null) {
-                                                        CURRENT.remove();
-                                                    } else {
-                                                        CURRENT.set(previous);
-                                                    }
-                                                    if (previousGate == null) {
-                                                        CURRENT_GATE.remove();
-                                                    } else {
-                                                        CURRENT_GATE.set(previousGate);
-                                                    }
-                                                }
-                                            });
-                                } catch (RuntimeException rejected) {
-                                    managed.completeExceptionally(rejected);
-                                    if (gate != null) {
-                                        gate.complete(null);
-                                    }
-                                }
-                            });
+            managed.observe(
+                    false,
+                    (value, error) -> {
+                        try {
+                            queue.executor.execute(
+                                    () -> {
+                                        ZLinkSerialExecutionQueue previous = CURRENT.get();
+                                        CompletableFuture<Void> previousGate = CURRENT_GATE.get();
+                                        CURRENT.set(queue);
+                                        if (gate == null) {
+                                            CURRENT_GATE.remove();
+                                        } else {
+                                            CURRENT_GATE.set(gate);
+                                        }
+                                        try (var serial =
+                                                        systems.zlink.framework.runtime.internal
+                                                                .handlers
+                                                                .ZLinkSuspendInvocationContext
+                                                                .enterSerialExecutionTurn(
+                                                                        serialContext);
+                                                var actor =
+                                                        systems.zlink.framework.runtime.internal
+                                                                .handlers
+                                                                .ZLinkSuspendInvocationContext
+                                                                .enterActorDispatch(actorDispatch);
+                                                var execution =
+                                                        systems.zlink.framework.runtime.internal
+                                                                .handlers
+                                                                .ZLinkSuspendInvocationContext
+                                                                .enterApplicationExecution(
+                                                                        application);
+                                                ZLinkFlowContext.Scope ignored =
+                                                        flow == null
+                                                                ? () -> {}
+                                                                : ZLinkFlowContext.enter(flow)) {
+                                            if (error != null) {
+                                                managed.completeExceptionally(error);
+                                            } else {
+                                                managed.complete(value);
+                                            }
+                                        } finally {
+                                            if (previous == null) {
+                                                CURRENT.remove();
+                                            } else {
+                                                CURRENT.set(previous);
+                                            }
+                                            if (previousGate == null) {
+                                                CURRENT_GATE.remove();
+                                            } else {
+                                                CURRENT_GATE.set(previousGate);
+                                            }
+                                        }
+                                    });
+                        } catch (RuntimeException rejected) {
+                            managed.completeExceptionally(rejected);
+                            if (gate != null) {
+                                gate.complete(null);
+                            }
+                        }
+                    });
             return managed;
         }
-        queue.suspendContinuation(turn.entry);
-        queue.observeOwned(stage)
-                .whenComplete(
-                        (value, error) -> {
-                            try {
-                                CompletionStage<Void> continuation =
-                                        queue.enqueueContinuation(
-                                                turn.entry,
-                                                () -> {
-                                                    updateCarrier(serialContext, currentTurn());
-                                                    try (var serial =
-                                                                    systems.zlink.framework.runtime
-                                                                            .internal.handlers
-                                                                            .ZLinkSuspendInvocationContext
-                                                                            .enterSerialExecutionTurn(
-                                                                                    serialContext);
-                                                            var actor =
-                                                                    systems.zlink.framework.runtime
-                                                                            .internal.handlers
-                                                                            .ZLinkSuspendInvocationContext
-                                                                            .enterActorDispatch(
-                                                                                    actorDispatch);
-                                                            var execution =
-                                                                    systems.zlink.framework.runtime
-                                                                            .internal.handlers
-                                                                            .ZLinkSuspendInvocationContext
-                                                                            .enterApplicationExecution(
-                                                                                    application);
-                                                            ZLinkFlowContext.Scope ignored =
-                                                                    flow == null
-                                                                            ? () -> {}
-                                                                            : ZLinkFlowContext
-                                                                                    .enter(flow)) {
-                                                        if (error != null) {
-                                                            managed.completeExceptionally(error);
-                                                        } else {
-                                                            managed.complete(value);
-                                                        }
-                                                    }
-                                                    return CompletableFuture.completedFuture(null);
-                                                });
-                                continuation.whenComplete(
-                                        (ignored, continuationFailure) -> {
-                                            if (continuationFailure != null) {
-                                                managed.completeExceptionally(continuationFailure);
-                                                // A suspended managed turn has no continuation left
-                                                // to release its gate after admission failure.
-                                                // Release
-                                                // the original turn so the queue cannot remain
-                                                // active
-                                                // forever when relocation/capacity closes the lane.
-                                                if (turn.gate != null) {
-                                                    turn.gate.complete(null);
+        managed.observe(
+                true,
+                (value, error) -> {
+                    try {
+                        CompletionStage<Void> continuation =
+                                queue.enqueueContinuation(
+                                        turn.entry,
+                                        managed,
+                                        () -> {
+                                            updateCarrier(serialContext, currentTurn());
+                                            try (var serial =
+                                                            systems.zlink.framework.runtime.internal
+                                                                    .handlers
+                                                                    .ZLinkSuspendInvocationContext
+                                                                    .enterSerialExecutionTurn(
+                                                                            serialContext);
+                                                    var actor =
+                                                            systems.zlink.framework.runtime.internal
+                                                                    .handlers
+                                                                    .ZLinkSuspendInvocationContext
+                                                                    .enterActorDispatch(
+                                                                            actorDispatch);
+                                                    var execution =
+                                                            systems.zlink.framework.runtime.internal
+                                                                    .handlers
+                                                                    .ZLinkSuspendInvocationContext
+                                                                    .enterApplicationExecution(
+                                                                            application);
+                                                    ZLinkFlowContext.Scope ignored =
+                                                            flow == null
+                                                                    ? () -> {}
+                                                                    : ZLinkFlowContext.enter(
+                                                                            flow)) {
+                                                if (error != null) {
+                                                    managed.completeExceptionally(error);
+                                                } else {
+                                                    managed.complete(value);
                                                 }
                                             }
+                                            return CompletableFuture.completedFuture(null);
                                         });
-                            } catch (RuntimeException continuationFailure) {
-                                managed.completeExceptionally(continuationFailure);
-                                if (turn.gate != null) {
-                                    turn.gate.complete(null);
-                                }
-                            }
-                        });
+                        continuation.whenComplete(
+                                (ignored, continuationFailure) -> {
+                                    if (continuationFailure != null) {
+                                        managed.completeExceptionally(continuationFailure);
+                                        // A suspended managed turn has no continuation left
+                                        // to release its gate after admission failure.
+                                        // Release
+                                        // the original turn so the queue cannot remain
+                                        // active
+                                        // forever when relocation/capacity closes the lane.
+                                        if (turn.gate != null) {
+                                            turn.gate.complete(null);
+                                        }
+                                    }
+                                });
+                    } catch (RuntimeException continuationFailure) {
+                        managed.completeExceptionally(continuationFailure);
+                        if (turn.gate != null) {
+                            turn.gate.complete(null);
+                        }
+                    }
+                });
         return managed;
     }
 
@@ -2101,67 +2148,69 @@ public final class ZLinkSerialExecutionQueue {
         Object serialContext =
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .currentSerialExecutionTurn();
-        CompletableFuture<T> managed = new CompletableFuture<>();
-        ZLinkCompletionBridge.forwardCancellation(managed, stage);
-        queue.suspendContinuation(turn.entry);
-        gate.complete(null);
-        queue.observeOwned(stage)
-                .whenComplete(
-                        (value, error) -> {
-                            try {
-                                CompletionStage<Void> continuation =
-                                        queue.enqueueContinuation(
-                                                turn.entry,
-                                                () -> {
-                                                    updateCarrier(serialContext, currentTurn());
-                                                    try (var serial =
-                                                                    systems.zlink.framework.runtime
-                                                                            .internal.handlers
-                                                                            .ZLinkSuspendInvocationContext
-                                                                            .enterSerialExecutionTurn(
-                                                                                    serialContext);
-                                                            var actor =
-                                                                    systems.zlink.framework.runtime
-                                                                            .internal.handlers
-                                                                            .ZLinkSuspendInvocationContext
-                                                                            .enterActorDispatch(
-                                                                                    actorDispatch);
-                                                            var execution =
-                                                                    systems.zlink.framework.runtime
-                                                                            .internal.handlers
-                                                                            .ZLinkSuspendInvocationContext
-                                                                            .enterApplicationExecution(
-                                                                                    application);
-                                                            ZLinkFlowContext.Scope ignored =
-                                                                    flow == null
-                                                                            ? () -> {}
-                                                                            : ZLinkFlowContext
-                                                                                    .enter(flow)) {
-                                                        if (error != null) {
-                                                            managed.completeExceptionally(error);
-                                                        } else {
-                                                            managed.complete(value);
-                                                        }
-                                                    }
-                                                    return CompletableFuture.completedFuture(null);
-                                                });
-                                continuation.whenComplete(
-                                        (ignored, continuationFailure) -> {
-                                            if (continuationFailure != null) {
-                                                managed.completeExceptionally(continuationFailure);
+        OwnedWait<T> managed = new OwnedWait<>(turn, stage);
+        managed.observe(
+                true,
+                (value, error) -> {
+                    try {
+                        CompletionStage<Void> continuation =
+                                queue.enqueueContinuation(
+                                        turn.entry,
+                                        managed,
+                                        () -> {
+                                            updateCarrier(serialContext, currentTurn());
+                                            try (var serial =
+                                                            systems.zlink.framework.runtime.internal
+                                                                    .handlers
+                                                                    .ZLinkSuspendInvocationContext
+                                                                    .enterSerialExecutionTurn(
+                                                                            serialContext);
+                                                    var actor =
+                                                            systems.zlink.framework.runtime.internal
+                                                                    .handlers
+                                                                    .ZLinkSuspendInvocationContext
+                                                                    .enterActorDispatch(
+                                                                            actorDispatch);
+                                                    var execution =
+                                                            systems.zlink.framework.runtime.internal
+                                                                    .handlers
+                                                                    .ZLinkSuspendInvocationContext
+                                                                    .enterApplicationExecution(
+                                                                            application);
+                                                    ZLinkFlowContext.Scope ignored =
+                                                            flow == null
+                                                                    ? () -> {}
+                                                                    : ZLinkFlowContext.enter(
+                                                                            flow)) {
+                                                if (error != null) {
+                                                    managed.completeExceptionally(error);
+                                                } else {
+                                                    managed.complete(value);
+                                                }
                                             }
+                                            return CompletableFuture.completedFuture(null);
                                         });
-                            } catch (RuntimeException continuationFailure) {
-                                managed.completeExceptionally(continuationFailure);
-                            }
-                        });
+                        continuation.whenComplete(
+                                (ignored, continuationFailure) -> {
+                                    if (continuationFailure != null) {
+                                        managed.completeExceptionally(continuationFailure);
+                                    }
+                                });
+                    } catch (RuntimeException continuationFailure) {
+                        managed.completeExceptionally(continuationFailure);
+                    }
+                });
+        gate.complete(null);
         return managed;
     }
 
-    private synchronized void suspendContinuation(Entry turn) {
+    private synchronized void suspendContinuation(Entry turn, OwnedWait<?> wait) {
         if (suspendedContinuations() == Integer.MAX_VALUE) {
             throw new IllegalStateException("suspended continuation count exhausted");
         }
+        wait.next = suspendedWaits;
+        if (suspendedWaits != null) suspendedWaits.previous = wait;
+        suspendedWaits = wait;
         if (isLifecycleTurn(turn)) {
             suspendedLifecycleContinuations++;
         } else {
@@ -2178,11 +2227,16 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private CompletionStage<Void> enqueueContinuation(
-            Entry origin, Supplier<CompletionStage<Void>> operation) {
+            Entry origin, OwnedWait<?> wait, Supplier<CompletionStage<Void>> operation) {
         ZLinkApplicationJobContext.QueuedOwnership ownership;
         CompletionStage<Void> result;
         boolean scheduleDrain = false;
         synchronized (this) {
+            if (wait.previous == null) suspendedWaits = wait.next;
+            else wait.previous.next = wait.next;
+            if (wait.next != null) wait.next.previous = wait.previous;
+            wait.next = null;
+            wait.previous = null;
             boolean lifecycleContinuation = isLifecycleTurn(origin);
             if (lifecycleContinuation) {
                 if (suspendedLifecycleContinuations <= 0) {
@@ -2601,6 +2655,7 @@ public final class ZLinkSerialExecutionQueue {
         private final boolean continuation;
         // The first entry of the turn this continuation resumes; null for that first entry.
         private Entry origin;
+        private volatile OwnedWait<?> ownedWait;
         private ZLinkSerialExecutionQueue ownerMailbox;
 
         private Entry turnOrigin() {

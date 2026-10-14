@@ -981,7 +981,13 @@ export class ZLinkFrameworkRuntimeHost
       effectiveTargetApplicationVersion,
       deadlineMs,
       this.relocationStopStarting.signal
-    );
+    ).finally(() => {
+      this.relocationTargetApplicationVersion = undefined;
+      this.relocationStopStarting = undefined;
+      this.relocationOperation = undefined;
+      this.relocationOperationKey = undefined;
+      this.relocationOperationStartedAt = undefined;
+    });
     return waitForRuntimeOperation(this.relocationOperation, options.signal);
   }
 
@@ -1006,7 +1012,7 @@ export class ZLinkFrameworkRuntimeHost
     stopStartingSignal: AbortSignal
   ): Promise<ZLinkFrameworkRelocationResult> {
     if (!this.isStarted) {
-      return this.completeRelocation(
+      return this.resetBlockedRelocation(
         blockedRelocation(
           mode,
           effectiveTargetApplicationVersion,
@@ -1058,7 +1064,8 @@ export class ZLinkFrameworkRuntimeHost
               mode,
               effectiveTargetApplicationVersion,
               ZLinkFrameworkRelocationReason.RelocationFailed
-            )
+            ),
+            ZLinkFrameworkRuntimeState.Error
           );
         }
         return this.resetBlockedRelocation(
@@ -1074,12 +1081,15 @@ export class ZLinkFrameworkRuntimeHost
         );
       }
       await this.publishHostRelocated();
-      return this.completeRelocation({
-        mode,
-        effectiveTargetApplicationVersion,
-        outcome: ZLinkFrameworkRelocationOutcome.Relocated,
-        reason: ZLinkFrameworkRelocationReason.None
-      });
+      return this.completeRelocation(
+        {
+          mode,
+          effectiveTargetApplicationVersion,
+          outcome: ZLinkFrameworkRelocationOutcome.Relocated,
+          reason: ZLinkFrameworkRelocationReason.None
+        },
+        ZLinkFrameworkRuntimeState.Relocated
+      );
     } catch (error) {
       const result = blockedRelocation(
         mode,
@@ -1093,7 +1103,7 @@ export class ZLinkFrameworkRuntimeHost
               : ZLinkFrameworkRelocationReason.RelocationFailed
       );
       return error instanceof ZLinkRetiringRollbackError
-        ? this.completeRelocation(result)
+        ? this.completeRelocation(result, ZLinkFrameworkRuntimeState.Error)
         : this.resetBlockedRelocation(result);
     }
   }
@@ -1203,29 +1213,18 @@ export class ZLinkFrameworkRuntimeHost
       this.setRuntimeState(ZLinkFrameworkRuntimeState.Serving);
     }
     this.runtimeDeadline = undefined;
-    this.relocationTargetApplicationVersion = undefined;
-    this.relocationStopStarting = undefined;
-    this.relocationOperation = undefined;
-    this.relocationOperationKey = undefined;
-    this.relocationOperationStartedAt = undefined;
     return result;
   }
 
   private async completeRelocation(
-    result: ZLinkFrameworkRelocationResult
+    result: ZLinkFrameworkRelocationResult,
+    state: ZLinkFrameworkRuntimeState
   ): Promise<ZLinkFrameworkRelocationResult> {
     this.runtimeRelocationResult = result;
     if (this.shutdownDeadline === undefined) this.runtimeDeadline = undefined;
     this.recordRelocationResult(result);
-    this.setRuntimeState(
-      result.outcome === ZLinkFrameworkRelocationOutcome.Relocated
-        ? ZLinkFrameworkRuntimeState.Relocated
-        : ZLinkFrameworkRuntimeState.Error
-    );
-    if (
-      result.outcome === ZLinkFrameworkRelocationOutcome.Blocked &&
-      this.shutdownDeadline === undefined
-    ) {
+    this.setRuntimeState(state);
+    if (state === ZLinkFrameworkRuntimeState.Error && this.shutdownDeadline === undefined) {
       await this.runWithShutdownDeadline(0, async () => {
         const cleanup = await Promise.allSettled([this.stop()]);
         const failure = cleanup[0];

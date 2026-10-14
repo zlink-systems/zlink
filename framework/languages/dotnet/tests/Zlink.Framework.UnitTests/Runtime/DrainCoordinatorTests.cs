@@ -21,6 +21,43 @@ namespace Zlink.Framework.UnitTests;
 public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 {
     [Fact]
+    public async Task Completed_Drain_After_Deadline_Does_Not_Repeat_Teardown()
+    {
+        var executor = new CompletedTeardownExecutor();
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        var deadline = TimeSpan.FromMilliseconds(20);
+        coordinator.RequestShutdown(deadline);
+        var result = Assert.IsType<ForceStopped>(await coordinator.DrainAsync(deadline));
+        Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, result.Reason);
+        Assert.Equal(0, executor.ForceCount);
+    }
+
+    private sealed class CompletedTeardownExecutor : IZLinkDrainExecutor
+    {
+        public int ForceCount { get; private set; }
+
+        public async ValueTask<ZLinkDrainForceReason?> ExecuteAsync(
+            TimeSpan deadline,
+            CancellationToken deadlineToken
+        )
+        {
+            // Completed bounded cleanup can finish after the original shutdown deadline.
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, deadlineToken);
+            }
+            catch (OperationCanceledException) when (deadlineToken.IsCancellationRequested) { }
+            return null;
+        }
+
+        public ValueTask ForceStopAsync(ZLinkDrainForceReason reason, CancellationToken token)
+        {
+            ForceCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    [Fact]
     public async Task Forced_Relocation_Establishes_Teardown_End_Before_Publication()
     {
         var executor = new FakeDrainExecutor();
@@ -1772,10 +1809,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             }
         );
 
-        var result = await coordinator.ForceStopAsync(
-            ZLinkDrainForceReason.DeadlineExceeded,
-            TimeSpan.FromSeconds(1)
-        );
+        var result = await coordinator.ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded);
 
         Assert.IsType<ForceStopped>(result);
         Assert.Equal(1, snapshotCount);
@@ -1805,7 +1839,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         try
         {
             var result = await coordinator
-                .ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, TimeSpan.FromSeconds(1))
+                .ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded)
                 .AsTask()
                 .WaitAsync(TimeSpan.FromSeconds(1));
 
@@ -1858,7 +1892,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         try
         {
             var result = await coordinator
-                .ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, TimeSpan.FromSeconds(1))
+                .ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded)
                 .AsTask()
                 .WaitAsync(TimeSpan.FromSeconds(1));
 

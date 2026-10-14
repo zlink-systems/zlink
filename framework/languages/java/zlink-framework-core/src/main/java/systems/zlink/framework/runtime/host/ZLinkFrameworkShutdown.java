@@ -30,12 +30,18 @@ final class ZLinkFrameworkShutdown {
     }
 
     void deferStage(String stage, Supplier<CompletionStage<Void>> action) {
-        actions.push(() -> atStage(stage, () -> withinDeadline(atStage(stage, action))));
+        actions.push(() -> atStage(stage, () -> withinDeadline(action.get())));
     }
 
     private CompletionStage<Void> withinDeadline(CompletionStage<Void> action) {
-        if (action.toCompletableFuture().isDone()) return action;
         long remaining = Duration.between(Instant.now(), deadline).toNanos();
+        if (action.toCompletableFuture().isDone()) {
+            return action.thenCompose(
+                    ignored ->
+                            remaining > 0L
+                                    ? action
+                                    : CompletableFuture.failedFuture(new DeadlineExpired()));
+        }
         if (remaining <= 0L) {
             return CompletableFuture.failedFuture(new DeadlineExpired());
         }
@@ -43,7 +49,7 @@ final class ZLinkFrameworkShutdown {
         action.whenComplete(
                 (ignored, failure) -> {
                     if (failure == null) completion.complete(null);
-                    else completion.completeExceptionally(failure);
+                    else completion.completeExceptionally(new CompletionException(failure));
                 });
         return completion
                 .orTimeout(
@@ -91,9 +97,7 @@ final class ZLinkFrameworkShutdown {
                     .exceptionallyCompose(
                             error ->
                                     CompletableFuture.failedFuture(
-                                            unwrap(error) instanceof Failure
-                                                    ? unwrap(error)
-                                                    : new Failure(stage, unwrap(error))));
+                                            new Failure(stage, unwrap(error))));
         } catch (RuntimeException error) {
             return CompletableFuture.failedFuture(new Failure(stage, error));
         }

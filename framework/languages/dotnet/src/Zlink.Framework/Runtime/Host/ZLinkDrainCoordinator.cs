@@ -324,20 +324,10 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         return await _terminal.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    internal async ValueTask<ZLinkDrainResult> ForceStopAsync(
-        ZLinkDrainForceReason reason,
-        TimeSpan deadline
-    )
+    internal async ValueTask<ZLinkDrainResult> ForceStopAsync(ZLinkDrainForceReason reason)
     {
-        if (deadline <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(deadline));
         _admission.BeginDrain(ZLinkDrainOwner.Shutdown);
-        var forced = await ForceStopAsync(
-                reason,
-                deadline,
-                hasCommitted: false,
-                committedUnitCount: 0
-            )
+        var forced = await ForceStopAsync(reason, hasCommitted: false, committedUnitCount: 0)
             .ConfigureAwait(false);
         _terminal.TrySetResult(forced);
         return forced;
@@ -405,15 +395,13 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
                     == ZLinkFrameworkLifecycleIntent.Shutdown
                 && _shutdownEnd is { } end
                 && DateTimeOffset.UtcNow >= end
-                    ? await ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, deadline)
-                        .ConfigureAwait(false)
+                    ? new ForceStopped(ZLinkDrainForceReason.DeadlineExceeded)
                     : new Drained(),
                 ZLinkDrainExecutionDisposition.Blocked => new DrainBlocked(
                     executionResult.BlockedReason ?? ZLinkFrameworkRelocationReason.RelocationFailed
                 ),
                 ZLinkDrainExecutionDisposition.ForceStop => await ForceStopAsync(
                         executionResult.ForceReason ?? ZLinkDrainForceReason.TeardownFailed,
-                        deadline,
                         executionResult.HasCommitted,
                         executionResult.CommittedUnitCount
                     )
@@ -429,13 +417,13 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         }
         catch (OperationCanceledException)
         {
-            result = await ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, deadline)
+            result = await ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded)
                 .ConfigureAwait(false);
         }
         catch (Exception error)
         {
             _logger?.LogError(error, "ZLink drain execution failed before terminal teardown.");
-            result = await ForceStopAsync(ZLinkDrainForceReason.TeardownFailed, deadline)
+            result = await ForceStopAsync(ZLinkDrainForceReason.TeardownFailed)
                 .ConfigureAwait(false);
         }
 
@@ -467,7 +455,6 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
 
     private async ValueTask<ZLinkDrainResult> ForceStopAsync(
         ZLinkDrainForceReason reason,
-        TimeSpan deadline,
         bool hasCommitted = false,
         ulong committedUnitCount = 0
     )
@@ -481,7 +468,7 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
                 EstablishTeardownEnd(DateTimeOffset.UtcNow);
                 using (ExecutionContext.SuppressFlow())
                     _forceStopOperation = Task.Run(() =>
-                        ExecuteForceStopAsync(reason, deadline, hasCommitted, committedUnitCount)
+                        ExecuteForceStopAsync(reason, hasCommitted, committedUnitCount)
                     );
                 return _forceStopOperation;
             })
@@ -491,7 +478,6 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
 
     private async Task<ZLinkDrainResult> ExecuteForceStopAsync(
         ZLinkDrainForceReason reason,
-        TimeSpan deadline,
         bool hasCommitted,
         ulong committedUnitCount
     )
