@@ -1082,8 +1082,19 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         if (!isCurrentActor(actor)) {
             throw new IllegalStateException("actor is not local");
         }
-        retireStreamRoute(actor);
-        retireActorBinding(actor);
+        // The interface completes nothing, so a failed retirement is reported where this node
+        // reports its other unobserved failures.
+        retireStreamRoute(actor)
+                .thenCombine(retireActorBinding(actor), (route, record) -> null)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                LOGGER.log(
+                                        Level.WARNING,
+                                        "bound Session close failed: " + actor.actorId(),
+                                        failure);
+                            }
+                        });
     }
 
     /** Removes the Actor's current binding record in the binding owner's turn. */
@@ -1874,8 +1885,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     new IllegalStateException("STREAM session binding is stale"));
         }
         if (isCurrentActor(actor)) {
-            retireLocalSession(sessionRid, actor, bindingGeneration);
-            return removeStreamBinding(sessionRid, actor, bindingGeneration, stream);
+            // Ending order: stop new slotted submissions first, then retire the Actor's record
+            // (02-session-actor-binding.ko.md:225-227).
+            return removeStreamBinding(sessionRid, actor, bindingGeneration, stream)
+                    .thenCompose(
+                            ignored -> retireLocalSession(sessionRid, actor, bindingGeneration))
+                    .thenApply(ignored -> null);
         }
         return owner.bindRemoteStreamSession(
                         sessionRid,
@@ -1934,9 +1949,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     /**
      * Retires exactly the same-node Session binding record, as a tombstone does for a remote one.
      */
-    private void retireLocalSession(
+    private CompletionStage<Boolean> retireLocalSession(
             RoutingId sessionRid, ZLinkBackendActorRef actor, long bindingGeneration) {
-        remoteSessionBindingOwner.apply(
+        return remoteSessionBindingOwner.apply(
                 this,
                 actor,
                 applied -> {
