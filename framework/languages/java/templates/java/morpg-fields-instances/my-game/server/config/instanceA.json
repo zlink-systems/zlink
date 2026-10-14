@@ -6,6 +6,5 @@
   "streamEndpoint": null,
   "fieldIds": [],
   "fieldCapacity": 0,
-  "dungeonCapacity": 1,
-  "bootstrap": false
+  "dungeonCapacity": 1
 }

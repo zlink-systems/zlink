@@ -6,6 +6,5 @@
   "streamEndpoint": "tcp://127.0.0.1:0",
   "fieldIds": [],
   "fieldCapacity": 0,
-  "dungeonCapacity": 0,
-  "bootstrap": false
+  "dungeonCapacity": 0
 }

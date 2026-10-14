@@ -87,19 +87,17 @@ public final class Hosting {
                             });
             try {
                 ready.get(Control.HOST_DEADLINE.toSeconds(), TimeUnit.SECONDS);
-                if (config.bootstrap()) {
-                    var spots = app.getBean(ZLinkSpotManager.class);
-                    for (var fieldId : config.fieldIds()) {
-                        var created =
-                                spots.getOrCreate(fieldId, Names.FIELD)
-                                        .inMesh(Names.MESH)
-                                        .submit()
-                                        .toCompletableFuture()
-                                        .join();
-                        if (created.state() != ZLinkSpotCreateState.CREATED)
-                            throw new IllegalStateException(
-                                    "Field bootstrap failed: " + fieldId + " " + created);
-                    }
+                var spots = app.getBean(ZLinkSpotManager.class);
+                for (var fieldId : config.fieldIds()) {
+                    var created =
+                            spots.getOrCreate(fieldId, Names.FIELD)
+                                    .inMesh(Names.MESH)
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .join();
+                    if (created.state() == ZLinkSpotCreateState.REJECTED)
+                        throw new IllegalStateException(
+                                "Field bootstrap rejected: " + fieldId + " " + created);
                 }
                 var endpoints = new LinkedHashMap<String, Object>();
                 endpoints.put("id", config.id());

@@ -8,5 +8,4 @@ public record NodeConfig(
         String streamEndpoint,
         java.util.List<String> fieldIds,
         int fieldCapacity,
-        int dungeonCapacity,
-        boolean bootstrap) {}
+        int dungeonCapacity) {}

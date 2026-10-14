@@ -9,6 +9,5 @@
     "field-4"
   ],
   "fieldCapacity": 2,
-  "dungeonCapacity": 0,
-  "bootstrap": true
+  "dungeonCapacity": 0
 }
