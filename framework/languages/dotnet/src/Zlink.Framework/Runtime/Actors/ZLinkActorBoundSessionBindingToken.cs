@@ -3,7 +3,6 @@ namespace Zlink.Framework.Runtime.Actors;
 internal static class ZLinkActorBoundSessionBindingToken
 {
     private const string NativePrefix = "native:";
-    private const ulong CanonicalTokenParticipantId = 1;
 
     internal static string Canonical(
         RoutingId ownerNodeRid,
@@ -17,7 +16,7 @@ internal static class ZLinkActorBoundSessionBindingToken
         var bytes =
             Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.EncodeRelocationSessionBinding(
                 new(
-                    new(CanonicalTokenParticipantId),
+                    new(ZLinkCanonicalActorRelocationWriter.ParticipantId),
                     new(ownerNodeRid.ToBytes().ToArray()),
                     new(ownerNodeGeneration),
                     new(ownerId),

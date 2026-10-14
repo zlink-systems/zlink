@@ -51,14 +51,12 @@ internal readonly record struct ZLinkSessionRelocationContext(
 
 internal static class ZLinkSessionRelocationWire
 {
-    private const ulong FirstParticipantId = 1;
-
     internal static Systems.Zlink.Framework.Runtime.Protocol.ServiceWirePilotCodec.RelocationSessionBinding? CaptureBinding(
         ZLinkRemoteActorBoundSessionRoute route
     ) =>
         route.IsBound
             ? new(
-                FirstParticipantId,
+                ZLinkCanonicalActorRelocationWriter.ParticipantId,
                 route.NodeRid!.Value.ToBytes().ToArray(),
                 route.SessionOwnerNodeGeneration,
                 route.SessionOwnerId!,
@@ -97,9 +95,12 @@ internal static class ZLinkSessionRelocationWire
             sourceNodeGeneration,
             sourceLeaseGeneration,
             binding.SessionOwnerNodeGeneration,
-            0,
-            binding.SessionOwnerId,
-            binding.SessionOwnerLeaseGeneration
+            // sessionBindings carries no accepted Session sequence; the target
+            // starts at zero and relayed frames advance it with the sequence
+            // the Session owner assigned.
+            AcceptedHighWater: 0,
+            SessionOwnerId: binding.SessionOwnerId,
+            SessionOwnerLeaseGeneration: binding.SessionOwnerLeaseGeneration
         );
     }
 

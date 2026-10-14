@@ -1029,7 +1029,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             RecoveryPayload: recovery
         )
         {
-            CanonicalParticipantId = 1,
+            CanonicalParticipantId = ZLinkCanonicalActorRelocationWriter.ParticipantId,
             SessionBinding = ZLinkSessionRelocationWire.CaptureBinding(boundSessionRoute),
         };
         var publicationParticipant = new ZLinkAggregateRelocationParticipant(
