@@ -66,6 +66,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         ZLinkServiceWireCodec.RelocationPrepareRecord
     > _sourceAttempts = new();
     private int _reconciliationRunning;
+    private TaskCompletionSource _reconciliationWake = NewReconciliationWake();
 
     internal int ActiveStageCount => _staged.Values.OfType<TargetStage>().Count();
 
@@ -2591,6 +2592,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
 
     internal void ScheduleReconciliation()
     {
+        // The loop replaces this wake after each wait, so a schedule during a
+        // pass completes the next wait instead of waiting a polling interval.
+        Volatile.Read(ref _reconciliationWake).TrySetResult();
         if (Interlocked.CompareExchange(ref _reconciliationRunning, 1, 0) != 0)
             return;
         if (
@@ -2639,8 +2643,15 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     }
                 }
 
-                await Task.Delay(registration.Locations.Options.PollingInterval, cancellationToken)
+                await Task.WhenAny(
+                        Task.Delay(
+                            registration.Locations.Options.PollingInterval,
+                            cancellationToken
+                        ),
+                        Volatile.Read(ref _reconciliationWake).Task
+                    )
                     .ConfigureAwait(false);
+                Interlocked.Exchange(ref _reconciliationWake, NewReconciliationWake());
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -2649,6 +2660,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             Interlocked.Exchange(ref _reconciliationRunning, 0);
         }
     }
+
+    private static TaskCompletionSource NewReconciliationWake() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private async ValueTask<ZLinkRelocationRecoveryCandidate?> ReconcileStageAuthorityAsync(
         TargetStage stage,

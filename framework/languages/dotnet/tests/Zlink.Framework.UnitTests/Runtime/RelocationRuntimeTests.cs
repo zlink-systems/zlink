@@ -90,6 +90,58 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
+    public async Task Scheduled_reconciliation_runs_before_the_polling_interval_elapses()
+    {
+        using var services = CreateRuntimeServices();
+        var runtime = CreateBareRuntime(services);
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var registration = new ZLinkFrameworkRegistration();
+            registration.Locations.UseInMemoryStores = true;
+            registration.Locations.Options.PollingInterval = TimeSpan.FromMinutes(5);
+            var target = new ZLinkSpotRetireTargetRuntime(services, runtime, registration);
+
+            // The first pass removes the first expired stage and then waits
+            // for the polling interval.
+            Assert.True(TrackExpiredPublishedStage(target));
+            target.ScheduleReconciliation();
+            Assert.True(
+                SpinWait.SpinUntil(() => target.ActiveStageCount == 0, TimeSpan.FromSeconds(5))
+            );
+
+            // A stage tracked after that pass is removed only by a later pass,
+            // so only the schedule wake can run it before the interval elapses.
+            Assert.True(TrackExpiredPublishedStage(target));
+            Assert.Equal(1, target.ActiveStageCount);
+            target.ScheduleReconciliation();
+            Assert.True(
+                SpinWait.SpinUntil(() => target.ActiveStageCount == 0, TimeSpan.FromSeconds(5))
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+
+        static bool TrackExpiredPublishedStage(ZLinkSpotRetireTargetRuntime target)
+        {
+            var envelope = CreateEnvelope() with { AggregateId = Guid.NewGuid() };
+            var stage = CreateTargetStageForHeldJournal() with
+            {
+                Envelope = envelope,
+                ExpiresAt = TimeSpan.Zero,
+            };
+            Volatile.Write(ref stage.Published, 1);
+            Volatile.Write(ref stage.SessionRoutesConverged, 1);
+            return target.TryTrackStage(
+                new ZLinkAggregateFence(envelope.AggregateId, envelope.AggregateGeneration),
+                stage
+            );
+        }
+    }
+
+    [Fact]
     public void Target_observation_accepts_only_byte_exact_steady_authority()
     {
         var (stage, _) = CreateCanonicalPublishedReconciliationFixture();
