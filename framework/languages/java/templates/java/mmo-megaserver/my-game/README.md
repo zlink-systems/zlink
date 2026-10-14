@@ -54,7 +54,7 @@ The runner checks `zlink.structure.json`, creates its own Redis Compose project 
 
 ## Known issues
 
-Validation with Framework 0.30.0 is blocked by #1729 (Java deferred cross-node join reports DATA_LOST) and #1738 (Java seals a closed Session during host relocation). Keep the pinned version at 0.30.1 and verify the candidate release before deployment. Do not compensate with application retries or private API calls.
+Validation with Framework 0.30.0 is blocked by Java deferred cross-node join reporting DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)) and Java sealing a closed Session during host relocation ([#1738](https://github.com/zlink-systems/zlink/issues/1738)). Keep the pinned version at 0.30.1 and verify the candidate release before deployment. Do not compensate with application retries or private API calls.
 
 ## Deployment sequence
 

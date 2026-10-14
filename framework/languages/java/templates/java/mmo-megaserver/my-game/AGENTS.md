@@ -7,8 +7,8 @@ This template implements a Java MMO megaserver with capacity-limited Region User
 | Role | Responsibility and extension point |
 | --- | --- |
 | session | STREAM connection, Actor GetOrCreate and binding, typed relay; `server/session/.../infrastructure/zlink/GameSession.java` |
-| region | Entry instance selection; Region membership, movement and visibility; `server/region/.../domain/Positions.java` and `infrastructure/zlink/` |
-| instance | Dungeon GetOrCreate and typed replies; `server/instance/.../infrastructure/zlink/` |
+| region | Entry instance selection; Region membership, movement and visibility; Dungeon GetOrCreate; `server/region/.../domain/Positions.java` and `infrastructure/zlink/` |
+| instance | Dungeon User Spot hosting and typed replies; `server/instance/.../infrastructure/zlink/` |
 | location | Redis Location and relocation stores; shared hosting and Compose |
 | players | Stream client and scenario assertions in `e2e/` |
 
