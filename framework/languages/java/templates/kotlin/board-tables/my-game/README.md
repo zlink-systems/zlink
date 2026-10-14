@@ -1,6 +1,6 @@
 # MyGame board tables
 
-Kotlin으로 작성한 4인 보드 테이블 서버입니다. Session node가 STREAM 연결을 받고 Player Actor에 bind한 뒤 메시지를 relay합니다. Table User Spot이 좌석·칩·카드·차례를 소유합니다. Player Actor에는 게임 상태의 사본을 두지 않습니다.
+This project is a four-player board table server written in Kotlin. The Session node accepts STREAM connections, binds each connection to a Player Actor, and relays messages. The Table User Spot owns seats, chips, cards, and turns. The Player Actor keeps no copy of game state. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
 
 ```mermaid
 flowchart LR
@@ -9,11 +9,14 @@ flowchart LR
   table -->|Location / lease| location[Location Store]
 ```
 
-## 준비물
+## Prerequisites
 
-JDK 17 이상으로 Gradle을 시작할 수 있어야 합니다. Gradle 9.3.0 wrapper와 Foojay resolver가 컴파일·실행에 필요한 JDK 25를 내려받습니다. Docker Compose v2와 Linux container를 지원하는 Docker daemon, Windows에서는 PowerShell 7이 필요합니다. 첫 빌드와 실행에는 Maven Central·Gradle Plugin Portal·JDK 배포 서버·Docker registry에 접근할 수 있어야 합니다.
+- JDK 17 or later, enough to start Gradle. The Gradle 9.3.0 wrapper and the Foojay resolver download the JDK 25 that compilation and execution require.
+- Docker Compose v2 and a Docker daemon that supports Linux containers.
+- PowerShell 7 on Windows.
+- Network access to Maven Central, the Gradle Plugin Portal, the JDK distribution server, and a Docker registry for the first build and run.
 
-Framework 0.30.0과 binding 1.19.0을 공개 Maven package로 사용합니다. 버전은 루트 `build.gradle.kts`에서 지정합니다. 저장소 소스나 로컬 package feed를 참조하지 않으므로 이 디렉터리만 복사하여 사용할 수 있습니다.
+The project uses Framework 0.30.0 and binding 1.19.0 as public Maven packages. The versions are set in the root `build.gradle.kts`. The project references neither repository sources nor a local package feed, so this directory can be copied and used on its own.
 
 ## Build
 
@@ -43,27 +46,27 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
-runner는 구조를 검사한 다음 고유 Compose project의 Redis와 Table node 두 개, Session node를 시작합니다. Redis·mesh·STREAM 포트는 OS가 배정합니다. 실행별 key prefix·설정·stdout·stderr·message flow 기록은 `.logs/run-<id>/`에 보존합니다. 정리 단계에서는 그 실행이 생성한 process와 Compose project만 종료합니다. 시나리오 실패 또는 정리 실패 시 종료 코드는 1입니다.
+The runner checks the structure, then starts Redis in a uniquely named Compose project, two Table nodes, and the Session node. The OS assigns the Redis, mesh, and STREAM ports. Each run keeps its key prefix, configuration, stdout, stderr, and message flow records under `.logs/run-<id>/`. Cleanup stops only the processes and the Compose project that the run created. The exit code is 1 when a scenario or the cleanup fails.
 
-| 시나리오 | 확인하는 동작 |
+| Scenario | Observable behavior |
 | --- | --- |
-| `table` | 좌석 배정, 비공개 카드, 잘못된 차례 거부, 베팅, 결산과 칩 보존 |
-| `reconnect` | `SessionInfo`의 sessionId 변경과 actorId·objectGeneration 유지, 좌석·카드·차례 유지, 다른 client 연결 유지 |
-| `update` | drain 전후 두 client의 `SessionInfo` 유지, 진행 중인 판의 상태·연결 유지, source 종료·교체, 새 판 결산 |
+| `table` | Seat assignment, private cards, rejection of an out-of-turn action, betting, settlement, and chip conservation. |
+| `reconnect` | The `SessionInfo` sessionId changes while actorId and objectGeneration stay the same. Seat, cards, and turn are preserved, and the other client stays connected. |
+| `update` | Both clients keep their `SessionInfo` before and after drain. The hand in progress keeps its state and connections, the source node is stopped and replaced, and a new hand settles. |
 
-`SessionInfo`는 Session ID와 bind된 Actor의 ID·generation을 담고, `TableView`는 테이블 상태만 담습니다. `SessionInfoRequest`는 Session node가 답합니다. 요청 handler의 응답은 요청 Actor의 bound session으로 보내고, 그 밖의 상태 push는 공개 Actor send API를 사용합니다.
+`SessionInfo` carries the Session ID and the ID and generation of the bound Actor. `TableView` carries only the table state. The Session node answers `SessionInfoRequest`. A request handler sends its response to the requesting Actor's bound session; other state pushes use the public Actor send API.
 
-## 구성과 확장
+## Structure and extension
 
-`server/shared`는 메시지·상수·설정과 공통 bootstrap, `server/session`은 STREAM·Actor bind·relay, `server/table`은 게임·Entry Spot·relocation adapter, `e2e`는 공개 stream connector client와 process runner를 제공합니다. 기본 typed JSON serializer를 사용합니다. Spring Boot는 공개 Framework bootstrap과 생성자 주입을 담당하며 HTTP server를 실행하지 않습니다.
+`server/shared` provides messages, constants, configuration, and the common bootstrap. `server/session` provides STREAM, Actor binding, and relay. `server/table` provides the game, the Entry Spot, and the relocation adapter. `e2e` provides the public stream connector client and the process runner. The project uses the default typed JSON serializer. Spring Boot supplies the public Framework bootstrap and constructor injection and does not run an HTTP server.
 
-Table Spot은 기본 SPOT_WIDE execution gate를 사용합니다. 상태 변경을 별도 lock이나 queue로 보호하지 않습니다. Table adapter는 application 상태만 JSON으로 저장하고 Player adapter의 application 상태는 비어 있습니다. Framework가 Actor identity·generation·membership·session route를 이전합니다.
+The Table Spot uses the default SPOT_WIDE execution gate. State changes are not protected by a separate lock or queue. The Table adapter stores only application state as JSON, and the Player adapter's application state is empty. The Framework transfers Actor identity, generation, membership, and session routes.
 
-## 배포 순서와 node 제어
+## Deployment sequence
 
-Redis를 준비한 뒤 `server/config/*.json`의 endpoint와 공통 key prefix를 배포 환경에 맞게 설정합니다. Table node A·B를 먼저 시작하고 `READY`를 확인한 다음 Session node를 시작합니다. node Id는 설정과 구조 파일 사이에 일치해야 합니다. 같은 Id로 대체 process를 시작해도 Framework가 새 routing identity를 발급합니다.
+Prepare Redis, then set the endpoints and the shared key prefix in `server/config/*.json` for the target environment. Start Table nodes A and B first and wait for `READY`, then start the Session node. Node IDs must match between the configuration and the structure file. Starting a replacement process with the same ID still gives it a new routing identity from the Framework.
 
-서버 실행 예시(JDK 25):
+Example server commands (JDK 25):
 
 ```sh
 java --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.ProgramKt server/config/table-a.json
@@ -71,6 +74,14 @@ java --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/li
 java --enable-native-access=ALL-UNNAMED -cp 'server/session/build/install/session/lib/*' MyGame.session.ProgramKt server/config/session.json
 ```
 
-Table process의 stdin에 `drain`을 쓰면 `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN`을 순서대로 확인할 수 있습니다. `SAFE_TO_SHUTDOWN`은 runtime observation에서 확인한 뒤 출력합니다. 그다음 `shutdown`을 보내 `STOPPED`를 확인하고 같은 설정으로 대체 process를 시작합니다. `READY`에는 실제 listener endpoint가 포함됩니다.
+Writing `drain` to a Table process's stdin produces `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN` in that order. The process prints `SAFE_TO_SHUTDOWN` after confirming it from runtime observation. Then send `shutdown`, wait for `STOPPED`, and start a replacement process with the same configuration. `READY` includes the actual listener endpoint.
 
-Windows runner는 Gradle이 선택한 JDK 25를 직접 실행합니다. `lib/*` classpath를 사용하므로 cmd의 classpath 길이 제한을 피합니다. 수동 실행에서는 JDK 25의 `java.exe`를 사용하고 classpath wildcard를 따옴표로 감쌉니다. `--enable-native-access=ALL-UNNAMED` 인자를 유지합니다.
+The Windows runner starts the JDK 25 that Gradle selected directly. The `lib/*` classpath avoids the cmd classpath length limit. For manual runs, use the JDK 25 `java.exe`, quote the classpath wildcard, and keep the `--enable-native-access=ALL-UNNAMED` argument.
+
+## 한국어 실행 안내
+
+이 프로젝트는 Session node 하나와 Table node 두 개, Redis를 실행하는 4인 보드 테이블 서버입니다. `run-e2e.sh` 또는 `run-e2e.ps1`을 실행하면 구조를 검사하고 `table`, `reconnect`, `update` 시나리오로 좌석·카드·베팅·재연결·노드 교체의 실제 동작을 확인합니다. 시나리오 실패나 정리 실패가 있으면 종료 코드는 1입니다.
+
+시나리오를 고르려면 `./run-e2e.sh --scenario table,reconnect,update`(Windows는 `-Scenario`)를 사용합니다. 포트는 실행마다 OS가 배정하며, runner는 자신이 만든 process와 Compose project만 정리합니다.
+
+로그, 설정, message flow 기록은 `.logs/run-<id>/`에 남습니다. 실패하면 이 폴더의 첫 오류부터 확인하십시오. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따릅니다.
