@@ -468,10 +468,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             UUID relocationId = UUID.randomUUID();
             ZLinkActorJoinOperationId operationId = new ZLinkActorJoinOperationId(0x1111L, 0x2222L);
             assertNotEquals(relocationId, new UUID(operationId.high(), operationId.low()));
-            ZLinkMessage admissionReply =
-                    ZLinkMessage.fromEncoded(
-                            systems.zlink.framework.ZLinkEncodedPayload.from(new byte[] {9, 4}),
-                            targetSpots.serializerForSpot());
             var admission =
                     new ZLinkActorJoinRelocationPort.CanonicalAdmission(
                             relocationId,
@@ -490,7 +486,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             targetDescriptor.leaseGeneration(),
                             targetSpot,
                             actor -> ((TrackingSpot) targetSpot).onJoinedActor(actor),
-                            admissionReply,
                             "application/json",
                             new byte[0],
                             TIMEOUT);
