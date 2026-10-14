@@ -2,6 +2,10 @@
 
 This project is a runnable server starting point for an MMORPG seamless world. Game engine projects are outside its scope. `zlink.structure.json` describes the initial composition; Redis and Framework own the current runtime locations.
 
+## Start from GAME.md
+
+If `GAME.md` exists in the project root, read it first. It describes the game the user wants to build and the genre, server structure and server language chosen when the project was created. Build that game on this structure, keep the node responsibilities below, and keep the e2e scenarios passing.
+
 ## Node responsibilities
 
 | Project | Responsibility | Game logic extension point |
