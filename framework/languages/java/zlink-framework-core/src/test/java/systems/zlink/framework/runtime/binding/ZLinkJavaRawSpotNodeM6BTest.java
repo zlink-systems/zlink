@@ -2510,6 +2510,70 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void laterLocalBindIsNotErasedByAnEarlierRemoteBind() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId sessionOwnerRid = RoutingId.from("jvm-m6b-two-owners-session-owner");
+            RoutingId localSessionRid = RoutingId.from("jvm-m6b-two-owners-local-session");
+            node.setRoutingId(RoutingId.from("jvm-m6b-two-owners-actor-node"));
+            node.setBind("inproc://jvm-m6b-two-owners-" + System.nanoTime());
+            node.start();
+            ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = target.createActor("two-owners-actor", create);
+            }
+            target.rememberActorAuthority(actor, 41, 1);
+            var route =
+                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            actor, node.lifecycleGeneration(), 41, 1);
+            ZLinkStateLane ownerTurn = new ZLinkStateLane();
+            target.setRemoteSessionBindingOwner(
+                    (spotNode, ref, transition) ->
+                            ownerTurn.runAsync(
+                                    () ->
+                                            transition.apply(
+                                                    ZLinkInternalSpotNode
+                                                            .RemoteSessionBindingTransition.NONE)));
+            CompletableFuture<Void> release = new CompletableFuture<>();
+            ownerTurn.runAsync(
+                    () -> {
+                        release.join();
+                        return null;
+                    });
+            // The remote bind is submitted first and the same-node bind second.
+            CompletionStage<Boolean> remote =
+                    target.applyRemoteStreamBinding(
+                            sessionOwnerRid,
+                            7,
+                            sessionOwnerRid.toString(),
+                            1,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    1,
+                                    route,
+                                    RoutingId.from("jvm-m6b-two-owners-remote-session"),
+                                    true,
+                                    3),
+                            accepted -> {});
+            CompletionStage<Void> local =
+                    target.bindStreamSession(
+                            localSessionRid, actor, 9, 1, null, Duration.ofSeconds(1));
+            target.publishStreamSession(localSessionRid, actor, 9, 1, null);
+            release.complete(null);
+            assertTrue(remote.toCompletableFuture().get(5, TimeUnit.SECONDS));
+            local.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            ownerTurn.runAsync(() -> null).toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            assertTrue(
+                    target.hasLocalActorBoundSessionRoute(actor),
+                    "the later same-node bind was erased");
+            assertFalse(
+                    target.hasRemoteActorBoundSessionRoute(actor),
+                    "the earlier remote bind stayed current");
+        }
+    }
+
+    @Test
     void remoteBindingIdentityFencesOldOwnerEpochWithoutGlobalCounter() throws Exception {
         try (var context = Zlink.createContext();
                 var actorNode = new ZLinkJavaRawMeshNode(context, "mesh")) {

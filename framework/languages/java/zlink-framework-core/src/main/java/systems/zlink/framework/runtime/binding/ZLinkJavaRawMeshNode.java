@@ -4263,7 +4263,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     CompletionStage<Void> sendBoundSession(
-            ZLinkJavaRawSpotNode.RemoteStreamBinding binding, List<Message> parts) {
+            ZLinkJavaRawSpotNode.ActorSessionBinding binding, List<Message> parts) {
         BoundSessionRouteStateSnapshot route = boundSessionRouteStateSnapshot(binding);
         boolean ready = route.readyFor(binding);
         if (!ready) {
@@ -4286,7 +4286,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     private BoundSessionRouteStateSnapshot boundSessionRouteStateSnapshot(
-            ZLinkJavaRawSpotNode.RemoteStreamBinding binding) {
+            ZLinkJavaRawSpotNode.ActorSessionBinding binding) {
         RoutingId target = binding.sessionOwnerNodeRid();
         ZLinkServiceTopologyRegistry currentTopology = topology;
         ZLinkServiceTopologyRegistry.Peer peer =
@@ -7528,7 +7528,7 @@ final class ZLinkJavaRawMeshNode
             return peer != null && peer.connectionId().equals(admissionConnectionId);
         }
 
-        boolean readyFor(ZLinkJavaRawSpotNode.RemoteStreamBinding binding) {
+        boolean readyFor(ZLinkJavaRawSpotNode.ActorSessionBinding binding) {
             return peer != null
                     && peer.descriptor().lifecycleGeneration()
                             == binding.sessionOwnerNodeGeneration()
