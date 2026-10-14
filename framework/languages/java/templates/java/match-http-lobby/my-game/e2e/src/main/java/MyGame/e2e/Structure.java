@@ -111,7 +111,7 @@ public final class Structure {
         for (var spot : spots) {
             require(
                     roles.get(owner(spot, roles)).equals(Roles.MATCH),
-                    "Room Spot owner must be a table node");
+                    "Room Spot owner must be a match node");
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(

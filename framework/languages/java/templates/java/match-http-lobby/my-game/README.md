@@ -50,7 +50,7 @@ The runner validates `zlink.structure.json`, creates its own Redis Compose proje
 
 ## Known issues
 
-Framework 0.30.1 is pending publication. Verification against 0.30.0 reproduced #1729 (Java deferred JoinSpot DATA_LOST), blocking the first Room admission. Other deployment paths may encounter #1740 (shutdown / SAFE_TO_SHUTDOWN), #1771 (handoff wait), #1772 (new Actor placement without an Entry Spot), or #1775 (bound-session send route). The template does not compensate for Framework failures. Preserve node stderr, including message-flow diagnostics, when reporting a failure.
+Framework 0.30.1 is pending publication. Verification against 0.30.0 reproduced Java deferred JoinSpot DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)), blocking the first Room admission. The template does not compensate for Framework failures. Preserve node stderr, including message-flow diagnostics, when reporting a failure.
 
 ## Deployment sequence
 

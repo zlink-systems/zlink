@@ -51,7 +51,7 @@ public final class GameSession implements ZLinkSession {
                     || request.playerId().isBlank()
                     || request.roomId() == null
                     || request.roomId().isBlank())
-                throw new IllegalArgumentException("Player and table IDs are required");
+                throw new IllegalArgumentException("Player and room IDs are required");
             return actors.getOrCreate(request.playerId(), Names.PLAYER)
                     .inMesh(Names.MESH)
                     .request(ZLinkMessage.empty())
