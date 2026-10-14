@@ -15,52 +15,33 @@ public sealed class ProtobufNativePayloadTests
     [Fact]
     public void Buffered_message_encoding_allocates_only_the_final_native_owner()
     {
-        const int iterations = AllocationIterations;
         var codecs = Codecs();
         var value = new BytesValue { Value = ByteString.CopyFrom(new byte[AllocationPayloadSize]) };
         var size = value.CalculateSize();
-        for (var index = 0; index < AllocationWarmupIterations; index++)
+        var directBytes = AllocatedBytesOfUninterruptedCalls(() =>
         {
             using var direct = Message.Allocate(size);
             value.WriteTo(direct.AsSpan());
-            using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(BytesValue), codecs);
-        }
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            using var direct = Message.Allocate(size);
-            value.WriteTo(direct.AsSpan());
-        }
-        var directBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
+        });
+        var encodedBytes = AllocatedBytesOfUninterruptedCalls(() =>
         {
             using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(BytesValue), codecs);
-        }
-        var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        });
         Assert.Equal(directBytes, encodedBytes);
     }
 
     [Fact]
     public void Public_serialization_transfers_the_protobuf_buffer_without_a_second_copy()
     {
-        const int iterations = AllocationIterations;
         var codecs = Codecs();
         Assert.True(codecs.TryGetSerializer("application/x-protobuf", out var serializer));
         var value = new BytesValue { Value = ByteString.CopyFrom(new byte[AllocationPayloadSize]) };
-        for (var index = 0; index < AllocationWarmupIterations; index++)
-        {
-            _ = ZLinkEncodedPayload.FromOwned(value.ToByteArray());
-            _ = serializer.Serialize(value, typeof(BytesValue));
-        }
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            _ = ZLinkEncodedPayload.FromOwned(value.ToByteArray());
-        var directBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            _ = serializer.Serialize(value, typeof(BytesValue));
-        var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var directBytes = AllocatedBytesOfUninterruptedCalls(() =>
+            ZLinkEncodedPayload.FromOwned(value.ToByteArray())
+        );
+        var encodedBytes = AllocatedBytesOfUninterruptedCalls(() =>
+            serializer.Serialize(value, typeof(BytesValue))
+        );
         Assert.True(
             encodedBytes <= directBytes,
             $"Public serialization allocated {encodedBytes} bytes; owned buffer control allocated {directBytes} bytes."
@@ -210,6 +191,31 @@ public sealed class ProtobufNativePayloadTests
         using var part = ZLinkEnvelopeCodec.EncodeBody(value, typeof(LegacyMessage), codecs);
 
         Assert.Equal(new byte[] { 0x0a, 0x02, 0x6f, 0x6b }, part.ToArray());
+    }
+
+    // Sums the bytes AllocationIterations calls allocate on this thread after
+    // the same call path has been warmed. A GC suspension, including one by a
+    // background GC that has not finished yet, can retire the thread allocation
+    // context inside a call and add its unused tail to the thread counter. A
+    // call that a GC pause interrupted therefore does not count, and the loop
+    // measures another call in its place.
+    private static long AllocatedBytesOfUninterruptedCalls(Action call)
+    {
+        for (var index = 0; index < AllocationWarmupIterations; index++)
+            call();
+        long allocated = 0;
+        for (var measured = 0; measured < AllocationIterations; )
+        {
+            var pause = GC.GetTotalPauseDuration();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            call();
+            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (GC.GetTotalPauseDuration() != pause)
+                continue;
+            allocated += bytes;
+            measured++;
+        }
+        return allocated;
     }
 
     private static ZLinkCodecRegistryBuilder Codecs()
