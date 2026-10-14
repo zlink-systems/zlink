@@ -1930,8 +1930,7 @@ public final class ZLinkSerialExecutionQueue {
         ZLinkCompletionBridge.forwardCancellation(managed, stage);
         if (!queue.lanePolicy.releasesGateOnIncompleteStage()) {
             CompletableFuture<Void> gate = turn.gate;
-            ZLinkCompletionBridge.whenCompleteOwner(
-                    stage,
+            stage.whenComplete(
                     (value, error) -> {
                         try {
                             queue.executor.execute(
@@ -1993,8 +1992,7 @@ public final class ZLinkSerialExecutionQueue {
             return managed;
         }
         queue.suspendContinuation(turn.entry);
-        ZLinkCompletionBridge.whenCompleteOwner(
-                stage,
+        stage.whenComplete(
                 (value, error) -> {
                     try {
                         CompletionStage<Void> continuation =
@@ -2090,8 +2088,7 @@ public final class ZLinkSerialExecutionQueue {
         ZLinkCompletionBridge.forwardCancellation(managed, stage);
         queue.suspendContinuation(turn.entry);
         gate.complete(null);
-        ZLinkCompletionBridge.whenCompleteOwner(
-                stage,
+        stage.whenComplete(
                 (value, error) -> {
                     try {
                         CompletionStage<Void> continuation =

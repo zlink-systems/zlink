@@ -567,7 +567,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
             if (duplicate != null)
                 return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
-            requestAdmission = ZLinkRequestStages.newAdmission();
+            requestAdmission = new CompletableFuture<>();
             return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
         }
 

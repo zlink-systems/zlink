@@ -593,7 +593,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
             if (duplicate != null)
                 return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
-            requestAdmission = ZLinkRequestStages.newAdmission();
+            requestAdmission = new CompletableFuture<>();
             return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
         }
 
@@ -721,7 +721,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                     timeout);
             try {
                 var submitted = call.metadata(metadata.values()).submit(replyType);
-                ZLinkRequestStages.forwardAdmission(requestAdmission, submitted.admitted());
+                ZLinkRequestStages.forwardAdmission(
+                        requestAdmission, ZLinkRequestStages.ownerAdmission(submitted));
                 return submitted;
             } catch (RuntimeException failure) {
                 transportPayload.close();

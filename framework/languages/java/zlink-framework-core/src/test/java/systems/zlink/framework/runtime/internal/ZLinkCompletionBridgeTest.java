@@ -11,30 +11,54 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkCompletionBridgeTest {
     @Test
     void dispatchedSourceCommitsImmediatelyAndKeepsOwnerObservationOnItsTurn() throws Exception {
-        var source = ZLinkCompletionBridge.<String>completionSource();
+        var source = new CompletableFuture<String>();
+        var view = ZLinkCompletionBridge.applicationView(source);
         var owner = Thread.currentThread();
         var observed = new AtomicReference<Thread>();
-        ZLinkCompletionBridge.whenCompleteOwner(
-                source, (value, failure) -> observed.set(Thread.currentThread()));
+        source.whenComplete((value, failure) -> observed.set(Thread.currentThread()));
         var continuation =
-                source.thenApply(
+                view.thenApply(
                         value -> {
                             assertNotSame(owner, Thread.currentThread());
                             return value;
                         });
         assertTrue(source.complete("accepted"));
-        assertTrue(source.isDone());
+        assertTrue(view.isDone());
+        assertSame(owner, observed.get());
+        assertEquals("accepted", continuation.get(2, java.util.concurrent.TimeUnit.SECONDS));
+    }
+
+    @Test
+    void callerExecutorThatHelpsTheSourceNeverRunsOwnerObservation() throws Exception {
+        var source = new CompletableFuture<String>();
+        var view = ZLinkCompletionBridge.applicationView(source);
+        var owner = Thread.currentThread();
+        var observed = new AtomicReference<Thread>();
+        source.whenComplete((value, failure) -> observed.set(Thread.currentThread()));
+        java.util.concurrent.Executor handoff =
+                task -> {
+                    var caller = new Thread(task, "caller-executor");
+                    caller.start();
+                    try {
+                        caller.join();
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                };
+        var continuation = view.thenApplyAsync(value -> value, handoff);
+        assertTrue(source.complete("accepted"));
         assertSame(owner, observed.get());
         assertEquals("accepted", continuation.get(2, java.util.concurrent.TimeUnit.SECONDS));
     }
 
     @Test
     void failurePropagationKeepsDependentRecoveryOutsideTheOwnerTurn() throws Exception {
-        var source = ZLinkCompletionBridge.<String>completionSource();
+        var source = new CompletableFuture<String>();
+        var view = ZLinkCompletionBridge.applicationView(source);
         var owner = Thread.currentThread();
         var failure = new IllegalStateException("owner rejected");
         var recovered =
-                source.toCompletableFuture()
+                view.toCompletableFuture()
                         .thenApply(value -> value)
                         .exceptionally(
                                 error -> {
@@ -44,6 +68,20 @@ final class ZLinkCompletionBridgeTest {
                                 });
         assertTrue(source.completeExceptionally(failure));
         assertEquals("rejected", recovered.get(2, java.util.concurrent.TimeUnit.SECONDS));
+    }
+
+    @Test
+    void callerCancellationOfTheViewCancelsTheOwnerOnTheCallerThread() {
+        var source = new CompletableFuture<String>();
+        var view = ZLinkCompletionBridge.applicationView(source);
+        var caller = Thread.currentThread();
+        var observed = new AtomicReference<Thread>();
+        source.whenComplete((value, failure) -> observed.set(Thread.currentThread()));
+
+        assertTrue(view.cancel(false));
+        assertTrue(source.isCancelled());
+        assertTrue(view.isCancelled());
+        assertSame(caller, observed.get());
     }
 
     @Test

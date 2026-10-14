@@ -12,18 +12,20 @@ import java.util.function.Function;
 public final class ZLinkCompletionBridge {
     private ZLinkCompletionBridge() {}
 
-    /** Uses the standard process executor for application continuations, without another source. */
-    public static <T> CompletableFuture<T> completionSource() {
-        return new DispatchedFuture<>();
-    }
-
-    /** Owner observers publish results and retain their existing execution boundary. */
-    @SuppressWarnings("unchecked")
-    public static <T> CompletionStage<T> whenCompleteOwner(
-            CompletionStage<T> source, BiConsumer<? super T, ? super Throwable> observer) {
-        return source instanceof DispatchedFuture<?> dispatched
-                ? ((DispatchedFuture<T>) dispatched).whenCompleteOwner(observer)
-                : source.whenComplete(observer);
+    /**
+     * Gives the caller its own stage over an owner source. The view commits on the owner's
+     * completion, runs caller continuations in a new turn on the standard process executor, and
+     * forwards caller cancellation to the owner. Owner observers stay on the owner source, so no
+     * thread that runs a caller continuation can reach them.
+     */
+    public static <T> CompletableFuture<T> applicationView(CompletableFuture<T> owner) {
+        var view = new ApplicationView<>(owner);
+        owner.whenComplete(
+                (value, failure) -> {
+                    if (failure == null) view.complete(value);
+                    else view.completeExceptionally(failure);
+                });
+        return view;
     }
 
     /** Preserves direct failures at existing synchronous state-registration boundaries. */
@@ -53,8 +55,7 @@ public final class ZLinkCompletionBridge {
 
     /** Runs the forwarding action when cancellation must be scheduled on the waiter's owner. */
     public static void forwardCancellation(CompletableFuture<?> caller, Runnable forward) {
-        whenCompleteOwner(
-                caller,
+        caller.whenComplete(
                 (ignored, failure) -> {
                     if (caller.isCancelled()) forward.run();
                 });
@@ -65,15 +66,24 @@ public final class ZLinkCompletionBridge {
         if (!caller.complete(value)) discard.accept(value);
     }
 
-    private static final class DispatchedFuture<T> extends CompletableFuture<T> {
+    private static final class ApplicationView<T> extends DispatchedFuture<T> {
+        private final CompletableFuture<T> owner;
+
+        private ApplicationView(CompletableFuture<T> owner) {
+            this.owner = owner;
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            owner.cancel(mayInterruptIfRunning);
+            return super.cancel(mayInterruptIfRunning);
+        }
+    }
+
+    private static class DispatchedFuture<T> extends CompletableFuture<T> {
         @Override
         public <U> CompletableFuture<U> newIncompleteFuture() {
             return new DispatchedFuture<>();
-        }
-
-        private CompletionStage<T> whenCompleteOwner(
-                BiConsumer<? super T, ? super Throwable> observer) {
-            return super.whenComplete(observer);
         }
 
         @Override
