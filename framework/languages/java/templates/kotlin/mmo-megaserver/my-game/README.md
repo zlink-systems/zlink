@@ -54,7 +54,7 @@ The runner checks `zlink.structure.json`, creates its own Redis Compose project 
 
 ## Known issues
 
-Windows and Linux validation with Framework 0.30.0 is blocked by #1729 (deferred cross-node join reports DATA_LOST). The runtime also has the tracked #1738 closed-Session relocation defect; this template did not reach that stage. Keep the pinned version at 0.30.1 and verify the candidate release before deployment. Do not compensate with application retries or private API calls.
+Windows and Linux validation with Framework 0.30.0 is blocked by deferred cross-node join reporting DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). Keep the pinned version at 0.30.1 and verify the candidate release before deployment. Do not compensate with application retries or private API calls.
 
 ## Deployment sequence
 
