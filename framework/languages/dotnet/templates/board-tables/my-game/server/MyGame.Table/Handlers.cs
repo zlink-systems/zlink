@@ -57,7 +57,8 @@ public sealed class BetHandler : IZLinkSpotActorSendHandler<TableSpot, PlayerAct
     ) => spot.BetAsync(actor, request, ct);
 }
 
-public sealed class PlayerDelivery<TMessage>
+// Forwards a Table push to the player's client. One body serves every pushed packet.
+public abstract class PlayerDelivery<TMessage>
     : IZLinkSpotActorSendHandler<TableSpot, PlayerActor, TMessage>
 {
     public ValueTask HandleAsync(
@@ -68,3 +69,9 @@ public sealed class PlayerDelivery<TMessage>
         CancellationToken ct
     ) => actor.Context.BoundSession.Send(message).Async();
 }
+
+public sealed class TableViewDelivery : PlayerDelivery<TableView>;
+
+public sealed class HandDealtDelivery : PlayerDelivery<HandDealt>;
+
+public sealed class HandResultDelivery : PlayerDelivery<HandResult>;

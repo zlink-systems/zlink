@@ -22,11 +22,9 @@ public sealed class TableSpot(
         Context.Handlers.AddActorPacket<ViewHandler, PlayerActor>(nameof(TableViewRequest));
         Context.Handlers.AddActorPacket<StartHandler, PlayerActor>(nameof(StartHandRequest));
         Context.Handlers.AddActorPacket<BetHandler, PlayerActor>(nameof(BetRequest));
-        Context.Handlers.AddActorPacket<PlayerDelivery<TableView>, PlayerActor>(nameof(TableView));
-        Context.Handlers.AddActorPacket<PlayerDelivery<HandDealt>, PlayerActor>(nameof(HandDealt));
-        Context.Handlers.AddActorPacket<PlayerDelivery<HandResult>, PlayerActor>(
-            nameof(HandResult)
-        );
+        Context.Handlers.AddActorPacket<TableViewDelivery, PlayerActor>(nameof(TableView));
+        Context.Handlers.AddActorPacket<HandDealtDelivery, PlayerActor>(nameof(HandDealt));
+        Context.Handlers.AddActorPacket<HandResultDelivery, PlayerActor>(nameof(HandResult));
     }
 
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
