@@ -87,7 +87,7 @@ TEST (ServiceTopologyPreparedFacts, PublishesChangesBeforeNotification)
     mesh::service_topology_registry_t topology (local);
     auto remote = local;
     remote.node_routing_id = {'b'};
-    std::optional<mesh::admitted_peer_t> notified_peer;
+    std::shared_ptr<const mesh::admitted_peer_t> notified_peer;
     auto notified_local = local;
     int notifications = 0;
     topology.set_change_handler ([&] {
@@ -279,7 +279,7 @@ TEST (CppFrameworkRouteMeshWeightUpdate, SoleTargetStopsAndResumesAfterLiveWeigh
     source.expect_peer (target_descriptor);
     ASSERT_TRUE (source.connect_peer (target.endpoint (), target_descriptor));
     ASSERT_TRUE (pump_until (source, target, [&] {
-        return source.topology ().peer (target_descriptor.node_routing_id).has_value ();
+        return source.topology ().peer (target_descriptor.node_routing_id) != nullptr;
     }));
 
     expect_successful_channel_request (source, target);
@@ -344,8 +344,8 @@ TEST (CppFrameworkRouteMeshWeightUpdate, ConcurrentWeightChangesReachPeerInRevis
     source.expect_peer (target_descriptor);
     ASSERT_TRUE (source.connect_peer (target.endpoint (), target_descriptor));
     ASSERT_TRUE (pump_until (source, target, [&] {
-        return source.topology ().peer (target_descriptor.node_routing_id).has_value ()
-               && target.topology ().peer (source_routing_id).has_value ();
+        return source.topology ().peer (target_descriptor.node_routing_id) != nullptr
+               && target.topology ().peer (source_routing_id) != nullptr;
     }));
 
     std::promise<void> first_published;
@@ -384,7 +384,7 @@ TEST (CppFrameworkRouteMeshWeightUpdate, ConcurrentWeightChangesReachPeerInRevis
     }
     EXPECT_EQ (100, peer_channel_weight (source, target_descriptor.node_routing_id, "X"));
     expect_successful_channel_request (source, target);
-    EXPECT_TRUE (target.topology ().peer (source_routing_id).has_value ())
+    EXPECT_TRUE (target.topology ().peer (source_routing_id) != nullptr)
       << "the target dropped the peer after it received descriptor revisions out of order";
 
     source.close ();

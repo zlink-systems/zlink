@@ -6130,9 +6130,19 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
     }
     auto next_stateful_owner = stateful_owners.begin ();
     receive_batch_budget_t budget;
+    // One poll per receive turn; the turn then reads records until the ROUTER
+    // reports none or the budget ends (08-messaging-hot-path I2).
+    const auto readiness = _transport->begin_receive_turn ();
+    const bool receive_ready =
+      readiness && accept_application_receive
+      && (static_cast<short> (*readiness) & static_cast<short> (zlink::poll_event_flag_t::pollin))
+           != 0;
     while (budget.can_receive ()) {
-        const auto pumped = co_await _transport->pump_one (
-          mesh::service_liveness_registry_t::clock_t::now (), accept_application_receive);
+        const auto pumped =
+          !readiness ? mesh::raw_mesh_pump_result_t::protocol_error
+          : receive_ready
+            ? _transport->receive_next (mesh::service_liveness_registry_t::clock_t::now ())
+            : mesh::raw_mesh_pump_result_t::no_data;
         budget.account (_transport->last_pump_bytes ());
         trace_mesh_host ("pump", std::string ("result=") + pump_result_name (pumped) + " pending="
                                    + std::to_string (_transport->mailbox ().pending_messages (

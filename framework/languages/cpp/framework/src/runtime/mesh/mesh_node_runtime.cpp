@@ -2058,7 +2058,7 @@ bool mesh_node_runtime_t::wait_for_peer_ready (const zlink::routing_id_t &target
         }
         zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
     } while (std::chrono::steady_clock::now () < deadline);
-    return _node->transport ().topology ().peer (routing_id).has_value ();
+    return _node->transport ().topology ().peer (routing_id) != nullptr;
 }
 
 host::spot_handle_t mesh_node_runtime_t::get_or_create_spot (std::string spot_id)

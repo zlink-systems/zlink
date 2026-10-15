@@ -355,6 +355,12 @@ class raw_mesh_node_owner_t
       std::optional<protocol::application_payload_t> application_reply = std::nullopt);
     task_t<raw_mesh_pump_result_t> pump_one (service_liveness_registry_t::clock_t::time_point now,
                                              bool accept_application_receive = true);
+    /* One receive turn polls the ROUTER once: begin_receive_turn observes
+     * readiness and applies a ready route snapshot (nullopt when the poll
+     * failed), then receive_next reads one record per call until the ROUTER
+     * reports none. pump_one is the single-record form of the same turn. */
+    std::optional<zlink::poll_event_flag_t> begin_receive_turn ();
+    raw_mesh_pump_result_t receive_next (service_liveness_registry_t::clock_t::time_point now);
     /* Wait for ROUTER input or an already admitted mailbox/control record.
      * This is the blocking wake-up used by the host ingress loop; it avoids
      * turning an idle node into a timed polling loop. */

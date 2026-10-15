@@ -141,7 +141,10 @@ class service_topology_registry_t
 
     std::vector<admitted_peer_t> peers () const;
     std::vector<service_node_descriptor_t> not_required_peers () const;
-    std::optional<admitted_peer_t> peer (const std::vector<std::uint8_t> &node_routing_id) const;
+    // The admitted peer inside the current immutable topology snapshot; the
+    // pointer keeps that snapshot alive and is null when the peer is absent.
+    std::shared_ptr<const admitted_peer_t>
+    peer (const std::vector<std::uint8_t> &node_routing_id) const;
     result_t<std::vector<std::uint8_t>>
     select (const std::string &channel_name,
             service_liveness_registry_t::connection_t *admission = nullptr);

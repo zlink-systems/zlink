@@ -3630,7 +3630,7 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
             if (!runtime.transport ().topology ().peer (peer.to_bytes ()))
                 wait_for_input (runtime.transport (), connect_deadline);
         }
-        return runtime.transport ().topology ().peer (peer.to_bytes ()).has_value ();
+        return runtime.transport ().topology ().peer (peer.to_bytes ()) != nullptr;
     };
     // Each endpoint must keep servicing its handshake while the other waits
     // for input. A wait on one endpoint cannot drive the other's receive turn.

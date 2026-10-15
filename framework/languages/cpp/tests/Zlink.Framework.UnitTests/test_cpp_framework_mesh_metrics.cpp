@@ -211,11 +211,12 @@ void admit_pair (mesh::raw_mesh_node_owner_t &source, mesh::raw_mesh_node_owner_
     source.expect_peer (target_descriptor);
     require (source.connect_peer (target.endpoint (), target_descriptor),
              "raw MeshNode connect failed");
-    require (
-      pump_until (
-        source, target,
-        [&] { return source.topology ().peer (target_descriptor.node_routing_id).has_value (); }),
-      "raw MeshNode admission timed out");
+    require (pump_until (source, target,
+                         [&] {
+                             return source.topology ().peer (target_descriptor.node_routing_id)
+                                    != nullptr;
+                         }),
+             "raw MeshNode admission timed out");
 }
 
 void verify_topology_metrics_and_selection_reasons ()
@@ -269,11 +270,12 @@ void verify_topology_metrics_and_selection_reasons ()
     require_metric (provider, "zlink.mesh_node.peers.connected", "gauge", "{peer}", peer_labels, 1);
     require_metric (provider, "zlink.mesh_node.peers.ready", "gauge", "{peer}", peer_labels, 0);
 
-    require (
-      pump_until (
-        source, target,
-        [&] { return source.topology ().peer (target_descriptor.node_routing_id).has_value (); }),
-      "topology metric admission timed out");
+    require (pump_until (source, target,
+                         [&] {
+                             return source.topology ().peer (target_descriptor.node_routing_id)
+                                    != nullptr;
+                         }),
+             "topology metric admission timed out");
     require_metric (provider, "zlink.mesh_node.peers.configured", "gauge", "{peer}", peer_labels,
                     1);
     require_metric (provider, "zlink.mesh_node.peers.connected", "gauge", "{peer}", peer_labels, 1);
