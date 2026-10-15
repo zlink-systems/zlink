@@ -544,15 +544,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             nodes.add(node);
             nodesByName.put(nodeRegistration.nodeName(), node);
             initializedSpotTypes.addAll(nodeRegistration.spotFactories());
-            nodeRegistration
-                    .spotFactories()
-                    .forEach(
-                            type ->
-                                    initializedSpotRelocationCoordinationModes.putIfAbsent(
-                                            type,
-                                            systems.zlink.framework.configuration
-                                                    .ZLinkSpotRelocationCoordinationMode
-                                                    .FRAMEWORK_MANAGED));
             if (nodeRegistration.pubSubEnabled()) {
                 publishers.register(nodeRegistration.meshName(), node);
             }
@@ -736,15 +727,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             nodes.add(node);
             nodesByName.put(nodeRegistration.meshName(), node);
             initializedSpotTypes.addAll(nodeRegistration.spotFactories());
-            nodeRegistration
-                    .spotFactories()
-                    .forEach(
-                            type ->
-                                    initializedSpotRelocationCoordinationModes.putIfAbsent(
-                                            type,
-                                            systems.zlink.framework.configuration
-                                                    .ZLinkSpotRelocationCoordinationMode
-                                                    .FRAMEWORK_MANAGED));
             nodeRegistration
                     .relocatableSpotFactories()
                     .values()
