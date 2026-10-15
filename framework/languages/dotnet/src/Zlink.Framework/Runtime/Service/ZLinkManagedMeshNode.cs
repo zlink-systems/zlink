@@ -10385,7 +10385,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 if (removed == target)
                 {
-                    _lifecycle.Cancel();
+                    // The node raises this event inside its lane turn (spec 01
+                    // §11: no caller continuation under the deciding turn). The
+                    // token is marked cancelled now; its callbacks, which resume
+                    // the durable request and dispose this lifetime through
+                    // another node turn, run after the turn instead of inline.
+                    _ = _lifecycle.CancelAsync();
                     onLifecycleEnded?.Invoke();
                 }
             };
