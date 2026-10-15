@@ -178,6 +178,16 @@ class operation_completion_dispatcher_t
     static_assert (alignof (operation_completion_item_t) > stopping);
     struct state_t
     {
+        // Completions published after the worker's final drain still own
+        // their registry drain slots; release them with the shared state.
+        ~state_t ()
+        {
+            std::unique_ptr<operation_completion_item_t> head (
+              item (pending.load (std::memory_order_acquire)));
+            while (head)
+                head = std::move (head->next);
+        }
+
         std::atomic<std::uintptr_t> pending{0};
     };
 
