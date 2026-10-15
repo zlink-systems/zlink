@@ -150,23 +150,6 @@ bool application_command (protocol::command kind) noexcept
     }
 }
 
-std::optional<std::uint64_t> application_request_correlation (protocol::command kind,
-                                                              std::span<const std::uint8_t> header)
-{
-    switch (kind) {
-        case protocol::command::nodeRequest:
-            return protocol::decode_node_request_header (header);
-        case protocol::command::channelRequest:
-            return protocol::decode_channel_request_header (header).correlation;
-        case protocol::command::spotRequest:
-            return protocol::decode_spot_message_header (header, kind).correlation;
-        case protocol::command::actorRequest:
-            return protocol::decode_actor_message_header (header, kind).correlation;
-        default:
-            return std::nullopt;
-    }
-}
-
 std::size_t raw_received_bytes (const detail::backend::raw_received_t &received) noexcept
 {
     std::size_t total = 0;
@@ -2682,8 +2665,22 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
         trace_mesh ("receive kind=" + std::to_string (static_cast<int> (header.kind))
                     + " parts=" + std::to_string (received->parts.size ()) + " replyToken="
                     + (received->reply_token ? std::string ("present") : std::string ("-")));
-        if (header.kind == protocol::command::hello || header.kind == protocol::command::admit
-            || header.kind == protocol::command::update) {
+        const bool descriptor_record = header.kind == protocol::command::hello
+                                       || header.kind == protocol::command::admit
+                                       || header.kind == protocol::command::update;
+        const bool handshake = (descriptor_record && header.kind != protocol::command::update)
+                               || header.kind == protocol::command::reject;
+        const auto admitted = _topology.peer (received->source_routing_id);
+        if (!handshake
+            && (!admitted
+                || !detail::backend::is_route_connection (admitted->connection_id,
+                                                          received->route_generation))) {
+            if (mesh_trace_enabled ())
+                trace_mesh ("record-drop reason=route-not-admitted kind="
+                            + std::to_string (static_cast<int> (header.kind)));
+            co_return raw_mesh_pump_result_t::infrastructure;
+        }
+        if (descriptor_record) {
             if (received->parts.size () != 1) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
@@ -2810,44 +2807,8 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
               .get ();
             co_return raw_mesh_pump_result_t::infrastructure;
         }
-        const auto admitted = _topology.peer (received->source_routing_id);
-        if (admitted && admitted->liveness
-            && detail::backend::is_route_connection (admitted->connection_id,
-                                                     received->route_generation))
+        if (admitted->liveness)
             admitted->liveness->record_received (now);
-        if (!admitted) {
-            if (application_command (header.kind) && header.flags == 0
-                && received->parts.size () == 2) {
-                const auto correlation = application_request_correlation (
-                  header.kind, protocol::message_bytes (received->parts.front ()));
-                bool rejected = false;
-                if (correlation && received->reply_token) {
-                    try {
-                        rejected = reply_failure (
-                          service_mailbox_record_t{owner_key (received->source_routing_id),
-                                                   service_mailbox_domain_t::application,
-                                                   {},
-                                                   received->source_routing_id,
-                                                   received->reply_token,
-                                                   correlation,
-                                                   0,
-                                                   std::nullopt,
-                                                   std::nullopt},
-                          static_cast<std::uint32_t> (
-                            protocol::request_terminal_result::notConnected),
-                          static_cast<std::uint32_t> (protocol::framework_error_code::none));
-                    }
-                    catch (...) {
-                    }
-                }
-                trace_mesh ("application-drop reason=peer-not-admitted action="
-                            + std::string (rejected ? "reply-not-connected" : "drop"));
-            }
-            trace_mesh ("application-drop reason=peer-not-admitted kind="
-                        + std::to_string (static_cast<int> (header.kind))
-                        + " sourceBytes=" + std::to_string (received->source_routing_id.size ()));
-            co_return raw_mesh_pump_result_t::protocol_error;
-        }
         if (header.kind == protocol::command::livenessProbe
             || header.kind == protocol::command::livenessAck) {
             if (received->parts.size () != 1) {

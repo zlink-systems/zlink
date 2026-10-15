@@ -27,6 +27,7 @@
 #include <chrono>
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <future>
 #include <filesystem>
 #include <fstream>
@@ -3715,11 +3716,117 @@ void verify_topology_ready_is_remote_admit_on_current_route ()
     assert (!observe ().peer->ready);
 }
 
+void verify_unadmitted_route (bool repeat_hello)
+{
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("unadmitted-target")}));
+    target.start ();
+    zlink::context_t context;
+    zlink::router_socket_t source (context);
+    source.set_routing_id (zlink::routing_id_t::from ("unadmitted-source"));
+    source.options ().mandatory (true);
+    source.options ().linger (0ms);
+    source.options ().connect_routing_id (zlink::routing_id_t::from ("unadmitted-target"));
+    source.connect (target.endpoint ());
+    zlink::framework::detail::backend::raw_route_port_t port (source);
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (source.routes_snapshot ().empty () && std::chrono::steady_clock::now () < deadline)
+        (void) port.poll (0ms);
+    assert (!source.routes_snapshot ().empty ());
+    if (repeat_hello) {
+        const auto receive_hello = [&] {
+            while (std::chrono::steady_clock::now () < deadline) {
+                (void) target.observe_routes ();
+                if (auto record = port.try_receive ()) {
+                    assert (
+                      protocol::decode_header (protocol::message_bytes (record->parts.front ()))
+                        .kind
+                      == protocol::command::hello);
+                    return true;
+                }
+            }
+            return false;
+        };
+        assert (receive_hello ());
+        (void) await_task (target.tick_liveness (std::chrono::steady_clock::now ()));
+        assert (receive_hello ());
+        const auto remote = descriptor ("unadmitted-source");
+        assert (await_task (
+          port.send (bytes ("unadmitted-target"),
+                     {protocol::encode_route_mesh_admission (protocol::command::hello, remote)})));
+        while (!target.topology ().peer (remote.node_routing_id)
+               && std::chrono::steady_clock::now () < deadline)
+            (void) await_task (target.pump_one (std::chrono::steady_clock::now ()));
+        const auto peer = target.topology ().peer (remote.node_routing_id);
+        assert (peer && !peer->ready);
+        bool admit_received = false;
+        while (!admit_received && std::chrono::steady_clock::now () < deadline)
+            if (auto record = port.try_receive ()) {
+                assert (
+                  protocol::decode_header (protocol::message_bytes (record->parts.front ())).kind
+                  == protocol::command::admit);
+                admit_received = true;
+            }
+        assert (admit_received);
+        (void) await_task (target.tick_liveness (std::chrono::steady_clock::now ()));
+        assert (receive_hello ());
+        assert (await_task (
+          port.send (bytes ("unadmitted-target"),
+                     {protocol::encode_route_mesh_admission (protocol::command::admit, remote)})));
+        while (!target.topology ().peer (remote.node_routing_id)->ready
+               && std::chrono::steady_clock::now () < deadline)
+            (void) await_task (target.pump_one (std::chrono::steady_clock::now ()));
+        assert (target.topology ().peer (remote.node_routing_id)->ready);
+        (void) await_task (target.tick_liveness (std::chrono::steady_clock::now ()));
+        assert (await_task (target.send_to_node (
+          remote.node_routing_id, {"AfterAdmit", "application/json", bytes ("{}")})));
+        // The following DATA is an ordering barrier for the same Application lane.
+        bool data_received = false;
+        while (!data_received && std::chrono::steady_clock::now () < deadline)
+            if (auto record = port.try_receive ()) {
+                const auto kind =
+                  protocol::decode_header (protocol::message_bytes (record->parts.front ())).kind;
+                assert (kind == protocol::command::nodeSend
+                        || kind == protocol::command::livenessProbe);
+                data_received = kind == protocol::command::nodeSend;
+            }
+        assert (data_received);
+    } else {
+        const auto update = protocol::encode_route_mesh_admission (
+          protocol::command::update, descriptor ("unadmitted-source"));
+        assert (await_task (port.send (bytes ("unadmitted-target"), {update})));
+        auto update_result = mesh::raw_mesh_pump_result_t::no_data;
+        while (update_result == mesh::raw_mesh_pump_result_t::no_data
+               && std::chrono::steady_clock::now () < deadline)
+            update_result = await_task (target.pump_one (std::chrono::steady_clock::now ()));
+        assert (update_result == mesh::raw_mesh_pump_result_t::infrastructure);
+        assert (!target.topology ().peer (bytes ("unadmitted-source")));
+        auto pending = port.request (
+          bytes ("unadmitted-target"),
+          {protocol::encode_node_request_header (91),
+           protocol::encode_application_payload ({"Silent", "application/json", bytes ("{}")})},
+          100ms);
+        while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
+            (void) await_task (target.pump_one (std::chrono::steady_clock::now ()));
+            (void) port.poll (0ms);
+        }
+        assert (pending.await_ready ());
+        assert (await_task (std::move (pending)).terminal == zlink::request_result_t::timed_out);
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096));
+    }
+    port.close ();
+    target.close ();
+}
+
 int main (int argc, char **argv)
 {
     if (argc == 4 && std::string_view (argv[1]) == "--only") {
         const std::string_view name (argv[2]);
-        for (int i = 0; i < std::stoi (argv[3]); ++i) {
+        const int repetitions = std::stoi (argv[3]);
+        if (repetitions <= 0)
+            return 2;
+        for (int i = 0; i < repetitions; ++i) {
             if (name == "pre-bind")
                 verify_durable_attempt_waits_for_admit (protocol::command::boundSessionBind);
             else if (name == "pre-create")
@@ -3728,6 +3835,8 @@ int main (int argc, char **argv)
                 verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
             else if (name == "retries")
                 verify_bound_session_bind_retries_until_route_is_admitted ();
+            else if (name == "silent")
+                verify_unadmitted_route (false);
             else if (name == "replay")
                 verify_bound_session_bind_replay_preserves_first_admission ();
             else if (name == "create")
@@ -3738,6 +3847,7 @@ int main (int argc, char **argv)
                 verify_actor_join_durable_replay ();
             else
                 return 2;
+            std::fprintf (stderr, "%s %d/%d passed\n", argv[2], i + 1, repetitions);
         }
         return 0;
     }
@@ -3787,6 +3897,7 @@ int main (int argc, char **argv)
             == zlink::request_result_t::not_connected);
     assert (map_submit_request_result (zlink::submit_result_t::not_connected, true)
             == zlink::request_result_t::not_connected);
+    verify_unadmitted_route (false);
     verify_topology_ready_is_remote_admit_on_current_route ();
     verify_durable_attempt_waits_for_admit (protocol::command::boundSessionBind);
     verify_durable_attempt_waits_for_admit (protocol::command::actorCreate);
