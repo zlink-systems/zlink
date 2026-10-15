@@ -17,6 +17,7 @@ using namespace std::chrono_literals;
 constexpr auto wait_budget = 5s;
 constexpr auto default_follow_duration = 30s;
 constexpr auto source_follow_duration = 3s;
+constexpr std::size_t status_observation_capacity = 32;
 constexpr int instance_probe = -1;
 constexpr auto actor_type = "member";
 constexpr auto actor_id = "member";
@@ -38,6 +39,7 @@ struct observations_t
     bool leave_entered = false;
     int instances = 0;
     std::vector<int> destroyed;
+    std::vector<std::pair<fw::spot_close_reason_t, std::size_t>> closings;
     fw::task_completion_source_t<void> release_leave;
     std::optional<std::size_t> completion_to_hold;
     fw::task_completion_source_t<void> release_completion;
@@ -144,6 +146,13 @@ class room_t final : public fw::spot_t<actor_t>
                                                           : fw::spot_actor_join_result_t::accept ();
     }
     fw::task_t<void> on_actor_joined (actor_t &) override { co_return; }
+    fw::task_t<void> on_closing (const fw::spot_closing_context_t &context,
+                                 std::stop_token) override
+    {
+        std::lock_guard lock (observations->mutex);
+        observations->closings.emplace_back (context.reason, observations->destroyed.size ());
+        co_return;
+    }
     fw::task_t<void> on_leave_actor (actor_t &) override
     {
         if (_context.spot_id () == previous_spot) {
@@ -255,6 +264,87 @@ bool peer_ready (fw::route_mesh_runtime_t &routes)
            && std::chrono::steady_clock::now () < deadline)
         std::this_thread::yield ();
     return routes.snapshot (mesh_name).ready_peer_count > 0;
+}
+
+TEST (ActorMaintenanceJoin, HostShutdownClosesOccupiedUserSpot)
+{
+    observations_t evidence;
+    observations = &evidence;
+    host_t host;
+    configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    const auto created = services.get_required<fw::spot_manager_t> ()
+                           .get_or_create (fw::spot_id_t (local_spot), room_type)
+                           .timeout (wait_budget)
+                           .async ()
+                           .result ();
+    ASSERT_TRUE (created);
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .timeout (wait_budget)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (move_to (services.get_required<fw::actor_client_t> (), evidence, local_spot, 1));
+    const auto explicit_close =
+      services.get_required<fw::spot_manager_t> ().close (created.value ().spot).result ();
+    ASSERT_TRUE (explicit_close);
+    EXPECT_FALSE (explicit_close.value ());
+    const auto stopped = host.app.shutdown (wait_budget).result ().value ();
+    EXPECT_EQ (stopped.outcome, fw::termination_outcome_t::stopped);
+    EXPECT_EQ (stopped.reason, fw::termination_reason_t::none);
+    std::lock_guard lock (evidence.mutex);
+    ASSERT_EQ (evidence.closings.size (), 1);
+    EXPECT_EQ (evidence.closings.front ().first, fw::spot_close_reason_t::host_shutdown);
+    EXPECT_EQ (evidence.closings.front ().second, 0);
+    EXPECT_EQ (evidence.destroyed.size (), 1);
+}
+
+TEST (ActorMaintenanceJoin, RelocationPublishesSafeToShutdown)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    configure (source, first_rid, store, relocations, source_follow_duration);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    configure (target, second_rid, store, relocations, source_follow_duration);
+    target.start ();
+    ASSERT_TRUE (ready (target));
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<fw::framework_runtime_status_t> statuses;
+    auto &runtime = services.get_required<fw::framework_runtime_t> ();
+    auto observation = runtime.observe (status_observation_capacity, [&] (const auto &event) {
+        {
+            std::lock_guard lock (mutex);
+            statuses.push_back (event.status);
+        }
+        changed.notify_all ();
+    });
+    const auto relocated =
+      source.app
+        .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
+        .result ()
+        .value ();
+    ASSERT_EQ (relocated.outcome, fw::relocation_outcome_t::relocated)
+      << "reason=" << static_cast<int> (relocated.reason);
+    std::unique_lock lock (mutex);
+    EXPECT_TRUE (changed.wait_for (lock, wait_budget, [&] {
+        return std::ranges::any_of (statuses, [] (const auto &status) {
+            return status.state == fw::framework_runtime_state_t::relocated
+                   && status.safe_to_shutdown;
+        });
+    }));
+    lock.unlock ();
+    EXPECT_TRUE (runtime.status ().safe_to_shutdown);
+    observation->close ();
 }
 
 TEST (ActorMaintenanceJoin, LocalDirectAdmissionUsesCurrentActorId)

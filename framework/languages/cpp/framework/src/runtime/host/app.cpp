@@ -521,6 +521,7 @@ bool same_runtime_status (const framework_runtime_status_t &left,
 {
     return left.state == right.state && left.is_ready == right.is_ready
            && left.accepting_work == right.accepting_work
+           && left.safe_to_shutdown == right.safe_to_shutdown
            && left.operation_deadline == right.operation_deadline
            && left.relocation_result == right.relocation_result
            && left.termination_result == right.termination_result
@@ -549,6 +550,15 @@ class framework_runtime_status_source_t
         result.state = state->runtime_state.load (std::memory_order_acquire);
         result.is_ready = result.state == framework_runtime_state_t::serving;
         result.accepting_work = result.state == framework_runtime_state_t::serving;
+        result.safe_to_shutdown = true;
+        for (const auto &registration : detail::mesh_node_runtime_t::registrations (state->zlink)) {
+            if (!registration || !registration->spot_state)
+                continue;
+            const auto node = detail::spot_node_runtime_t (registration->spot_state).native_node ();
+            if (node)
+                result.safe_to_shutdown =
+                  result.safe_to_shutdown && node->status ().safe_to_shutdown;
+        }
         {
             std::lock_guard lock (state->relocation_operation.mutex);
             const auto &operation = state->relocation_operation;
@@ -3939,12 +3949,21 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
 
     if (std::holds_alternative<shutdown_completed_t> (result)) {
         bool spots_closed = true;
-        for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
-            auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
-            if (runtime && !runtime->close_all_user_spots (deadline_at)) {
-                spots_closed = false;
-                break;
+        try {
+            for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
+                auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
+                if (runtime && !runtime->close_all_user_spots (deadline_at)) {
+                    spots_closed = false;
+                    state.monitoring->diagnostics_logger.error (
+                      "Host shutdown Spot teardown did not complete");
+                    break;
+                }
             }
+        }
+        catch (const std::exception &error) {
+            spots_closed = false;
+            state.monitoring->diagnostics_logger.error (
+              std::string ("Host shutdown Spot teardown failed: ") + error.what ());
         }
         if (!spots_closed)
             force (std::chrono::steady_clock::now () >= deadline_at

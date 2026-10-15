@@ -988,11 +988,14 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
      * through the gate (gate §7). `done` receives the Close result once. */
     void close_now (service::spot_close_begin_t begin,
                     service::spot_close_done_t done,
-                    detail::task_scheduler_t resume);
+                    detail::task_scheduler_t resume,
+                    spot_close_reason_t reason);
 
     /* Runs a Close on this Spot's lifecycle lane after the lifecycle work
      * accepted before it (Spot address messaging §7). */
-    void request_close (service::spot_close_begin_t begin, service::spot_close_done_t done);
+    void request_close (service::spot_close_begin_t begin,
+                        service::spot_close_done_t done,
+                        spot_close_reason_t reason = spot_close_reason_t::explicit_close);
 
     /* Step 1 of a Close that only releases the local activation: a node-local
      * Spot, or operational cleanup whose authority another owner holds. */
@@ -1313,7 +1316,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       std::function<task_t<authority_snapshot_t> ()> reincarnate,
       std::function<task_t<bool> (const authority_snapshot_t &)> discard_reincarnation,
       service::spot_close_done_t done,
-      detail::task_scheduler_t resume);
+      detail::task_scheduler_t resume,
+      spot_close_reason_t reason);
 
     struct application_detach_work_t
     {
@@ -1611,7 +1615,8 @@ class spot_node_runtime_t
                                       std::uint64_t object_generation,
                                       std::uint64_t authority_owner_generation) const;
     std::vector<spot_info_t> list_spots () const;
-    task_t<bool> close_spot (spot_id_t spot_id);
+    task_t<bool> close_spot (spot_id_t spot_id,
+                             spot_close_reason_t reason = spot_close_reason_t::explicit_close);
     // Runs a remote User Spot Close (command 48) for the local owner activation.
     void close_user_spot_owner (const std::string &spot_id,
                                 service::spot_close_begin_t begin,

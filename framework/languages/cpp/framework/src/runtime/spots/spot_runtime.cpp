@@ -2356,7 +2356,8 @@ void spot_context_state_t::leave_callback (std::function<void ()> settle_owner_s
 }
 
 void spot_context_state_t::request_close (service::spot_close_begin_t begin,
-                                          service::spot_close_done_t done)
+                                          service::spot_close_done_t done,
+                                          spot_close_reason_t reason)
 {
     /* The lifecycle item ends when the Close result is decided. A queue that
      * discards the item before it runs reports ShuttingDown once. */
@@ -2379,7 +2380,7 @@ void spot_context_state_t::request_close (service::spot_close_begin_t begin,
     };
     auto report = std::make_shared<close_report_t> (std::move (done));
     auto shared_begin = std::make_shared<service::spot_close_begin_t> (std::move (begin));
-    auto run = [state = shared_from_this (), shared_begin,
+    auto run = [state = shared_from_this (), shared_begin, reason,
                 report] (std::function<void ()> finished, detail::task_scheduler_t resume) {
         state->close_now (
           std::move (*shared_begin),
@@ -2387,7 +2388,7 @@ void spot_context_state_t::request_close (service::spot_close_begin_t begin,
               (*report) (std::move (result));
               finished ();
           },
-          std::move (resume));
+          std::move (resume), reason);
     };
     // Without an open lifecycle lane no other lifecycle work can precede the Close.
     const auto queue = serial_queue;
@@ -2443,7 +2444,8 @@ task_t<T> run_close_step (std::function<task_t<T> ()> step, const detail::task_s
 
 void spot_context_state_t::close_now (service::spot_close_begin_t begin,
                                       service::spot_close_done_t done,
-                                      detail::task_scheduler_t resume)
+                                      detail::task_scheduler_t resume,
+                                      spot_close_reason_t reason)
 {
     auto owner = state_lane_owner ();
     if (!owner) {
@@ -2452,7 +2454,7 @@ void spot_context_state_t::close_now (service::spot_close_begin_t begin,
     }
     const auto start =
       owner->lane
-        .run ([this, &owner, &done] {
+        .run ([this, &owner, &done, reason] {
             close_start_t result;
             if (merge_into_running_close_core (done)) {
                 result.path = close_path_t::merged;
@@ -2467,11 +2469,14 @@ void spot_context_state_t::close_now (service::spot_close_begin_t begin,
             }
             // Actor membership keeps admission and authority. A Join or leave
             // accepted earlier on this lane has decided its membership.
-            if (node.get () != owner.get () || actor_count != 0)
+            if (node.get () != owner.get ()
+                || (reason != spot_close_reason_t::host_shutdown && actor_count != 0))
                 return result;
             result.path = close_path_t::start;
             result.token = reserve_close_core (*owner, close_reservation_kind_t::explicit_close);
-            if (is_instance_spot () && owner->begin_instance_spot_close) {
+            if (reason == spot_close_reason_t::host_shutdown) {
+                result.authority_begin = local_close_step ();
+            } else if (is_instance_spot () && owner->begin_instance_spot_close) {
                 result.authority_begin = [begin = owner->begin_instance_spot_close, id = spot_id,
                                           name = spot_name, generation = object_generation,
                                           owner_generation = authority_owner_generation] {
@@ -2519,7 +2524,7 @@ void spot_context_state_t::close_now (service::spot_close_begin_t begin,
       run_close_step<service::spot_close_commit_t> (
         begin ? std::move (begin) : start.authority_begin, resume),
       resume,
-      [self = shared_from_this (), owner, token, settle,
+      [self = shared_from_this (), owner, token, settle, reason,
        resume] (result_t<service::spot_close_commit_t> commit) mutable {
           if (!commit) {
               settle (result_t<bool>::failure (commit.error_kind (),
@@ -2535,7 +2540,7 @@ void spot_context_state_t::close_now (service::spot_close_begin_t begin,
           self->run_local_close_steps (owner, token, std::move (commit.value ().release),
                                        std::move (commit.value ().reincarnate),
                                        std::move (commit.value ().discard_reincarnation),
-                                       std::move (settle), std::move (resume));
+                                       std::move (settle), std::move (resume), reason);
       });
 }
 
@@ -2546,12 +2551,14 @@ void spot_context_state_t::run_local_close_steps (
   std::function<task_t<authority_snapshot_t> ()> reincarnate,
   std::function<task_t<bool> (const authority_snapshot_t &)> discard_reincarnation,
   service::spot_close_done_t done,
-  detail::task_scheduler_t resume)
+  detail::task_scheduler_t resume,
+  spot_close_reason_t reason)
 {
     // Steps 3 and 4: OnClosing once, local cleanup, then the fenced release.
     auto finish = [self = shared_from_this (), owner, token, release = std::move (release),
                    reincarnate = std::move (reincarnate), done,
-                   discard_reincarnation = std::move (discard_reincarnation), resume] () mutable {
+                   discard_reincarnation = std::move (discard_reincarnation), resume,
+                   reason] () mutable {
         const bool sealed =
           owner->lane.run ([&] { return self->close_reservation == token && self->closed; }).get ();
         if (!sealed) {
@@ -2560,13 +2567,21 @@ void spot_context_state_t::run_local_close_steps (
             return;
         }
         try {
-            self->close_application_then_release_location (
-              owner, spot_close_reason_t::explicit_close, token);
+            const auto native =
+              reason == spot_close_reason_t::host_shutdown ? self->native_spot.lock () : nullptr;
+            self->close_application_then_release_location (owner, reason, token);
+            if (native) {
+                if (!native->close ()) {
+                    done (result_t<bool>::failure (framework_error_kind_t::internal_failure,
+                                                   "Host shutdown native Spot close was refused"));
+                    return;
+                }
+            }
         }
         catch (...) {
             // Closing stays committed after local release failure.
-            done (result_t<bool>::failure (framework_error_kind_t::internal_failure,
-                                           "Spot Close could not release its local activation"));
+            done (::zlink::framework::detail::result_access_t::failure<bool> (
+              std::current_exception ()));
             return;
         }
         auto pending = self->serial_queue ? self->serial_queue->first_pending_message_or_close ()
@@ -2732,6 +2747,51 @@ void spot_context_state_t::run_local_close_steps (
                 });
           });
     };
+    auto after_closing = [self = shared_from_this (), owner, reason, finish, done,
+                          resume] () mutable {
+        if (reason != spot_close_reason_t::host_shutdown) {
+            finish ();
+            return;
+        }
+        // Host relocation §14: keep membership through OnClosing, then use
+        // the Actor owner to retire each member before releasing the Spot.
+        service::after_close_step (
+          run_close_step<bool> (
+            [self, owner] {
+                auto members =
+                  owner->lane
+                    .run ([&] {
+                        std::vector<actor_ref_t> result;
+                        for (const auto &[id, type] : owner->actor_types_by_id) {
+                            const auto key = type + ":" + id;
+                            const auto membership = owner->actor_spot_ids.find (key);
+                            if (membership != owner->actor_spot_ids.end ()
+                                && membership->second == self->spot_id) {
+                                result.push_back (
+                                  ::zlink::framework::detail::actor_ref_access_t::make (
+                                    self->node_rid, type, id, owner->actor_generations.at (key)));
+                            }
+                        }
+                        return result;
+                    })
+                    .get ();
+                spot_node_runtime_t runtime (owner);
+                for (const auto &member : members) {
+                    const auto removed = runtime.destroy_actor (member);
+                    if (!removed)
+                        return task_t<bool> (removed);
+                }
+                return task_t<bool> (result_t<bool>::success (true));
+            },
+            resume),
+          resume, [finish, done] (result_t<bool> result) mutable {
+              if (!result) {
+                  done (std::move (result));
+                  return;
+              }
+              finish ();
+          });
+    };
     owner->lane.run ([&] { closed = true; }).get ();
     cancel_timers ();
     try {
@@ -2740,17 +2800,16 @@ void spot_context_state_t::run_local_close_steps (
           owner->lane.run ([&] { return std::exchange (lifecycle.on_closing, {}); }).get ();
         if (on_closing && instance) {
             service::after_close_step (
-              on_closing (instance.get (),
-                          spot_closing_context_t{spot_close_reason_t::explicit_close,
-                                                 std::chrono::system_clock::time_point::max ()},
-                          {}),
+              on_closing (
+                instance.get (),
+                spot_closing_context_t{reason, std::chrono::system_clock::time_point::max ()}, {}),
               resume,
               [self = shared_from_this (), owner, instance,
-               finish] (result_t<void> result) mutable {
+               after_closing] (result_t<void> result) mutable {
                   if (!result)
                       report_spot_close_diagnostic (owner, std::string (self->spot_id),
                                                     "on_closing_failed", result.exception ());
-                  finish ();
+                  after_closing ();
               });
             return;
         }
@@ -2759,7 +2818,7 @@ void spot_context_state_t::run_local_close_steps (
         report_spot_close_diagnostic (owner, std::string (spot_id), "on_closing_failed",
                                       std::current_exception ());
     }
-    finish ();
+    after_closing ();
 }
 
 void report_spot_close_diagnostic (const std::shared_ptr<spot_node_builder_state_t> &owner,
@@ -13307,7 +13366,7 @@ std::vector<spot_info_t> spot_node_runtime_t::list_spots () const
       .get ();
 }
 
-task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id)
+task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id, spot_close_reason_t reason)
 {
     struct close_plan_t
     {
@@ -13333,7 +13392,8 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id)
     auto completion = std::make_shared<task_completion_source_t<bool>> ();
     auto closed = completion->task ();
     plan.context->_state->request_close (
-      {}, [completion, monitoring = plan.monitoring, kind = plan.kind] (result_t<bool> result) {
+      {},
+      [completion, monitoring = plan.monitoring, kind = plan.kind] (result_t<bool> result) {
           if (result && result.value () && monitoring) {
               runtime::runtime_metrics_t metrics (monitoring);
               if (metrics.enabled ()) {
@@ -13342,7 +13402,8 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id)
               }
           }
           completion->complete (std::move (result));
-      });
+      },
+      reason);
     return closed;
 }
 
@@ -13396,20 +13457,15 @@ bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_
                                          std::chrono::ceil<std::chrono::milliseconds> (
                                            deadline_at - std::chrono::steady_clock::now ()));
         const auto result = closing.result_for (remaining);
-        return result && *result && result->value ();
+        return result && result->value ();
     };
     for (const auto &closing : running_closes) {
         if (!wait_for_close (closing))
             return false;
     }
     for (auto &spot_id : user_spots) {
-        try {
-            if (!wait_for_close (close_spot (std::move (spot_id))))
-                return false;
-        }
-        catch (...) {
+        if (!wait_for_close (close_spot (std::move (spot_id), spot_close_reason_t::host_shutdown)))
             return false;
-        }
     }
     return active_user_spot_count () == 0;
 }
