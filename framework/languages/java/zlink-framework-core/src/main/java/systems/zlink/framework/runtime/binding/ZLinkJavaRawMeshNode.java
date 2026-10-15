@@ -1395,6 +1395,12 @@ final class ZLinkJavaRawMeshNode
     }
 
     Optional<Integer> classifyNodeSendTarget(RoutingId targetNodeRid) {
+        // An admitted peer is a sendable target whatever intent exists, so the common case reads
+        // the topology once and leaves the intent scan to targets that are not admitted.
+        ZLinkServiceTopologyRegistry admitted = topology;
+        if (admitted != null && admitted.peerFromOwner(targetNodeRid).isPresent()) {
+            return Optional.empty();
+        }
         Map.Entry<Long, PeerIntent> selectedIntent = null;
         for (Map.Entry<Long, PeerIntent> entry : peerIntents.entrySet()) {
             if (targetNodeRid.equals(entry.getValue().expectedRoutingId())
