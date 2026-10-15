@@ -103,7 +103,7 @@ test('a handler that throws, rejects, or awaits does not stall the dispatch pump
   }
 });
 
-async function startPair(behavior) {
+async function startPair(behavior, onWaitTurn) {
   class TurnPing {}
   class TurnRequestHandler {
     handle(value) {
@@ -152,7 +152,8 @@ async function startPair(behavior) {
       .peers.some(
         (peer) =>
           String(peer.nodeRid) === 'turn-target' && peer.state === framework.ZLinkPeerState.Ready
-      )
+      ),
+    onWaitTurn
   );
   const packet = (value) => Object.assign(new TurnPing(), value);
   return {
@@ -166,10 +167,11 @@ async function startPair(behavior) {
   };
 }
 
-async function waitUntil(predicate) {
+async function waitUntil(predicate, onTurn) {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     if (predicate()) return;
+    onTurn?.();
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.fail('Condition did not become true before the deadline.');
@@ -220,26 +222,39 @@ async function waitUntilImmediate(predicate) {
 }
 
 // Spec 08 §4.2: management work runs at its deadline, at most once per
-// receive rotation, and the idle wait lasts until the nearest deadline. An
-// idle connected pair arms no fixed-interval maintenance timer.
+// receive rotation, and the idle wait lasts until the nearest deadline. With
+// timers mocked, an idle connected pair passes 200 ms of virtual time without
+// a fixed-interval maintenance timer firing; the armed timer waits for the
+// next liveness deadline.
 test('an idle connected node waits for its next management deadline', async (t) => {
-  const pair = await startPair({ request: (value) => value, send: () => undefined });
-  const { setTimeout: originalSetTimeout } = globalThis;
-  let maintenanceTimers = 0;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const armed = [];
+  const { setTimeout: mockedSetTimeout } = globalThis;
   t.mock.method(globalThis, 'setTimeout', function (callback, delay, ...args) {
-    if (typeof callback === 'function' && callback.name === 'onMaintenance') maintenanceTimers++;
-    return originalSetTimeout.call(this, callback, delay, ...args);
+    if (typeof callback === 'function' && callback.name === 'onMaintenance') armed.push(delay);
+    return mockedSetTimeout.call(this, callback, delay, ...args);
   });
+  // Virtual time moves one millisecond per event-loop turn while the pair
+  // connects, which keeps the handshake cadence of a pending peer running.
+  const pair = await startPair({ request: (value) => value, send: () => undefined }, () =>
+    t.mock.timers.tick(1)
+  );
   try {
     assert.deepEqual(await pair.request({ value: 'ready' }), { value: 'ready' });
-    maintenanceTimers = 0;
-    await new Promise((resolve) => originalSetTimeout(resolve, 200));
-    t.diagnostic(`maintenance timers armed in 200 ms idle: ${maintenanceTimers}`);
-    // Liveness probes run every 5 s; nothing else is due in this window.
-    assert.ok(maintenanceTimers <= 4, `maintenance timers in 200 ms idle: ${maintenanceTimers}`);
+    for (let turn = 0; turn < 10; turn++) await new Promise((resolve) => setImmediate(resolve));
+    armed.length = 0;
+    for (let elapsed = 0; elapsed < 200; elapsed++) {
+      t.mock.timers.tick(1);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    t.diagnostic(`maintenance timer delays armed in 200 ms of idle virtual time: ${armed}`);
+    // No fixed-interval timer: anything armed waits for a liveness or request
+    // deadline seconds away, not the 1 ms maintenance cadence.
+    assert.ok(armed.length <= 2, `maintenance timers armed: ${armed.length}`);
+    for (const delay of armed) assert.ok(delay >= 1_000, `maintenance timer delay ${delay} ms`);
     assert.deepEqual(await pair.request({ value: 'after-idle' }), { value: 'after-idle' });
   } finally {
-    t.mock.restoreAll();
     await pair.stop();
+    t.mock.timers.reset();
   }
 });
