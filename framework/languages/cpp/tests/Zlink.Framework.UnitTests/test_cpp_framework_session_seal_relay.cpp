@@ -365,7 +365,7 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
         const auto target_peer =
           target->transport ().topology ().peer (source.status ().routing_id ().to_bytes ());
         return source.has_admitted_peer (target_rid, target_status.lifecycle_generation ())
-               && target_peer
+               && target_peer && target_peer->ready
                && target_peer->descriptor.state == mesh::service_node_state_t::serving;
     };
     std::promise<void> admitted;

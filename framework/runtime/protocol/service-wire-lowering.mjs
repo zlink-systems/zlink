@@ -242,6 +242,7 @@ const GENERATED_OBJECT_TREE_KEYS = new Set([
   "savedWork",
   "timerRegistrations",
   "pendingTimerTicks",
+  "sessionBindings",
 ]);
 const CONDITION_KEYS = CONDITION_KINDS;
 const CONDITIONAL_FALSE_BEHAVIOR = {
@@ -2567,6 +2568,7 @@ function runSelfTests(schemaPath) {
       savedWork: { $ref: "saved-work-vector" },
       timerRegistrations: { $ref: "relocation-timer-registration-vector" },
       pendingTimerTicks: { $ref: "relocation-pending-timer-tick-vector" },
+      sessionBindings: { $ref: "relocation-session-binding-vector" },
     },
     maximumBytes: 274877906944,
     chunkSplit: "any-byte-boundary-including-within-frozen-record",
@@ -2633,7 +2635,7 @@ function runSelfTests(schemaPath) {
     LoweringCoverageError,
   );
   assert.deepEqual(JSON.parse(JSON.stringify(ir)), ir);
-  assert.equal(ir.types.length, 156);
+  assert.equal(ir.types.length, 158);
   assert.equal(ir.commands.length, 40);
   assert.equal(
     ir.semanticConstraints.filter((constraint) => constraint.runtimePredicate)

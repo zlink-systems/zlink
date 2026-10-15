@@ -63,6 +63,9 @@ internal static class ZLinkTelemetry
         );
         activity.SetTag(ZLinkTraceFormat.MessageSizeBytesField, flow.MessageSize);
         activity.SetTag(ZLinkTraceFormat.DurationSecondsField, flow.DurationSeconds);
+        activity.SetTag(ZLinkTraceFormat.DetailField, flow.Detail);
+        activity.SetTag(ZLinkTraceFormat.ErrorTypeField, flow.ErrorType);
+        activity.SetTag(ZLinkTraceFormat.ErrorMessageField, flow.ErrorMessage);
         activity.AddEvent(new ActivityEvent(ZLinkTraceFormat.MessageFlowEventName));
     }
 

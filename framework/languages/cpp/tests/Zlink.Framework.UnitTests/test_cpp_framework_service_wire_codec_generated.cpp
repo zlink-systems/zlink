@@ -659,7 +659,7 @@ int main ()
             }
         }
     }
-    if (index.at ("version") != 4 || acceptedCases != 33 || rejectedCases != 60
+    if (index.at ("version") != 4 || acceptedCases != 34 || rejectedCases != 64
         || boundaryPairs.size () != 25) {
         std::cerr << "fixture catalog v4 coverage mismatch: accept=" << acceptedCases
                   << ", reject=" << rejectedCases << ", boundary-pairs=" << boundaryPairs.size ()

@@ -4509,7 +4509,7 @@ final class ZLinkJavaRawMeshNode
         ExecutorService currentPump = pump;
         if (currentPump != null) {
             currentPump.shutdownNow();
-            awaitExecutorTermination(currentPump);
+            currentPump.close();
         }
         // The pump has stopped, so the children of its unfinished fanout end here.
         RawMulticastFanout fanout = pendingRawMulticast;
@@ -4537,22 +4537,6 @@ final class ZLinkJavaRawMeshNode
         currentReceiveFlowRegistration.close();
         port.close();
         signalLifecycleEnded();
-    }
-
-    private static void awaitExecutorTermination(ExecutorService executor) {
-        boolean interrupted = false;
-        try {
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
-                executor.awaitTermination(5, TimeUnit.SECONDS);
-            }
-        } catch (InterruptedException interruption) {
-            interrupted = true;
-            executor.shutdownNow();
-        }
-        if (interrupted) {
-            Thread.currentThread().interrupt();
-        }
     }
 
     private void startPump() {

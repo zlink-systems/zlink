@@ -752,6 +752,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertBefore("replay:D1", "command44");
             assertBefore("command44", "client.push.terminal");
             assertBefore("client.push.terminal", "target.normalize");
+            link.checkCanonicalBindingRetries().toCompletableFuture().get(1, TimeUnit.SECONDS);
             assertTrue(EVENTS.contains("route.duplicate.noop"));
             assertTrue(EVENTS.contains("route.changed.conflict"));
             assertEquals(2, released.get());
@@ -1135,12 +1136,96 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         private final AtomicReference<CompletionStage<Void>> leftCompletion =
                 new AtomicReference<>();
         private final AtomicReference<byte[]> cutover = new AtomicReference<>();
+
+        private CompletionStage<Void> checkCanonicalBindingRetries() {
+            var original = targetRequest.get();
+            byte[] prepareBytes = canonicalPrepare.get();
+            var prepare = ZLinkCanonicalRelocationProtocol.decodePrepare(prepareBytes);
+            var binding =
+                    ZLinkServiceRelocationEnvelopeCodec.decode(original.relocationPayload())
+                            .sessionBindings()
+                            .getFirst();
+            var changedBinding =
+                    new systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec
+                            .RelocationSessionBinding(
+                            binding.participantId(),
+                            binding.sessionOwnerNodeRid(),
+                            binding.sessionOwnerNodeGeneration(),
+                            binding.sessionOwnerId(),
+                            binding.sessionOwnerLeaseGeneration(),
+                            binding.sessionRid(),
+                            binding.bindingGeneration() + 1);
+            byte[] changedPayload =
+                    org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                            () -> {
+                                var value =
+                                        systems.zlink.framework.runtime.protocol
+                                                .ServiceWirePilotCodec.decodeRelocationEnvelopeV1(
+                                                List.of(original.relocationPayload()));
+                                return systems.zlink.framework.runtime.protocol
+                                        .ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
+                                        new systems.zlink.framework.runtime.protocol
+                                                .ServiceWirePilotCodec.RelocationEnvelopeV1(
+                                                value.relocationHigh(),
+                                                value.relocationLow(),
+                                                value.object(),
+                                                value.applicationVersion(),
+                                                value.applicationStates(),
+                                                value.savedWork(),
+                                                value.timerRegistrations(),
+                                                value.pendingTimerTicks(),
+                                                List.of(changedBinding)));
+                            });
+            var checksum = new java.util.zip.CRC32C();
+            checksum.update(changedPayload);
+            var changedPrepare =
+                    new ZLinkCanonicalRelocationProtocol.Prepare(
+                            prepare.id(),
+                            prepare.targetAttemptGeneration(),
+                            prepare.coordinator(),
+                            prepare.target(),
+                            prepare.initiatorRole(),
+                            prepare.object(),
+                            prepare.sourceNodeRid(),
+                            prepare.sourceNodeGeneration(),
+                            new ZLinkCanonicalRelocationProtocol.Manifest(
+                                    changedPayload.length,
+                                    prepare.manifest().chunkCount(),
+                                    checksum.getValue()),
+                            prepare.applicationVersion());
+            return targetMachine
+                    .get()
+                    .apply(
+                            SOURCE_RID,
+                            1L,
+                            ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                            prepareBytes)
+                    .thenCompose(
+                            reply -> {
+                                ZLinkCanonicalRelocationProtocol.decodeReady(reply);
+                                EVENTS.add("route.duplicate.noop");
+                                return targetMachine
+                                        .get()
+                                        .apply(
+                                                SOURCE_RID,
+                                                2L,
+                                                ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                                                ZLinkCanonicalRelocationProtocol.encodePrepare(
+                                                        changedPrepare));
+                            })
+                    .thenAccept(
+                            reply -> {
+                                ZLinkCanonicalRelocationProtocol.decodeFailed(reply);
+                                EVENTS.add("route.changed.conflict");
+                            });
+        }
+
         private final AtomicReference<ZLinkSpotRetireControl.StageRequest> targetRequest =
                 new AtomicReference<>();
         private final AtomicLong readyTransportSuccessNanos = new AtomicLong();
         private final CompletableFuture<Void> targetCompletion = new CompletableFuture<>();
         private final AtomicBoolean readyInjected = new AtomicBoolean();
-        private final AtomicBoolean routeDuplicateChecked = new AtomicBoolean();
+        private final AtomicReference<byte[]> canonicalPrepare = new AtomicReference<>();
         private final ZLinkServiceM6BWireCodec codec = new ZLinkServiceM6BWireCodec();
         private final ZLinkInternalMeshNode source;
         private final ZLinkInternalMeshNode target;
@@ -1221,6 +1306,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                             == ServiceWireConstants
                                                                     .COMMAND_RELOCATION_PREPARE) {
                                                 EVENTS.add("canonical.prepare");
+                                                canonicalPrepare.set(command.clone());
                                             } else if (sourceSide
                                                     && code
                                                             == ServiceWireConstants
@@ -1237,86 +1323,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                             delivered =
                                                     peer.get()
                                                             .apply(descriptor.rid(), code, command);
-                                            if (sourceSide
-                                                    && code
-                                                            == ServiceWireConstants
-                                                                    .COMMAND_RELOCATION_DATA) {
-                                                byte[] frozen =
-                                                        ZLinkCanonicalRelocationProtocol.decodeData(
-                                                                        command)
-                                                                .frozenRecord();
-                                                if (frozen.length >= 4
-                                                        && Byte.toUnsignedInt(frozen[0])
-                                                                == ServiceWireConstants.MAGIC_0
-                                                        && Byte.toUnsignedInt(frozen[1])
-                                                                == ServiceWireConstants.MAGIC_1
-                                                        && Byte.toUnsignedInt(frozen[2])
-                                                                == ServiceWireConstants.WIRE_MAJOR
-                                                        && Byte.toUnsignedInt(frozen[3])
-                                                                == ServiceWireConstants
-                                                                        .COMMAND_SESSION_RELOCATION_SEALED
-                                                        && routeDuplicateChecked.compareAndSet(
-                                                                false, true)) {
-                                                    var sealed =
-                                                            codec.decodeSessionRelocationSealed(
-                                                                    frozen);
-                                                    var session = sealed.session();
-                                                    byte[] changed =
-                                                            codec.encodeSessionRelocationSealed(
-                                                                    new ZLinkServiceM6BWireCodec
-                                                                            .SessionRelocationSealed(
-                                                                            sealed.relocation(),
-                                                                            sealed.coordinator(),
-                                                                            sealed.actor(),
-                                                                            new ZLinkServiceM6BWireCodec
-                                                                                    .SessionOwnerFence(
-                                                                                    session
-                                                                                            .nodeRid(),
-                                                                                    session
-                                                                                            .nodeGeneration(),
-                                                                                    session
-                                                                                            .ownerId(),
-                                                                                    session
-                                                                                            .ownerLeaseGeneration(),
-                                                                                    session
-                                                                                            .sessionRid(),
-                                                                                    session
-                                                                                                    .bindingGeneration()
-                                                                                            + 1)));
-                                                    delivered =
-                                                            delivered
-                                                                    .thenCompose(
-                                                                            ignored ->
-                                                                                    endpoint.get()
-                                                                                            .stageRelayedRecord(
-                                                                                                    targetRequest
-                                                                                                            .get(),
-                                                                                                    frozen))
-                                                                    .thenRun(
-                                                                            () ->
-                                                                                    EVENTS.add(
-                                                                                            "route.duplicate.noop"))
-                                                                    .thenCompose(
-                                                                            ignored ->
-                                                                                    endpoint.get()
-                                                                                            .stageRelayedRecord(
-                                                                                                    targetRequest
-                                                                                                            .get(),
-                                                                                                    changed))
-                                                                    .handle(
-                                                                            (ignored, failure) -> {
-                                                                                assertNotNull(
-                                                                                        failure,
-                                                                                        "changed"
-                                                                                                + " command43"
-                                                                                                + " must"
-                                                                                                + " conflict");
-                                                                                EVENTS.add(
-                                                                                        "route.changed.conflict");
-                                                                                return null;
-                                                                            });
-                                                }
-                                            }
                                             if (!sourceSide
                                                     && code
                                                             == ServiceWireConstants

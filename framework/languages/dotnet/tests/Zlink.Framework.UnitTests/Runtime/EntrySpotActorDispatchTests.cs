@@ -1029,11 +1029,7 @@ public sealed partial class EntrySpotActorDispatchTests
             state.BindSession(node.RoutingId, RoutingId.From("session"), "binding")
         );
         await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await state.ExecuteDispatchAsync(
-                CreateHeader("blocked"),
-                _ => ValueTask.CompletedTask,
-                CancellationToken.None
-            )
+            await state.ExecuteDispatchAsync(_ => ValueTask.CompletedTask, CancellationToken.None)
         );
 
         node.DestroyFailure = null;
@@ -1283,7 +1279,6 @@ public sealed partial class EntrySpotActorDispatchTests
 
         var first = state
             .ExecuteDispatchAsync(
-                CreateHeader("destroy-from-turn"),
                 async _ =>
                 {
                     await sessions.DestroyActorAsync(node.RoutingId, actor);
@@ -2317,6 +2312,119 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         finally
         {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteActorFrameRelay_ExecutesSameActorFramesInArrivalOrderWhileTheFirstAwaits()
+    {
+        var probe = new DispatchProbe();
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, dispatchProbe: probe);
+        try
+        {
+            RegisterProbeActor(runtime, actorRef);
+            var relayNode = RoutingId.From("relay-source-node");
+            const ulong relayGeneration = 61;
+            node.AdmittedMeshPeers.Add(
+                new MeshNodePeer(
+                    ConnectionIntentId: 1,
+                    MeshPeerSource.Discovery,
+                    MeshPeerState.Admitted,
+                    relayNode,
+                    relayGeneration,
+                    DescriptorRevision: 1,
+                    Endpoint: "inproc://relay-source-node",
+                    ChannelCount: 1,
+                    LastError: 0,
+                    LastChangedMs: 1
+                )
+            );
+            const ulong authorityGeneration = 41;
+            const ulong ownerLeaseGeneration = 51;
+            node.SetLocalActorAuthorityFence(actorRef, authorityGeneration, ownerLeaseGeneration);
+            var source = new ZLinkServiceWireCodec.RequestSourceFence(
+                "caller-owner",
+                71,
+                RoutingId.From("caller-node"),
+                72
+            );
+            var handler = new ZLinkRemoteActorFrameRelayHandler(runtime);
+            var context = new ZLinkRouteMessageContext(
+                null,
+                null,
+                relayNode,
+                ZLinkRemoteActorFrameProtocol.PacketName,
+                null,
+                null,
+                null
+            );
+            Task Relay(string packetName, ulong operation) =>
+                handler
+                    .HandleAsync(
+                        new ZLinkRemoteActorFrameRelay(
+                            ActorId: actorRef.ActorId,
+                            ActorGeneration: actorRef.Generation,
+                            TargetNodeRid: actorRef.NodeRid.ToHex(),
+                            TargetNodeGeneration: 1,
+                            AuthorityOwnerGeneration: authorityGeneration,
+                            OwnerLeaseGeneration: ownerLeaseGeneration,
+                            RelayNodeRid: relayNode.ToHex(),
+                            RelayNodeGeneration: relayGeneration,
+                            SourceNodeRid: source.NodeRid.ToHex(),
+                            SourceNodeGeneration: source.NodeGeneration,
+                            SourceSessionRid: string.Empty,
+                            RequestSourceOwnerId: source.OwnerId,
+                            RequestSourceLeaseGeneration: source.LeaseGeneration,
+                            RequestSourceNodeRid: source.NodeRid.ToHex(),
+                            RequestSourceNodeGeneration: source.NodeGeneration,
+                            OperationIdHigh: 91,
+                            OperationIdLow: operation,
+                            MessageFollowHopCount: 1,
+                            ReplyRequestId: 0,
+                            ReplyFlags: 0,
+                            ReplyCapability: null,
+                            DeadlineUnixMs: 0,
+                            ApplicationMetadata: Array.Empty<byte>(),
+                            Header: ZLinkStreamProtocolDefaults
+                                .EncodeHeader(
+                                    new ZlinkStreamHeader(
+                                        ZlinkStreamMessageKind.Send,
+                                        ZlinkStreamCodec.Json,
+                                        ZlinkStreamHeaderFlags.None,
+                                        null,
+                                        packetName,
+                                        ZlinkStreamMetadata.Empty
+                                    )
+                                )
+                                .ToArray(),
+                            Body: ZLinkEnvelopeCodec.EncodeJsonBytes(packetName, typeof(string))
+                        ),
+                        context,
+                        CancellationToken.None
+                    )
+                    .AsTask();
+
+            // The second frame for the same Actor arrives through the relay
+            // route while the first frame's handler awaits (spec 23 §10.2).
+            var first = Relay("first", 1);
+            await probe.ActorAFirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var second = Relay("second", 2);
+            Assert.False(second.IsCompleted);
+            Assert.False(probe.ActorASecondStarted.Task.IsCompleted);
+
+            probe.ReleaseActorAFirst.SetResult();
+            await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(
+                new[] { "actor-a:first:start", "actor-a:first:end", "actor-a:second:start" },
+                probe.Events.ToArray()
+            );
+        }
+        finally
+        {
+            probe.ReleaseActorAFirst.TrySetResult();
             await runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -5504,17 +5612,8 @@ public sealed partial class EntrySpotActorDispatchTests
             )
             .AsTask();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var header = new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "ingress",
-            ZlinkStreamMetadata.Empty
-        );
         var ingress = member
             .ExecuteDispatchAsync(
-                header,
                 _ =>
                 {
                     ingressClaimed.TrySetResult();
@@ -10516,7 +10615,6 @@ public sealed partial class EntrySpotActorDispatchTests
         using var body = Message.From(Encoding.UTF8.GetBytes(name));
         await state
             .ExecuteDispatchAsync(
-                header,
                 ct => activation.InvokeActorPacketAsync(descriptor, actor, header, body, ct),
                 CancellationToken.None
             )

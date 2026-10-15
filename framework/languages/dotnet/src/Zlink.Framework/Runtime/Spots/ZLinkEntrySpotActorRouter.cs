@@ -99,7 +99,6 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                         .ConfigureAwait(false)
                     : await runtimeState
                         .ExecuteDispatchAsync(
-                            header,
                             ct =>
                                 activation.InvokeActorPacketForReplyAsync(
                                     descriptor,

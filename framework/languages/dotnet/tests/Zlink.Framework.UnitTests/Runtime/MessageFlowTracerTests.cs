@@ -387,6 +387,67 @@ public sealed class MessageFlowTracerTests
         Assert.Null(activity.GetTagItem("channel_route_kind"));
     }
 
+    [Theory]
+    [InlineData(ZLinkDiagnosticsLevel.Off, false)]
+    [InlineData(ZLinkDiagnosticsLevel.Errors, true)]
+    [InlineData(ZLinkDiagnosticsLevel.Normal, true)]
+    public void StageFailureUsesExistingFlowGateAndPreservesDiagnosticDetails(
+        ZLinkDiagnosticsLevel level,
+        bool expected
+    )
+    {
+        var activities = CaptureActivities(out var listener);
+        var logger = new CapturingLogger();
+        using (listener)
+        {
+            var options = new ZLinkDispatchOptionsModel();
+            options.Diagnostics.SetLevel(level);
+            options.Diagnostics.SetSampleRate(0);
+            var tracer = new ZLinkMessageFlowTracer(options, logger);
+            if (tracer.Enabled(ZLinkMessageFlowOutcome.Completed, ZLinkMessageFlowResult.Failed))
+            {
+                var error = ZLinkTraceFormat.DispatchErrorDetails(
+                    new InvalidOperationException("restore failed token=private\nsecret stack")
+                );
+                tracer.Trace(
+                    new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.Completed,
+                        ZLinkDispatchErrorSurface.ActorRelocation,
+                        ZLinkDispatchMessageKind.Control,
+                        Result: ZLinkMessageFlowResult.Failed
+                    )
+                    {
+                        Detail = "target_prepare_failed",
+                        ErrorType = error.Type,
+                        ErrorMessage = error.Message,
+                    }
+                );
+            }
+        }
+        if (!expected)
+        {
+            Assert.Empty(activities);
+            Assert.Equal(0, logger.CallCount);
+            return;
+        }
+        var activity = Assert.Single(activities);
+        Assert.Equal("completed", activity.GetTagItem("phase"));
+        Assert.Equal("failed", activity.GetTagItem("outcome"));
+        Assert.Equal("target_prepare_failed", activity.GetTagItem("detail"));
+        Assert.Equal(nameof(InvalidOperationException), activity.GetTagItem("error_type"));
+        Assert.Equal("restore failed token=<redacted>", activity.GetTagItem("error_message"));
+        Assert.Contains(
+            logger.Fields,
+            field => field.Key == "detail" && Equals(field.Value, "target_prepare_failed")
+        );
+        Assert.Contains(
+            logger.Fields,
+            field =>
+                field.Key == "error_message"
+                && Equals(field.Value, "restore failed token=<redacted>")
+        );
+    }
+
     private static List<Activity> CaptureActivities(out ActivityListener listener)
     {
         var activities = new List<Activity>();

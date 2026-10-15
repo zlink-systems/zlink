@@ -226,6 +226,7 @@ function decodeSessionRelocationBarrier(hex) {
         targetAuthorityOwnerGeneration: u64(),
         targetNodeRid: text8(),
         targetNodeGeneration: u64(),
+        targetOwnerLeaseGeneration: u64(),
       };
       if (BigInt(route.targetAuthorityOwnerGeneration)
           <= BigInt(route.previousAuthorityOwnerGeneration)) fail("invalid-field");
