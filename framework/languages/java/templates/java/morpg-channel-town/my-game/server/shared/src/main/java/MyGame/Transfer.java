@@ -1,13 +1,14 @@
 package MyGame;
 
-import java.util.concurrent.CancellationException;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 
-public final class Transfer {
-  private Transfer() {}
+import java.util.concurrent.CancellationException;
 
-  public static void check(ZLinkRelocationCancellation cancellation) {
-    if (cancellation.isCancellationRequested())
-      throw new CancellationException("Application state transfer cancelled");
-  }
+public final class Transfer {
+    private Transfer() {}
+
+    public static void check(ZLinkRelocationCancellation cancellation) {
+        if (cancellation.isCancellationRequested())
+            throw new CancellationException("Application state transfer cancelled");
+    }
 }

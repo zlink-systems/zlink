@@ -3,7 +3,7 @@ package MyGame;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 public final class Json {
-  private Json() {}
+    private Json() {}
 
-  public static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
+    public static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
 }
