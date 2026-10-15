@@ -3438,21 +3438,6 @@ bool raw_mesh_node_owner_t::wait_for_activity (std::chrono::milliseconds timeout
     }
 }
 
-bool raw_mesh_node_owner_t::ingress_data_ready ()
-{
-    return _lane
-      .run ([this] {
-          std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          if (!_router)
-              return false;
-          std::lock_guard socket_lock (*_socket_mutex);
-          return (static_cast<short> (_router->options ().events ())
-                  & static_cast<short> (zlink::poll_event_flag_t::pollin))
-                 != 0;
-      })
-      .get ();
-}
-
 void raw_mesh_node_owner_t::signal_activity () noexcept
 {
     std::shared_ptr<detail::backend::raw_route_port_t> port;

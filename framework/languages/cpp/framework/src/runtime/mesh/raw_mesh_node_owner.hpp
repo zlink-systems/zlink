@@ -361,8 +361,6 @@ class raw_mesh_node_owner_t
     bool wait_for_activity (std::chrono::milliseconds timeout,
                             bool accept_application_receive = true) noexcept;
     void signal_activity () noexcept;
-    // Observes only Core ordinary ingress readiness; does not claim a record.
-    bool ingress_data_ready ();
     std::size_t last_pump_bytes () const;
     task_t<service_liveness_tick_t>
     tick_liveness (service_liveness_registry_t::clock_t::time_point now);
