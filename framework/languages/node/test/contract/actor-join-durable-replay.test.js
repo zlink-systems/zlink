@@ -9,14 +9,19 @@ const { encodeApplicationPayload } = require('../../packages/framework/dist/runt
 
 function joinFixture(request, { canonical = true, entry = false } = {}) {
   const attempts = [];
+  let ready = true;
+  const routeObservers = new Set();
   const runtime = new ServiceStatefulRuntime({
+    observePeerRoute: () => ({ generation: 1n, ready }),
+    observePeerRouteChanged: listener => { routeObservers.add(listener); return () => routeObservers.delete(listener); },
     observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     topology: { peer: rid => rid === 'target-node' ? { descriptor: { lifecycleGeneration: 11n } } : undefined },
     async requestService(target, parts, timeoutMs) {
       const attempt = { target, parts, timeoutMs, at: performance.now(), record: decodeActorJoin28(parts) };
       attempts.push(attempt);
-      return request(attempt, attempts.length);
+      try { return await request(attempt, attempts.length); }
+      catch (error) { ready = false; throw error; }
     }
   }, 'source-node', 7n);
   const actor = runtime.createActor('durable-actor');
@@ -28,6 +33,7 @@ function joinFixture(request, { canonical = true, entry = false } = {}) {
   const payload = { packetName: 'JoinInput', contentType: 'application/json', payload: Buffer.from('{"seat":2}') };
   return {
     runtime, attempts, spot,
+    ready() { ready = true; for (const observer of routeObservers) observer('target-node'); },
     join(timeoutMs) {
       const args = entry ? [actor.ref, 'target-node', payload] : [actor.ref, 'target-node', spot, spot.generation, payload];
       if (canonical) args.push({ targetNodeGeneration: 7n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 7n },
@@ -70,6 +76,7 @@ for (const canonical of [true, false]) for (const entry of [true, false]) {
         await new Promise(resolve => setImmediate(resolve));
         assert.equal(fixture.attempts.length, 1);
         now += 20.25;
+        fixture.ready();
         t.mock.timers.tick(20.25);
         const result = await pending.promise;
         assert.equal(result.terminalResult, RequestResult.Ok);

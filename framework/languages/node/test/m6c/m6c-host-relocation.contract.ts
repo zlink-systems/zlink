@@ -1,3 +1,7 @@
+import type { RawServiceMeshRuntime } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
+import { setImmediate as turn } from 'node:timers/promises';
+import { requestDurableService } from '../../packages/framework/src/runtime/foundation/durable-service-request';
+import { ZLinkBackendResultError } from '../../packages/framework/src/runtime/backend/runtime-values';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { frameworkErrorMappingFixture } from './framework-error-mapping-fixture';
@@ -2034,7 +2038,9 @@ test('ActorJoin READY submit failure re-submits Ready against the retained stagi
   const relocatePromise = harness.relocate();
   relocatePromise.catch(() => undefined);
   try {
-    await new Promise<void>((resolve) => setTimeout(resolve, 900));
+    await harness.waitForReadyAttempt(1);
+    harness.restoreSourceRoute();
+    await harness.waitForReadyAttempt(2);
     assert.ok(
       harness.events.filter((value) => value === 'ready:submit').length >= 2,
       'a Prepare resend must re-submit Ready against the retained staging'
@@ -2065,7 +2071,10 @@ test('exact ActorJoin Prepare can restore again and arm fallback only after READ
     readyResults: [SubmitResult.NotConnected, SubmitResult.Ok]
   });
   try {
-    await harness.relocate();
+    const relocation = harness.relocate();
+    await harness.waitForReadyAttempt(1);
+    harness.restoreSourceRoute();
+    await relocation;
     harness.clearDeliveryErrors();
     await harness.targetIdle();
     assert.ok(harness.prepareFingerprints.length >= 2);
@@ -2348,7 +2357,20 @@ test('post-commit source cleanup failure preserves Accepted and reports all fail
   }
 });
 
+interface NativeRouteChangePeers {
+  source: { raw: RawServiceMeshRuntime };
+  target: { raw: RawServiceMeshRuntime };
+  until(predicate: () => boolean, label: string): Promise<void>;
+  hold(): void;
+  held(): boolean;
+  release(): void;
+  switchRoute(forceReplacement?: boolean): Promise<void>;
+  close(): Promise<void>;
+}
+
 interface ActorJoinHarnessOptions {
+  readonly transport?: NativeRouteChangePeers;
+  readonly beforeControlSubmit?: (kind: string) => void;
   readonly missingAfterTargetCommit?: boolean;
   readonly sourceLeaveFailure?: Error;
   readonly sourceRetirementFailure?: Error;
@@ -2365,6 +2387,9 @@ interface ActorJoinHarnessOptions {
 }
 
 function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
+  let sourceRouteGeneration = 1n;
+  let sourceRouteReady = true;
+  const sourceRouteObservers = new Set<(rid: string) => void>();
   const events: string[] = [];
   const controlKinds: string[] = [];
   const prepareFingerprints: string[] = [];
@@ -2679,14 +2704,53 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           return SubmitResult.Ok;
         }
       }
+      if (options.transport !== undefined) {
+        if (control !== undefined) options.beforeControlSubmit?.(control.kind);
+        return options.transport.source.raw
+          .sendService(_targetRid, [bytes])
+          .then((sent) => (sent ? SubmitResult.Ok : SubmitResult.NotConnected));
+      }
       queueMicrotask(() => deliver(targetRuntime, 'source', Buffer.from(bytes), targetDeliveries));
       return SubmitResult.Ok;
     },
+    observePeerRoute: () =>
+      options.transport?.source.raw.observePeerRoute('target') ?? {
+        generation: sourceRouteGeneration,
+        ready: sourceRouteReady
+      },
+    observePeerRouteChanged: (listener: (rid: string) => void) => {
+      if (options.transport !== undefined)
+        return options.transport.source.raw.observePeerRouteChanged(listener);
+      sourceRouteObservers.add(listener);
+      return () => {
+        sourceRouteObservers.delete(listener);
+      };
+    },
+    observePeerConnectionIntentRemoved: () => () => {},
     requestInfrastructureControlFrames(
+      targetRid: string,
+      frames: readonly Uint8Array[],
+      requestOptions?: {
+        readonly timeoutMs?: number;
+        readonly signal?: AbortSignal;
+        readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
+      }
+    ): Promise<readonly Uint8Array[]> {
+      return requestDurableService(
+        sourceNode,
+        targetRid,
+        frames,
+        performance.now() + (requestOptions?.timeoutMs ?? 30_000),
+        'Prepare',
+        requestOptions?.signal,
+        requestOptions?.onSubmitted
+      );
+    },
+    requestService(
       _targetRid: string,
       frames: readonly Uint8Array[],
-      requestOptions?: { readonly timeoutMs?: number }
-    ): Promise<readonly Uint8Array[]> {
+      timeoutMs: number
+    ): Promise<readonly Buffer[]> {
       const bytes = frames[0]!;
       const control = decodeServiceRelocationControlRequest(bytes);
       if (control !== undefined) {
@@ -2695,7 +2759,9 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           prepareFingerprints.push(Buffer.from(bytes).toString('base64'));
         }
       }
-      return new Promise<readonly Uint8Array[]>((resolve, reject) => {
+      if (options.transport !== undefined)
+        return options.transport.source.raw.requestService(_targetRid, frames, timeoutMs);
+      return new Promise<readonly Buffer[]>((resolve, reject) => {
         const parts = frames.map((frame) => Message.from(frame));
         let settled = false;
         const finish = (action: () => void) => {
@@ -2706,7 +2772,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         };
         const timer = setTimeout(
           () => finish(() => reject(new Error('in-memory infrastructure request timed out'))),
-          requestOptions?.timeoutMs ?? 30_000
+          timeoutMs
         );
         const delivery = Promise.resolve(
           targetRuntime.tryHandleControl('mesh-a', {
@@ -2720,6 +2786,12 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
               if (result === SubmitResult.Ok) {
                 const replyParts = Array.isArray(reply) ? reply : [reply];
                 finish(() => resolve(replyParts.map((part) => Buffer.from(part))));
+              }
+              if (result !== SubmitResult.Ok) {
+                sourceRouteReady = false;
+                finish(() =>
+                  reject(new ZLinkBackendResultError('request', RequestResult.NotConnected))
+                );
               }
               return result;
             }
@@ -2772,11 +2844,19 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     sendInfrastructureControl(_sourceRid: string, bytes: Uint8Array) {
       events.push('sourceLeave:submit');
       if (options.sourceLeaveResult !== undefined) return options.sourceLeaveResult;
+      if (options.transport !== undefined)
+        return options.transport.target.raw
+          .sendService(_sourceRid, [bytes])
+          .then((sent) => (sent ? SubmitResult.Ok : SubmitResult.NotConnected));
       queueMicrotask(() => deliver(sourceRuntime, 'target', Buffer.from(bytes), sourceDeliveries));
       return SubmitResult.Ok;
     },
     sendToNode(_sourceRid: string, bytes: Uint8Array) {
       events.push('sourceLeave:submit');
+      if (options.transport !== undefined)
+        return options.transport.target.raw
+          .sendService(_sourceRid, [bytes])
+          .then((sent) => (sent ? SubmitResult.Ok : SubmitResult.NotConnected));
       const result = options.sourceLeaveResult ?? SubmitResult.Ok;
       if (result === SubmitResult.Ok) {
         queueMicrotask(() =>
@@ -2888,6 +2968,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           return true;
         }
       },
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
       observePeerConnectionIntentRemoved() {
         return () => {};
       },
@@ -2920,6 +3002,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
               }
             : undefined
       },
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
       observePeerConnectionIntentRemoved() {
         return () => {};
       },
@@ -3037,6 +3121,33 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }
   } as never);
 
+  if (options.transport !== undefined) {
+    for (const [peer, runtime] of [
+      [options.transport.source, sourceRuntime],
+      [options.transport.target, targetRuntime]
+    ] as const) {
+      peer.raw.setServiceIngress(async (record) => {
+        const parts = record.parts.map((part) => Message.from(part));
+        try {
+          const handled = await runtime.tryHandleControl('mesh-a', {
+            kind:
+              record.requestSequence === undefined ? ReceiveKind.NodeSend : ReceiveKind.NodeRequest,
+            sourceNodeRid: record.sourceRoutingId,
+            parts,
+            reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+              if (record.reply === undefined)
+                throw new Error('Native request has no reply capability.');
+              record.reply(Array.isArray(reply) ? reply : [reply as Uint8Array]);
+              return SubmitResult.Ok;
+            }
+          } as never);
+          return handled ? 'infrastructure' : undefined;
+        } finally {
+          for (const part of parts) part.close();
+        }
+      });
+    }
+  }
   const relocate = async (advertisedReceiveChunkLimitBytes?: number) => {
     sourceSignal = new AbortController();
     if (options.canonicalRecovery === true && canonicalHandoffId === undefined) {
@@ -3116,6 +3227,20 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     return result;
   };
   return {
+    async waitForReadyAttempt(count: number) {
+      const deadline = performance.now() + 1000;
+      while (
+        events.filter((value) => value === 'ready:submit').length < count &&
+        performance.now() < deadline
+      )
+        await turn();
+      assert(events.filter((value) => value === 'ready:submit').length >= count);
+    },
+    restoreSourceRoute() {
+      sourceRouteGeneration++;
+      sourceRouteReady = true;
+      for (const observer of sourceRouteObservers) observer('target');
+    },
     events,
     controlKinds,
     prepareFingerprints,
@@ -3440,3 +3565,75 @@ test('an exact failed Session relocation closes its physical Session context', a
   assert.equal(closed, 1);
   assert.equal(await registry.route('actor-current'), undefined);
 });
+
+for (const phase of ['Prepare', 'cutover'] as const) {
+  test(`native relocation retains its original terminal after ${phase} route replacement`, async () => {
+    const { routeChangePeers } = require(
+      process.cwd() + '/test/contract/helpers/route-change-peer'
+    ) as {
+      routeChangePeers(options: {
+        sourceRid: string;
+        targetRid: string;
+        sourceGeneration: bigint;
+        targetGeneration: bigint;
+        runtimeRoot: string;
+      }): Promise<NativeRouteChangePeers>;
+    };
+    const peers = await routeChangePeers({
+      sourceRid: 'source',
+      targetRid: 'target',
+      sourceGeneration: 2n,
+      targetGeneration: 6n,
+      runtimeRoot: require('node:path').resolve(__dirname, '../../packages/framework/src/runtime')
+    });
+    let heldCutover = false;
+    const harness = createActorJoinHostHarness({
+      transport: peers,
+      beforeControlSubmit: (kind) => {
+        if (phase === 'cutover' && kind === 'cutover' && !heldCutover) {
+          heldCutover = true;
+          peers.hold();
+        }
+      }
+    });
+    try {
+      await peers.until(
+        () =>
+          peers.source.raw.isPeerRouteReady('target') &&
+          peers.target.raw.isPeerRouteReady('source'),
+        'initial admission'
+      );
+      if (phase === 'Prepare') peers.hold();
+      let outcome: Awaited<ReturnType<typeof harness.relocate>> | undefined;
+      let failure: unknown;
+      const relocation = harness.relocate().then(
+        (value) => {
+          outcome = value;
+        },
+        (error) => {
+          failure = error;
+        }
+      );
+      await peers.until(
+        () => peers.held() && harness.prepareFingerprints.length > 0,
+        `${phase} bytes retained on old pipe`
+      );
+      await peers.switchRoute(true);
+      peers.release();
+      await peers.until(
+        () => outcome !== undefined || failure !== undefined,
+        'original relocation terminal'
+      );
+      if (failure !== undefined) throw failure;
+      assert.equal(String(outcome!.actorRef.nodeRid), 'target');
+      assert.equal(harness.location.commits, 1);
+      assert.equal(harness.targetActorManager.published, 1);
+      assert.equal(harness.targetActorManager.aborted, 0);
+      assert.equal(new Set(harness.prepareFingerprints).size, 1);
+      await relocation;
+    } finally {
+      await harness.dispose();
+      await peers.close();
+    }
+  });
+}
