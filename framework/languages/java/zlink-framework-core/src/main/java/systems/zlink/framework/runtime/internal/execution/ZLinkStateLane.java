@@ -4,6 +4,8 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -12,7 +14,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
@@ -42,11 +43,32 @@ public final class ZLinkStateLane {
     private static final ExecutorService DEFAULT_EXECUTOR =
             Executors.newVirtualThreadPerTaskExecutor();
 
-    private final ConcurrentLinkedQueue<WorkItem> mailbox = new ConcurrentLinkedQueue<>();
-    private final AtomicInteger scheduled = new AtomicInteger();
+    private static final VarHandle MAILBOX;
+    private static final VarHandle SCHEDULED;
+    private static final VarHandle ADMISSION;
+    private static final VarHandle COMPLETED;
+
+    static {
+        try {
+            var lookup = MethodHandles.lookup();
+            MAILBOX =
+                    lookup.findVarHandle(
+                            ZLinkStateLane.class, "mailbox", ConcurrentLinkedQueue.class);
+            SCHEDULED = lookup.findVarHandle(ZLinkStateLane.class, "scheduled", int.class);
+            ADMISSION = lookup.findVarHandle(ZLinkStateLane.class, "admission", int.class);
+            COMPLETED =
+                    lookup.findVarHandle(
+                            ZLinkStateLane.class, "completed", CompletableFuture.class);
+        } catch (ReflectiveOperationException error) {
+            throw new ExceptionInInitializerError(error);
+        }
+    }
+
+    private volatile ConcurrentLinkedQueue<WorkItem> mailbox;
+    private volatile int scheduled;
     // The sign bit seals admission; the remaining bits count submissions still publishing a turn.
-    private final AtomicInteger admission = new AtomicInteger();
-    private final CompletableFuture<Void> completed = new CompletableFuture<>();
+    private volatile int admission;
+    private volatile CompletableFuture<Void> completed;
     private final Executor executor;
 
     public ZLinkStateLane() {
@@ -97,7 +119,7 @@ public final class ZLinkStateLane {
                 }
             }
             result = new CompletableFuture<>();
-            mailbox.add(completeWork(work, result));
+            mailbox().add(completeWork(work, result));
             scheduleDrain();
         } finally {
             releaseAdmission();
@@ -116,7 +138,7 @@ public final class ZLinkStateLane {
             if (runIdleTurnNow && tryRunInline(turn)) {
                 return result;
             }
-            mailbox.add(turn);
+            mailbox().add(turn);
             scheduleDrain();
         } finally {
             releaseAdmission();
@@ -181,8 +203,8 @@ public final class ZLinkStateLane {
     }
 
     private boolean tryClaimInlineTurn() {
-        if (!scheduled.compareAndSet(0, 1)) return false;
-        if (!mailbox.isEmpty()) {
+        if (!SCHEDULED.compareAndSet(this, 0, 1)) return false;
+        if (!mailboxEmpty()) {
             releaseInlineTurn();
             return false;
         }
@@ -199,8 +221,8 @@ public final class ZLinkStateLane {
     }
 
     private void releaseInlineTurn() {
-        scheduled.set(0);
-        if (!mailbox.isEmpty()) {
+        scheduled = 0;
+        if (!mailboxEmpty()) {
             scheduleDrain();
         }
         completeCloseIfDrained();
@@ -210,15 +232,19 @@ public final class ZLinkStateLane {
         Objects.requireNonNull(work, "work");
         if (!tryAdmit()) return false;
         try {
-            mailbox.add(
-                    () -> {
-                        try {
-                            return callWithCurrent(
-                                    this, () -> Objects.requireNonNull(work.get(), "work result"));
-                        } catch (RuntimeException | Error error) {
-                            return CompletableFuture.failedFuture(error);
-                        }
-                    });
+            mailbox()
+                    .add(
+                            () -> {
+                                try {
+                                    return callWithCurrent(
+                                            this,
+                                            () ->
+                                                    Objects.requireNonNull(
+                                                            work.get(), "work result"));
+                                } catch (RuntimeException | Error error) {
+                                    return CompletableFuture.failedFuture(error);
+                                }
+                            });
             scheduleDrain();
             return true;
         } finally {
@@ -236,9 +262,14 @@ public final class ZLinkStateLane {
     }
 
     public CompletionStage<Void> closeAsync() {
-        admission.getAndUpdate(state -> state | CLOSED);
+        CompletableFuture<Void> completion = completed;
+        if (completion == null) {
+            completion = new CompletableFuture<>();
+            if (!COMPLETED.compareAndSet(this, null, completion)) completion = completed;
+        }
+        ADMISSION.getAndBitwiseOr(this, CLOSED);
         completeCloseIfDrained();
-        return completed;
+        return completion;
     }
 
     public static Executor propagateCurrent(Executor executor) {
@@ -250,31 +281,46 @@ public final class ZLinkStateLane {
     }
 
     private boolean tryAdmit() {
-        int state = admission.get();
+        int state = admission;
         while (state >= 0) {
-            if (admission.compareAndSet(state, state + 1)) return true;
-            state = admission.get();
+            if (ADMISSION.compareAndSet(this, state, state + 1)) return true;
+            state = admission;
         }
         return false;
     }
 
     private void releaseAdmission() {
-        admission.decrementAndGet();
+        ADMISSION.getAndAdd(this, -1);
         completeCloseIfDrained();
     }
 
     private void completeCloseIfDrained() {
-        if (admission.get() == CLOSED && scheduled.get() == 0 && mailbox.isEmpty()) {
-            completed.complete(null);
+        CompletableFuture<Void> completion = completed;
+        if (completion != null && admission == CLOSED && scheduled == 0 && mailboxEmpty()) {
+            completion.complete(null);
         }
     }
 
+    private ConcurrentLinkedQueue<WorkItem> mailbox() {
+        ConcurrentLinkedQueue<WorkItem> queue = mailbox;
+        if (queue == null) {
+            queue = new ConcurrentLinkedQueue<>();
+            if (!MAILBOX.compareAndSet(this, null, queue)) queue = mailbox;
+        }
+        return queue;
+    }
+
+    private boolean mailboxEmpty() {
+        ConcurrentLinkedQueue<WorkItem> queue = mailbox;
+        return queue == null || queue.isEmpty();
+    }
+
     private void scheduleDrain() {
-        if (scheduled.compareAndSet(0, 1)) {
+        if (SCHEDULED.compareAndSet(this, 0, 1)) {
             try {
                 executor.execute(this::drain);
             } catch (RuntimeException rejected) {
-                scheduled.set(0);
+                scheduled = 0;
                 throw rejected;
             }
         }
@@ -286,7 +332,7 @@ public final class ZLinkStateLane {
 
     private void runNext(int processed) {
         while (processed < DRAIN_BATCH_LIMIT) {
-            WorkItem work = mailbox.poll();
+            WorkItem work = mailbox().poll();
             if (work == null) break;
             CompletionStage<Void> execution;
             try {
@@ -301,8 +347,8 @@ public final class ZLinkStateLane {
                 return;
             }
         }
-        scheduled.set(0);
-        if (!mailbox.isEmpty()) scheduleDrain();
+        scheduled = 0;
+        if (!mailboxEmpty()) scheduleDrain();
         completeCloseIfDrained();
     }
 
@@ -310,8 +356,8 @@ public final class ZLinkStateLane {
         try {
             executor.execute(() -> runNext(processed));
         } catch (RuntimeException rejected) {
-            scheduled.set(0);
-            if (admission.get() < 0) completed.completeExceptionally(rejected);
+            scheduled = 0;
+            if (admission < 0) completed.completeExceptionally(rejected);
         }
     }
 
