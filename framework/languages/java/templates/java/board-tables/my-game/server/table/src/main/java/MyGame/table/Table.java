@@ -31,7 +31,7 @@ public final class Table implements ZLinkSpot<Player> {
         checkJoin(actorId, join);
         return CompletableFuture.completedFuture(
                 index(actorId) == Rules.NO_SEAT && state.seats.size() == Rules.SEATS
-                        ? ZLinkSpotActorJoinResult.reject(new ActionRejected(Rules.TABLE_FULL))
+                        ? ZLinkSpotActorJoinResult.reject()
                         : ZLinkSpotActorJoinResult.accept());
     }
 

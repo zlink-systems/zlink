@@ -22,9 +22,7 @@ public final class Player implements ZLinkActor {
             case ZLinkActorJoinCompletion.Accepted accepted ->
                     CompletableFuture.completedFuture(null);
             case ZLinkActorJoinCompletion.Rejected rejected ->
-                    context.boundSession()
-                            .send(rejected.reply().decode(ActionRejected.class))
-                            .submit();
+                    context.boundSession().send(new ActionRejected(Rules.TABLE_FULL)).submit();
             case ZLinkActorJoinCompletion.Failed failed ->
                     CompletableFuture.failedFuture(
                             new IllegalStateException("Join failed: " + failed.kind()));
