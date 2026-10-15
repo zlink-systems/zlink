@@ -1511,10 +1511,7 @@ export class RawServiceMeshRuntime {
     );
   }
 
-  private submitControl(
-    target: string,
-    parts: readonly Uint8Array[]
-  ): boolean | Promise<boolean> {
+  private submitControl(target: string, parts: readonly Uint8Array[]): boolean | Promise<boolean> {
     let submission;
     try {
       submission = this.requireStarted().submitSend(target, parts);
