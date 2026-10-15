@@ -53,9 +53,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     void PublishDraining();
 
-    void SetRouterHighWaterMark(ulong value);
-
-    void SetRouterReceiveHighWaterMark(ulong value) { }
+    void ApplyRouterSocketConfig(ZLinkSocketConfig config) { }
 
     void SetRouterReceiveTimeout(TimeSpan? value) { }
 
@@ -129,6 +127,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     IReadOnlyList<MeshNodePeer> MeshPeers();
 
+    ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetRid);
+
     IReadOnlyList<MeshPeerChannel> MeshPeerChannels(RoutingId peerRid, ulong lifecycleGeneration);
 
     IMeshNodeMonitor OpenMeshMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All);
@@ -186,7 +186,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
-        bool durable = false
+        bool durable = false,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         ValueTask.FromException<ZLinkBackendRouteReceived>(
             new NotSupportedException(
@@ -260,21 +261,26 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         SendFlags flags
     );
 
+    /// <summary>Consumes the original parts on success and failure.</summary>
     ValueTask SendToActorAsync(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         SendFlags flags,
         CancellationToken cancellationToken
-    ) =>
-        ValueTask.FromException(
+    )
+    {
+        ZLinkMessageParts.DisposeAll(parts);
+        return ValueTask.FromException(
             new NotSupportedException("This MeshNode backend does not support direct Actor sends.")
         );
+    }
 
     ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     );
 
     bool ReplyActorNoBind(
@@ -331,7 +337,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         ulong deadlineUnixMs,
         TimeSpan timeout,
         ReadOnlyMemory<byte> metadata,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         throw new NotSupportedException(
             "This MeshNode backend does not support Instance Spot activation."
@@ -530,7 +537,8 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         ValueTask.FromException<ZLinkBackendRouteReceived>(
             new NotSupportedException("This Spot backend does not support direct channel requests.")
@@ -597,7 +605,8 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
         Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
-            null
+            null,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         ValueTask.FromException<ZLinkBackendRouteReceived>(
             new NotSupportedException("This Spot backend does not support direct Spot requests.")

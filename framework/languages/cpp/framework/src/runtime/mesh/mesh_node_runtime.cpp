@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/timers/async_delay.hpp"
@@ -2984,9 +2984,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     }
     if (outcome.application_reply)
         s->admission_payload = std::move (application_reply_payload);
-    s->admission_reply_content_type = outcome.application_reply
-                                        ? outcome.application_reply->content_type
-                                        : "application/octet-stream";
+    s->admission_reply_content_type =
+      outcome.application_reply ? std::string (runtime::protocol::framework_multipart_content_type)
+                                : std::string{};
     co_return co_await seal_remote_application_actor_join (std::move (s));
 }
 
@@ -3192,8 +3192,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .expected_owner_lease_generation = s->source_owner_lease_generation,
       .relocation = s->relocation,
       .relocation_content_type = s->relocation_content_type,
-      .request_content_type = s->application_content_type.empty () ? "application/octet-stream"
-                                                                   : s->application_content_type,
+      .request_content_type = s->application_content_type.empty ()
+                                ? std::string (stream_content_type (stream_codec_t::raw))
+                                : s->application_content_type,
       .request = s->request.to_bytes (),
       .reservation_token = s->transfer_id,
       .reserved_payload_bytes = runtime::protocol::actor_join_reserved_payload_bytes (
@@ -3206,9 +3207,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .target_spot_authority_owner_generation = s->target_spot_authority_owner_generation,
       .coordinator = s->relocation_coordinator,
       .operation = {s->target_completion_operation_id_high, s->target_completion_operation_id_low},
-      .reply_content_type = s->admission_reply_content_type.empty ()
-                              ? "application/octet-stream"
-                              : s->admission_reply_content_type,
+      .reply_content_type = s->admission_reply_content_type,
       .reply = s->admission_payload};
     runtime::protocol::frozen_record_t recovery_frozen;
     std::string recovery_encode_error;
@@ -3502,7 +3501,7 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::actor_join_reply_from_completi
 }
 
 
-task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_actor (
+request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_actor (
   const actor_ref_t &actor,
   const stream_header_t &header,
   const zlink::message_t &payload,
@@ -3524,24 +3523,24 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
     if (const auto flow = header.flow_id ())
         envelope.flow_id = std::string (*flow);
     envelope.flow_origin = header.flow_origin ();
-    co_return co_await relay_application_actor (
+    co_return co_await detail::request_submission (relay_application_actor (
       actor, envelope, payload, timeout, zlink::routing_id_t::from (std::uint32_t{0}),
       std::move (stale_route), 0, runtime::protocol::wire_operation_id_t{}, 0,
-      await_remote_admission, std::move (bound_session_source));
+      await_remote_admission, std::move (bound_session_source)));
 }
 
-task_t<std::optional<zlink::message_t>>
+request_task_t<std::optional<zlink::message_t>>
 mesh_node_runtime_t::relay_application_actor (const actor_ref_t &actor,
                                               const runtime::messaging::envelope_header_t &header,
                                               const zlink::message_t &payload,
                                               std::chrono::milliseconds timeout)
 {
-    co_return co_await relay_application_actor (
+    co_return co_await detail::request_submission (relay_application_actor (
       actor, header, payload, timeout, zlink::routing_id_t::from (std::uint32_t{0}),
-      runtime::protocol::actor_route_fence_t{}, 0, runtime::protocol::wire_operation_id_t{}, 0);
+      runtime::protocol::actor_route_fence_t{}, 0, runtime::protocol::wire_operation_id_t{}, 0));
 }
 
-task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_actor (
+request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_actor (
   actor_ref_t actor,
   runtime::messaging::envelope_header_t header,
   zlink::message_t payload,
@@ -3659,25 +3658,24 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
             }
             auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
             host::pending_operation_t operation;
-            const auto submitted = co_await origin.request_to_spot (
+            auto submission = origin.request_to_spot (
               target_node, follow_target.route.spot_id, *target_generation, request_parts.items (),
               operation, zlink::send_flags_t::none, timeout);
+            auto admitted = co_await detail::request_admission_source_t{};
+            observe_request_failure (operation, admitted, "Actor message follow route request");
+            const auto submitted = co_await submission;
             if (submitted != zlink::submit_result_t::ok) {
                 co_return result_t<std::optional<zlink::message_t>>::failure (
                   framework_error_kind_t::internal_failure,
                   "Actor message follow route request was not submitted");
             }
-            auto completed = co_await await_completion (operation);
-            if (completed.record.terminal_result
-                != static_cast<int> (zlink::request_result_t::ok)) {
-                const runtime::messaging::request_failure_mapper_t failure_mapper;
-                const auto failure = failure_mapper.reply_header_exception (
-                  completed.record.terminal_result, completed.record.failure_errno,
-                  "Actor message follow route request");
-                co_return result_t<std::optional<zlink::message_t>>::failure (failure.kind (),
-                                                                              failure.what ());
-            }
-            runtime::messaging::message_parts_t reply_parts (std::move (completed.parts));
+            co_await detail::request_admitted_t{};
+            auto completed =
+              co_await await_request_reply (operation, "Actor message follow route request");
+            if (!completed)
+                co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
+                  completed.exception ());
+            runtime::messaging::message_parts_t reply_parts (std::move (completed.value ()));
             auto decoded = codec.decode_envelope_reply<spot_actor_packet_route_reply_t> (
               reply_parts, *_serializers, "Actor message follow reply is empty",
               "Actor message follow reply decode failed", header.message_name);
@@ -3720,9 +3718,9 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
               "bound Session Actor route fence is inconsistent");
         }
         if (targets_local_node && !replays_handoff_packet)
-            co_return co_await spot_runtime.relay_local_actor_packet (
+            co_return co_await detail::request_submission (spot_runtime.relay_local_actor_packet (
               actor, header, payload, source_node, stale_route, incoming_hop_count,
-              original_operation, original_reply_route_id, timeout);
+              original_operation, original_reply_route_id, timeout));
         std::uint64_t authority_owner_generation = 0;
         std::uint64_t owner_lease_generation = 0;
         if (targets_local_node && !spot_runtime.actor_route (target_actor)) {
@@ -3792,36 +3790,30 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
                   runtime::messaging::map_submit_result_error_kind (submitted),
                   "Actor relay send was not accepted");
             }
+            co_await detail::request_admitted_t{};
             co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
         }
 
         host::pending_operation_t operation;
-        const auto submitted = co_await request_to_actor (
-          native_actor, encoded.items (), operation, timeout, {}, authority_owner_generation,
-          owner_lease_generation, wire_bound_session_source);
+        auto submission = request_to_actor (native_actor, encoded.items (), operation, timeout, {},
+                                            authority_owner_generation, owner_lease_generation,
+                                            wire_bound_session_source);
+        auto admitted = co_await detail::request_admission_source_t{};
+        observe_request_failure (operation, admitted, "Actor relay request");
+        const auto submitted = co_await submission;
         if (submitted != zlink::submit_result_t::ok) {
             co_return result_t<std::optional<zlink::message_t>>::failure (
               runtime::messaging::map_submit_result_error_kind (submitted),
               "Actor relay request was not accepted");
         }
-        auto completed = co_await await_completion (operation);
-        //  Spec 20 §3/§4 — an ordered bound-session relay of a one-way send
-        //  awaits only the remote admission terminal. Classify a non-OK
-        //  terminal (spec 32 §5), and for a command return success before
-        //  touching the parts: a successful one-way completion carries no
-        //  application reply, so decoding an envelope from the empty parts
-        //  fabricated an invalid_frame failure and dropped the message.
-        if (completed.record.terminal_result != static_cast<int> (zlink::request_result_t::ok)) {
-            const runtime::messaging::request_failure_mapper_t failure_mapper;
-            const auto failure = failure_mapper.reply_header_exception (
-              completed.record.terminal_result, completed.record.failure_errno,
-              "Actor relay request");
-            co_return result_t<std::optional<zlink::message_t>>::failure (failure.kind (),
-                                                                          failure.what ());
-        }
+        co_await detail::request_admitted_t{};
+        auto completed = co_await await_request_reply (operation, "Actor relay request");
+        if (!completed)
+            co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
+              completed.exception ());
         if (kind == runtime::messaging::message_kind_t::command)
             co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
-        runtime::messaging::message_parts_t reply (std::move (completed.parts));
+        runtime::messaging::message_parts_t reply (std::move (completed.value ()));
         auto reply_header = runtime::messaging::envelope_codec_t{}.decode_header (reply, false);
         if (!reply_header) {
             co_return result_t<std::optional<zlink::message_t>>::failure (
@@ -3909,7 +3901,7 @@ mesh_node_runtime_t::wait_for_application_actor_route_change (
                                                : std::optional<runtime::spot_address_t>{};
 }
 
-task_t<application_actor_session_bind_outcome_t>
+request_task_t<application_actor_session_bind_outcome_t>
 mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
                                                      const zlink::routing_id_t &session_rid,
                                                      std::uint64_t binding_generation,
@@ -3928,6 +3920,8 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
         auto completion =
           std::make_shared<task_completion_source_t<runtime::protocol::reply_header_t>> ();
         auto output = completion->task ();
+        auto admitted = co_await detail::request_admission_source_t{};
+        detail::observe_request_failure (output, admitted);
         const auto actor_fence = runtime::protocol::actor_route_fence_t{
           std::string (actor.actor_id ().value ()),
           actor.object_generation (),
@@ -3962,7 +3956,8 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
                     framework_error_kind_t::protocol_error,
                     "Remote Actor session binding reply decode failed"));
               }
-          });
+          },
+          admitted);
         if (!submitted) {
             co_return result_t<application_actor_session_bind_outcome_t>::failure (
               framework_error_kind_t::not_configured,
@@ -4176,6 +4171,56 @@ task_t<mesh_node_runtime_t::operation_completion_t>
 mesh_node_runtime_t::await_completion (const host::pending_operation_t &operation)
 {
     return operation.completion->task ();
+}
+
+namespace
+{
+std::exception_ptr
+request_completion_failure (const result_t<host::operation_completion_t> &completion,
+                            std::string_view operation_name)
+{
+    if (!completion)
+        return completion.exception ();
+    const auto &record = completion.value ().record;
+    if (record.terminal_result == static_cast<int> (zlink::request_result_t::ok))
+        return {};
+    return std::make_exception_ptr (
+      runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
+        static_cast<std::uint32_t> (record.terminal_result),
+        static_cast<std::uint32_t> (record.failure_errno), std::string (operation_name)));
+}
+}
+
+void mesh_node_runtime_t::observe_request_failure (
+  const host::pending_operation_t &operation,
+  const std::shared_ptr<task_completion_source_t<void>> &admitted,
+  std::string_view operation_name)
+{
+    auto completion = await_completion (operation);
+    detail::observe_task_terminal (completion, [admitted, operation_name] (const auto &result) {
+        if (auto failure = request_completion_failure (result, operation_name))
+            admitted->complete (detail::result_access_t::failure<void> (std::move (failure)));
+    });
+}
+
+task_t<result_t<runtime::messaging::message_parts_t>>
+mesh_node_runtime_t::await_request_reply (const host::pending_operation_t &operation,
+                                          std::string_view operation_name)
+{
+    std::optional<result_t<host::operation_completion_t>> completion;
+    try {
+        completion =
+          result_t<host::operation_completion_t>::success (co_await await_completion (operation));
+    }
+    catch (const std::exception &) {
+        completion = detail::result_access_t::failure<host::operation_completion_t> (
+          std::current_exception ());
+    }
+    if (auto failure = request_completion_failure (*completion, operation_name))
+        co_return detail::result_access_t::failure<runtime::messaging::message_parts_t> (
+          std::move (failure));
+    co_return result_t<runtime::messaging::message_parts_t>::success (
+      runtime::messaging::message_parts_t (std::move (completion->value ().parts)));
 }
 
 task_t<std::optional<zlink::submit_result_t>>

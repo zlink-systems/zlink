@@ -63,7 +63,8 @@ final class ZLinkSpotRouterNodeDispatcher {
             List<Message> spotParts,
             Duration timeout,
             ZLinkServiceOperationRegistry operations,
-            UUID operationId) {
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission) {
         CompletableFuture<List<Message>> result = new CompletableFuture<>();
         var entrySpot = node.entrySpot();
         rememberAuthority(
@@ -82,7 +83,8 @@ final class ZLinkSpotRouterNodeDispatcher {
                         spotParts,
                         timeout,
                         operations,
-                        operationId)
+                        operationId,
+                        requestAdmission)
                 .whenComplete(
                         (reply, failure) -> {
                             if (failure == null) {

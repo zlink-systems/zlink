@@ -180,7 +180,8 @@ final class ZLinkInstanceSpotStaleCacheTest {
                                         Map.of(),
                                         WAIT,
                                         ready,
-                                        resolver);
+                                        resolver,
+                                        null);
                 if (missing)
                     assertTrue(
                             call.toCompletableFuture()
@@ -219,7 +220,8 @@ final class ZLinkInstanceSpotStaleCacheTest {
                                 Map.of(),
                                 WAIT,
                                 next,
-                                resolver)
+                                resolver,
+                                null)
                         .toCompletableFuture()
                         .get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
                 assertEquals(missing ? 3 : 2, submissions.get());

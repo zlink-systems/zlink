@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: LicenseRef-zlink-License-1.0
 
 import crypto from "node:crypto";
 import fs from "node:fs";

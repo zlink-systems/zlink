@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 #include <chrono>
@@ -41,6 +41,9 @@ class offload_executor_t
     bool drain_until (std::chrono::steady_clock::time_point deadline);
     bool drained () const;
     std::size_t live_worker_count () const;
+    // Threads this executor still owns: running workers and returned workers
+    // that the next worker start or drain joins.
+    std::size_t owned_thread_count () const;
 
   private:
     struct work_item_t
@@ -51,11 +54,14 @@ class offload_executor_t
 
     void worker_loop ();
     void start_worker_locked ();
+    void retire_current_worker_locked ();
+    void join_retired_workers_locked ();
 
     mutable std::mutex _mutex;
     std::condition_variable _ready;
     std::condition_variable _empty;
     std::queue<work_item_t> _queue;
+    // [0, _live_workers) run worker_loop; the rest have returned.
     std::vector<std::thread> _workers;
     std::vector<std::stop_source *> _active_cancellations;
     std::size_t _min_worker_count = 1;

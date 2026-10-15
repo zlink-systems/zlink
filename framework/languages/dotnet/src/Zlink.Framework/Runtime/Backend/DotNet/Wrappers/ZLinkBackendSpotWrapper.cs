@@ -212,7 +212,8 @@ internal sealed class ZLinkBackendSpotWrapper
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default
+        ReadOnlyMemory<byte> metadata = default,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         RequireManagedNode()
             .RequestToChannelDirectAsync(
@@ -222,7 +223,8 @@ internal sealed class ZLinkBackendSpotWrapper
                 flags,
                 metadata,
                 timeout,
-                cancellationToken
+                cancellationToken,
+                requestAdmission: requestAdmission
             );
 
     public void Publish(
@@ -312,7 +314,8 @@ internal sealed class ZLinkBackendSpotWrapper
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
         Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.InstanceRouteV1Case0? readyRoute =
-            null
+            null,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         RequireManagedNode()
             .RequestToSpotDirectAsync(
@@ -325,7 +328,8 @@ internal sealed class ZLinkBackendSpotWrapper
                 metadata,
                 timeout,
                 cancellationToken,
-                readyRoute
+                readyRoute,
+                requestAdmission: requestAdmission
             );
 
     public bool RequestToSpot(

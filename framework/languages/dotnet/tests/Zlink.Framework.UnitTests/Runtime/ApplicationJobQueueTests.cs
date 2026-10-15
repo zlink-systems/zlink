@@ -862,15 +862,6 @@ public sealed class ApplicationJobQueueTests
     }
 
     [Fact]
-    public void Only_terminal_record_kinds_bypass_dispatch_admission()
-    {
-        Assert.False(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.Completion));
-        Assert.False(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.SendReady));
-        Assert.True(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.NodeSend));
-        Assert.True(ZLinkMeshDispatchPump.RequiresApplicationAdmission(MeshRecordKind.SpotControl));
-    }
-
-    [Fact]
     public async Task Reset_preserves_current_and_rebases_peak_while_clearing_wait_totals()
     {
         using var queue = CreateQueue(limit: 2);

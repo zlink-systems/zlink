@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // §10.3 s2s-channel-to-spot-request-echo. Question: what a Channel process pays to start a remote request to a global

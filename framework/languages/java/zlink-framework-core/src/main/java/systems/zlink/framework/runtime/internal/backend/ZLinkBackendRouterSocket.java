@@ -6,6 +6,7 @@ import systems.zlink.contracts.sockets.ReceiveFlowState;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public interface ZLinkBackendRouterSocket
@@ -34,9 +35,6 @@ public interface ZLinkBackendRouterSocket
 
     CompletionStage<Void> send(RoutingId routingId, List<Message> parts);
 
-    CompletionStage<ZLinkBackendReceived> request(
-            RoutingId routingId, List<Message> parts, Duration timeout);
-
     void reply(RoutingId routingId, long requestSeq, List<Message> parts);
 
     default void disconnectPeer(RoutingId routingId) {
@@ -48,4 +46,10 @@ public interface ZLinkBackendRouterSocket
         throw new UnsupportedOperationException(
                 "paired router receive-flow control is not available");
     }
+
+    CompletionStage<ZLinkBackendReceived> request(
+            RoutingId routingId,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission);
 }

@@ -56,6 +56,30 @@ final class ZLinkStreamJsonTest {
     }
 
     @Test
+    void frameworkJsonProfileUsesEnumNamesAndRejectsOrdinals() {
+        EnumPayload expected = new EnumPayload(ProfileReportReason.profile);
+        ZLinkStreamEncodedPayload encoded = ZLinkStreamJson.encode("profile-report", expected);
+
+        assertEquals(
+                "{\"reasonId\":\"profile\"}",
+                new String(encoded.payload().toByteArray(), StandardCharsets.UTF_8));
+        assertEquals(expected, ZLinkStreamJson.decode(encoded, EnumPayload.class));
+
+        for (String json : List.of("{\"reasonId\":1}", "{\"reasonId\":\"1\"}")) {
+            ZLinkStreamEncodedPayload payload =
+                    new ZLinkStreamEncodedPayload(
+                            "profile-report",
+                            Message.from(json.getBytes(StandardCharsets.UTF_8)),
+                            Map.of(),
+                            ZLinkStreamCodec.JSON);
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> ZLinkStreamJson.decode(payload, EnumPayload.class),
+                    json);
+        }
+    }
+
+    @Test
     void frameworkJsonProfileRejectsNumericInt64() {
         ZLinkStreamEncodedPayload numeric =
                 new ZLinkStreamEncodedPayload(
@@ -297,6 +321,15 @@ final class ZLinkStreamJsonTest {
     private record AnnotatedPayload(String value) {}
 
     private record TimestampedPayload(Instant occurredAt) {}
+
+    private record EnumPayload(ProfileReportReason reasonId) {}
+
+    private enum ProfileReportReason {
+        nickname,
+        profile,
+        harassment,
+        other
+    }
 
     private record LongPayload(long value) {}
 

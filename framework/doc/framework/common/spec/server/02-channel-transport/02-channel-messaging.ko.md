@@ -585,9 +585,15 @@ Classic fanout publish에 적용하지 않는다.
 | ChannelName이 현재 process에 등록되지 않았다. | `NotFound`로 끝나며 다른 송신 경로로 보내지 않는다. |
 | ChannelName의 선택 가능한 target이 없다. | [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다. |
 | 알려진 target의 연결이 제한 시간까지 ready가 되지 않는다. | Route 연결 오류 또는 timeout으로 끝난다. |
-| Request handler를 찾지 못하거나 payload를 해석하지 못했다. | Reply 경로가 남아 있으면 error reply로 완료한다. |
+| Request handler를 찾지 못하거나 payload를 해석하지 못했다. | [Reply 경로가 남아 있으면](#reply-route-remains) error reply로 완료한다. |
 | One-way handler를 찾지 못하거나 payload를 해석하지 못했다. | Message를 handler에 전달하지 않고 runtime 관측 정보에 기록한다. |
 | Host가 새로운 submit을 받지 않는다. | 해당 언어의 shutdown 오류로 실패한다. |
+
+<a id="reply-route-remains"></a>수신한 message가 reply token을 가진 request이고, envelope header 전체가 JSON
+문법에 맞는 object이며, `correlationId`가
+[Request 연결과 업무 흐름 식별 §3](../06-observability/04-flow-correlation.ko.md#3-형식과-소유권)의 형식에 맞는
+문자열이면 reply 경로가 남아 있다. 이때 다른 header field가 잘못되었으면 error reply로 완료한다. 이 조건을
+충족하지 못하면 reply를 만들지 않고 runtime 관측 정보에 실패를 한 번 기록한다.
 
 ChannelName 호출은 Framework가 Server member 하나를 선택한다. 기존 작업을 마치며 새 작업
 수락을 중단하는 drain 상태의 member는 이 선택 후보에서 제외하므로 새로운 ChannelName

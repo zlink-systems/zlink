@@ -10,6 +10,8 @@
         <RepositoryUrl>https://github.com/zlink-systems/zlink</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
         <PackageProjectUrl>https://github.com/zlink-systems/zlink</PackageProjectUrl>
+        <PackageLicenseFile></PackageLicenseFile>
+        <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
         <PackageReadmeFile>README.md</PackageReadmeFile>
         <PublishRepositoryUrl>true</PublishRepositoryUrl>
         <EmbedUntrackedSources>true</EmbedUntrackedSources>
@@ -23,5 +25,10 @@
         <PackageReference Include="System.Threading.Channels" VersionOverride="8.0.0" Condition="'$(TargetFramework)' == 'netstandard2.1'" />
         <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
         <None Include="../../README.md" Pack="true" PackagePath="/" />
+        <None Include="$(ZLinkRepoRoot)/framework/languages/cpp/http-client/LICENSE" Link="LICENSE" Pack="true" PackagePath="" Visible="false" />
+    </ItemGroup>
+    <ItemGroup>
+        <Compile Include="../Shared/ZLinkJsonSerializerOptions.cs" Link="Internal/ZLinkJsonSerializerOptions.cs"/>
+        <Compile Include="../Shared/ZLinkFrameworkJsonDocument.cs" Link="Internal/ZLinkFrameworkJsonDocument.cs"/>
     </ItemGroup>
 </Project>

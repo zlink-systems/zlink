@@ -119,7 +119,8 @@ final class ZLinkJavaRawMeshAuthorityCompletionTest {
                     var actor = new ZLinkBackendActorRef(targetRid, "missing-actor", 1);
                     source.spotNode().rememberActorAuthority(actor, 1, 1);
                     request =
-                            source.requestActor(actor, List.of(payload), Duration.ofSeconds(5))
+                            source.requestActor(
+                                            actor, List.of(payload), Duration.ofSeconds(5), null)
                                     .toCompletableFuture();
                 } else {
                     ((ZLinkJavaRawSpotNode) source.spotNode())
@@ -132,7 +133,8 @@ final class ZLinkJavaRawMeshAuthorityCompletionTest {
                                             1,
                                             new byte[0],
                                             List.of(payload),
-                                            Duration.ofSeconds(5))
+                                            Duration.ofSeconds(5),
+                                            null)
                                     .toCompletableFuture();
                 }
             }

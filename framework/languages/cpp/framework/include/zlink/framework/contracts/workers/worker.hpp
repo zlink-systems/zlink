@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
@@ -299,7 +299,7 @@ template <typename TResult> class worker_call_t
 
     task_t<TResult> async () { return start (false); }
 
-    task_t<TResult> yield () { return start (true); }
+    task_t<TResult> yield () { return detail::release_turn_on_suspend (start (true)); }
 
   private:
     task_t<TResult> start (bool release_turn)
@@ -316,7 +316,6 @@ template <typename TResult> class worker_call_t
               framework_error_kind_t::internal_failure, "worker runtime is not configured"));
         }
         auto control = std::make_shared<detail::worker_control_t> (_host_cancellation, _timeout);
-        auto turn_plan = detail::prepare_serial_turn_await (release_turn);
         std::optional<task_t<TResult>> task;
         try {
             task.emplace (_executor (control->cancellation.get_token ()));
@@ -332,11 +331,7 @@ template <typename TResult> class worker_call_t
             return task_t<TResult> (result_t<TResult>::failure (
               framework_error_kind_t::internal_failure, "worker executor failed"));
         }
-        auto guarded = detail::apply_worker_deadline (std::move (*task), control, _timeout);
-        if (!turn_plan) {
-            return guarded;
-        }
-        return detail::reschedule_task (std::move (guarded), std::move (turn_plan->scheduler));
+        return detail::apply_worker_deadline (std::move (*task), control, _timeout);
     }
     bool try_start ()
     {

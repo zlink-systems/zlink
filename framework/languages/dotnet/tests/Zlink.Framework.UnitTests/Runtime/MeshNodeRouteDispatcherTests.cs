@@ -9,6 +9,119 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Fact]
+    public async Task MalformedReplyRouteMatchesSharedFourLanguageContract()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        const string relative = "framework/test/fixtures/malformed-envelope-reply-route.tsv";
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, relative)))
+            directory = directory.Parent;
+        Assert.NotNull(directory);
+        int count = 0;
+        foreach (var row in File.ReadLines(Path.Combine(directory!.FullName, relative)))
+        {
+            if (row.Length == 0 || row.StartsWith('#'))
+                continue;
+            var fields = row.Split('\t');
+            bool request = bool.Parse(fields[1]);
+            var logger = new MeshFlowLoggerFactory();
+            await using var services = new ServiceCollection()
+                .AddSingleton<ILoggerFactory>(logger)
+                .AddTransient<MeshChannelRequestHandler>()
+                .BuildServiceProvider();
+            var registration = new ZLinkFrameworkRegistration();
+            registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            var spotNode = new ZLinkSpotNodeRegistration
+            {
+                SpotNodeName = "mesh",
+                RoutingId = RoutingId.From("mesh-node"),
+            };
+            var membership = new ZLinkMeshChannelMembership { ChannelName = "play" };
+            membership.RequestHandlers.Add(
+                new ZLinkChannelHandlerRegistration(
+                    typeof(MeshChannelRequestHandler),
+                    typeof(MeshRequest),
+                    typeof(MeshReply),
+                    "String"
+                )
+            );
+            spotNode.ChannelMemberships.Add(membership);
+            var runtime = new ZLinkFrameworkRuntime(
+                services,
+                null!,
+                registration,
+                new ZLinkHandlerRegistry([]),
+                new ZLinkHandlerDispatcher(
+                    services.GetRequiredService<IServiceScopeFactory>(),
+                    registration
+                )
+            );
+            var runner = new ZLinkRuntimeTaskRunner(
+                new ThrowingRuntimeErrorSink(),
+                CancellationToken.None
+            );
+            await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+                ZLinkMeshNodeRouteDispatcher.Create(
+                    services,
+                    registration,
+                    spotNode,
+                    runtime,
+                    runner
+                )
+            );
+            int replies = 0;
+            ZLinkEnvelopeHeader? replyHeader = null;
+            var parts = new[]
+            {
+                Message.From(System.Text.Encoding.UTF8.GetBytes(fields[2])),
+                Message.From(System.Text.Encoding.UTF8.GetBytes("request")),
+            };
+            Func<IReadOnlyList<Message>, SubmitResult>? reply = request
+                ? replyParts =>
+                {
+                    replies++;
+                    replyHeader = ZLinkEnvelopeCodec.DecodeHeader(replyParts, false);
+                    return SubmitResult.Ok;
+                }
+                : null;
+            await dispatcher.DispatchBatchAsync(
+                [
+                    new ZLinkBackendRouteReceived(
+                        parts,
+                        RoutingId.From("source-node"),
+                        null,
+                        request ? 41UL : null,
+                        reply,
+                        "play"
+                    ),
+                ],
+                CancellationToken.None
+            );
+            await runner.StopAsync();
+            Assert.True(replies == (fields[3] == "reply_error" ? 1 : 0), fields[0]);
+            if (replyHeader is not null)
+            {
+                Assert.Equal(ZLinkMessageKind.Error, replyHeader.Kind);
+                Assert.Equal("protocol_error", replyHeader.ErrorCode);
+                using var json = System.Text.Json.JsonDocument.Parse(fields[2]);
+                Assert.Equal(
+                    json.RootElement.GetProperty("correlationId").GetString(),
+                    replyHeader.CorrelationId
+                );
+            }
+            var errors = logger
+                .Messages.Where(line =>
+                    line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
+                )
+                .ToArray();
+            Assert.Single(errors);
+            Assert.Contains("reason=invalid_frame", errors[0], StringComparison.Ordinal);
+            Assert.Contains("action=" + fields[3], errors[0], StringComparison.Ordinal);
+            count++;
+        }
+        Assert.Equal(22, count);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -205,13 +318,18 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task MeshNode_Rid_Send_Decodes_The_Retained_Body_View_Directly()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task MeshNode_Rid_Decodes_The_Retained_Body_View_Directly(bool request, bool raw)
     {
         var capture = new RetainedBodyCapture();
         await using var services = new ServiceCollection()
             .AddSingleton(capture)
             .AddTransient<RetainedBodyRouteSendHandler>()
+            .AddTransient<RetainedBodyRouteRequestHandler>()
+            .AddTransient<RetainedBodyRawRequestHandler>()
             .BuildServiceProvider();
         var registration = new ZLinkFrameworkRegistration
         {
@@ -228,6 +346,16 @@ public sealed partial class EntrySpotActorDispatchTests
                 typeof(RetainedBodyRouteSendHandler),
                 typeof(RetainedBody),
                 null,
+                "RetainedBody"
+            )
+        );
+        spotNode.RouteRequestHandlers.Add(
+            new ZLinkRouteHandlerRegistration(
+                raw
+                    ? typeof(RetainedBodyRawRequestHandler)
+                    : typeof(RetainedBodyRouteRequestHandler),
+                raw ? typeof(Message) : typeof(RetainedBody),
+                raw ? typeof(Message) : typeof(MeshReply),
                 "RetainedBody"
             )
         );
@@ -260,11 +388,11 @@ public sealed partial class EntrySpotActorDispatchTests
             )
         );
         var header = new ZLinkEnvelopeHeader(
-            ZLinkMessageKind.Command,
+            request ? ZLinkMessageKind.Request : ZLinkMessageKind.Command,
             "mesh",
             "RetainedBody",
             "application/x-retained-body",
-            null,
+            request ? "retained-request" : null,
             null,
             null,
             null,
@@ -289,8 +417,18 @@ public sealed partial class EntrySpotActorDispatchTests
                 [],
                 sourceNodeRid: RoutingId.From("source-node"),
                 spotId: null,
-                requestSeq: null,
-                reply: null,
+                requestSeq: request ? 41UL : null,
+                reply: request
+                    ? parts =>
+                    {
+                        if (raw)
+                        {
+                            Assert.Equal(bodyPart.ToArray(), parts[1].ToArray());
+                            capture.Result.TrySetResult(true);
+                        }
+                        return SubmitResult.Ok;
+                    }
+                    : null,
                 payloadOwner: owner,
                 applicationPayloadView: view
             )
@@ -722,6 +860,25 @@ public sealed partial class EntrySpotActorDispatchTests
             cancellationToken.ThrowIfCancellationRequested();
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class RetainedBodyRouteRequestHandler
+        : IZLinkRouteRequestHandler<RetainedBody, MeshReply>
+    {
+        public ValueTask<MeshReply> HandleAsync(
+            RetainedBody message,
+            ZLinkRouteMessageContext context,
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(new MeshReply("retained"));
+    }
+
+    private sealed class RetainedBodyRawRequestHandler : IZLinkRouteRequestHandler<Message, Message>
+    {
+        public ValueTask<Message> HandleAsync(
+            Message message,
+            ZLinkRouteMessageContext context,
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(message);
     }
 
     private sealed class FailingMeshChannelRequestHandler

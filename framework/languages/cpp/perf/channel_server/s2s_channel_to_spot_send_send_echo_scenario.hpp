@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // §10.4 s2s-channel-to-spot-send-send-echo. Question: how completion rate, throughput and round trip differ from the

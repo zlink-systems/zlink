@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // §10.5 s2s-spot-to-channel-request-echo. Question: how the terminal (ordinary or Yield) and the number of Spots change

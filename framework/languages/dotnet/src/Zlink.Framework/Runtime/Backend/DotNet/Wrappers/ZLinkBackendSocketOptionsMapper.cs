@@ -6,10 +6,7 @@ internal static class ZLinkBackendSocketOptionsMapper
     {
         if (config.MaxMessageSize > 0)
             options.MaxMessageSize = config.MaxMessageSize;
-        if (config.SendHighWaterMark > 0)
-            options.SendHighWaterMark = config.SendHighWaterMark;
-        if (config.ReceiveHighWaterMark > 0)
-            options.ReceiveHighWaterMark = config.ReceiveHighWaterMark;
+        ApplyHighWaterMarks(options, config);
         if (config.SendBufferSize > 0)
             options.SendBufferSize = config.SendBufferSize;
         if (config.ReceiveBufferSize > 0)
@@ -27,5 +24,19 @@ internal static class ZLinkBackendSocketOptionsMapper
             options.TcpNoDelay = tcpNoDelay;
         if (config.Immediate is { } immediate)
             options.Immediate = immediate;
+    }
+
+    internal static void ApplyHighWaterMarks(CommonSocketOptions options, IZLinkSocketConfig config)
+    {
+        var send = config is ZLinkSocketConfig configuredSend
+            ? configuredSend.ConfiguredSendHighWaterMark
+            : config.SendHighWaterMark;
+        var receive = config is ZLinkSocketConfig configuredReceive
+            ? configuredReceive.ConfiguredReceiveHighWaterMark
+            : config.ReceiveHighWaterMark;
+        if (send is { } sendValue)
+            options.SendHighWaterMark = sendValue;
+        if (receive is { } receiveValue)
+            options.ReceiveHighWaterMark = receiveValue;
     }
 }

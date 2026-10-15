@@ -163,7 +163,10 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
     }
 
     CompletionStage<Void> dispatchResolvedActorPacket(
-            ZLinkActor actor, ActorPacketFrames.Header packetHeader, ActorMessageRead read) {
+            ZLinkActor actor,
+            ActorPacketFrames.Header packetHeader,
+            ActorMessageRead read,
+            CompletableFuture<Void> requestAdmission) {
         return host.dispatchLocalActorPacket(
                 context,
                 spotSurface,
@@ -171,7 +174,24 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 packetHeader,
                 read.headerPart(),
                 read.bodyPart(),
-                read.fromPendingHeader());
+                read.fromPendingHeader(),
+                requestAdmission);
+    }
+
+    final CompletionStage<Void> admitActor(List<ZLinkBackendActorReceived> messages) {
+        return admitActor(messages, null);
+    }
+
+    final CompletionStage<Void> admitActor(
+            List<ZLinkBackendActorReceived> messages, CompletableFuture<Void> requestAdmission) {
+        var dispatched = dispatchActorMessages(messages, this::admitActorIngress, requestAdmission);
+        dispatched.whenComplete(
+                (ignored, failure) -> messages.forEach(ZLinkBackendActorReceived::close));
+        return dispatched;
+    }
+
+    CompletionStage<Void> admitActorIngress(Supplier<CompletionStage<Void>> operation) {
+        return operation.get();
     }
 
     final CompletionStage<Void> dispatchActorMessages(
@@ -183,6 +203,14 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             List<ZLinkBackendActorReceived> actorMessages,
             java.util.function.Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>>
                     admission) {
+        return dispatchActorMessages(actorMessages, admission, null);
+    }
+
+    final CompletionStage<Void> dispatchActorMessages(
+            List<ZLinkBackendActorReceived> actorMessages,
+            java.util.function.Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>>
+                    admission,
+            CompletableFuture<Void> requestAdmission) {
         List<CompletionStage<Void>> dispatches = new ArrayList<>();
         int index = 0;
         try {
@@ -244,7 +272,10 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                             admission.apply(
                                                     () ->
                                                             dispatchResolvedActorPacket(
-                                                                    actor, packetHeader, read)));
+                                                                    actor,
+                                                                    packetHeader,
+                                                                    read,
+                                                                    requestAdmission)));
                     dispatched.whenComplete(
                             (done, failure) ->
                                     host.closePendingActorHeader(headerPart, pendingHeader));

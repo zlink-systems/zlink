@@ -45,7 +45,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         _node = node;
-        _completions = new ZLinkMeshCompletionTable();
+        _completions = node.Completions;
         _pump = new ZLinkMeshDispatchPump(node, _completions, applicationJobQueue);
         _node.SetCompletionHandlerCore((record, parts) => _completions.TryComplete(record, parts));
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);
@@ -238,15 +238,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _node.PublishDraining();
     }
 
-    public void SetRouterHighWaterMark(ulong value)
-    {
-        _node.RouterHighWaterMark = value;
-    }
-
-    public void SetRouterReceiveHighWaterMark(ulong value)
-    {
-        _node.RouterReceiveHighWaterMark = value;
-    }
+    public void ApplyRouterSocketConfig(ZLinkSocketConfig config) =>
+        _node.RouterSocketConfig = config;
 
     public void SetRouterReceiveTimeout(TimeSpan? value)
     {
@@ -399,7 +392,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         ulong deadlineUnixMs,
         TimeSpan timeout,
         ReadOnlyMemory<byte> metadata,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         EnsureStarted();
@@ -421,9 +415,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             return Array.Empty<Message>();
         }
 
-        var terminal = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var terminal = new TaskCompletionSource<IReadOnlyList<Message>>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -463,7 +455,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                     deadlineUnixMs,
                     timeout,
                     SendFlags.None,
-                    metadata
+                    metadata,
+                    requestAdmission: requestAdmission
                 )
         );
         if (submit != SubmitResult.Ok)
@@ -494,9 +487,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         EnsureStarted();
-        var terminal = new TaskCompletionSource<(UserSpotCreateCompletion, IReadOnlyList<Message>)>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var terminal =
+            new TaskCompletionSource<(UserSpotCreateCompletion, IReadOnlyList<Message>)>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -566,9 +558,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         EnsureStarted();
-        var terminal = new TaskCompletionSource<(ActorCreateCompletion?, IReadOnlyList<Message>)>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var terminal = new TaskCompletionSource<(ActorCreateCompletion?, IReadOnlyList<Message>)>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -641,9 +631,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         EnsureStarted();
-        var terminal = new TaskCompletionSource<bool>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var terminal = new TaskCompletionSource<bool>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -703,9 +691,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         EnsureStarted();
-        var terminal = new TaskCompletionSource<UserSpotCloseCompletion>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var terminal = new TaskCompletionSource<UserSpotCloseCompletion>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -947,6 +933,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         return _node.Peers();
     }
 
+    public ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetRid) =>
+        _node.ClassifyLiveRouterTarget(targetRid);
+
     public IReadOnlyList<MeshPeerChannel> MeshPeerChannels(
         RoutingId peerRid,
         ulong lifecycleGeneration
@@ -1183,9 +1172,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         CancellationToken cancellationToken
     )
     {
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var completion = new TaskCompletionSource();
         var correlationId = _node.AllocateOperationId();
         _completions.RegisterBeforeSubmit(
             correlationId,
@@ -1298,7 +1285,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
-        bool durable = false
+        bool durable = false,
+        ZLinkRequestAdmission? requestAdmission = null
     ) =>
         _node.RequestToNodeDirectAsync(
             targetNodeRid,
@@ -1307,7 +1295,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             metadata,
             timeout,
             cancellationToken,
-            durable
+            durable,
+            requestAdmission: requestAdmission
         );
 
     public SubmitResult SendToActor(
@@ -1324,18 +1313,24 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         IReadOnlyList<Message> parts,
         SendFlags flags,
         CancellationToken cancellationToken
-    ) => _node.SendToActorDirectAsync(ToNativeActor(actor), parts, flags, cancellationToken);
+    ) =>
+        _node.SendToActorDirectAsync(
+            ToNativeActor(actor),
+            parts,
+            flags,
+            cancellationToken,
+            ownsParts: true
+        );
 
     public async ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var completion = new TaskCompletionSource<IReadOnlyList<Message>>();
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterBeforeSubmit(
             correlationId,
@@ -1365,7 +1360,14 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                     new Messaging.ZLinkRequestTerminalException(result, record.FailureErrno)
                 );
             },
-            id => _node.RequestToActor(ToNativeActor(actor), parts, id, timeout ?? default)
+            id =>
+                _node.RequestToActor(
+                    ToNativeActor(actor),
+                    parts,
+                    id,
+                    timeout ?? default,
+                    requestAdmission: requestAdmission
+                )
         );
         if (submit != SubmitResult.Ok)
             throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);

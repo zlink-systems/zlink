@@ -14,7 +14,8 @@ export class ZLinkSourceSpotRouter {
     packetName: string | undefined,
     request: unknown,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     throwIfAborted(signal);
     const parts = [
@@ -29,7 +30,8 @@ export class ZLinkSourceSpotRouter {
       target.targetNodeRid,
       target.spotId,
       parts,
-      timeoutMs ?? this.defaultRequestTimeoutMs
+      timeoutMs ?? this.defaultRequestTimeoutMs,
+      onAdmitted
     );
     const replyParts = await awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);
@@ -70,14 +72,16 @@ export class ZLinkSourceSpotRouter {
     target: ZLinkSpotRouteTarget,
     request: Message,
     timeoutMs: number | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onAdmitted?: () => void
   ): Promise<readonly Message[]> {
     throwIfAborted(signal);
     const operation = sourceSpot.requestToSpot(
       target.targetNodeRid,
       target.spotId,
       request,
-      timeoutMs ?? this.defaultRequestTimeoutMs
+      timeoutMs ?? this.defaultRequestTimeoutMs,
+      onAdmitted
     );
     return await awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);

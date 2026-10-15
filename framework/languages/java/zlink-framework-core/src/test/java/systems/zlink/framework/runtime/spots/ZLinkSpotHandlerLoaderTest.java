@@ -8,7 +8,8 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotSubscription;
@@ -61,7 +62,7 @@ final class ZLinkSpotHandlerLoaderTest {
                         handlerType -> null);
 
         assertThrows(
-                ZLinkConfigurationException.class,
+                ZLinkFrameworkException.class,
                 () ->
                         loader.load(
                                 TestSpot.class,
@@ -79,9 +80,9 @@ final class ZLinkSpotHandlerLoaderTest {
                         new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()),
                         handlerType -> null);
 
-        ZLinkConfigurationException error =
+        ZLinkFrameworkException error =
                 assertThrows(
-                        ZLinkConfigurationException.class,
+                        ZLinkFrameworkException.class,
                         () ->
                                 loader.load(
                                         Object.class,
@@ -89,6 +90,7 @@ final class ZLinkSpotHandlerLoaderTest {
                                         (name, period, handlerType, options) ->
                                                 CompletableFuture.completedFuture(null)));
 
+        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION, error.kind());
         assertEquals(
                 "SPOT subscription handler topic is required: "
                         + MissingTopicSubscription.class.getName(),

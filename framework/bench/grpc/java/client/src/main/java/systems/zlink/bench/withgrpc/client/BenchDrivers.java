@@ -29,6 +29,8 @@ import java.util.concurrent.locks.LockSupport;
 public final class BenchDrivers {
     // Maximum wait before the completion poll returns to recheck completion or its deadline.
     private static final long COMPLETION_POLL_INTERVAL_NS = 50_000_000L;
+    private static final int SUBMISSIONS_PER_YIELD = 256;
+    private static final long DRAIN_POLL_INTERVAL_MS = 1;
 
     private final BenchOptions options;
     private final StatsClient stats = new StatsClient();
@@ -364,9 +366,10 @@ public final class BenchDrivers {
             }
         }
         resources.addSubmitCpuNs(ClientResources.currentThreadCpuNs() - cpuStart);
-        long settleDeadline = System.nanoTime() + options.drainBoundMs * 1_000_000L;
+        long settleDeadline =
+                System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(options.drainBoundMs);
         while (source.inFlight() > 0 && System.nanoTime() < settleDeadline) {
-            Thread.sleep(1);
+            Thread.sleep(DRAIN_POLL_INTERVAL_MS);
         }
         source.freezeTerminal();
     }
@@ -383,11 +386,24 @@ public final class BenchDrivers {
         int issuedSinceYield = 0;
         long cpuStart = resources.beginSubmit();
         Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
+        BenchRequestOperation requests =
+                operation instanceof BenchRequestOperation requestOperation
+                        ? requestOperation
+                        : null;
         while (BenchMetricHeader.nowNs() < deadline) {
             long started = source.begin();
             CompletableFuture<Void> future;
+            BenchRequestOperation.Submission submitted;
+            long requestSequence = sequence++;
             try {
-                future = operation.invoke(trigger.payloadBytes(), phase, sequence++);
+                submitted =
+                        requests != null
+                                ? requests.submit(trigger.payloadBytes(), phase, requestSequence)
+                                : null;
+                future =
+                        submitted == null
+                                ? operation.invoke(trigger.payloadBytes(), phase, requestSequence)
+                                : submitted.reply();
             } catch (Throwable error) {
                 source.complete(started, error);
                 continue;
@@ -398,15 +414,26 @@ public final class BenchDrivers {
                         source.complete(started, error);
                         pending.remove(future);
                     });
-            if (++issuedSinceYield == 256) {
+            if (submitted != null) {
+                try {
+                    operation.await(
+                            submitted.admitted(),
+                            Duration.ofNanos(Math.max(0, deadline - BenchMetricHeader.nowNs())));
+                } catch (ExecutionException
+                        | java.util.concurrent.CancellationException admissionFailure) {
+                    // The reply callback owns the terminal error count for this request.
+                }
+            }
+            if (++issuedSinceYield == SUBMISSIONS_PER_YIELD) {
                 issuedSinceYield = 0;
                 Thread.yield();
             }
         }
         resources.addSubmitCpuNs(ClientResources.currentThreadCpuNs() - cpuStart);
-        long settleDeadline = System.nanoTime() + options.drainBoundMs * 1_000_000L;
+        long settleDeadline =
+                System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(options.drainBoundMs);
         while (!pending.isEmpty() && System.nanoTime() < settleDeadline) {
-            Thread.sleep(1);
+            Thread.sleep(DRAIN_POLL_INTERVAL_MS);
         }
         source.freezeTerminal();
     }

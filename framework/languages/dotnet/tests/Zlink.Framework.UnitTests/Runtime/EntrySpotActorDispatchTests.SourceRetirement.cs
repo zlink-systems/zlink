@@ -96,9 +96,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 1,
                 2,
                 1,
-                2
+                2,
+                TimeSpan.FromSeconds(1)
             );
-            state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
             if (leaveFails)
                 state
                     .Handoff.TryBeginSourceMembershipLeave("source-retirement")!
@@ -171,7 +171,7 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.IsType<InvalidOperationException>(failure);
         Assert.Null(state.Actor);
         Assert.Null(state.Context);
-        Assert.False(sessions.IsCurrentLocalActor(source));
+        Assert.Null(await sessions.FindActorAsync(source.ActorId));
         Assert.Equal(1, handler.DisposeCount);
         Assert.Equal(1, diagnosticCount);
         await FinalizeSource(CancellationToken.None);
@@ -256,9 +256,9 @@ public sealed partial class EntrySpotActorDispatchTests
             1,
             2,
             1,
-            2
+            2,
+            TimeSpan.FromSeconds(1)
         );
-        state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
         Assert.NotNull(state.Handoff.TryBeginSourceMembershipLeave("source-unfinished-leave"));
         var diagnosed = new TaskCompletionSource<Exception>(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -276,7 +276,7 @@ public sealed partial class EntrySpotActorDispatchTests
             await diagnosed.Task.WaitAsync(TimeSpan.FromSeconds(5))
         );
         Assert.Null(state.Actor);
-        Assert.False(sessions.IsCurrentLocalActor(source));
+        Assert.Null(await sessions.FindActorAsync(source.ActorId));
     }
 
     private sealed class SourceRetirementFailingHandler : IAsyncDisposable

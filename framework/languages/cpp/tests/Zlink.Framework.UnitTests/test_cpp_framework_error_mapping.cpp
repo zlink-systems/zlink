@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include <nlohmann/json.hpp>

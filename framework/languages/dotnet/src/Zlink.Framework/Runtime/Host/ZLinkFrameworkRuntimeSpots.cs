@@ -181,21 +181,13 @@ internal sealed partial class ZLinkFrameworkRuntime
     }
 
     internal async ValueTask<bool> CloseCurrentSpotAsync(
-        string spotNodeName,
-        string spotId,
-        ulong objectGeneration,
+        ZLinkSpotActivation activation,
         CancellationToken cancellationToken
     )
     {
         using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
         return await _spots
-            .CloseLocalByIdAsync(
-                GetOrStartState(),
-                spotNodeName,
-                spotId,
-                objectGeneration,
-                cancellationToken
-            )
+            .CloseFromContextAsync(GetOrStartState(), activation, cancellationToken)
             .ConfigureAwait(false);
     }
 

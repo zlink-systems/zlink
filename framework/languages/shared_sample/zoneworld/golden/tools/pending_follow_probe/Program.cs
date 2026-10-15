@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 using System.Text;
 using Systems.Zlink.Stream.Connector.Contracts;
 using ZoneWorld.Client;

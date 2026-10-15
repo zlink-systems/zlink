@@ -4065,32 +4065,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         _actorBoundSessionCoordinator.UnbindSessionActor(actorId, context, bindingToken);
     }
 
-    internal bool TrySubmitLocalActorSend(
-        ZLinkBackendActorRef actor,
-        ZlinkStreamHeader header,
-        Message payload
-    )
-    {
-        if (!_actorSessionManager.IsCurrentLocalActor(actor))
-            return false;
-        return TryRunDetached(
-            "local-actor-client-send",
-            async cancellationToken =>
-            {
-                try
-                {
-                    await _actorSessionManager
-                        .SubmitActorByIdAsync(actor.ActorId, header, payload, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
-                    payload.Dispose();
-                }
-            }
-        );
-    }
-
     /// <summary>Actor-node entry for a relayed session frame whose bound actor
     /// migrated here: dispatches it through the standard actor inbound
     /// pipeline. The frame carries the session identity, so the dispatch
@@ -4323,6 +4297,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         // Per-actor FIFO across concurrently handled relay records: sibling
         // forwarded frames must not overtake each other (spec 23 §10.2).
         var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
+        var operationAdmission = CurrentOperation;
         var chained = AwaitStateLane(
             _stateLane.RunAsync(() =>
             {
@@ -4339,7 +4314,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                             prior,
                             batch,
                             deadlineUnixMs,
-                            cancellationToken
+                            cancellationToken,
+                            operationAdmission
                         )
                     );
                 _remoteFrameChains[actorKey] = next;
@@ -4370,7 +4346,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         Task prior,
         ZLinkSpotActorFrameBatch batch,
         ulong deadlineUnixMs,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRuntimeOperationLease? operationAdmission
     )
     {
         try
@@ -4382,6 +4359,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             // The prior frame reported its own failure; the chain continues.
         }
 
+        using var operationScope = EnterAcceptedOperation(operationAdmission);
         if (deadlineUnixMs == 0)
         {
             await new ZLinkActorInboundPipeline(this, new ZLinkEntrySpotActorInboundEndpoint(this))

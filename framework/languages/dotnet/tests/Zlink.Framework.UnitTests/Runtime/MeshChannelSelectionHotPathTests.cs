@@ -2,16 +2,180 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshChannelSelectionHotPathTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AdmissionAndRouteLossRefreshEveryRouterClassification(bool localIsClient)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "classification-transitions");
+        node.SetObjectRole(
+            localIsClient ? ZLinkMeshNodeObjectRole.Client : ZLinkMeshNodeObjectRole.Server
+        );
+        var rid = RoutingId.From("transition-peer");
+        const string endpoint = "inproc://classification-transitions";
+        node.ConnectPeer(endpoint, rid);
+        var admission = new ZLinkServiceWireCodec.AdmissionRecord(
+            "classification-transitions",
+            ZLinkServiceSecurityIdentity.Plaintext,
+            endpoint,
+            1,
+            1,
+            new Dictionary<string, uint>(),
+            1,
+            1,
+            (byte)ZLinkMeshNodeObjectRole.Server,
+            100,
+            0,
+            0,
+            0,
+            0,
+            new Dictionary<byte, byte[]>(),
+            []
+        );
+        var process = typeof(ZLinkManagedMeshNode).GetMethod(
+            "ProcessAdmissionCore",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        )!;
+        process.Invoke(node, [rid, 1UL, ServiceWireConstants.Command.Hello, admission, null]);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.Unknown,
+            node.ClassifyLiveRouterTarget(rid)
+        );
+        process.Invoke(node, [rid, 1UL, ServiceWireConstants.Command.Admit, admission, null]);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.ReadyEligible,
+            node.ClassifyLiveRouterTarget(rid)
+        );
+        var draining = admission with { DescriptorRevision = 2, RuntimeState = 2 };
+        process.Invoke(node, [rid, 1UL, ServiceWireConstants.Command.Update, draining, null]);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.Unknown,
+            node.ClassifyLiveRouterTarget(rid)
+        );
+        Method<Func<RouterRoute, RoutingId?>>(node, "EndRouteAdmissionUnderLock")(
+            new RouterRoute(rid, 1)
+        );
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.Unknown,
+            node.ClassifyLiveRouterTarget(rid)
+        );
+        var client = admission with
+        {
+            LifecycleGeneration = 2,
+            ObjectRole = (byte)ZLinkMeshNodeObjectRole.Client,
+        };
+        process.Invoke(node, [rid, 2UL, ServiceWireConstants.Command.Hello, client, null]);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.ObjectClientTarget,
+            node.ClassifyLiveRouterTarget(rid)
+        );
+        process.Invoke(node, [rid, 2UL, ServiceWireConstants.Command.Admit, client, null]);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.ObjectClientTarget,
+            node.ClassifyLiveRouterTarget(rid)
+        );
+        var invalidRoleUpdate = client with
+        {
+            DescriptorRevision = client.DescriptorRevision + 1,
+            ObjectRole = (byte)ZLinkMeshNodeObjectRole.Server,
+        };
+        process.Invoke(
+            node,
+            [rid, 2UL, ServiceWireConstants.Command.Update, invalidRoleUpdate, null]
+        );
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.Unknown,
+            node.ClassifyLiveRouterTarget(rid)
+        );
+        var replacement = admission with { LifecycleGeneration = 3 };
+        process.Invoke(node, [rid, 3UL, ServiceWireConstants.Command.Admit, replacement, null]);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.ReadyEligible,
+            node.ClassifyLiveRouterTarget(rid)
+        );
+        node.DisconnectPeer(rid);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.Unknown,
+            node.ClassifyLiveRouterTarget(rid)
+        );
+    }
+
+    [Fact]
+    public async Task RepeatedSendTargetClassificationDoesNotEnterTheNodeStateLane()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "classification-turn");
+        var peer = AddReadyPeer(node);
+        peer.State = MeshPeerState.Admitted;
+        Method<Action>(node, "RebuildChannelSelectionPlansUnderLock")();
+        var lane = Field<ZLinkStateLane>(node, "_lane");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var classifications = Task.Run(() =>
+        {
+            for (var index = 0; index < 1024; index++)
+                Assert.Equal(
+                    ZLinkRouteMeshTargetClassification.ReadyEligible,
+                    node.ClassifyLiveRouterTarget(peer.RoutingId)
+                );
+        });
+        try
+        {
+            // A node state turn cannot run while the existing turn is held.
+            // All classifications must finish without requesting such a turn.
+            await classifications.WaitAsync(TimeSpan.FromSeconds(3));
+        }
+        finally
+        {
+            release.SetResult();
+            await held;
+            await classifications;
+        }
+    }
+
+    [Fact]
+    public async Task LiveTargetClassificationUsesTheMonitoringAdmissionState()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "classification");
+        var peer = AddReadyPeer(node);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.Unknown,
+            node.ClassifyLiveRouterTarget(peer.RoutingId)
+        );
+        peer.State = MeshPeerState.Admitted;
+        Method<Action>(node, "RebuildChannelSelectionPlansUnderLock")();
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.ReadyEligible,
+            node.ClassifyLiveRouterTarget(peer.RoutingId)
+        );
+        peer.State = MeshPeerState.Configured;
+        Method<Action>(node, "RebuildChannelSelectionPlansUnderLock")();
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.Unknown,
+            node.ClassifyLiveRouterTarget(peer.RoutingId)
+        );
+    }
+
     private delegate (
         bool Selected,
         RoutingId TargetRid,

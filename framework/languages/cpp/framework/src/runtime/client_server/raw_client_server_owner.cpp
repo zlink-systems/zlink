@@ -1,6 +1,7 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
+#include "runtime/client_server/client_server_failure_mapper.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/application_job_receive_flow.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
@@ -138,6 +139,15 @@ class pending_request_guard_t
   private:
     std::atomic_size_t *_pending;
 };
+
+// A request that ends before Core admission is a failure, not a completion
+// record: request_task_t then ends `admitted` and the reply with this cause.
+result_t<client_server_request_completion_t>
+request_failed_before_admission (foundation::operation_terminal_t terminal)
+{
+    return detail::result_access_t::failure<client_server_request_completion_t> (
+      client_server_operation_exception (terminal, "ClientServer request"));
+}
 
 } // namespace
 
@@ -1395,7 +1405,7 @@ raw_client_server_client_t::send (const protocol::application_payload_t &payload
     co_return submitted;
 }
 
-task_t<client_server_request_completion_t>
+request_task_t<client_server_request_completion_t>
 raw_client_server_client_t::request (const protocol::application_payload_t &payload,
                                      std::chrono::milliseconds timeout,
                                      std::map<std::string, std::string> metadata)
@@ -1423,10 +1433,9 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     const auto &port = state.port;
     const auto &channel = state.channel;
     const auto ready = state.ready;
-    if (!ready) {
-        co_return client_server_request_completion_t{
-          foundation::operation_terminal_t::transport_failed};
-    }
+    if (!ready)
+        co_return request_failed_before_admission (
+          foundation::operation_terminal_t::transport_failed);
     //  A ClientServer request rides the channel envelope as a Request
     //  record with a required correlation id; the deadline mirrors the
     //  caller timeout like the other language runtimes.
@@ -1450,8 +1459,9 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     const auto remaining =
       std::chrono::ceil<std::chrono::milliseconds> (deadline - std::chrono::steady_clock::now ());
     if (remaining <= std::chrono::milliseconds::zero ())
-        co_return client_server_request_completion_t{foundation::operation_terminal_t::timed_out};
-    auto completion = co_await port->request (wire, remaining, state.admission);
+        co_return request_failed_before_admission (foundation::operation_terminal_t::timed_out);
+    auto admitted = co_await detail::request_admission_source_t{};
+    auto completion = co_await port->request (wire, remaining, state.admission, admitted);
     trace_client_server_lazy ("client-request-complete", [&] {
         return "channel=" + channel + " correlation=" + correlation_id
                + " result=" + std::to_string (static_cast<int> (completion.terminal))

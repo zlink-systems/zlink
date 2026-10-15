@@ -571,14 +571,13 @@ internal sealed class ZLinkActorBoundSessionCoordinator
 
     public void UnbindSessionActor(string actorId, ZLinkSessionContext context, string bindingToken)
     {
-        AwaitStateLane(
-            _sessionBindings.UnbindAsync(
-                actorId,
-                context,
-                bindingToken,
-                existing => context.SendActorUnbound(existing.ActorRef.Slot)
-            )
-        );
+        var removed = AwaitStateLane(_sessionBindings.UnbindAsync(actorId, context, bindingToken));
+        if (removed is not null && context.SessionRuntime?.IsTransportTerminating != true)
+            ZLinkUnawaitedSubmit.Observe(
+                context.SendActorUnboundAsync(removed.ActorRef.Slot),
+                "actor unbound",
+                context.Runtime.ErrorSink
+            );
     }
 
     public ZLinkSessionContext? GetSessionActorContext(string actorId, string bindingToken) =>

@@ -4,21 +4,23 @@ import {
   type ZLinkPacketJsonContract
 } from './JsonContract';
 
-export const ZLINK_DECORATOR_METADATA = Symbol.for('@zlink-systems/framework:decorator');
-
-export interface ZLinkDecoratorMetadata {
-  readonly kind: string;
-  readonly packetName?: string;
-  readonly groupName?: string;
-  readonly methodName?: string;
-  readonly meshName?: string;
-  readonly channelName?: string;
-  readonly topic?: string;
-  readonly jsonContract?: ZLinkPacketJsonContract;
-}
+import {
+  ZLINK_DECORATOR_METADATA,
+  readZLinkDecoratorMetadata,
+  type ZLinkDecoratorMetadata
+} from '@zlink-systems/stream-wire/internal/json';
+export {
+  ZLINK_DECORATOR_METADATA,
+  readZLinkDecoratorMetadata
+} from '@zlink-systems/stream-wire/internal/json';
+export type { ZLinkDecoratorMetadata } from '@zlink-systems/stream-wire/internal/json';
 
 export function ZLinkHandlerGroup(groupName: string): ClassDecorator {
   return classDecorator({ kind: 'handlerGroup', groupName });
+}
+
+export interface ZLinkRequest<TReply> extends Promise<TReply> {
+  readonly admitted: Promise<void>;
 }
 
 export function ZLinkRequest(packetName?: string): MethodDecorator {
@@ -105,13 +107,4 @@ function appendMetadata(target: object, metadata: ZLinkDecoratorMetadata): void 
     value: [...current, metadata],
     writable: false
   });
-}
-
-export function readZLinkDecoratorMetadata(target: object): readonly ZLinkDecoratorMetadata[] {
-  if (!Object.prototype.hasOwnProperty.call(target, ZLINK_DECORATOR_METADATA)) {
-    return [];
-  }
-  return (target as Record<symbol, unknown>)[
-    ZLINK_DECORATOR_METADATA
-  ] as readonly ZLinkDecoratorMetadata[];
 }

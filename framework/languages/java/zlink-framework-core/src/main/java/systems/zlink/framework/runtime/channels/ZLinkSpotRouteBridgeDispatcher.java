@@ -45,8 +45,34 @@ final class ZLinkSpotRouteBridgeDispatcher {
             List<Message> requestParts,
             Duration timeout,
             CompletableFuture<List<Message>> result) {
+        submitRequest(
+                bridge,
+                routerChannelId,
+                targetNodeRid,
+                targetSpotId,
+                requestParts,
+                timeout,
+                result,
+                null);
+    }
+
+    static void submitRequest(
+            ZLinkBackendSpotRouteBridge bridge,
+            String routerChannelId,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            List<Message> requestParts,
+            Duration timeout,
+            CompletableFuture<List<Message>> result,
+            CompletableFuture<Void> requestAdmission) {
         try {
-            bridge.request(routerChannelId, targetNodeRid, targetSpotId, requestParts, timeout)
+            bridge.request(
+                            routerChannelId,
+                            targetNodeRid,
+                            targetSpotId,
+                            requestParts,
+                            timeout,
+                            requestAdmission)
                     .whenComplete(
                             (reply, failure) -> {
                                 requestParts.forEach(Message::close);

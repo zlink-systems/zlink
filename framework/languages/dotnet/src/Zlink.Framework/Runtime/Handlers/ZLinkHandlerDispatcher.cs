@@ -16,9 +16,12 @@ internal sealed class ZLinkHandlerDispatcher(
     )
     {
         return DispatchCoreAsync(
+            endpoint.DeclaringType,
+            endpoint.Invoker,
+            endpoint.ArgumentPlan,
+            message,
             context,
             dispatchKind,
-            (instances, ct) => InvokeHandlerAsync(endpoint, message, context, instances, ct),
             cancellationToken
         );
     }
@@ -32,36 +35,86 @@ internal sealed class ZLinkHandlerDispatcher(
     )
     {
         return DispatchCoreAsync(
+            descriptor.HandlerType,
+            descriptor.Invoker,
+            ZLinkHandlerContractDescriptorSupport.HandleAsyncArgumentPlan,
+            message,
             context,
             dispatchKind,
-            async (instances, ct) =>
-            {
-                var handler = instances.Resolve(descriptor.HandlerType);
-                return await ZLinkHandlerInvocationEngine
-                    .InvokeAsync(handler, descriptor.Invoker, message, context, ct)
-                    .ConfigureAwait(false);
-            },
             cancellationToken
         );
     }
 
-    private async ValueTask<ZLinkHandlerDispatchResult> DispatchCoreAsync(
+    private ValueTask<ZLinkHandlerDispatchResult> DispatchCoreAsync(
+        Type handlerType,
+        ZLinkHandlerMethodInvoker invoker,
+        IReadOnlyList<ZLinkHandlerArgumentKind> argumentPlan,
+        object? message,
         IZLinkMessageContext context,
         ZLinkHandlerDispatchKind dispatchKind,
-        Func<ZLinkScopedHandlerInstanceOwner, CancellationToken, ValueTask<object?>> invokeHandler,
+        CancellationToken cancellationToken
+    ) =>
+        registration.Filters.Count == 0
+            ? InvokeUnfilteredAsync(
+                handlerType,
+                invoker,
+                argumentPlan,
+                message,
+                context,
+                cancellationToken
+            )
+            : InvokeFilteredAsync(
+                handlerType,
+                invoker,
+                argumentPlan,
+                message,
+                context,
+                dispatchKind,
+                cancellationToken
+            );
+
+    private async ValueTask<ZLinkHandlerDispatchResult> InvokeUnfilteredAsync(
+        Type handlerType,
+        ZLinkHandlerMethodInvoker invoker,
+        IReadOnlyList<ZLinkHandlerArgumentKind> argumentPlan,
+        object? message,
+        IZLinkMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var handler = ZLinkScopedHandlerInstanceOwner.CreateForDispatch(
+            scope.ServiceProvider,
+            handlerType
+        );
+        try
+        {
+            var result = await ZLinkHandlerInvocationEngine
+                .InvokeAsync(handler, invoker, argumentPlan, message, context, cancellationToken)
+                .ConfigureAwait(false);
+            return new ZLinkHandlerDispatchResult(true, result);
+        }
+        finally
+        {
+            if (handler is IAsyncDisposable asyncDisposable)
+                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            else if (handler is IDisposable disposable)
+                disposable.Dispose();
+        }
+    }
+
+    private async ValueTask<ZLinkHandlerDispatchResult> InvokeFilteredAsync(
+        Type handlerType,
+        ZLinkHandlerMethodInvoker invoker,
+        IReadOnlyList<ZLinkHandlerArgumentKind> argumentPlan,
+        object? message,
+        IZLinkMessageContext context,
+        ZLinkHandlerDispatchKind dispatchKind,
         CancellationToken cancellationToken
     )
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         await using var instances = new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
-        if (registration.Filters.Count == 0)
-        {
-            // No filters registered (the common configuration): invoke the
-            // handler directly instead of building the filter pipeline's
-            // closures for an empty chain.
-            var direct = await invokeHandler(instances, cancellationToken).ConfigureAwait(false);
-            return new ZLinkHandlerDispatchResult(true, direct);
-        }
 
         object? result = null;
         var handlerInvoked = false;
@@ -72,7 +125,10 @@ internal sealed class ZLinkHandlerDispatcher(
             async ct =>
             {
                 handlerInvoked = true;
-                result = await invokeHandler(instances, ct).ConfigureAwait(false);
+                var handler = instances.Resolve(handlerType);
+                result = await ZLinkHandlerInvocationEngine
+                    .InvokeAsync(handler, invoker, argumentPlan, message, context, ct)
+                    .ConfigureAwait(false);
             },
             cancellationToken
         );
@@ -118,27 +174,6 @@ internal sealed class ZLinkHandlerDispatcher(
                 )
             );
         };
-    }
-
-    private static async ValueTask<object?> InvokeHandlerAsync(
-        ZLinkHandlerEndpointDescriptor endpoint,
-        object? message,
-        IZLinkMessageContext context,
-        ZLinkScopedHandlerInstanceOwner instances,
-        CancellationToken cancellationToken
-    )
-    {
-        var handler = instances.Resolve(endpoint.DeclaringType);
-        return await ZLinkHandlerInvocationEngine
-            .InvokeAsync(
-                handler,
-                endpoint.Invoker,
-                endpoint.ArgumentPlan,
-                message,
-                context,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
     }
 }
 

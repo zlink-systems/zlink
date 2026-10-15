@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include <zlink/framework.hpp>
 #include <zlink/framework/version.hpp>
@@ -18,6 +18,7 @@
 #include <zlink/framework/contracts/configuration/mesh_node.hpp>
 #include <zlink/framework/contracts/configuration/route_mesh_runtime_options.hpp>
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/contracts/dispatch/request_task.hpp>
 #include <zlink/framework/detail/runtime/dispatch/application_job_context.hpp>
 #include <zlink/framework/detail/deadline_scheduler.hpp>
 #include <zlink/framework/contracts/dispatch/execution.hpp>
@@ -173,7 +174,19 @@ static_assert (std::is_same_v<decltype (zlink::stream_e2e_client::use (
 static_assert (!std::is_same_v<zlink::framework::task_t<int>, std::future<int>>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::request_call_t<int>> ().async ()),
-                 zlink::framework::task_t<int>>);
+                 zlink::framework::request_task_t<int>>);
+
+static_assert (
+  std::is_base_of_v<zlink::framework::task_t<int>, zlink::framework::request_task_t<int>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::request_task_t<int> &> ().admitted ()),
+                 zlink::framework::task_t<void>>);
+static_assert (std::is_same_v<
+               decltype (std::declval<zlink::framework::channel_request_call_t &> ().async<int> ()),
+               zlink::framework::request_task_t<int>>);
+static_assert (std::is_same_v<decltype (std::declval<zlink::framework::actor_request_call_t &> ()
+                                          .async_message ()),
+                              zlink::framework::request_task_t<zlink::framework::message_t>>);
 
 template <typename T>
 concept has_submit = requires (T value) { value.submit (); };
@@ -279,7 +292,7 @@ static_assert (
   !has_callback_async<zlink::framework::actor_request_call_t, zlink::framework::message_t>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::actor_request_call_t &> ()
                                           .async<zlink::framework::message_t> ()),
-                              zlink::framework::task_t<zlink::framework::message_t>>);
+                              zlink::framework::request_task_t<zlink::framework::message_t>>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::actor_request_call_t &> ()
                                           .yield<zlink::framework::message_t> ()),
                               zlink::framework::task_t<zlink::framework::message_t>>);
@@ -293,7 +306,7 @@ static_assert (std::is_same_v<decltype (std::declval<zlink::framework::actor_cli
                               zlink::framework::actor_request_call_t>);
 static_assert (std::is_same_v<
                decltype (std::declval<zlink::framework::channel_request_call_t &> ().async<int> ()),
-               zlink::framework::task_t<int>>);
+               zlink::framework::request_task_t<int>>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::publish_call_t &> ().async ()),
                  zlink::framework::task_t<void>>);

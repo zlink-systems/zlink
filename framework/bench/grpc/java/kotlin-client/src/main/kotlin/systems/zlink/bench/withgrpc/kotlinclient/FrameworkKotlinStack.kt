@@ -11,13 +11,14 @@ import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.context.ConfigurableApplicationContext
 import systems.zlink.bench.withgrpc.client.BenchOperation
 import systems.zlink.bench.withgrpc.client.BenchOptions
+import systems.zlink.bench.withgrpc.client.BenchRequestOperation
 import systems.zlink.bench.withgrpc.client.FrameworkStack
 import systems.zlink.bench.withgrpc.proto.BenchPayload
 import systems.zlink.bench.withgrpc.shared.BenchContract
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.kotlin.await
-import systems.zlink.framework.kotlin.awaitReply
+import systems.zlink.framework.kotlin.kotlin
 
 /**
  * `zlink-framework-kotlin` client: RouteMesh channel messaging through the suspend interface of
@@ -30,8 +31,8 @@ import systems.zlink.framework.kotlin.awaitReply
  * <p>The host configuration is the java row's, reused verbatim: the same `@EnableZLinkFramework`
  * application class, the same RouteMesh client channel, the same manual peer connection. Rewriting
  * it in kotlin would have changed the wiring as well as the call API, and then a difference between
- * the two rows could not be attributed. What differs is the call itself: `awaitReply` and `await`
- * from `zlink-framework-kotlin`, not `CompletionStage`.
+ * the two rows could not be attributed. Requests use the Kotlin typed `submit` stage and suspend
+ * reply `await`; the shared driver observes admission before submitting the next request.
  */
 class FrameworkKotlinStack
 private constructor(
@@ -66,21 +67,26 @@ private constructor(
         }
     }
 
-    fun request(): BenchOperation = BenchOperation { payloadSize, phase, sequence ->
-        scope.benchFuture {
-            val reply: BenchPayload =
-                route
-                    .requestToChannel(
-                        BenchContract.CHANNEL_NAME,
-                        payload(payloadSize, phase, sequence),
-                    )
-                    .timeout(timeout)
-                    .awaitReply(BenchPayload::class.java)
-            val decoded = BenchMetricHeader.decode(reply.body.asReadOnlyByteBuffer())
-            check(BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
-                "framework reply header mismatch"
+    fun request(): BenchRequestOperation = BenchRequestOperation { payloadSize, phase, sequence ->
+        val submitted =
+            route
+                .kotlin()
+                .requestToChannel(
+                    BenchContract.CHANNEL_NAME,
+                    payload(payloadSize, phase, sequence),
+                    BenchPayload::class,
+                )
+                .timeout(timeout)
+                .submit()
+        val reply =
+            scope.benchFuture {
+                val value = submitted.await()
+                val decoded = BenchMetricHeader.decode(value.body.asReadOnlyByteBuffer())
+                check(BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
+                    "framework reply header mismatch"
+                }
             }
-        }
+        BenchRequestOperation.Submission(submitted.admitted().toCompletableFuture(), reply)
     }
 
     fun send(): BenchOperation = BenchOperation { payloadSize, phase, sequence ->

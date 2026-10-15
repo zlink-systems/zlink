@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.binding;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,6 +15,8 @@ import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -43,6 +46,70 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 final class ZLinkJavaRawMeshNodeMetricsTest {
+    @Test
+    void instanceRequestDoesNotSubmitToUnadmittedCoreRoute() throws Exception {
+        try (Context context = Zlink.createContext();
+                var source = node(context, "unadmitted-source");
+                RouterSocket target = context.createRouterSocket();
+                Received inbound = new Received()) {
+            RoutingId targetRid = RoutingId.from("unadmitted-target");
+            String endpoint = "inproc://unadmitted-instance-" + java.util.UUID.randomUUID();
+            target.setRoutingId(targetRid);
+            target.options().probe(true);
+            target.options().linger(Duration.ZERO);
+            target.bind(endpoint);
+            source.start();
+            source.connectPeer(endpoint, targetRid);
+            await(
+                    () -> {
+                        target.recv(inbound, RecvFlags.DONT_WAIT);
+                        inbound.close();
+                        return target.routesSnapshot().stream()
+                                .anyMatch(route -> route.routingId().equals(source.routingId()));
+                    });
+            Duration timeout = Duration.ofMillis(250);
+            var route =
+                    new ZLinkServiceM6BWireCodec.InstanceColdActivation(
+                            targetRid,
+                            1,
+                            "unadmitted-room",
+                            "mesh",
+                            "room",
+                            "1",
+                            System.currentTimeMillis() + timeout.toMillis());
+            var admission = new CompletableFuture<Void>();
+            try (Message packet = Message.from("Packet");
+                    Message body = Message.from("body")) {
+                var request =
+                        systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages.observe(
+                                source.requestInstanceSpot(
+                                        route,
+                                        "room",
+                                        null,
+                                        new byte[0],
+                                        List.of(packet, body),
+                                        timeout,
+                                        admission),
+                                admission);
+                var replyFailure =
+                        assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () -> request.toCompletableFuture().get(2, TimeUnit.SECONDS));
+                assertEquals(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        ((ZLinkFrameworkException) replyFailure.getCause()).kind());
+                var admissionFailure =
+                        assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () ->
+                                        request.admitted()
+                                                .toCompletableFuture()
+                                                .get(2, TimeUnit.SECONDS));
+                assertSame(replyFailure.getCause(), admissionFailure.getCause());
+            }
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void receivedOwnerFenceRefusalRetainsFrameworkOrigin(boolean ownerRefusal) throws Exception {
@@ -85,7 +152,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                     null,
                                     new byte[0],
                                     List.of(packet, body),
-                                    Duration.ofSeconds(2)));
+                                    Duration.ofSeconds(2),
+                                    null));
             var failure =
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
@@ -135,7 +203,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                 null,
                                                 new byte[0],
                                                 List.of(packet, body),
-                                                Duration.ofSeconds(2))
+                                                Duration.ofSeconds(2),
+                                                null)
                                         : caller.submitInstanceSpotSend(
                                                 route,
                                                 "absent",
@@ -249,7 +318,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                         null,
                                                         new byte[0],
                                                         List.of(packet, body),
-                                                        Duration.ofSeconds(5))
+                                                        Duration.ofSeconds(5),
+                                                        null)
                                                 .toCompletableFuture()
                                                 .get(2, TimeUnit.SECONDS));
                 var coldFailure =
@@ -263,7 +333,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                         null,
                                                         new byte[0],
                                                         List.of(packet, body),
-                                                        Duration.ofSeconds(5))
+                                                        Duration.ofSeconds(5),
+                                                        null)
                                                 .toCompletableFuture()
                                                 .get(2, TimeUnit.SECONDS));
                 assertEquals(
@@ -299,7 +370,9 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                             public CompletionStage<Void> handleRoute(
                                                     systems.zlink.framework.runtime.internal.backend
                                                                     .ZLinkBackendReceived
-                                                            received) {
+                                                            received,
+                                                    java.util.concurrent.CompletableFuture<Void>
+                                                            requestAdmission) {
                                                 assertTrue(received.isRequest());
                                                 try (Message reply = Message.from("recovered")) {
                                                     received.reply().accept(List.of(reply));
@@ -374,7 +447,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                         null,
                                                         new byte[0],
                                                         List.of(packet, body),
-                                                        Duration.ofSeconds(2))
+                                                        Duration.ofSeconds(2),
+                                                        null)
                                                 .toCompletableFuture()
                                                 .get(2, TimeUnit.SECONDS));
                 assertEquals(
@@ -473,7 +547,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                     pair.router(),
                                     pair.target.routingId(),
                                     List.of(wire.encodeNodeRequestHeader(41, 0), new byte[] {0}),
-                                    Duration.ofSeconds(2))
+                                    Duration.ofSeconds(2),
+                                    null)
                             .toCompletableFuture()
                             .get(2, TimeUnit.SECONDS);
             assertEquals(104, wire.decodeReplyHeader(reply.getFirst()).terminalResult());
@@ -488,7 +563,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                             pair.router(),
                             pair.target.routingId(),
                             List.of(wire.encodeNodeRequestHeader(42, 0), new byte[] {0}),
-                            Duration.ofSeconds(2))
+                            Duration.ofSeconds(2),
+                            null)
                     .toCompletableFuture()
                     .get(2, TimeUnit.SECONDS);
             assertTrue(sink.events.isEmpty());
@@ -662,7 +738,10 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                     "orders",
                                                     new byte[0],
                                                     List.of(packet, body),
-                                                    Duration.ofSeconds(2))
+                                                    Duration.ofSeconds(2),
+                                                    null,
+                                                    null,
+                                                    null)
                                             .toCompletableFuture()
                                             .get());
                     sink.expectSelection(reason);

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 #include "runtime/host/runtime_failure_collector.hpp"
@@ -209,7 +209,7 @@ class raw_client_server_client_t
     tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<zlink::submit_result_t> send (const protocol::application_payload_t &payload,
                                          std::map<std::string, std::string> metadata = {});
-    task_t<client_server_request_completion_t>
+    request_task_t<client_server_request_completion_t>
     request (const protocol::application_payload_t &payload,
              std::chrono::milliseconds timeout,
              std::map<std::string, std::string> metadata = {});

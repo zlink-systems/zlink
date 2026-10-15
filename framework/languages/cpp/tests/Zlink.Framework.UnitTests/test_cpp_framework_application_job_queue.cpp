@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 //  Spec 33-core-hwm-application-job-flow §8 contract tests for the shared
 //  Application Job Queue: limit-1 head-of-line, a permit outliving its parent
 //  call, the 1:N materialization cap, and stop/exactly-once release. These are

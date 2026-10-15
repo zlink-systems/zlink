@@ -27,11 +27,10 @@ import java.util.function.Consumer;
 
 class ZLinkMeshNodeRuntimeTest {
     @Test
-    void routerDefaultsUseAccountedBytesInsteadOfLegacyMessageCounts() {
+    void unconfiguredRouterHighWaterMarksRemainOwnedByCore() {
         MeshNodeRegistration registration = new MeshNodeRegistration("game");
-
-        assertEquals(4_096_000L, registration.configureRouterSocket().sendHighWaterMark());
-        assertEquals(4_096_000L, registration.configureRouterSocket().receiveHighWaterMark());
+        assertEquals(0L, registration.configureRouterSocket().sendHighWaterMark());
+        assertEquals(0L, registration.configureRouterSocket().receiveHighWaterMark());
     }
 
     @Test
@@ -148,7 +147,6 @@ class ZLinkMeshNodeRuntimeTest {
                     null);
             assertEquals(7L, node.routerHighWaterMark);
             assertEquals(11L, node.routerReceiveHighWaterMark);
-            assertEquals(7, node.pendingAdmissionCapacity);
             assertEquals(Duration.ofMillis(29), node.routerReceiveTimeout);
         }
     }
@@ -208,6 +206,26 @@ class ZLinkMeshNodeRuntimeTest {
 
     private static final class RecordingMeshNode implements ZLinkInternalMeshNode {
         @Override
+        public java.util.concurrent.CompletionStage<
+                        java.util.List<systems.zlink.contracts.messaging.Message>>
+                requestInstanceSpot(
+                        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                                        .InstanceRoute
+                                route,
+                        String stableType,
+                        String sourceSpotId,
+                        byte[] metadata,
+                        java.util.List<systems.zlink.contracts.messaging.Message> parts,
+                        java.time.Duration timeout,
+                        java.util.concurrent.CompletableFuture<Void> requestAdmission) {
+            return systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory.acceptedRequest(
+                    java.util.concurrent.CompletableFuture.failedFuture(
+                            new UnsupportedOperationException(
+                                    "Remote Instance Spot request is unavailable")),
+                    requestAdmission);
+        }
+
+        @Override
         public String advertisedEndpoint() {
             return status().localEndpoint();
         }
@@ -215,7 +233,6 @@ class ZLinkMeshNodeRuntimeTest {
         private final List<String> calls = new ArrayList<>();
         private long routerHighWaterMark;
         private long routerReceiveHighWaterMark;
-        private int pendingAdmissionCapacity;
         private Duration routerReceiveTimeout;
         private Consumer<ZLinkMeshDispatchRecord> dispatchReceiver;
 
@@ -245,18 +262,9 @@ class ZLinkMeshNodeRuntimeTest {
         }
 
         @Override
-        public void setRouterHighWaterMark(long value) {
-            routerHighWaterMark = value;
-        }
-
-        @Override
-        public void setRouterReceiveHighWaterMark(long value) {
-            routerReceiveHighWaterMark = value;
-        }
-
-        @Override
-        public void setRouterPendingAdmissionCapacity(int value) {
-            pendingAdmissionCapacity = value;
+        public void setRouterSocketConfig(MeshNodeRegistration.RouterSocketConfig config) {
+            routerHighWaterMark = config.sendHighWaterMark();
+            routerReceiveHighWaterMark = config.receiveHighWaterMark();
         }
 
         @Override

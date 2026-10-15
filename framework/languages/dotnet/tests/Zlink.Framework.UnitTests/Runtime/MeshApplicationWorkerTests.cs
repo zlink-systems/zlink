@@ -203,6 +203,63 @@ public sealed class MeshApplicationWorkerTests
     }
 
     [Fact]
+    public async Task LocalActorRecord_KeepsItsLocalPermitOriginThroughThePump()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "local-actor-origin",
+            applicationJobQueue: jobs
+        );
+        node.SetRoutingId(RoutingId.From("local-actor-origin-node"));
+        node.Start();
+        var entrySpotId = ((ZLinkManagedSpot)node.EntrySpot()).SpotId;
+        var actor = node.CreateActor("local-actor");
+        await using var pump = new ZLinkMeshDispatchPump(
+            node,
+            new ZLinkMeshCompletionTable(),
+            jobs
+        );
+        var origin = new TaskCompletionSource<ZLinkApplicationJobOrigin?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        pump.RegisterSpot(entrySpotId);
+        pump.SetDispatchHandler(
+            entrySpotId,
+            info =>
+            {
+                if (
+                    info.Event == ZLinkBackendSpotDispatchEvent.ActorReadable
+                    && info.ActorParts is { } parts
+                )
+                {
+                    origin.TrySetResult(info.ApplicationJobOrigin);
+                    foreach (var part in parts)
+                        part.Message.Dispose();
+                    info.ActorPayloadOwner?.Dispose();
+                }
+                return (ValueTask.CompletedTask, null);
+            }
+        );
+        pump.EnsureStarted();
+
+        using var payload = Message.From(new byte[16]);
+        Assert.Equal(SubmitResult.Ok, node.SendToActor(actor, [payload]));
+
+        // The record entered the mailbox with a local publication permit, and
+        // the queue accounts local backlog by that origin.
+        Assert.Equal(
+            ZLinkApplicationJobOrigin.Local,
+            await origin.Task.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        await pump.DisposeAsync();
+        Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
     public async Task LocalRequest_UsesPublicationPermitUntilHandlerEntry()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -234,6 +291,9 @@ public sealed class MeshApplicationWorkerTests
             },
             runner
         );
+        var handlerRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var state = pump.RegisterSpot("local-spot");
         pump.SetDispatchHandler("local-spot", info => (DispatchAsync(info), null));
         async ValueTask DispatchAsync(ZLinkBackendSpotDispatchInfo info)
@@ -244,6 +304,7 @@ public sealed class MeshApplicationWorkerTests
                 Assert.NotNull(received.ApplicationJobAdmission);
                 await received.ApplicationJobAdmission.ReleaseForHandlerStartAsync();
                 Assert.Equal(0UL, jobs.GetStatus().QueuedApplicationJobs);
+                await handlerRelease.Task;
                 Assert.Equal(SubmitResult.Ok, received.Reply(received.Parts));
             }
         }
@@ -253,7 +314,8 @@ public sealed class MeshApplicationWorkerTests
         );
         using var payload = Message.From(new byte[16]);
         pump.EnsureStarted();
-        var request = node.RequestToSpotDirectAsync(
+        var request = ZLinkRequestAdmission.Run<ZLinkBackendRouteReceived>(admission =>
+            node.RequestToSpotDirectAsync(
                 "",
                 rid,
                 "local-spot",
@@ -262,12 +324,17 @@ public sealed class MeshApplicationWorkerTests
                 SendFlags.None,
                 default,
                 TimeSpan.FromSeconds(5),
-                CancellationToken.None
+                CancellationToken.None,
+                requestAdmission: admission
             )
-            .AsTask();
-        Assert.False(request.IsCompleted);
+        );
+        Assert.False(request.Admitted.IsCompleted);
+        Assert.False(request.Reply.IsCompleted);
         held.Dispose();
-        using var reply = await request.WaitAsync(TimeSpan.FromSeconds(5));
+        await request.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(request.Reply.IsCompleted);
+        handlerRelease.SetResult();
+        using var reply = await request.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(16, reply.Parts[0].Size);
         await pump.DisposeAsync();
         await runner.StopAsync();

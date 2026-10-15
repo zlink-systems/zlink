@@ -225,22 +225,12 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         // the attempt owners before cancelling their Store and transport work.
         if (_drainRelocationTargets is not null)
             await _drainRelocationTargets(forceStopToken).ConfigureAwait(false);
-        if (!forceStopToken.CanBeCanceled)
-        {
-            foreach (var node in resources.SpotNodes)
-                await CaptureAsync(node.CloseLifecycleAsync).ConfigureAwait(false);
-        }
-
         if (forceStopToken.CanBeCanceled)
             Capture(ForceStopTokenSource.Cancel);
         Capture(StopTokenSource.Cancel);
         Capture(ApplicationJobQueue.Dispose);
-        foreach (var node in resources.SpotNodes)
-            Capture(node.RequestStop);
         foreach (var stream in resources.StreamNodes)
             await CaptureAsync(stream.RequestStopAsync).ConfigureAwait(false);
-
-        await CaptureAsync(TaskRunner.StopAsync).ConfigureAwait(false);
 
         foreach (var stream in resources.StreamNodes)
             await CaptureAsync(() => DisposeSafelyAsync(() => stream.DisposeAsync(forceStopToken)))
@@ -264,6 +254,8 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
                     DisposeSafelyAsync(() => DisposeSpotNodeAsync(node, forceStopToken))
                 )
                 .ConfigureAwait(false);
+
+        await CaptureAsync(TaskRunner.StopAsync).ConfigureAwait(false);
 
         foreach (var bundle in resources.PublisherBundles)
             await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);

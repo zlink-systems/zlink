@@ -1,3 +1,4 @@
+import { bindingRequestReply } from './node-backend-adapter-support';
 import type { DealerSocket, Message, PubSocket } from '@zlink-systems/zlink';
 import { ZLinkConfigurationException } from '../../configuration';
 import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../../messaging/submission-result';
@@ -56,7 +57,8 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     request: Message,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    metadata: ReadonlyMap<string, string> = EMPTY_METADATA
+    metadata: ReadonlyMap<string, string> = EMPTY_METADATA,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     throwIfAborted(signal);
     const operation = runWithOutboundFlow(true, () =>
@@ -78,7 +80,15 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     );
     if (timeoutMs !== undefined) operation.timeout(timeoutMs);
     const reply = await submitRequestOperation(
-      { submit: () => operation.submit().reply },
+      {
+        submit: () =>
+          bindingRequestReply(
+            operation.submit(),
+            timeoutMs === undefined ? undefined : performance.now() + timeoutMs,
+            undefined,
+            onAdmitted
+          )
+      },
       'channel request'
     );
     try {

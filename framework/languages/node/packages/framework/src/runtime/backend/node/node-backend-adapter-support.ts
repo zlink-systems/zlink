@@ -7,6 +7,7 @@ import {
 import { loadBinding } from '../node-backend-adapter';
 import { SubmitResult, ZLinkBackendResultError } from '../runtime-values';
 const nativeErrnoValues = osConstants.errno;
+const completedSend: Promise<void> = Promise.resolve();
 
 export type ZLinkBindingModule = typeof import('@zlink-systems/zlink');
 export const zlink = loadBinding() as ZLinkBindingModule;
@@ -119,12 +120,16 @@ export function submitBindingReply(operation: ZLinkBindingReplyOperation, payloa
   }
 }
 
-export async function submitBindingAsyncSend(
+export function submitBindingAsyncSend(
   operation: ZLinkBindingAsyncSendOperation,
   payload: unknown
 ): Promise<void> {
-  const submission = submitBindingSend(operation, payload);
-  if (submission.result === SubmitResult.Backpressured) await submission.admitted;
+  try {
+    const submission = submitBindingSend(operation, payload);
+    return submission.result === SubmitResult.Backpressured ? submission.admitted : completedSend;
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
 export function submitBindingSend(
@@ -152,7 +157,8 @@ export function submitBindingSend(
       })
     };
   }
-  return { result: SubmitResult.Ok, admitted: submission.admitted };
+  // Binding SendSubmission is the closed OK | BACKPRESSURED snapshot.
+  return submission as import('../raw-binding-port').ZLinkRawSendSubmission;
 }
 
 export function submitBindingSyncSend(
@@ -177,7 +183,8 @@ export async function submitBindingRequest(
   operation: ZLinkBindingRequestOperation,
   payload: unknown,
   timeoutMs: number | undefined,
-  recordReceived?: () => void
+  recordReceived?: () => void,
+  onAdmitted?: () => void
 ): Promise<readonly unknown[]> {
   const deadlineMs = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
   try {
@@ -195,7 +202,7 @@ export async function submitBindingRequest(
     if (timeoutMs !== undefined) {
       current = current.timeout(timeoutMs);
     }
-    return await bindingRequestReply(current.submit(), deadlineMs, recordReceived);
+    return await bindingRequestReply(current.submit(), deadlineMs, recordReceived, onAdmitted);
   } catch (error) {
     throw translateBindingResultError(error);
   }
@@ -204,13 +211,14 @@ export async function submitBindingRequest(
 export async function bindingRequestReply(
   submission: import('@zlink-systems/zlink').RequestSubmission,
   deadlineMs: number | undefined,
-  recordReceived?: () => void
+  recordReceived?: () => void,
+  onAdmitted?: () => void
 ): Promise<import('@zlink-systems/zlink').Message[]> {
   const reply = submission.reply;
   if (submission.result === SubmitResult.Backpressured) {
     try {
       const [, replies] = await waitRequestReply(
-        Promise.all([submission.admitted, reply]),
+        Promise.all([submission.admitted.then(() => onAdmitted?.()), reply]),
         'Request',
         deadlineMs
       );
@@ -227,6 +235,7 @@ export async function bindingRequestReply(
       throw error;
     }
   }
+  onAdmitted?.();
   const replies = await reply;
   recordReceived?.();
   return replies;

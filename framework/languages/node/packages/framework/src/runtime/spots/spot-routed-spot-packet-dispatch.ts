@@ -50,6 +50,7 @@ interface ZLinkRoutedSpotPacketDispatchOptions {
 
 interface ZLinkRoutedSpotPacketContext {
   readonly channelName: string;
+  readonly onAdmitted?: () => void;
   readonly contentType?: string;
   readonly workOptions?: ZLinkSerialWorkOptions;
   readonly admissionTimeoutMs?: number;
@@ -265,7 +266,7 @@ export class ZLinkRoutedSpotPacketDispatch {
         }
         await activation.serial.execute(
           runHandler,
-          context.workOptions,
+          { ...context.workOptions, onAdmitted: context.onAdmitted },
           instanceIntent ? runHandler : undefined
         );
       }

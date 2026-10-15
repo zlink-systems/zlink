@@ -19,13 +19,13 @@ export interface ZLinkActorRoutedJoinTransport {
     targetNodeRid: string,
     packetName: string | undefined,
     message: unknown
-  ): Promise<ZLinkSubmitResult>;
+  ): ZLinkSubmitResult | Promise<ZLinkSubmitResult>;
   submitInfrastructure?(
     routerChannelId: string,
     targetNodeRid: string,
     packetName: string | undefined,
     message: unknown
-  ): Promise<ZLinkSubmitResult>;
+  ): ZLinkSubmitResult | Promise<ZLinkSubmitResult>;
   sendToSpot(
     spotRouteTarget: ZLinkSpotRouteTarget,
     message: unknown,
@@ -34,7 +34,11 @@ export interface ZLinkActorRoutedJoinTransport {
   requestRawToSpot?(
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: Message,
-    options: { readonly timeoutMs?: number; readonly signal?: AbortSignal }
+    options: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+      readonly onAdmitted?: () => void;
+    }
   ): Promise<readonly Message[]>;
   requestToSpot<TReply = unknown>(
     spotRouteTarget: ZLinkSpotRouteTarget,
@@ -43,6 +47,7 @@ export interface ZLinkActorRoutedJoinTransport {
       readonly packetName?: string;
       readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
+      readonly onAdmitted?: () => void;
     }
   ): Promise<TReply>;
   requestFromSpotToSpot?<TReply = unknown>(
@@ -53,12 +58,17 @@ export interface ZLinkActorRoutedJoinTransport {
       readonly packetName?: string;
       readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
+      readonly onAdmitted?: () => void;
     }
   ): Promise<TReply>;
   requestRawFromSpotToSpot?(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: Message,
-    options: { readonly timeoutMs?: number; readonly signal?: AbortSignal }
+    options: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+      readonly onAdmitted?: () => void;
+    }
   ): Promise<readonly Message[]>;
 }

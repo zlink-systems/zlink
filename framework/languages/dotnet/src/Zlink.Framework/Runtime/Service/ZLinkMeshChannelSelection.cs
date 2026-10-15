@@ -1,5 +1,7 @@
+using System.Collections.Frozen;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Service;
 
@@ -7,12 +9,32 @@ namespace Zlink.Framework.Runtime.Service;
 /// Owns the channel target plans for one managed mesh node.
 /// </summary>
 /// <remarks>
-/// The mesh node calls this type while holding its topology gate. Keeping the
-/// plan lifecycle here prevents selection state from being mixed with peer
-/// admission and message submission state.
+/// The node state lane prepares classifications and owns weighted plan updates
+/// and cursor advancement. Classification readers use the published immutable
+/// view without joining that lane. Peer admission remains with the node.
 /// </remarks>
 internal sealed class ZLinkMeshChannelSelection
 {
+    private FrozenDictionary<RoutingId, ZLinkRouteMeshTargetClassification> _routerTargets =
+        FrozenDictionary<RoutingId, ZLinkRouteMeshTargetClassification>.Empty;
+
+    internal ZLinkRouteMeshTargetClassification ClassifyRouterTarget(RoutingId routingId) =>
+        Volatile.Read(ref _routerTargets).GetValueOrDefault(routingId);
+
+    internal void PrepareRouterTargets(IReadOnlyDictionary<RoutingId, ZLinkMeshPeer> peers) =>
+        Volatile.Write(
+            ref _routerTargets,
+            peers.ToFrozenDictionary(
+                static entry => entry.Key,
+                static entry =>
+                    entry.Value.Admission?.ObjectRole == (byte)ZLinkMeshNodeObjectRole.Client
+                        ? ZLinkRouteMeshTargetClassification.ObjectClientTarget
+                    : entry.Value.State == MeshPeerState.Admitted
+                        ? ZLinkRouteMeshTargetClassification.ReadyEligible
+                    : ZLinkRouteMeshTargetClassification.Unknown
+            )
+        );
+
     private readonly Dictionary<
         ZLinkChannelName,
         ZLinkWeightedSelectionPlan<ZLinkMeshChannelTarget, string>

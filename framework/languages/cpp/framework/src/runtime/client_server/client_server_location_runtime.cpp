@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/diagnostics/topology_projection.hpp"
@@ -1588,7 +1588,7 @@ task_t<void> client_server_location_runtime_t::send (const std::string &channel_
     co_return;
 }
 
-task_t<zlink::message_t>
+request_task_t<zlink::message_t>
 client_server_location_runtime_t::request (const std::string &channel_name,
                                            std::string packet_name,
                                            std::string content_type,
@@ -1611,10 +1611,10 @@ client_server_location_runtime_t::request (const std::string &channel_name,
     if (remaining <= std::chrono::milliseconds::zero ())
         co_return result_t<zlink::message_t>::failure (framework_error_kind_t::deadline_exceeded,
                                                        "ClientServer request deadline expired");
-    const auto completion = co_await selected->request (
+    const auto completion = co_await detail::request_submission (selected->request (
       protocol::application_payload_t{std::move (packet_name), std::move (content_type),
                                       message.to_bytes ()},
-      remaining, std::move (metadata));
+      remaining, std::move (metadata)));
     if (completion.terminal != foundation::operation_terminal_t::completed) {
         co_return detail::result_access_t::failure<zlink::message_t> (
           client_server_operation_exception (completion.terminal, "ClientServer request"));

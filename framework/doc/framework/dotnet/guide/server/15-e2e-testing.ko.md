@@ -51,7 +51,7 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 | --- | --- | --- |
 | 검증 대상 | 관리·관문 HTTP API | STREAM server node |
 | 사용하는 경우 | 방 생성, 조회, 관리 명령처럼 **요청 한 번에 결과가 끝나는** 것 | 연결을 유지한 채 **server가 먼저 보내는 push**까지 확인해야 하는 것 |
-| 대표 호출 | `Post(...).Body(...).Fetch<T>()` | `Connect` · `Request` · `WaitFor` · `ExpectNone` |
+| 대표 호출 | `Post(...).Body(...).Fetch<T>()` | `Connect()` · `Request()` · `WaitFor()` · `ExpectNone()` |
 
 대부분의 시나리오는 둘을 이어서 사용한다. HTTP로 대상을 만들고, 그 응답에 담겨 온
 endpoint로 STREAM에 접속하는 순서다.

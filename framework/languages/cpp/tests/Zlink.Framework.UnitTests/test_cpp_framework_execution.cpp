@@ -1,6 +1,7 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/request_admission_fixture.hpp"
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -1204,7 +1205,7 @@ class reentry_probe_actor_client_t final : public zlink::framework::actor_client
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
     }
 
-    zlink::framework::task_t<zlink::framework::message_t>
+    zlink::framework::request_task_t<zlink::framework::message_t>
     request_erased (zlink::framework::actor_id_t,
                     std::string,
                     zlink::framework::message_t,
@@ -1212,7 +1213,7 @@ class reentry_probe_actor_client_t final : public zlink::framework::actor_client
                     const zlink::framework::actor_request_call_t::metadata_map_t &) override
     {
         ++request_calls;
-        return zlink::framework::task_t<zlink::framework::message_t> (
+        return zlink::framework::request_task_t<zlink::framework::message_t> (
           zlink::framework::result_t<zlink::framework::message_t>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "same-Actor request reached transport"));
@@ -1238,7 +1239,9 @@ run_request_turn_probe (std::shared_ptr<zlink::framework::task_completion_source
         order->push_back (1);
     }
     zlink::framework::request_call_t<int> call (
-      "TurnProbe", [reply] (const auto &, auto, const auto &) { return reply->task (); });
+      "TurnProbe", [reply] (const auto &, auto, const auto &) {
+          return zlink::framework::test::accepted_request_task (reply->task ());
+      });
     int value = 0;
     if (release_turn)
         value = co_await call.yield ();
@@ -2345,7 +2348,9 @@ zlink::framework::task_t<void> run_spot_wide_actor_yield_probe (
     state->record ("actor-a:start");
     state->first_started.set ();
     zlink::framework::request_call_t<int> call (
-      "YieldProbe", [reply] (const auto &, auto, const auto &) { return reply->task (); });
+      "YieldProbe", [reply] (const auto &, auto, const auto &) {
+          return zlink::framework::test::accepted_request_task (reply->task ());
+      });
     const auto value = co_await call.yield ();
     if (value != 7)
         throw std::runtime_error ("yield probe reply mismatch");
@@ -2443,8 +2448,9 @@ zlink::framework::task_t<zlink::message_t> run_spot_wide_yield_idle_eviction_pro
 {
     probe->handler_entered.set ();
     zlink::framework::request_call_t<int> call (
-      "YieldIdleEvictionProbe",
-      [reply = probe->reply] (const auto &, auto, const auto &) { return reply->task (); });
+      "YieldIdleEvictionProbe", [reply = probe->reply] (const auto &, auto, const auto &) {
+          return zlink::framework::test::accepted_request_task (reply->task ());
+      });
     const auto value = co_await call.yield ();
     if (value != 7)
         throw std::runtime_error ("yield idle-eviction probe reply mismatch");
@@ -7668,11 +7674,12 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
             if (!zlink::framework::detail::defer_current_serial_turn (
                   [&] { record ("join"); }, [&] { record ("join-discarded"); }))
                 throw std::runtime_error ("join was not deferred");
-            auto plan = zlink::framework::detail::prepare_serial_turn_await (true);
-            if (!plan)
+            auto turn = zlink::framework::detail::capture_current_serial_turn ();
+            auto resume = zlink::framework::detail::release_serial_turn_for_resume (*turn);
+            if (!resume)
                 throw std::runtime_error ("turn was not released");
             record ("yield");
-            plan->scheduler ([&, turn = plan->turn, fail_after_yield] {
+            resume ([&, turn, fail_after_yield] {
                 record ("continuation");
                 if (fail_after_yield)
                     turn->cancel_deferred ();
@@ -8256,7 +8263,8 @@ int main (int argc, char **argv)
     zlink::framework::request_call_t<int> unsupported_yield (
       "UnsupportedYield", [&unsupported_submit_count] (const auto &, auto, const auto &) {
           unsupported_submit_count.fetch_add (1);
-          return zlink::framework::task_t<int> (zlink::framework::result_t<int>::success (1));
+          return zlink::framework::request_task_t<int> (
+            zlink::framework::result_t<int>::success (1));
       });
     const auto unsupported_yield_result = unsupported_yield.yield ().result ();
     if (unsupported_yield_result
@@ -9149,6 +9157,33 @@ int main (int argc, char **argv)
     }
     if (elastic_executor.live_worker_count () != 0) {
         return 24;
+    }
+
+    {
+        // A worker that returns on idle timeout is joined by its owner before
+        // the next worker starts, so returned threads do not accumulate.
+        constexpr int restart_rounds = 8;
+        zlink::framework::runtime::offload_executor_t restarting_executor (
+          0, 1, std::chrono::milliseconds (1));
+        for (int round = 0; round < restart_rounds; ++round) {
+            std::atomic_bool ran = false;
+            if (!restarting_executor.try_submit ([&] { ran.store (true); })) {
+                return 76;
+            }
+            for (int attempt = 0;
+                 attempt < 2500 && (!ran.load () || restarting_executor.live_worker_count () != 0);
+                 ++attempt) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (2));
+            }
+            if (!ran.load () || restarting_executor.live_worker_count () != 0) {
+                return 77;
+            }
+        }
+        if (restarting_executor.owned_thread_count () > 1) {
+            std::cerr << "offload executor kept returned workers: "
+                      << restarting_executor.owned_thread_count () << '\n';
+            return 78;
+        }
     }
 
     if (!verify_spot_wide_consumer_waits_for_shared_gate ()) {

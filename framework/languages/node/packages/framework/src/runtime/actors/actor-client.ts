@@ -1,4 +1,6 @@
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
+import { createZLinkRequest } from '../messaging/request-result';
+import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 import {
   type ActorRef,
   type RoutingId,
@@ -89,7 +91,8 @@ export interface ZLinkActorClientOptions {
     parts: readonly Message[],
     returnResponse: boolean,
     actor: ActorRef,
-    deadlineUnixMs?: number
+    deadlineUnixMs?: number,
+    onAdmitted?: () => void
   ) => Promise<unknown> | undefined;
   readonly sendErrorReporter?: (error: unknown) => void;
   readonly routeTransport?: ZLinkActorRoutedJoinTransport;
@@ -118,8 +121,17 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
   requestToActor(actorId: string, request: unknown): ZLinkActorRequestCall {
     requireActorId(actorId);
     return new DefaultZLinkActorRequestCall(
-      (packetName, timeoutMs, metadata, signal) =>
-        this.request(actorId, packetName, request, timeoutMs, metadata, signal, 'async'),
+      (packetName, timeoutMs, metadata, signal, onAdmitted) =>
+        this.request(
+          actorId,
+          packetName,
+          request,
+          timeoutMs,
+          metadata,
+          signal,
+          'async',
+          onAdmitted
+        ),
       (packetName, timeoutMs, metadata, signal) =>
         this.request(actorId, packetName, request, timeoutMs, metadata, signal, 'yield'),
       actorId,
@@ -211,7 +223,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     timeoutMs: number | undefined,
     metadata: ReadonlyMap<string, string>,
     signal?: AbortSignal,
-    waitPolicy: 'async' | 'yield' = 'async'
+    waitPolicy: 'async' | 'yield' = 'async',
+    onAdmitted?: () => void
   ): Promise<TReply> {
     throwIfAborted(signal);
     const sourceSpotId = currentZLinkActorExecution()?.spotId ?? currentZLinkSpotSerialSourceId();
@@ -267,7 +280,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         parts,
         true,
         routedActor,
-        deadlineUnixMs
+        deadlineUnixMs,
+        onAdmitted
       );
       if (handoff !== undefined) {
         const submissions = [handoff];
@@ -278,7 +292,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
             parts,
             true,
             routedActor,
-            deadlineUnixMs
+            deadlineUnixMs,
+            onAdmitted
           );
           if (duplicate !== undefined) submissions.push(duplicate);
         }
@@ -297,7 +312,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         remainingActorRequestTimeout(actorId, deadlineMs),
         signal,
         route,
-        messageFollow
+        messageFollow,
+        onAdmitted
       );
     } catch (error) {
       if (isStaleActorError(error)) {
@@ -423,7 +439,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     route?: ZLinkResolvedActorRoute,
-    messageFollowContext?: ZLinkActorMessageFollowContext
+    messageFollowContext?: ZLinkActorMessageFollowContext,
+    onAdmitted?: () => void
   ): Promise<TReply> {
     const node = this.requireNode(meshName);
     if (
@@ -459,7 +476,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         this.options.routeTransport,
         remoteActorRouteTarget(route),
         relay,
-        { timeoutMs, signal },
+        { timeoutMs, signal, onAdmitted },
         `Remote Actor request is not available for '${actor.actorId}'.`,
         (replyParts) => JSON.parse(replyParts[0]?.getString('utf8') ?? '{}')
       );
@@ -481,7 +498,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       () =>
         node.requestToActor(actor, toMessageLikeParts(parts), {
           flags: ZLINK_BACKEND_SEND_NONE,
-          timeoutMs
+          timeoutMs,
+          onAdmitted
         }),
       signal
     );
@@ -700,7 +718,8 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
       packetName: string | undefined,
       timeoutMs: number | undefined,
       metadata: ReadonlyMap<string, string>,
-      signal?: AbortSignal
+      signal?: AbortSignal,
+      onAdmitted?: () => void
     ) => Promise<TReply>,
     private readonly yieldSubmitter: <TReply>(
       packetName: string | undefined,
@@ -728,8 +747,9 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
     return this;
   }
 
-  submit<TReply>(signal?: AbortSignal): Promise<TReply> {
-    return this.execute<TReply>('async', signal);
+  submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply> {
+    this.rejectSelfActorRequest();
+    return createZLinkRequest((onAdmitted) => this.execute<TReply>('async', signal, onAdmitted));
   }
 
   yield<TReply>(signal?: AbortSignal): Promise<TReply> {
@@ -739,9 +759,12 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
     return turn.yieldPromise(pending);
   }
 
-  private execute<TReply>(waitPolicy: 'async' | 'yield', signal?: AbortSignal): Promise<TReply> {
+  private execute<TReply>(
+    waitPolicy: 'async' | 'yield',
+    signal?: AbortSignal,
+    onAdmitted?: () => void
+  ): Promise<TReply> {
     ensureSingleSubmit(this.executed);
-    this.rejectSelfActorRequest();
     this.executed = true;
     throwIfAborted(signal);
     const submitter = waitPolicy === 'async' ? this.asyncSubmitter : this.yieldSubmitter;
@@ -749,7 +772,8 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
       this.packet ?? resolveFrameworkPacketName(this.request, undefined, 'Actor'),
       this.timeoutMs ?? this.defaultRequestTimeoutMs,
       this.selectedMetadata,
-      signal
+      signal,
+      onAdmitted
     );
   }
 

@@ -1,6 +1,7 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/request_admission_fixture.hpp"
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -244,14 +245,14 @@ class recording_actor_client_t final : public zlink::framework::actor_client_t
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
     }
 
-    zlink::framework::task_t<zlink::framework::message_t>
+    zlink::framework::request_task_t<zlink::framework::message_t>
     request_erased (zlink::framework::actor_id_t,
                     std::string,
                     zlink::framework::message_t,
                     std::optional<std::chrono::milliseconds>,
                     const zlink::framework::actor_request_call_t::metadata_map_t &) override
     {
-        return zlink::framework::task_t<zlink::framework::message_t> (
+        return zlink::framework::request_task_t<zlink::framework::message_t> (
           zlink::framework::result_t<zlink::framework::message_t>::success (
             zlink::framework::message_t{}));
     }
@@ -478,7 +479,7 @@ int bind_or_get_completion_can_reenter_same_manager ()
     session_actor_manager_access_t::bind_native (
       manager, [native_completion, &native_binds] (actor_ref_t, std::uint64_t) {
           ++native_binds;
-          return native_completion->task ();
+          return zlink::framework::test::accepted_request_task (native_completion->task ());
       });
     const auto actor = test_actor_ref ("actor-node", "player", "bind-or-get-reentrant-actor", 1);
     auto continuation_ran = std::make_shared<std::atomic_bool> (false);
@@ -970,7 +971,7 @@ int route_update_preserves_object_generation ()
                            const stream_header_t &, const zlink::message_t &,
                            std::optional<bound_session_relay_source_t>, std::chrono::milliseconds) {
         relay_routes.push_back (actor);
-        return task_t<std::optional<zlink::message_t>> (
+        return request_task_t<std::optional<zlink::message_t>> (
           result_t<std::optional<zlink::message_t>>::success (std::nullopt));
     });
 
@@ -2370,9 +2371,9 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
         }
         changed.notify_all ();
         if (actor.actor_id ().value () == "relay-a" && marker == "A1") {
-            return first_completion->task ();
+            return test::accepted_request_task (first_completion->task ());
         }
-        return task_t<std::optional<zlink::message_t>> (
+        return request_task_t<std::optional<zlink::message_t>> (
           result_t<std::optional<zlink::message_t>>::success (std::nullopt));
     });
 
@@ -2423,7 +2424,7 @@ int session_relay_does_not_start_actor_dispatch_on_session_thread ()
                            const zlink::message_t &, std::optional<bound_session_relay_source_t>,
                            std::chrono::milliseconds) {
         actor_dispatch_thread = std::this_thread::get_id ();
-        return task_t<std::optional<zlink::message_t>> (
+        return request_task_t<std::optional<zlink::message_t>> (
           result_t<std::optional<zlink::message_t>>::success (std::nullopt));
     });
 
@@ -2585,13 +2586,16 @@ int relay_request_survives_pending_dispatcher_completion ()
                         const actor_ref_t &relayed_actor, actor_context_t,
                         const stream_header_t &header, const zlink::message_t &payload,
                         std::optional<bound_session_relay_source_t>, std::chrono::milliseconds) {
-        return inspect_pending_relay_arguments (relayed_actor, header, payload, pending,
-                                                relay_started, actor_id, packet_name, payload_text);
+        return test::accepted_request_task (
+          inspect_pending_relay_arguments (relayed_actor, header, payload, pending, relay_started,
+                                           actor_id, packet_name, payload_text));
     });
 
     auto request =
       bound.relay_request (packet_name, zlink::message_t::from (payload_text)).async ();
-    if (!relay_started->load (std::memory_order_acquire))
+    auto admitted = request.admitted ();
+    if (!admitted.await_ready () || !admitted.result () || request.await_ready ()
+        || !relay_started->load (std::memory_order_acquire))
         return 1;
 
     std::vector<std::string> reclaimed_storage;
@@ -2624,8 +2628,9 @@ int relay_send_survives_pending_dispatcher_completion ()
                         const actor_ref_t &relayed_actor, actor_context_t,
                         const stream_header_t &header, const zlink::message_t &payload,
                         std::optional<bound_session_relay_source_t>, std::chrono::milliseconds) {
-        return inspect_pending_relay_arguments (relayed_actor, header, payload, pending,
-                                                relay_started, actor_id, packet_name, payload_text);
+        return test::accepted_request_task (
+          inspect_pending_relay_arguments (relayed_actor, header, payload, pending, relay_started,
+                                           actor_id, packet_name, payload_text));
     });
 
     auto relayed = bound.relay (packet_name, zlink::message_t::from (payload_text));
@@ -5881,7 +5886,7 @@ int session_relay_waiter_accepts_beyond_former_capacity ()
         auto source =
           std::make_shared<task_completion_source_t<std::optional<zlink::message_t>>> ();
         dispatched.push_back (source);
-        return source->task ();
+        return test::accepted_request_task (source->task ());
     });
 
     /* One relay occupies the drain turn; the rest cross the former boundary. */
@@ -6123,6 +6128,64 @@ int actor_unbound_waits_for_accepted_push_fifo ()
     return events.size () == 2 && events.back () == "$zlink.actor.unbound" ? 0 : 3;
 }
 
+int actor_unbound_follows_session_termination (bool physical, bool disconnect_then_shutdown = false)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    constexpr auto stream_name = "unbound-termination";
+    constexpr auto submission_wait_timeout = std::chrono::seconds (5);
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto manager = gateway.manager ();
+    auto builder = zlink::framework::test::runtime_failure_builder ();
+    builder.stream (stream_name).bind ("tcp://127.0.0.1:0");
+    auto runtime = stream_runtime_t::from (builder);
+    auto stream = runtime.open_session (stream_name);
+    auto unbound = std::make_shared<std::atomic_int> (0);
+    auto unbound_submitted = std::make_shared<std::promise<void>> ();
+    auto submitted = unbound_submitted->get_future ();
+    runtime.attach_transport_writer (
+      stream,
+      [unbound, unbound_submitted] (const stream_header_t &header, const zlink::message_t &) {
+          if (header.packet_name () == "$zlink.actor.unbound" && ++(*unbound) == 1)
+              unbound_submitted->set_value ();
+          return task_t<void> (result_t<void>::success ());
+      });
+    session_actor_manager_access_t::attach (manager, stream);
+    session_actor_manager_access_t::bind_native (
+      manager, [] (actor_ref_t, std::uint64_t, std::uint16_t) {
+          return request_task_t<void> (result_t<void>::success ());
+      });
+    auto disconnect_completion = std::make_shared<task_completion_source_t<void>> ();
+    if (!disconnect_then_shutdown)
+        disconnect_completion->complete (result_t<void>::success ());
+    state->disconnect_dispatcher = [disconnect_completion] (const actor_ref_t &) {
+        return disconnect_completion->task ();
+    };
+    auto binding =
+      manager.bind (test_actor_ref ("node", "player", "actor-a", 1)).async ().result ();
+    if (!binding)
+        return 1;
+    if (physical) {
+        if (!stream.close ().result ())
+            return 2;
+        session_actor_manager_access_t::disconnect (manager);
+        if (disconnect_then_shutdown) {
+            // The physical disconnect callback is still pending when shutdown closes the stream.
+            if (!stream.close ().result ())
+                return 5;
+            disconnect_completion->complete (result_t<void>::success ());
+            session_actor_manager_access_t::disconnect (manager);
+        }
+    } else {
+        if (!binding.value ().notify_disconnected ().result ())
+            return 3;
+        if (submitted.wait_for (submission_wait_timeout) != std::future_status::ready)
+            return 4;
+    }
+    return unbound->load () == (physical ? 0 : 1) ? 0 : 4;
+}
+
 int session_disconnect_uses_actor_slot_issue_order ()
 {
     using namespace zlink::framework;
@@ -6142,7 +6205,7 @@ int session_disconnect_uses_actor_slot_issue_order ()
     session_actor_manager_access_t::attach (manager, stream);
     session_actor_manager_access_t::bind_native (
       manager, [] (actor_ref_t, std::uint64_t, std::uint16_t) {
-          return task_t<void> (result_t<void>::success ());
+          return request_task_t<void> (result_t<void>::success ());
       });
     std::vector<std::string> disconnected;
     state->disconnect_dispatcher = [&disconnected] (const actor_ref_t &actor) {
@@ -6162,6 +6225,19 @@ int main (int argc, char **argv)
 {
     if (argc == 2) {
         const std::string test (argv[1]);
+        if (test == "--unbound-physical")
+            return actor_unbound_follows_session_termination (true);
+        if (test == "--unbound-logical")
+            return actor_unbound_follows_session_termination (false);
+        if (test == "--unbound-disconnect-then-shutdown") {
+            constexpr auto stress_iterations = 100;
+            for (auto iteration = 0; iteration < stress_iterations; ++iteration) {
+                if (const auto result = actor_unbound_follows_session_termination (true, true);
+                    result != 0)
+                    return result;
+            }
+            return 0;
+        }
         if (test == "--reconcile-source")
             return reconcile_deadline_fast_fails_when_store_shows_source ();
         if (test == "--reconcile-no-commit")

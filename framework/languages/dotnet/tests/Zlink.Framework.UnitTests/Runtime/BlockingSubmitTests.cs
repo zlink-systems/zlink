@@ -204,6 +204,27 @@ public sealed class BlockingSubmitTests
     }
 
     [Fact]
+    public async Task ClientServerPublicRequest_AdmitsBeforeReply()
+    {
+        await using var peers = await Peers.StartAsync();
+        peers.Probe.ReleaseRequest = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var request = peers
+                .Client.RequestToChannel("work", new RequestMessage("admitted"))
+                .Async<ReplyMessage>();
+            await request.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(request.Reply.IsCompleted);
+            peers.Probe.ReleaseRequest.SetResult();
+            Assert.Equal("admitted", (await request).Value);
+        }
+        finally
+        {
+            peers.Probe.ReleaseRequest.TrySetResult();
+        }
+    }
+
+    [Fact]
     public async Task DispatchedHandler_RejectsBlockingCallsBeforeSubmission()
     {
         await using var peers = await Peers.StartAsync();
@@ -283,11 +304,13 @@ public sealed class BlockingSubmitTests
 
         public IZLinkRequestCall Timeout(TimeSpan timeout) => this;
 
-        public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
+        public Zlink.Framework.Contracts.Channels.ZLinkRequest<TReply> Async<TReply>(
+            CancellationToken cancellationToken = default
+        )
         {
             Submissions++;
             SubmittingThreadId = Environment.CurrentManagedThreadId;
-            return (ValueTask<TReply>)(object)result;
+            return new(ValueTask.CompletedTask, (ValueTask<TReply>)(object)result);
         }
 
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>
@@ -360,6 +383,7 @@ public sealed class BlockingSubmitTests
         public TaskCompletionSource SendCompleted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Action? InHandler { get; set; }
+        public TaskCompletionSource? ReleaseRequest { get; set; }
         public int Requests;
     }
 
@@ -390,6 +414,8 @@ public sealed class BlockingSubmitTests
             probe.InHandler?.Invoke();
             await Task.Yield();
             probe.InHandler?.Invoke();
+            if (probe.ReleaseRequest is not null)
+                await probe.ReleaseRequest.Task.WaitAsync(cancellationToken);
             return new ReplyMessage(request.Value);
         }
     }

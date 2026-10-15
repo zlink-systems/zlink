@@ -9,6 +9,30 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RouteMeshReceiveFlowTests
 {
     [Fact]
+    public async Task RouterWithoutOverridesKeepsCoreHighWaterMarkCalculation()
+    {
+        await using var inner = Systems.Zlink.Zlink.CreateContext();
+        inner.Options.CoreHwmBudgetBytes = 32UL * 1024 * 1024;
+        var context = new CapturingRouterContext(inner);
+        var rid = RoutingId.From("auto-hwm-router");
+        var endpoint = $"inproc://auto-hwm-{Guid.NewGuid():N}";
+        await using var node = new ZLinkManagedMeshNode(context, "auto-hwm");
+        node.SetRoutingId(rid);
+        node.SetBind(endpoint);
+        node.Start();
+        await using var dealer = context.CreateDealerSocket();
+        using var monitor = dealer.MonitorOpen(SocketEvent.ConnectionReady);
+        dealer.Connect(endpoint);
+        await ReceiveFlowMonitor.ReceiveAsync(monitor, MonitorEventType.ConnectionReady);
+        inner.RecalculateAutoHwm();
+        var budget = inner.GetCoreHwmBudgetSnapshot();
+
+        Assert.True(budget.ActiveSendQueueCount + budget.ActiveReceiveQueueCount > 0);
+        Assert.Equal(0UL, budget.ManualReservedHwmBytes);
+        Assert.Equal(0UL, budget.UnlimitedManualQueueCount);
+    }
+
+    [Fact]
     public async Task ClientDealerNeverReceivesHostPressureButServerRouterDoes()
     {
         var services = new ServiceCollection();

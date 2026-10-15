@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "spot_runtime.hpp"
 
@@ -2053,7 +2053,7 @@ spot_request_terminal_exception (runtime::foundation::operation_terminal_t termi
                              "SPOT mesh request completed without a terminal result"));
 }
 
-task_t<runtime::messaging::message_parts_t>
+request_task_t<runtime::messaging::message_parts_t>
 request_spot_parts_async (service::spot_handle_t egress,
                           const zlink::routing_id_t &target_node_rid,
                           const spot_id_t &target_spot_id,
@@ -2064,6 +2064,8 @@ request_spot_parts_async (service::spot_handle_t egress,
     auto source =
       std::make_shared<task_completion_source_t<runtime::messaging::message_parts_t>> ();
     auto output = source->task ();
+    auto admitted = co_await detail::request_admission_source_t{};
+    detail::observe_request_failure (output, admitted);
     try {
         const auto &native_parts = parts.items ();
         if (native_parts.empty ()) {
@@ -2099,6 +2101,7 @@ request_spot_parts_async (service::spot_handle_t egress,
                   submitted, "SPOT mesh request was not submitted")));
             co_return co_await output;
         }
+        co_await detail::request_admitted_t{};
     }
     catch (const framework_exception_t &error) {
         source->complete (
@@ -2123,7 +2126,7 @@ request_spot_parts_async (service::spot_handle_t egress,
     co_return co_await output;
 }
 
-task_t<runtime::messaging::message_parts_t>
+request_task_t<runtime::messaging::message_parts_t>
 request_spot_mesh_parts (std::shared_ptr<detail::spot_context_state_t> state,
                          node_rid_t node_rid,
                          spot_id_t spot_id,
@@ -2148,8 +2151,8 @@ request_spot_mesh_parts (std::shared_ptr<detail::spot_context_state_t> state,
               framework_error_kind_t::not_found,
               "SPOT mesh request target generation is unavailable");
         }
-        co_return co_await request_spot_parts_async (
-          *native, target_node_rid, spot_id, *target_generation, std::move (parts), timeout);
+        co_return co_await detail::request_submission (request_spot_parts_async (
+          *native, target_node_rid, spot_id, *target_generation, std::move (parts), timeout));
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<runtime::messaging::message_parts_t> (error);
@@ -2160,7 +2163,7 @@ request_spot_mesh_parts (std::shared_ptr<detail::spot_context_state_t> state,
     }
 }
 
-task_t<zlink::message_t>
+request_task_t<zlink::message_t>
 request_spot_mesh_message (const std::shared_ptr<detail::spot_context_state_t> &state,
                            node_rid_t node_rid,
                            spot_id_t spot_id,
@@ -2171,8 +2174,11 @@ request_spot_mesh_message (const std::shared_ptr<detail::spot_context_state_t> &
     auto output = source->task ();
     auto reply = request_spot_mesh_parts (state, std::move (node_rid), std::move (spot_id),
                                           std::move (parts), timeout);
+    auto admitted = detail::request_task_access_t::admission_source (reply);
+    auto physical_reply = detail::request_task_access_t::physical_reply (reply);
     detail::observe_task_completion (
-      reply, [source] (const result_t<runtime::messaging::message_parts_t> &reply_result) mutable {
+      physical_reply,
+      [source] (const result_t<runtime::messaging::message_parts_t> &reply_result) mutable {
           try {
               if (!reply_result) {
                   source->complete (detail::propagate_failure<zlink::message_t> (
@@ -2217,7 +2223,7 @@ request_spot_mesh_message (const std::shared_ptr<detail::spot_context_state_t> &
                 framework_error_kind_t::internal_failure, "SPOT route reply processing failed"));
           }
       });
-    return output;
+    return request_task_t<zlink::message_t> (std::move (output), std::move (admitted));
 }
 
 } // namespace
@@ -3242,10 +3248,10 @@ spot_context_t::erased_request_call_t::erased_request_call_t (framework_exceptio
 spot_context_t::erased_request_call_t::erased_request_call_t (
   std::string packet_name,
   serializer_registry_t *serializers,
-  std::function<task_t<zlink::message_t> (const std::string &,
-                                          std::chrono::milliseconds,
-                                          const request_call_t<zlink::message_t>::metadata_map_t &)>
-    submit,
+  std::function<request_task_t<zlink::message_t> (
+    const std::string &,
+    std::chrono::milliseconds,
+    const request_call_t<zlink::message_t>::metadata_map_t &)> submit,
   request_call_t<zlink::message_t>::preflight_fn_t preflight) :
     _packet_name (std::move (packet_name)),
     _serializers (serializers),
@@ -4253,9 +4259,9 @@ spot_context_t::erased_request_call_t spot_context_t::request_to_erased (node_ri
        payload = std::move (payload)] (
         const std::string &submitted_packet_name, std::chrono::milliseconds timeout,
         const request_call_t<zlink::message_t>::metadata_map_t &metadata) mutable
-      -> task_t<zlink::message_t> {
+      -> request_task_t<zlink::message_t> {
           if (!state) {
-              return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
+              return request_task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
                 framework_error_kind_t::protocol_error, "SPOT context is not configured"));
           }
           try {
@@ -4282,22 +4288,23 @@ spot_context_t::erased_request_call_t spot_context_t::request_to_erased (node_ri
                             reply.error () ? std::make_exception_ptr (*reply.error ())
                                            : std::exception_ptr{});
                       }
-                      return task_t<zlink::message_t> (detail::propagate_failure<zlink::message_t> (
-                        reply, "SPOT route request failed"));
+                      return request_task_t<zlink::message_t> (
+                        detail::propagate_failure<zlink::message_t> (reply,
+                                                                     "SPOT route request failed"));
                   }
                   runtime::messaging::envelope_codec_t envelope;
                   auto body = envelope.decode_body (reply.value ());
                   if (!body) {
-                      return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
+                      return request_task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
                         body.error_kind (), body.error () ? body.error ()->what ()
                                                           : "SPOT route reply body decode failed"));
                   }
-                  return task_t<zlink::message_t> (
+                  return request_task_t<zlink::message_t> (
                     result_t<zlink::message_t>::success (body.value ()));
               }
               auto native = state->native_spot.lock ();
               if (!native) {
-                  return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
+                  return request_task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
                     framework_error_kind_t::not_found,
                     "SPOT mesh route requires a running native Spot"));
               }
@@ -4311,7 +4318,7 @@ spot_context_t::erased_request_call_t spot_context_t::request_to_erased (node_ri
                                                 std::move (parts), effective_timeout);
           }
           catch (const framework_exception_t &error) {
-              return task_t<zlink::message_t> (
+              return request_task_t<zlink::message_t> (
                 detail::result_access_t::failure<zlink::message_t> (error));
           }
       },
@@ -4380,7 +4387,7 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
                                                                       invoker_t invoker)
 {
     if (kind == spot_handler_kind_t::subscription && topic.empty ()) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                      "SPOT subscription handler topic is required for '"
                                        + std::string (handler_type.name ()) + "' (packet '"
                                        + packet_name + "')");
@@ -4392,7 +4399,7 @@ spot_handler_registry_t &spot_handler_registry_t::add_handler_erased (spot_handl
                               && descriptor.topic == topic && descriptor.actor_type == actor_type;
                    });
     if (duplicate) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                      "duplicate spot handler registration");
     }
 
@@ -5394,14 +5401,9 @@ task_t<spot_create_result_t> spot_create_call_t::async ()
         return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
           framework_error_kind_t::not_configured,
           "Spot manager is not connected to a Location runtime"));
-    auto task =
-      create_user_spot (_state->exclusive, _state->spot_id, std::move (_state->stable_type),
-                        std::move (_state->mesh_name), std::move (_state->request),
-                        _state->timeout.value_or (std::chrono::seconds (30)));
-    const auto turn_plan = detail::prepare_serial_turn_await (false);
-    if (!turn_plan)
-        return task;
-    return detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+    return create_user_spot (_state->exclusive, _state->spot_id, std::move (_state->stable_type),
+                             std::move (_state->mesh_name), std::move (_state->request),
+                             _state->timeout.value_or (std::chrono::seconds (30)));
 }
 
 task_t<spot_create_result_t> spot_create_call_t::yield ()
@@ -5409,12 +5411,7 @@ task_t<spot_create_result_t> spot_create_call_t::yield ()
     if (!detail::current_serial_turn_allows_yield ()) {
         return detail::unsupported_yield_task<spot_create_result_t> ();
     }
-    auto turn_plan = detail::prepare_serial_turn_await (true);
-    auto task = async ();
-    if (!turn_plan) {
-        return task;
-    }
-    return detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+    return detail::release_turn_on_suspend (async ());
 }
 
 spot_create_call_t spot_manager_t::create (std::string stable_type)
@@ -7240,7 +7237,7 @@ spot_node_runtime_t::take_actor_handoff_backlog (const actor_ref_t &actor_ref)
     return _state->actor_transfer_coordinator.take_backlog (actor_key (actor_ref));
 }
 
-task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_local_actor_packet (
+request_task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_local_actor_packet (
   const actor_ref_t &actor_ref,
   const runtime::messaging::envelope_header_t &header,
   const zlink::message_t &payload,
@@ -7361,11 +7358,13 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_local_actor_p
         if (native)
             native->signal_dispatch_activity ();
     }
+    auto admitted = co_await detail::request_admission_source_t{};
     try {
         const auto kind = is_request ? stream_message_kind_t::request : stream_message_kind_t::send;
         auto reply = co_await relay_actor_packet (
           actor_ref, gateway.actor_context (actor_ref), kind, header.message_name, payload,
-          *services, serializers, std::move (metadata), nullptr, {}, {}, source_owner, operation,
+          *services, serializers, std::move (metadata), nullptr, {},
+          [admitted] { admitted->complete (result_t<void>::success ()); }, source_owner, operation,
           reply_route_id, header.deadline);
         if (!pending_key)
             co_return reply;
@@ -12035,9 +12034,9 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                       _state->actor_transfer_coordinator.transfer_id (key).value_or (key));
                 }
             }
+            if (after_application_admission)
+                after_application_admission ();
             if (!is_request) {
-                if (after_application_admission)
-                    after_application_admission ();
                 co_return result_t<std::optional<zlink::message_t>>::success (zlink::message_t{});
             }
             co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
@@ -12523,9 +12522,9 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                       "handoff_backlog", actor_ref,
                       _state->actor_transfer_coordinator.transfer_id (key).value_or (key));
                 }
+                if (after_application_admission)
+                    after_application_admission ();
                 if (!request_delivery) {
-                    if (after_application_admission)
-                        after_application_admission ();
                     co_return result_t<std::optional<zlink::message_t>>::success (
                       zlink::message_t{});
                 }

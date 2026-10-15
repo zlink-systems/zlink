@@ -157,12 +157,12 @@ public:
  actor_request_call_t &metadata(std::string key, std::string value);
 
  template <typename TReply>
- task_t<TReply> async();
+ request_task_t<TReply> async();
 
  template <typename TReply>
  task_t<TReply> yield();
 
- task_t<message_t> async_message();
+ request_task_t<message_t> async_message();
  task_t<message_t> yield_message();
 };
 

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 #include "runtime/protocol/service_wire_codec.hpp"
@@ -286,8 +286,7 @@ inline frozen_record_t encode_actor_join_recovery_saved_work (const actor_join_r
         || value.coordinator.lease_generation == 0 || value.coordinator.node_routing_id.empty ()
         || value.coordinator.node_generation == 0
         || value.coordinator.expected_authority_store_version.empty ()
-        || (value.operation.high == 0 && value.operation.low == 0)
-        || value.reply_content_type.empty ())
+        || (value.operation.high == 0 && value.operation.low == 0))
         throw service_wire_error_t ("Actor Join recovery identity is invalid");
     /* ZLJR is a byte-stable cross-language record.  The Node encoder emits
      * object properties in declaration order, as does System.Text.Json for
@@ -358,7 +357,9 @@ inline frozen_record_t encode_actor_join_recovery_saved_work (const actor_join_r
       {recovery_field::TargetAuthorityOwnerGeneration, value.target_authority_owner_generation},
       {recovery_field::OperationIdHigh, value.operation.high},
       {recovery_field::OperationIdLow, value.operation.low},
-      {recovery_field::ReplyContentType, value.reply_content_type},
+      {recovery_field::ReplyContentType, value.reply_content_type.empty ()
+                                           ? nlohmann::ordered_json (nullptr)
+                                           : nlohmann::ordered_json (value.reply_content_type)},
       {recovery_field::Reply, ""}};
     const auto metadata_text = metadata.dump ();
     if (metadata_text.size () > 256u * 1024u)
@@ -487,8 +488,10 @@ decode_actor_join_recovery_saved_work (const frozen_record_t &record)
       json_u64 (metadata.at (recovery_field::OperationIdHigh), recovery_field::OperationIdHigh);
     result.operation.low =
       json_u64 (metadata.at (recovery_field::OperationIdLow), recovery_field::OperationIdLow);
-    result.reply_content_type = required_text (metadata.at (recovery_field::ReplyContentType),
-                                               recovery_field::ReplyContentType);
+    result.reply_content_type = metadata.at (recovery_field::ReplyContentType).is_null ()
+                                  ? std::string{}
+                                  : required_text (metadata.at (recovery_field::ReplyContentType),
+                                                   recovery_field::ReplyContentType);
     result.request = generated.request;
     result.reply = generated.reply;
 

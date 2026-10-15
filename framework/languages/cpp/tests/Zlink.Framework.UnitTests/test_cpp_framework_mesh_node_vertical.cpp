@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -17,6 +17,8 @@
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/actors/actor_ref_access.hpp"
 #include "../support/loopback_tcp_endpoint.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
@@ -2078,6 +2080,64 @@ void verify_fixed_drain_callback_barrier ()
     assert (node->active_application_callbacks () == 0);
 }
 
+void verify_accepted_handler_push_after_host_seal (bool shutdown)
+{
+    using namespace zlink::framework;
+    auto registration = make_named_node ("accepted-send-mesh", "accepted-send-node");
+    serializer_registry_t serializers;
+    service_collection_t services;
+    auto owned_store = std::make_unique<runtime::in_memory_location_repository_t> ();
+    auto &store = *owned_store;
+    services.add_singleton<location_repository_t> (
+      std::unique_ptr<location_repository_t> (owned_store.release ()));
+    services.add_singleton<runtime::location_runtime_t> (
+      std::make_unique<runtime::location_runtime_t> (store));
+    register_mesh_location_resolvers (services);
+    auto provider = services.build_provider ();
+    auto &locations = provider.get_required<runtime::location_runtime_t> ();
+    locations.start (*registration->routing_id);
+    runtime::mesh_node_host_service_t service (
+      std::make_shared<runtime::runtime_failure_collector_t> (), {registration}, serializers);
+    service.start (provider);
+    const auto node = service.nodes ().front ();
+    auto gateway_state = std::make_shared<detail::actor_gateway_state_t> ();
+    detail::actor_gateway_runtime_t gateway (gateway_state);
+    const auto actor = detail::actor_ref_access_t::make (
+      node_rid_t::from_string ("accepted-send-node"), "player", "accepted-handler", 1);
+    std::atomic_int sends{0};
+    gateway.bind_session_sink (actor,
+                               [&sends] (std::string, stream_codec_t, const zlink::message_t &) {
+                                   ++sends;
+                                   return task_t<void> (result_t<void>::success ());
+                               });
+    std::promise<void> started;
+    std::promise<void> release;
+    auto latch = release.get_future ().share ();
+    node->application_work_enqueued ();
+    auto handler = std::async (std::launch::async, [&] {
+        node->application_work_started ();
+        started.set_value ();
+        latch.wait ();
+        const auto submitted = gateway.dispatch_bound_session_send (
+          actor, "AcceptedPush", stream_codec_t::raw, zlink::message_t::from ("push"));
+        node->application_work_finished ();
+        return submitted;
+    });
+    assert (started.get_future ().wait_for (1s) == std::future_status::ready);
+    assert (service.publish_descriptor_state (shutdown ? framework_runtime_state_t::draining
+                                                       : framework_runtime_state_t::relocating));
+    service.seal_application_dispatch ();
+    assert (service.submit_local_node_send (node, {}) == zlink::submit_result_t::terminated);
+    assert (!service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now ()));
+    release.set_value ();
+    assert (handler.wait_for (1s) == std::future_status::ready);
+    assert (handler.get ());
+    assert (sends.load () == 1);
+    assert (service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 1s));
+    service.stop ();
+    locations.stop ();
+}
+
 void verify_local_and_wire_application_owner_keys_match ()
 {
     using namespace zlink::framework;
@@ -2722,6 +2782,8 @@ int main (int argc, char **argv)
     verify_object_client_registration_boundary ();
     verify_host_shutdown_seal_reaches_raw_mesh ();
     verify_fixed_drain_callback_barrier ();
+    verify_accepted_handler_push_after_host_seal (false);
+    verify_accepted_handler_push_after_host_seal (true);
     verify_local_and_wire_application_owner_keys_match ();
     verify_owner_drain_continuation_during_executor_shutdown ();
     verify_deferred_application_terminal_ownership ();

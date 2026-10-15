@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/diagnostics/mesh_trace.hpp"
 
@@ -80,7 +80,7 @@ decode_mesh_record_header (const host::receive_record_t &record,
     const bool request =
       record.kind == kind_t::node_request || record.kind == kind_t::channel_request
       || record.kind == kind_t::spot_request || record.kind == kind_t::actor_request;
-    const bool can_correlate = rejected_header && !rejected_header->correlation_id.empty ();
+    const bool can_correlate = rejected_header && rejected_header->can_correlate_reply ();
     auto submitted = zlink::submit_result_t::terminated;
     if (request && can_correlate) {
         detail::channel_reply_writer_t replies;

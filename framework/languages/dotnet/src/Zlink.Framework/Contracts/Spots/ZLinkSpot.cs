@@ -217,7 +217,7 @@ public interface IZLinkSpotRequestCall : IZLinkMetadataCall<IZLinkSpotRequestCal
 
     IZLinkSpotRequestCall Timeout(TimeSpan timeout);
 
-    ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default);
+    ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default);
 
     ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default);
 }

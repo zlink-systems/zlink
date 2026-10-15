@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include <zlink/framework.hpp>
 #include "runtime/handlers/handler_registry_runtime.hpp"
@@ -842,7 +842,7 @@ int main ()
     }
     catch (const zlink::framework::framework_exception_t &error) {
         missing_topic_failed =
-          error.kind () == zlink::framework::framework_error_kind_t::protocol_error
+          error.kind () == zlink::framework::framework_error_kind_t::invalid_operation
           && std::string (error.what ()).find ("SPOT subscription handler topic is required")
                != std::string::npos
           && std::string (error.what ()).find (typeid (dispatch_spot_t).name ())
@@ -852,6 +852,14 @@ int main ()
         return 47;
     }
     spot_handlers.add_subscribe<&dispatch_spot_t::on_topic_event> ("spot-topic");
+    try {
+        spot_handlers.add_subscribe<&dispatch_spot_t::on_topic_event> ("spot-topic");
+        return 48;
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        if (error.kind () != zlink::framework::framework_error_kind_t::invalid_operation)
+            return 49;
+    }
     const auto registered_handlers = spot_handlers.descriptors ();
     if (registered_handlers.size () != 2
         || registered_handlers.back ().kind != zlink::framework::spot_handler_kind_t::subscription

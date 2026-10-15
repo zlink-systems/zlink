@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/execution/task_result.hpp"
 #include "runtime/diagnostics/mesh_trace.hpp"
@@ -63,6 +63,9 @@ std::pair<std::uint32_t, std::uint32_t> stateful_failure_pair (stateful::statefu
         case stateful::stateful_error_t::moving:
             return {static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
                     static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving)};
+        case stateful::stateful_error_t::none:
+            return {static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)};
         case stateful::stateful_error_t::conflict:
             // Source-local conflicts are InvalidOperation (error model §2, §5).
             // A remote owner's unavailable result is classified at its boundary.
@@ -5688,14 +5691,17 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                                                      std::move (application_reply));
                       };
                     if (!store || !materializer) {
-                        terminal (105,
+                        terminal (static_cast<std::uint32_t> (
+                                    protocol::request_terminal_result::internalError),
                                   static_cast<std::uint32_t> (
                                     protocol::framework_error_code::requestFailed),
                                   protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
                     }
                     if (request.deadline_unix_ms <= unix_milliseconds_now ()) {
-                        terminal (101, 0, protocol::user_spot_create_result_t::rejected, {}, 0);
+                        terminal (
+                          static_cast<std::uint32_t> (protocol::request_terminal_result::timedOut),
+                          0, protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
                     }
                     const auto &global_id = request.spot_id;
@@ -5729,13 +5735,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           snapshot
                           && snapshot->allocation.object_kind == placement_object_kind_t::user_spot
                           && snapshot->allocation.stable_type != request.stable_type;
-                        terminal (107,
-                                  static_cast<std::uint32_t> (
-                                    stale ? protocol::framework_error_code::spotGenerationStale
-                                    : type_mismatch
-                                      ? protocol::framework_error_code::spotTypeMismatch
-                                      : protocol::framework_error_code::spotMoving),
-                                  protocol::user_spot_create_result_t::rejected, {}, 0);
+                        terminal (
+                          static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
+                          static_cast<std::uint32_t> (
+                            stale           ? protocol::framework_error_code::spotGenerationStale
+                            : type_mismatch ? protocol::framework_error_code::spotTypeMismatch
+                                            : protocol::framework_error_code::spotMoving),
+                          protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
                     }
                     const auto fence = public_fence (
@@ -5743,7 +5749,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto &pending = snapshot->pending_creation;
                     if (!pending || pending->reservation_id != fence.reservation_id) {
                         terminal (
-                          107,
+                          static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
                           static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
                           protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
@@ -5752,7 +5758,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       pending->request_content_reference, pending->request_sha256,
                       pending->request_encoded_size);
                     if (!creation_payload) {
-                        terminal (105,
+                        terminal (static_cast<std::uint32_t> (
+                                    protocol::request_terminal_result::internalError),
                                   static_cast<std::uint32_t> (
                                     protocol::framework_error_code::requestFailed),
                                   protocol::user_spot_create_result_t::rejected, {}, 0);
@@ -5769,14 +5776,17 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         const auto existing =
                           _objects.find (stateful::object_kind_t::user_spot, exact_ref.key);
                         if (!existing || *existing != exact_ref) {
-                            terminal (105,
+                            terminal (static_cast<std::uint32_t> (
+                                        protocol::request_terminal_result::internalError),
                                       static_cast<std::uint32_t> (
                                         protocol::framework_error_code::requestFailed),
                                       protocol::user_spot_create_result_t::rejected, {}, 0);
                             continue;
                         }
-                        terminal (0, 0, protocol::user_spot_create_result_t::existing,
-                                  request.spot_id, exact_ref.object_generation);
+                        terminal (
+                          static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
+                          protocol::user_spot_create_result_t::existing, request.spot_id,
+                          exact_ref.object_generation);
                         continue;
                     }
                     auto local =
@@ -5788,19 +5798,16 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           return bytes;
                       }());
                     if (local.status == stateful::create_status_t::existing) {
-                        terminal (0, 0, protocol::user_spot_create_result_t::existing,
-                                  request.spot_id, exact_ref.object_generation);
+                        terminal (
+                          static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
+                          protocol::user_spot_create_result_t::existing, request.spot_id,
+                          exact_ref.object_generation);
                         continue;
                     }
                     if (!local.factory_owner) {
-                        terminal (local.error == stateful::stateful_error_t::generation_stale ? 107
-                                                                                              : 108,
-                                  static_cast<std::uint32_t> (
-                                    local.error == stateful::stateful_error_t::moving
-                                      ? protocol::framework_error_code::spotMoving
-                                    : local.error == stateful::stateful_error_t::generation_stale
-                                      ? protocol::framework_error_code::spotGenerationStale
-                                      : protocol::framework_error_code::requestFailed),
+                        const auto [classified_terminal, classified_code] =
+                          stateful_failure_pair (local.error);
+                        terminal (classified_terminal, classified_code,
                                   protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
                     }
@@ -5817,7 +5824,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                              public_fence (reservation, snapshot->allocation.target.mesh_name,
                                            request.stable_type)})
                           .result ();
-                        terminal (105,
+                        terminal (static_cast<std::uint32_t> (
+                                    protocol::request_terminal_result::internalError),
                                   static_cast<std::uint32_t> (
                                     protocol::framework_error_code::spotCreateFailed),
                                   protocol::user_spot_create_result_t::rejected, {}, 0);
@@ -5831,9 +5839,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           .result ()
                           .value ();
                         (void) _objects.abort_create (local.attempt);
-                        terminal (0, 0, protocol::user_spot_create_result_t::rejected,
-                                  request.spot_id, exact_ref.object_generation,
-                                  std::move (materialized.application_reply));
+                        terminal (
+                          static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
+                          protocol::user_spot_create_result_t::rejected, request.spot_id,
+                          exact_ref.object_generation, std::move (materialized.application_reply));
                         continue;
                     }
                     const auto committed =
@@ -5852,7 +5861,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     if (!ready && !already) {
                         (void) _objects.abort_create (local.attempt);
                         terminal (
-                          107,
+                          static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
                           static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
                           protocol::user_spot_create_result_t::rejected, {}, 0);
                         continue;
@@ -5874,7 +5883,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             local_commit = _objects.commit_create (reconciled.attempt);
                     }
                     if (local_commit != stateful::stateful_error_t::none) {
-                        terminal (105,
+                        terminal (static_cast<std::uint32_t> (
+                                    protocol::request_terminal_result::internalError),
                                   static_cast<std::uint32_t> (
                                     protocol::framework_error_code::spotCreateFailed),
                                   protocol::user_spot_create_result_t::rejected, {}, 0);
@@ -5883,7 +5893,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     _spot_actor_index_lane
                       .run ([&] { _spots.insert_or_assign (exact_ref.key, exact_ref); })
                       .get ();
-                    terminal (0, 0, protocol::user_spot_create_result_t::created, request.spot_id,
+                    terminal (static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
+                              protocol::user_spot_create_result_t::created, request.spot_id,
                               exact_ref.object_generation,
                               std::move (materialized.application_reply));
                     continue;

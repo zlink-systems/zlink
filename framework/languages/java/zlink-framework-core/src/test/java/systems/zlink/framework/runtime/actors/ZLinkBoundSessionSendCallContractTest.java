@@ -3,7 +3,9 @@ package systems.zlink.framework.runtime.actors;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -20,6 +22,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
@@ -37,6 +40,77 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 final class ZLinkBoundSessionSendCallContractTest {
+    @Test
+    void acceptedHandlerSendSurvivesRelocationSeal() throws Exception {
+        acceptedHandlerSendSurvivesSeal(false);
+    }
+
+    @Test
+    void acceptedHandlerSendSurvivesShutdownSeal() throws Exception {
+        acceptedHandlerSendSurvivesSeal(true);
+    }
+
+    private void acceptedHandlerSendSurvivesSeal(boolean shutdown) throws Exception {
+        var sends = new AtomicInteger();
+        var backend = spotNode(sends);
+        var actors =
+                new ZLinkActorRuntime(
+                        backend,
+                        Map.of("probe", ProbeFactory.class),
+                        Map.of(),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        new ZLinkJsonMessageSerializer(),
+                        ZLinkHandlerActivator.reflection(),
+                        ZLinkStreamCodec.RAW,
+                        unusedAdmission());
+        var actor =
+                actors.getOrCreateLocalActor("accepted-handler", ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        actors.bindNativeSession(
+                actor,
+                backend,
+                new ZLinkBackendActorRef(RoutingId.from("node-a"), "accepted-handler", 7));
+        var drain = new ZLinkMeshDrainCoordinator(java.util.List.of("mesh"));
+        var claim = drain.tryClaim("mesh");
+        var started = new CompletableFuture<Void>();
+        var release = new CompletableFuture<Void>();
+        var handler =
+                CompletableFuture.runAsync(
+                        () -> {
+                            try (claim) {
+                                started.complete(null);
+                                release.join();
+                                actor.context()
+                                        .boundSession()
+                                        .send("accepted-push")
+                                        .submit()
+                                        .toCompletableFuture()
+                                        .join();
+                            }
+                        });
+        try {
+            started.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (shutdown) drain.sealAll();
+            else drain.seal("mesh");
+            assertTrue(drain.isSealed("mesh"));
+            assertNull(drain.tryClaim("mesh"));
+            assertFalse(drain.awaitAllZero().toCompletableFuture().isDone());
+            release.complete(null);
+            handler.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            drain.awaitAllZero()
+                    .toCompletableFuture()
+                    .get(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(1, sends.get());
+        } finally {
+            release.complete(null);
+            handler.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            actors.close();
+        }
+    }
+
     @Test
     void localNativeBoundSessionUsesOneBindingAdmissionTerminal() {
         AtomicInteger synchronousSends = new AtomicInteger();

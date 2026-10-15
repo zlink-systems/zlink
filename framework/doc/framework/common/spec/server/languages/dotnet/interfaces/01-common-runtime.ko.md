@@ -38,10 +38,21 @@ public interface IZLinkSendCall : IZLinkMetadataCall<IZLinkSendCall>
     void Submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
 }
 
+public readonly struct ZLinkRequest<TReply>
+{
+    // await하면 reply를 얻는다. Admitted는 Submit §2의 admission 단계다.
+    public ValueTask Admitted { get; }
+    public ValueTask<TReply> Reply { get; }
+    public ValueTaskAwaiter<TReply> GetAwaiter();
+    public ConfiguredValueTaskAwaitable<TReply> ConfigureAwait(bool continueOnCapturedContext);
+    public Task<TReply> AsTask();
+    public static implicit operator ValueTask<TReply>(ZLinkRequest<TReply> request);
+}
+
 public interface IZLinkRequestCall : IZLinkMetadataCall<IZLinkRequestCall>
 {
     IZLinkRequestCall Timeout(TimeSpan timeout);
-    ValueTask<TReply> Async<TReply>(
+    ZLinkRequest<TReply> Async<TReply>(
         CancellationToken cancellationToken = default);
     TReply Submit<TReply>();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
     ValueTask<TReply> Yield<TReply>(

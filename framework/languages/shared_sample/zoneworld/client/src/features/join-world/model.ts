@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { AnnouncementModel } from '../../entities/announcement/model';
 import { PlayerModel } from '../../entities/player/model';
 import type {

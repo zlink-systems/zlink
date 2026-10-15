@@ -250,7 +250,7 @@ internal sealed class ZLinkBoundSessionSendCall<TMessage>(
 ) : IZLinkBoundSessionSendCall
 {
     private readonly Dictionary<string, string> _metadata = new(StringComparer.Ordinal);
-    private readonly ZLinkOneWayCallGate _submission = new("Bound session send");
+    private ZLinkOneWayCallGate _submission = new("Bound session send");
 
     public IZLinkBoundSessionSendCall Metadata(string key, string value)
     {

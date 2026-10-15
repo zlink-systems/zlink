@@ -39,6 +39,7 @@
     <ItemGroup>
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
+        <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
@@ -77,6 +78,7 @@
         <Compile Include="Runtime/SourceMembershipLeaveCompletionTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
+        <Compile Include="Runtime/JoinCallbackSendTests.cs"/>
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
@@ -84,6 +86,7 @@
         <Compile Include="Runtime/ProtobufNativePayloadTests.cs"/>
         <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
         <Compile Include="Runtime/MeshPermitHandoffTests.cs"/>
+        <Compile Include="Runtime/MeshReceiveWakeTests.cs"/>
         <Compile Include="Runtime/MeshReplyPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshOutboundPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshMonitorHotPathTests.cs"/>
@@ -116,6 +119,8 @@
         <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>
         <Compile Include="Runtime/DescriptorOwnerLeaseSelectionTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
+        <Compile Include="Runtime/AcceptedHandlerSendSealTests.cs"/>
+        <Compile Include="Runtime/EntrySpotActorDispatchTests.StartupIdentity.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.SourceRetirement.cs"/>
         <Compile Include="Runtime/EntrySpotIdentityStoreTests.cs"/>
         <Compile Include="Runtime/RuntimeIdentifierTests.cs"/>
@@ -135,6 +140,7 @@
         <Compile Include="Runtime/GeneratedServiceWireCommandCodecConformanceTests.cs"/>
         <Compile Include="Runtime/GenerationTokenRangeTests.cs"/>
         <Compile Include="Runtime/FrameworkJsonProfileTests.cs"/>
+        <Compile Include="Runtime/ConnectorJsonProfileTests.cs"/>
         <Compile Include="Runtime/HandlerResultAwaiterTests.cs"/>
         <Compile Include="Runtime/HttpExecutionSchedulerTests.cs"/>
         <Compile Include="Runtime/InMemoryLocationStoreTests.cs"/>
@@ -164,6 +170,7 @@
         <Compile Include="Runtime/MessageFollowSuppressionRegistryTests.cs"/>
         <Compile Include="Runtime/MessagePayloadOwnershipConvergenceTests.cs"/>
         <Compile Include="Runtime/MeshCompletionTableConvergenceTests.cs"/>
+        <Compile Include="Runtime/CompletionDispatcherIsolationTests.cs"/>
         <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
         <Compile Include="Runtime/MeshNodeShutdownSealTests.cs"/>
         <Compile Include="Runtime/MeshNodeHelloSubmissionTests.cs"/>

@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration.RouterSocketConfig;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -36,12 +37,13 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
                 var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind("inproc://large-payload-source-" + System.nanoTime());
-            source.setRouterHighWaterMark(4_096_000L);
-            source.setRouterReceiveHighWaterMark(4_096_000L);
+            var socketConfig = new RouterSocketConfig();
+            socketConfig.setSendHighWaterMark(4_096_000L);
+            socketConfig.setReceiveHighWaterMark(4_096_000L);
+            source.setRouterSocketConfig(socketConfig);
             target.setRoutingId(targetRid);
             target.setBind("tcp://127.0.0.1:0");
-            target.setRouterHighWaterMark(4_096_000L);
-            target.setRouterReceiveHighWaterMark(4_096_000L);
+            target.setRouterSocketConfig(socketConfig);
             source.start();
             target.start();
             String endpoint = target.status().localEndpoint();
@@ -65,7 +67,13 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
                 completed =
                         source.spotNode()
                                 .requestToNode(
-                                        targetRid, List.of(packet, payload), Duration.ofSeconds(5))
+                                        targetRid,
+                                        null,
+                                        List.of(packet, payload),
+                                        Duration.ofSeconds(5),
+                                        null,
+                                        null,
+                                        null)
                                 .toCompletableFuture();
             }
 

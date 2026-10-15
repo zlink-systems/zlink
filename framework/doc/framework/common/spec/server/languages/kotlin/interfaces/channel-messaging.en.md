@@ -9,8 +9,9 @@ the current Spot turn as `yield()`. One-way `await()`'s normal result is
 `Unit`, and failure propagates the Java stage's exception unchanged. The
 typed request's reified entry method fixes `KClass<TReply>.java` as the
 internal Java `Class<TReply>` when building the wrapper. The application
-doesn't pass the reply type again at the terminal, or write
-`.submit().await()`.
+doesn't pass the reply type again at the terminal. To wait only for the reply it uses
+`await()`; when it needs the admission stage it uses `admitted()` of the Java `ZLinkRequestStage`
+returned by `submit()` ([Submit and completion §2](../../../01-execution/01-submit-and-completion.en.md#request-admitted-stage)).
 
 The synchronous blocking terminator adds no Kotlin-specific wrapper and exposes the Java surface's
 `submit_sync()` as is. A blocking call is not a suspend, so it is not wrapped in `await()`; it is for
@@ -75,6 +76,7 @@ interface ZLinkKotlinSubmissionCall {
 interface ZLinkKotlinRequestCall<TReply : Any> {
  fun metadata(key: String, value: String): ZLinkKotlinRequestCall<TReply>
  fun timeout(timeout: Duration): ZLinkKotlinRequestCall<TReply>
+ fun submit(): systems.zlink.framework.channels.ZLinkRequestStage<TReply>
  suspend fun await(): TReply
  suspend fun yield(): TReply
 }
@@ -298,6 +300,7 @@ public interface systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall {
 public interface systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> {
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> metadata(java.lang.String, java.lang.String);
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> timeout(java.time.Duration);
+ public abstract systems.zlink.framework.channels.ZLinkRequestStage<TReply> submit();
  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super TReply>);
  public abstract java.lang.Object yield(kotlin.coroutines.Continuation<? super TReply>);
 }

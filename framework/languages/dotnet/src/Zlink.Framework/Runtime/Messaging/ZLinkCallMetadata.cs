@@ -4,11 +4,34 @@ namespace Zlink.Framework.Runtime.Messaging;
 
 // Owns the metadata half of every mesh-plane call builder (05-route-mesh §6):
 // last-write-wins accumulation and canonical-frame encoding with the 1024-byte
-// cap. Call classes hold one instance so the merge/encode knowledge lives here
-// rather than in ten builders.
+// cap. Call builders allocate this owner only when metadata is supplied.
 internal sealed class ZLinkCallMetadata
 {
     private Dictionary<string, string>? _values;
+
+    internal static void Set(ref ZLinkCallMetadata? metadata, string key, string value) =>
+        GetOrCreate(ref metadata).Set(key, value);
+
+    internal static void Merge(ref ZLinkCallMetadata? metadata, ZLinkMessageMetadata values) =>
+        GetOrCreate(ref metadata).Merge(values);
+
+    private static ZLinkCallMetadata GetOrCreate(ref ZLinkCallMetadata? metadata) =>
+        metadata ??= new ZLinkCallMetadata();
+
+    internal static ReadOnlyMemory<byte> Encode(ZLinkCallMetadata? metadata) =>
+        metadata?.Encode() ?? default;
+
+    internal static ZLinkMessageMetadata Snapshot(ZLinkCallMetadata? metadata) =>
+        metadata?.Snapshot() ?? ZLinkMessageMetadata.Empty;
+
+    internal static (
+        IReadOnlyDictionary<string, string>? Header,
+        ReadOnlyMemory<byte> Frame
+    ) EncodeChannel(ZLinkCallMetadata? metadata, bool clientServer) =>
+        clientServer ? (Snapshot(metadata).Values, default) : (null, Encode(metadata));
+
+    internal static ZlinkStreamMetadata ToStreamMetadata(ZLinkCallMetadata? metadata) =>
+        metadata?.ToStreamMetadata() ?? ZlinkStreamMetadata.Empty;
 
     public void Set(string key, string value)
     {
@@ -41,12 +64,6 @@ internal sealed class ZLinkCallMetadata
         _values is null || _values.Count == 0
             ? ZLinkMessageMetadata.Empty
             : new ZLinkMessageMetadata(_values);
-
-    internal (
-        IReadOnlyDictionary<string, string>? Header,
-        ReadOnlyMemory<byte> Frame
-    ) EncodeChannel(bool clientServer) =>
-        clientServer ? (Snapshot().Values, default) : (null, Encode());
 
     public ZlinkStreamMetadata ToStreamMetadata()
     {

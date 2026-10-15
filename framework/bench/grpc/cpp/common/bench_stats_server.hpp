@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #ifndef ZLINK_CPP_BENCH_STATS_SERVER_HPP
 #define ZLINK_CPP_BENCH_STATS_SERVER_HPP
 

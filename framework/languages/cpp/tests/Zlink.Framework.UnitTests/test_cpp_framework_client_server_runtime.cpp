@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
@@ -1466,6 +1466,53 @@ void verify_client_server_terminal_errors_preserve_public_boundaries ()
             == boundary_error_t::none);
 }
 
+// Spec 01-submit-and-completion §2 request-admitted-stage: a request that
+// fails before Core admission ends `admitted` with that failure, and the
+// reply ends with the same cause. An unstarted client is not ready, so the
+// owner fails the request before it reaches the transport.
+zlink::framework::request_task_t<client_server::client_server_request_completion_t>
+submit_unready_request (client_server::raw_client_server_client_t &client)
+{
+    return client.request (
+      protocol::application_payload_t{"unready.request", "application/json", bytes ("{}")}, 200ms);
+}
+
+// The location runtime composes the owner request the same way.
+zlink::framework::request_task_t<client_server::client_server_request_completion_t>
+compose_unready_request (client_server::raw_client_server_client_t &client)
+{
+    co_return co_await zlink::framework::detail::request_submission (
+      submit_unready_request (client));
+}
+
+void verify_unready_request_fails_admission_and_reply_with_one_cause ()
+{
+    protocol::client_server_server_admission_t server;
+    server.channel_name = "client-server-unready";
+    server.security_identity = "security-unready";
+    server.advertised_endpoint = "tcp://127.0.0.1:1";
+    client_server::raw_client_server_client_t client (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_client_options_t{
+          bytes ("client-unready"),
+          {server.channel_name, server.security_identity, 16u * 1024u * 1024u},
+          server}));
+    const auto assert_one_cause = [] (auto &request) {
+        auto admitted = request.admitted ();
+        const auto &admission = admitted.result ();
+        const auto &reply = request.result ();
+        assert (!admission && !reply);
+        assert (admission.exception () == reply.exception ());
+        assert (zlink::framework::detail::framework_error (admission.exception ())->kind ()
+                == zlink::framework::framework_error_kind_t::unavailable);
+    };
+
+    auto owner_request = submit_unready_request (client);
+    assert_one_cause (owner_request);
+    auto composed_request = compose_unready_request (client);
+    assert_one_cause (composed_request);
+}
+
 } // namespace
 
 namespace
@@ -1769,6 +1816,7 @@ int main ()
     verify_client_server_readiness_counts_local_ready_servers ();
     verify_network_defaults_are_deferred_until_apply ();
     verify_client_server_terminal_errors_preserve_public_boundaries ();
+    verify_unready_request_fails_admission_and_reply_with_one_cause ();
     verify_client_server_runtime_projection_and_observation ();
     verify_public_listener_status_reports_bound_endpoint ();
     verify_listener_status_during_stop_reads_record_or_not_configured ();

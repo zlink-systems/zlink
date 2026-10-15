@@ -339,7 +339,7 @@ async function requestBackpressure(
           })();
           pending.add(reply);
           reply.finally(() => pending.delete(reply));
-          if (submission.result === transport.backpressuredResult) {
+          if (completionPump === undefined || submission.result === transport.backpressuredResult) {
             blocked = submission.admitted.catch(() => {});
             blocked.finally(() => {
               blocked = null;
@@ -347,15 +347,19 @@ async function requestBackpressure(
           }
         }
       }
-      completionPump.poll(
-        blocked === null ? 0 : pollTimeoutUntil(deadline, COMPLETION_POLL_INTERVAL_MS)
-      );
-      await sleepImmediate();
+      if (completionPump !== undefined) {
+        completionPump.poll(
+          blocked === null ? 0 : pollTimeoutUntil(deadline, COMPLETION_POLL_INTERVAL_MS)
+        );
+        await sleepImmediate();
+      } else if (blocked !== null) {
+        await blocked;
+      }
     }
 
     const drainDeadline = header.nowNs() + BigInt(options.drainBoundMs) * 1_000_000n;
     while ((pending.size > 0 || blocked !== null) && header.nowNs() < drainDeadline) {
-      completionPump.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
+      completionPump?.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
       await sleepImmediate();
     }
     metrics.freezeTerminal();

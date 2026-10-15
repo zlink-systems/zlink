@@ -62,9 +62,23 @@ and the dedicated Kotlin wrapper's `await`. An immediate submit that returns no 
 completion uses `Submit`/`submit`. Only the terminal that actually releases the shared Spot
 gate uses the name `Yield`/`yield`.
 
+<a id="request-admitted-stage"></a>
+**A request that passes Core request admission also returns its admission stage.** Among server runtime
+requests, those that pass Core request admission — operations submitted as a Core REQUEST, such as node,
+Channel, Spot and Actor requests — provide a terminal that returns an async result awaiting the reply,
+and that result has an `admitted` stage as a member. Stream Connector and HTTP requests do not pass Core
+request admission, so they have no such stage. `admitted` ends at the call's [source-local admission](../00-foundation/02-glossary.en.md#source-local-admission)
+with the same meaning as the one-way async terminal — it completes without data on success and
+completes with the failure if the call fails before admission. If `admitted` fails, the reply ends
+with the same cause. Each stage ends exactly once. Send and request therefore give the caller the
+same admission boundary: a caller that wants to delay its next submission waits for the previous
+call's admission. `admitted` does not reveal a `Backpressured` status (§5) — it simply stays
+incomplete while capacity is awaited. The result type and the names of that terminal and member are
+set by the per-language interface in §16.
+
 **[The binding rule for isolation between submissions](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md#submission-stage-isolation) also applies to asynchronous completion representations returned by the Framework.** When an asynchronous terminator covered by this document returns an admission or application result, directly or by transforming a binding result, completion-state changes, cancellation, consumption, or detachment applied to one call must not propagate to another call's completion state or ability to consume its result through a shared returned representation or shared state behind it. This also applies to shared representations of already-completed results. Progress of other calls due to normal resource reclamation follows the existing admission and lifecycle contracts.
 
-Verification uses the completion representations and outcomes actually exposed by Framework terminators to check that shared state does not contaminate results already returned for other calls or results of later calls. It does not require the Framework to expose binding result-object structures or a `Backpressured` result.
+Verification uses the completion representations and outcomes actually exposed by Framework terminators to check that shared state does not contaminate results already returned for other calls or results of later calls. It does not require the Framework to expose a `Backpressured` result.
 
 The layer returning the completion representation owns its isolation. [Cancellation and shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the boundaries between cancellation of Framework queue waits, caller-wait cancellation of binding operations, and late-completion cleanup. Isolating a returned representation must not remove the cancellation connection of a pending stage that supports cancellation or introduce binding operation state, registries, or resubmission logic into the Framework.
 
@@ -413,8 +427,8 @@ deadlock. Timer cancellation and payload cleanup also occur outside the lock.
 Releasing the lock and immediately invoking the callback on the same call stack is still
 insufficient. It lets application code re-enter the runtime before the current transport
 response or timeout handling has returned. The completion callback is placed on a
-process-shared completion dispatcher and runs on a new execution turn after the current
-handling returns.
+process-shared completion dispatcher and runs under the new-execution-turn conditions defined
+below.
 
 The order is as follows.
 
@@ -422,6 +436,14 @@ The order is as follows.
 2. Release the lock.
 3. Enqueue the callback on the dispatcher.
 4. Run the callback on a new execution turn.
+
+**A new execution turn does not mean another thread.** When the callback runs on the same execution
+resource, it starts in the next turn after the call stack and lane-current scope of the completion
+decision and post have returned. When it runs on another execution resource, it starts in an independent
+turn that receives neither the lock of the completion decision nor the lane-current scope; a global order
+in which the other resource's whole upper call stack has returned is not required.
+[Messaging Hot Path "4.4"](08-messaging-hot-path.en.md#44-placing-the-execution-resource--handing-off-the-receive-role)
+decides which execution resource runs that turn.
 
 **Putting a completion callback on the dispatcher cannot fail.** The dispatcher has no limit.
 Nothing rejects a request for lack of a slot, and nothing throws away the completion of a
@@ -445,8 +467,8 @@ host has **received** and that waits for a handler. The two count different thin
 are never merged
 ([§1](04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities)).
 
-The dispatcher uses a process-shared lane instead of creating a thread per callback,
-and shutdown drains every accepted callback.
+The dispatcher does not create a thread per callback, and shutdown drains every accepted
+callback.
 
 An exception from one callback does not stop
 later callbacks from running.
@@ -486,9 +508,9 @@ decides immediately from the returned `result`, waits on `admitted` only when
 `result == BACKPRESSURED`, and consumes `reply` for a request. This implements "wait
 only when blocked at HWM" precisely — until now a single stage could not distinguish
 admission from reply, so [three-stage backpressure](04-application-job-queue-and-backpressure.en.md)
-waiting was imprecise. The framework's **public terminal does not expose backpressure**
-(§5, `Backpressured` is not a public result); this consumption lives only in the framework's
-internal implementation. Core send-completion notification drives the completion, so the
+waiting was imprecise. The framework's public terminals do not expose the binding `result`
+(§5, `Backpressured` is not a public result). The completion of a one-way terminal and the public `admitted`
+stage of a messaging request ([§2](#request-admitted-stage)) happen when this consumption ends at admission. Core send-completion notification drives the completion, so the
 framework doesn't wrap it in a separate executor or offload. The contracts for the binding
 terminal names, return types, and result object are owned by
 [the binding routed-transfer contract and asynchronous completion surface policy](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md)
@@ -540,11 +562,11 @@ the specific return type and error representation.
 
 | Language | General async completion | Synchronous blocking | Returning the Spot turn | per-language interface owner |
 |---|---|---|---|---|
-| .NET | `Async(...)` returns `ValueTask` or `ValueTask<T>` | `Submit(...)` | `Yield(...)` | [per-language interface index](../languages/dotnet/interfaces/README.en.md) |
-| Java | `submit(...)` returns `CompletionStage<T>` | `submit_sync(...)` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.en.md) |
+| .NET | `Async(...)` | `Submit(...)` | `Yield(...)` | [per-language interface index](../languages/dotnet/interfaces/README.en.md) |
+| Java | `submit(...)` | `submit_sync(...)` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.en.md) |
 | Kotlin | Uses the dedicated call wrapper's suspending `await()` | the Java surface's `submit_sync(...)` | The dedicated wrapper's `yield()` | [Channel messaging](../languages/kotlin/interfaces/channel-messaging.en.md) |
-| Node.js | `submit(...)` returns `Promise<T>` | **not provided (§4.1)** | `yield(...)` | [interface index](../languages/node/interfaces/README.en.md) |
-| C++ | `async(...)` returns `task_t<T>` | `submit(...)` | `yield(...)` | [framework interfaces](../languages/cpp/interfaces/README.en.md) |
+| Node.js | `submit(...)` | **not provided (§4.1)** | `yield(...)` | [interface index](../languages/node/interfaces/README.en.md) |
+| C++ | `async(...)` | `submit(...)` | `yield(...)` | [framework interfaces](../languages/cpp/interfaces/README.en.md) |
 
 The synchronous blocking terminator fails with `InvalidOperation` in a runtime execution context (§4 F2-a).
 
@@ -562,7 +584,7 @@ auto reply = co_await requestCall.async(); // Awaits the async application reply
 ```
 
 No overload differing only by return type is created. The C++ Messaging call wrapper offers both
-the async `task_t<T> async()` and the synchronous blocking `submit()` (the two terminators have
+the async `async()` and the synchronous blocking `submit()` (the two terminators have
 different names, so they are not overloads). `submit()` is application-thread only and fails with
 `InvalidOperation` in a runtime execution context (§4 F2-a). A callback overload can be provided as
 `submit(callback)` since its parameter list differs.

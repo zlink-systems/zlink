@@ -43,7 +43,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         string actorId,
         string packetName,
         TMessage message,
-        ZLinkCallMetadata metadata,
+        ZLinkCallMetadata? metadata,
         ResolvedActorRoute? fixedRoute = null
     )
     {
@@ -77,16 +77,6 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             message,
             metadata
         );
-        if (actor.NodeRid == nodeRuntime.Node.RoutingId)
-        {
-            var header = ZLinkStreamProtocolDefaults.DecodeHeader(parts[0].AsReadOnlyMemory());
-            if (runtime.TrySubmitLocalActorSend(actor.ToBackend(), header, parts[1]))
-            {
-                TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorSend);
-                parts[0].Dispose();
-                return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
-            }
-        }
         try
         {
             TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorSend);
@@ -111,9 +101,10 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         string packetName,
         TRequest request,
         TimeSpan? timeout,
-        ZLinkCallMetadata metadata,
+        ZLinkCallMetadata? metadata,
         CancellationToken cancellationToken,
-        ResolvedActorRoute? fixedRoute = null
+        ResolvedActorRoute? fixedRoute = null,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         var started = timeout is null ? 0 : Stopwatch.GetTimestamp();
@@ -164,7 +155,8 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                     actor.ToBackend(),
                     parts,
                     remainingTimeout,
-                    cancellationToken
+                    cancellationToken,
+                    requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
             terminal?.Succeeded();
@@ -289,13 +281,20 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         IReadOnlyList<Message> reply;
         try
         {
-            reply = await node.RequestToActorAsync(actor, parts, timeout, cancellationToken)
+            reply = await node.RequestToActorAsync(
+                    actor,
+                    parts,
+                    timeout,
+                    cancellationToken,
+                    requestAdmission: requestAdmission
+                )
                 .ConfigureAwait(false);
         }
         catch (ZlinkSubmitException error)
@@ -357,7 +356,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ZLinkCallMetadata? callMetadata = null
     )
     {
-        var metadata = callMetadata?.ToStreamMetadata() ?? ZlinkStreamMetadata.Empty;
+        var metadata = ZLinkCallMetadata.ToStreamMetadata(callMetadata);
         var flags = requestSeq is null
             ? ZlinkStreamHeaderFlags.None
             : ZlinkStreamHeaderFlags.HasRequestSeq;
@@ -505,18 +504,18 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         TMessage message
     ) : IZLinkActorSendCall
     {
-        private readonly ZLinkCallMetadata _metadata = new();
-        private readonly ZLinkOneWayCallGate _submission = new("Actor send");
+        private ZLinkCallMetadata? _metadata;
+        private ZLinkOneWayCallGate _submission = new("Actor send");
 
         public IZLinkActorSendCall Metadata(string key, string value)
         {
-            _metadata.Set(key, value);
+            ZLinkCallMetadata.Set(ref _metadata, key, value);
             return this;
         }
 
         public IZLinkActorSendCall Metadata(ZLinkMessageMetadata metadata)
         {
-            _metadata.Merge(metadata);
+            ZLinkCallMetadata.Merge(ref _metadata, metadata);
             return this;
         }
 
@@ -541,7 +540,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ResolvedActorRoute? fixedRoute = null
     ) : IZLinkActorRequestCall
     {
-        private readonly ZLinkCallMetadata _metadata = new();
+        private ZLinkCallMetadata? _metadata;
         private readonly ZLinkApplicationExecutionScope? _executionScope =
             ZLinkApplicationExecutionContext.Current;
         private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
@@ -556,24 +555,26 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
 
         public IZLinkActorRequestCall Metadata(string key, string value)
         {
-            _metadata.Set(key, value);
+            ZLinkCallMetadata.Set(ref _metadata, key, value);
             return this;
         }
 
         public IZLinkActorRequestCall Metadata(ZLinkMessageMetadata metadata)
         {
-            _metadata.Merge(metadata);
+            ZLinkCallMetadata.Merge(ref _metadata, metadata);
             return this;
         }
 
-        public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
+        public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
         {
             ZLinkApplicationExecutionContext.ValidateActorRequest(
                 actorId,
                 ZLinkNestedRequestTerminator.Async,
                 _executionScope
             );
-            return ExecuteAsync<TReply>(cancellationToken);
+            return ZLinkRequestAdmission.Run<TReply>(admission =>
+                ExecuteAsync<TReply>(cancellationToken, admission)
+            );
         }
 
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default)
@@ -585,10 +586,13 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             );
             return ZLinkApplicationExecutionContext
                 .RequireYieldTurn(_turn, "Actor request")
-                .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
+                .YieldFrameworkCallAsync(token => ExecuteAsync<TReply>(token), cancellationToken);
         }
 
-        private ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
+        private ValueTask<TReply> ExecuteAsync<TReply>(
+            CancellationToken cancellationToken,
+            ZLinkRequestAdmission? requestAdmission = null
+        )
         {
             return client.RequestAsync<TRequest, TReply>(
                 actorId,
@@ -597,7 +601,8 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                 _timeout,
                 _metadata,
                 cancellationToken,
-                fixedRoute
+                fixedRoute,
+                requestAdmission: requestAdmission
             );
         }
     }

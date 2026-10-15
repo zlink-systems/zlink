@@ -12,6 +12,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJavaSocketBacked {
@@ -131,8 +132,12 @@ final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJava
 
     @Override
     public synchronized CompletionStage<ZLinkBackendReceived> request(
-            RoutingId routingId, List<Message> parts, Duration timeout) {
-        return ZLinkJavaSocketSupport.submitRequest(socket.request(routingId), parts, timeout);
+            RoutingId routingId,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        return ZLinkJavaSocketSupport.submitRequest(
+                socket.request(routingId), parts, timeout, null, requestAdmission);
     }
 
     @Override

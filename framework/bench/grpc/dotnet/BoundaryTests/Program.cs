@@ -24,6 +24,80 @@ foreach (
         throw new InvalidOperationException($"Nanosecond boundary conversion failed: {ticks}");
 }
 var serverMetrics = new BenchServerMetrics();
+serverMetrics.Reset();
+var activeSourceWork = ResourceSample.Start();
+var workStart = ThreadPool.CompletedWorkItemCount;
+var workItemTimeout = TimeSpan.FromSeconds(3);
+using (var completed = new ManualResetEventSlim())
+{
+    ThreadPool.QueueUserWorkItem(_ => completed.Set());
+    if (!completed.Wait(workItemTimeout))
+        throw new InvalidOperationException("ThreadPool work item did not run.");
+    if (!SpinWait.SpinUntil(() => ThreadPool.CompletedWorkItemCount > workStart, workItemTimeout))
+        throw new InvalidOperationException("ThreadPool work item did not finish.");
+}
+if (activeSourceWork.Finish().ThreadPoolWorkItems < 1)
+    throw new InvalidOperationException(
+        "Source ThreadPool snapshot excluded a completed work item."
+    );
+using (
+    var workSnapshot = System.Text.Json.JsonDocument.Parse(
+        System.Text.Json.JsonSerializer.Serialize(serverMetrics.Snapshot())
+    )
+)
+{
+    if (workSnapshot.RootElement.GetProperty("ThreadPoolWorkItems").GetInt64() < 1)
+        throw new InvalidOperationException(
+            "Target ThreadPool snapshot excluded a completed work item."
+        );
+}
+var resetWorkStart = ThreadPool.CompletedWorkItemCount;
+serverMetrics.Reset();
+var resetWorkSnapshot = serverMetrics.Snapshot();
+if (resetWorkSnapshot.ThreadPoolWorkItems > ThreadPool.CompletedWorkItemCount - resetWorkStart)
+    throw new InvalidOperationException(
+        "Target ThreadPool snapshot retained the previous interval."
+    );
+var sourceWorkStart = ThreadPool.CompletedWorkItemCount;
+var sourceWorkSample = ResourceSample.Start();
+var sourceWorkResult = sourceWorkSample.Finish();
+if (sourceWorkResult.ThreadPoolWorkItems > ThreadPool.CompletedWorkItemCount - sourceWorkStart)
+    throw new InvalidOperationException(
+        "Source ThreadPool snapshot retained the previous interval."
+    );
+const int allocationPayloadBytes = 1024 * 1024;
+serverMetrics.Reset();
+var allocationPayload = new byte[allocationPayloadBytes];
+using (
+    var allocationSnapshot = System.Text.Json.JsonDocument.Parse(
+        System.Text.Json.JsonSerializer.Serialize(serverMetrics.Snapshot())
+    )
+)
+{
+    if (
+        allocationSnapshot.RootElement.GetProperty("AllocatedBytes").GetInt64()
+        < allocationPayloadBytes
+    )
+        throw new InvalidOperationException(
+            "Target allocation snapshot excluded an active allocation."
+        );
+}
+GC.KeepAlive(allocationPayload);
+serverMetrics.Reset();
+using (
+    var allocationSnapshot = System.Text.Json.JsonDocument.Parse(
+        System.Text.Json.JsonSerializer.Serialize(serverMetrics.Snapshot())
+    )
+)
+{
+    if (
+        allocationSnapshot.RootElement.GetProperty("AllocatedBytes").GetInt64()
+        >= allocationPayloadBytes
+    )
+        throw new InvalidOperationException(
+            "Target allocation snapshot retained the previous interval."
+        );
+}
 serverMetrics.Record(BenchMetricHeaders.CreatePayloadBytes(4096, 1, BenchPhase.Warmup, 0));
 if (serverMetrics.Snapshot().AllPhaseMessages != 1 || serverMetrics.Snapshot().Received != 0)
     throw new InvalidOperationException("Warmup receipt was excluded from all-phase stats.");

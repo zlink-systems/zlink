@@ -3,6 +3,7 @@ import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkFlowOrigin } from '../../contracts';
 import {
   decodeChannelHeader,
+  isValidChannelCorrelationId,
   ZLINK_CHANNEL_FORMAT_MARKER,
   ZLinkChannelMessageKind,
   type ZLinkChannelEnvelopeHeader
@@ -29,7 +30,6 @@ export function tryDecodeChannelHeader(
  * present only when it is individually well-formed.
  */
 export interface ZLinkMalformedChannelHeaderInfo {
-  readonly kind?: ZLinkChannelMessageKind;
   readonly channelName?: string;
   readonly messageName?: string;
   readonly correlationId?: string;
@@ -50,7 +50,6 @@ export function inspectMalformedChannelHeader(
   } catch {
     return {};
   }
-  if (header.formatMarker !== ZLINK_CHANNEL_FORMAT_MARKER) return {};
   const flowId =
     typeof header.flowId === 'string' && CHANNEL_FLOW_ID_PATTERN.test(header.flowId)
       ? header.flowId
@@ -58,7 +57,6 @@ export function inspectMalformedChannelHeader(
   const flowOrigin = salvageFlowOrigin(header.flowOrigin);
   const flowPairValid = flowEnabled && flowId !== undefined && flowOrigin !== undefined;
   return {
-    kind: salvageChannelKind(header.kind),
     channelName: salvageString(header.channelName),
     messageName: salvageString(header.messageName),
     correlationId: salvageCorrelationId(header.correlationId),
@@ -94,24 +92,12 @@ export function malformedProtocolErrorRequestHeader(
 const CHANNEL_FLOW_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-function salvageChannelKind(value: unknown): ZLinkChannelMessageKind | undefined {
-  return value === ZLinkChannelMessageKind.Request ||
-    value === ZLinkChannelMessageKind.Response ||
-    value === ZLinkChannelMessageKind.Command ||
-    value === ZLinkChannelMessageKind.Publish ||
-    value === ZLinkChannelMessageKind.Error
-    ? value
-    : undefined;
-}
-
 function salvageString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function salvageCorrelationId(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const byteLength = Buffer.byteLength(value, 'utf8');
-  return byteLength >= 1 && byteLength <= 64 && /^[\x00-\x7f]*$/.test(value) ? value : undefined;
+  return typeof value === 'string' && isValidChannelCorrelationId(value) ? value : undefined;
 }
 
 function salvageFlowOrigin(value: unknown): ZLinkFlowOrigin | undefined {

@@ -17,6 +17,40 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     private const string AdmissionTestServerHost = "127.0.0.2";
 
     [Fact]
+    public async Task CurrentSpotChannelPublicRequest_AdmitsBeforeReply()
+    {
+        await using var server = CreateBlockingServer(0);
+        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await serverRuntime.StartAsync(CancellationToken.None);
+        var state = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(state, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = CreateClient(endpoint);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await clientRuntime.StartAsync(CancellationToken.None);
+        var probe = server.GetRequiredService<BlockingRequestProbe>();
+        try
+        {
+            var activation = new MetadataTestSpotActivation(clientRuntime.Flow);
+            var spot = new ZLinkSpotOutboundEndpoint(activation, outbound: null!, clientRuntime);
+            activation.OutboundEndpoint = spot;
+            var request = spot.RequestToChannel("work", new BlockingRequest("admitted"))
+                .Async<EchoReply>();
+            await request.Admitted.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(request.Reply.IsCompleted);
+            probe.Release.SetResult();
+            Assert.Equal("admitted", (await request).Value);
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            await clientRuntime.StopAsync(CancellationToken.None);
+            await serverRuntime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task ClientServerPublicSendAndRequestPreserveMetadataSnapshot()
     {
         await using var server = CreateServer(0);

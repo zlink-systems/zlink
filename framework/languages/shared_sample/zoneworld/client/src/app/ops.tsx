@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { render } from 'preact';
 import { OpsPage } from '../pages/ops/ops-page';
 import { loadClientEndpoints } from '../shared/config/runtime';

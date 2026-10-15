@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 // Source A: HTTP-triggered logical streams. The runner owns process isolation and settle.
 #include "../common/bench_async.hpp"
 #include "../common/bench_common.hpp"
@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -175,7 +176,9 @@ struct counters_t
 class driver_t
 {
   public:
+    static constexpr int unlimited_request_window = 0;
     virtual ~driver_t () = default;
+    virtual int request_window () const = 0;
     std::function<void ()> boundary;
     void close_window (clock_t_::time_point deadline)
     {
@@ -219,6 +222,8 @@ template <typename TReply> struct grpc_call_t
 class grpc_driver_t : public driver_t
 {
   public:
+    int request_window () const override { return _window; }
+
     grpc_driver_t (const options_t &options, int window, bool command_path) :
         _options (options), _window (window), _command_path (command_path)
     {
@@ -465,6 +470,8 @@ bool grpc_driver_t::validate<google::protobuf::Empty> (
 class zlink_raw_driver_t : public driver_t
 {
   public:
+    int request_window () const override { return _window; }
+
     zlink_raw_driver_t (const options_t &options, int window, bool command_path) :
         _options (options), _window (window), _command_path (command_path)
     {
@@ -821,9 +828,11 @@ using json = nlohmann::json;
 class framework_driver_t final : public driver_t
 {
   public:
+    int request_window () const override { return _window; }
+
     framework_driver_t (const options_t &options, int window, bool command) :
         _options (options),
-        _window (window),
+        _window (command ? unlimited_request_window : window),
         _command (command),
         _host (std::vector<int>{}, bench_http_callback_t{})
     {
@@ -898,7 +907,7 @@ class framework_driver_t final : public driver_t
         return payload;
     }
 
-    template <typename T> fw::task_t<T> submit (payload_t payload)
+    template <typename T> auto submit (payload_t payload)
     {
         if constexpr (std::is_void_v<T>)
             return _client->send_to_node ("bench", _target_node, std::move (payload)).async ();
@@ -927,18 +936,28 @@ class framework_driver_t final : public driver_t
             uint64_t seq;
         };
         std::vector<std::optional<pending_t>> pending;
-        if (_window > 0)
-            pending.reserve (static_cast<size_t> (_window));
         std::vector<size_t> free_slots;
         std::vector<size_t> completed_slots;
         size_t in_flight = 0;
+        constexpr size_t admission_notification = std::numeric_limits<size_t>::max ();
+        std::optional<fw::task_t<void>> preceding_admission;
         auto completion_signal = std::make_shared<completion_signal_t> ();
         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
+        const auto can_submit = [&] (clock_t_::time_point now) {
+            const bool admission_ready = [&] {
+                if constexpr (std::is_void_v<T>)
+                    return in_flight == 0;
+                else
+                    return !preceding_admission || preceding_admission->await_ready ();
+            }();
+            return now < deadline && admission_ready
+                   && (_window == unlimited_request_window
+                       || in_flight < static_cast<size_t> (_window));
+        };
         do {
             close_window (deadline);
-            // Unbounded admission submits once per cooperative completion-pump turn.
-            while (clock_t_::now () < deadline
-                   && (_window <= 0 || in_flight < static_cast<size_t> (_window))) {
+            // Admission sequences submits; the pattern window bounds replies.
+            if (can_submit (clock_t_::now ())) {
                 const auto sent = now_ns ();
                 auto payload = make_payload (size, phase);
                 counters.enter ();
@@ -951,16 +970,24 @@ class framework_driver_t final : public driver_t
                     slot = free_slots.back ();
                     free_slots.pop_back ();
                 }
-                pending[slot].emplace (submit<T> (std::move (payload)), sent, _seq - 1);
+                auto submission = submit<T> (std::move (payload));
+                if constexpr (!std::is_void_v<T>) {
+                    preceding_admission.emplace (submission.admitted ());
+                    fw::detail::observe_task_completion (
+                      *preceding_admission, [completion_signal] (const auto &) {
+                          completion_signal->notify (admission_notification);
+                      });
+                }
+                pending[slot].emplace (std::move (submission), sent, _seq - 1);
                 fw::detail::observe_task_completion (
                   pending[slot]->task,
                   [completion_signal, slot] (const auto &) { completion_signal->notify (slot); });
                 ++in_flight;
-                if (_window <= 0)
-                    break;
             }
             completion_signal->take_completed (completed_slots);
             for (const size_t slot : completed_slots) {
+                if (slot == admission_notification)
+                    continue;
                 auto &item = *pending[slot];
                 const auto &result = item.task.result ();
                 bool valid = static_cast<bool> (result);
@@ -997,9 +1024,7 @@ class framework_driver_t final : public driver_t
             const auto now = clock_t_::now ();
             if (now >= hard_stop)
                 break;
-            const bool can_submit =
-              now < deadline && (_window <= 0 || in_flight < static_cast<size_t> (_window));
-            if (in_flight != 0 && !can_submit)
+            if (in_flight != 0 && !can_submit (now))
                 completion_signal->wait_until (now < deadline ? deadline : hard_stop);
         } while (clock_t_::now () < deadline || in_flight != 0);
         close_window (deadline);
@@ -1229,7 +1254,7 @@ class source_t
         cell.implementation = _options.implementation;
         cell.pattern = _options.pattern;
         cell.payload_size = _options.payload_size;
-        cell.request_window = pattern_window (_options.pattern);
+        cell.request_window = _driver->request_window ();
         cell.logical_cores_value = logical_cores ();
         const auto target_before = fetch_stats ("127.0.0.1", _options.target_stats_port);
         if (!target_before)

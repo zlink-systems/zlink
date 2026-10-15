@@ -58,6 +58,8 @@ module systems.zlink.framework {
     exports systems.zlink.framework.runtime.streams to
             zlink.framework.spring.boot.starter,
             zlink.framework.testkit;
+    exports systems.zlink.framework.runtime.internal.service to
+            zlink.framework.testkit;
 
     uses systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
     uses systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;

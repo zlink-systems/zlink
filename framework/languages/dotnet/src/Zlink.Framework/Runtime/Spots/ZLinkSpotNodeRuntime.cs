@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
@@ -41,7 +42,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     private ZLinkEntrySpotActivation? _entrySpotActivation;
     private ZLinkMeshNodeRouteDispatcher? _nodeRouteDispatcher;
     private int _entrySpotMetricActive;
-    private int _entrySpotLifecycleClosed;
 
     public ZLinkSpotNodeRuntime(
         IServiceProvider services,
@@ -362,7 +362,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         bool request,
         ulong deadlineUnixMs,
         ReadOnlyMemory<byte>? metadata,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         var activationTarget =
@@ -381,38 +382,69 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             request ? operationId.Low : 0,
             deadlineUnixMs
         );
-        if (request)
-            return activationTarget.ActivateAsync(operation, metadata, payload, cancellationToken);
-
-        // Local transport admission completes before target activation and first dispatch.
-        if (
-            !_taskRunner.TryRunDetached(
-                "local-instance-spot-activation",
-                async shutdownToken =>
-                {
-                    var terminal = await activationTarget
-                        .ActivateAsync(operation, metadata, payload, shutdownToken)
-                        .ConfigureAwait(false);
-                    if (terminal.Result != RequestResult.Ok)
-                        throw ZLinkRequestFailureMapper.CreateCompletionException(
-                            terminal.Result,
-                            (int)terminal.FailureCode,
-                            "Local Instance Spot activation"
-                        );
-                }
+        cancellationToken.ThrowIfCancellationRequested();
+        using var admission = _runtime.EnterOperation();
+        var backgroundOperation = _runtime.RetainOperationForBackgroundWork();
+        var reply = request
+            ? new TaskCompletionSource<InstanceSpotActivationTerminal>(
+                TaskCreationOptions.RunContinuationsAsynchronously
             )
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ShuttingDown,
-                "Local Instance Spot activation admission is closed."
+            : null;
+        // Local relay acceptance precedes target activation and first dispatch.
+        try
+        {
+            if (
+                !_taskRunner.TryRunDetached(
+                    "local-instance-spot-activation",
+                    async shutdownToken =>
+                    {
+                        using var ownership = backgroundOperation;
+                        try
+                        {
+                            var terminal = await activationTarget
+                                .ActivateAsync(
+                                    operation,
+                                    metadata,
+                                    payload,
+                                    request ? cancellationToken : shutdownToken
+                                )
+                                .ConfigureAwait(false);
+                            if (reply is not null)
+                                reply.TrySetResult(terminal);
+                            else if (terminal.Result != RequestResult.Ok)
+                                throw ZLinkRequestFailureMapper.CreateCompletionException(
+                                    terminal.Result,
+                                    (int)terminal.FailureCode,
+                                    "Local Instance Spot activation"
+                                );
+                        }
+                        catch (Exception error) when (reply is not null)
+                        {
+                            reply.TrySetException(error);
+                        }
+                    }
+                )
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ShuttingDown,
+                    "Local Instance Spot activation admission is closed."
+                );
+        }
+        catch
+        {
+            backgroundOperation.Dispose();
+            throw;
+        }
+        requestAdmission?.Complete();
+        return reply is not null
+            ? new ValueTask<InstanceSpotActivationTerminal>(reply.Task)
+            : ValueTask.FromResult(
+                new InstanceSpotActivationTerminal(
+                    RequestResult.Ok,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    Array.Empty<ReadOnlyMemory<byte>>()
+                )
             );
-        return ValueTask.FromResult(
-            new InstanceSpotActivationTerminal(
-                RequestResult.Ok,
-                0,
-                Array.Empty<ReadOnlyMemory<byte>>()
-            )
-        );
     }
 
     internal async ValueTask<(
@@ -547,18 +579,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             : ZLinkRouteMeshTargetClassification.Unknown;
     }
 
-    internal ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetNodeRid)
-    {
-        var peer = Node.MeshPeers()
-            .FirstOrDefault(candidate => candidate.RoutingId == targetNodeRid);
-        if (peer is null)
-            return ZLinkRouteMeshTargetClassification.Unknown;
-        if (peer.ObjectRole == ZLinkMeshNodeObjectRole.Client)
-            return ZLinkRouteMeshTargetClassification.ObjectClientTarget;
-        return peer.State == MeshPeerState.Admitted
-            ? ZLinkRouteMeshTargetClassification.ReadyEligible
-            : ZLinkRouteMeshTargetClassification.Unknown;
-    }
+    internal ZLinkRouteMeshTargetClassification ClassifyLiveRouterTarget(RoutingId targetNodeRid) =>
+        Node.ClassifyLiveRouterTarget(targetNodeRid);
 
     public IReadOnlyCollection<ZLinkSpotActivation> Spots => _spots.Spots;
 
@@ -682,10 +704,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         {
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
         }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(parts);
-        }
     }
 
     internal void ObserveActorAuthority(
@@ -713,7 +731,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
-        bool durable = false
+        bool durable = false,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         try
@@ -725,7 +744,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     timeout,
                     cancellationToken,
                     metadata,
-                    durable
+                    durable,
+                    requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
         }
@@ -793,13 +813,10 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         AwaitStateLane(_spots.CancelActiveOperationsAsync());
     }
 
-    internal async ValueTask CloseLifecycleAsync()
+    private async ValueTask CloseLifecycleAsync()
     {
         await _spots.CloseLifecycleAsync().ConfigureAwait(false);
-        if (
-            _entrySpotActivation is not { } activation
-            || Interlocked.Exchange(ref _entrySpotLifecycleClosed, 1) != 0
-        )
+        if (_entrySpotActivation is not { } activation)
             return;
 
         await activation.CloseAsync(CancellationToken.None).ConfigureAwait(false);
@@ -838,8 +855,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             )
             .ConfigureAwait(false);
         await CaptureAsync(_bundles.DisposeAsync).ConfigureAwait(false);
-        await CaptureAsync(() => DisposeEntrySpotAsync(forceStopToken.CanBeCanceled))
-            .ConfigureAwait(false);
+        await CaptureAsync(DisposeEntrySpotAsync).ConfigureAwait(false);
         await CaptureAsync(
                 forceStopToken.CanBeCanceled
                     ? () => Node.ForceStopAsync(forceStopToken)
@@ -1256,7 +1272,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         return Registration.Router is not null && Registration.ActorFactories.Count > 0;
     }
 
-    private async ValueTask DisposeEntrySpotAsync(bool forceStop)
+    private async ValueTask DisposeEntrySpotAsync()
     {
         if (_entrySpot is null)
             return;
@@ -1264,9 +1280,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         var failures = new List<Exception>();
         if (_entrySpotActivation is { } activation)
         {
-            if (!forceStop && Volatile.Read(ref _entrySpotLifecycleClosed) == 0)
-                await CaptureAsync(() => activation.CloseAsync(CancellationToken.None))
-                    .ConfigureAwait(false);
             await CaptureAsync(activation.DisposeAsync).ConfigureAwait(false);
         }
 

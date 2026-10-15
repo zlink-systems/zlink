@@ -1,0 +1,20 @@
+package Zlink.HttpClient
+entry README.md
+entry Zlink.HttpClient.nuspec
+entry [Content_Types].xml
+entry _rels/.rels
+entry lib/net10.0/Zlink.HttpClient.dll
+entry lib/net10.0/Zlink.HttpClient.xml
+entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
+content-sha256 lib/net10.0/Zlink.HttpClient.xml=2420eb97eed84bd4d1b8ff57b5005e19b5af0ee71280ea53ade8bbd6799070bc
+metadata authors=zlink
+metadata description=ZLink-style fluent HTTP client wrapping System.Net.Http for the ZLink framework.
+metadata id=Zlink.HttpClient
+metadata license=Apache-2.0 type=expression
+metadata licenseUrl=https://licenses.nuget.org/Apache-2.0
+metadata projectUrl=https://github.com/zlink-systems/zlink
+metadata readme=README.md
+metadata version={VERSION}
+metadata repository commit={COMMIT} type=git url=https://github.com/zlink-systems/zlink
+dependency-group targetFramework=net10.0
+dependency targetFramework=net10.0 exclude=Build,Analyzers id=Zlink.Framework.Contracts version={VERSION}

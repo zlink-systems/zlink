@@ -952,6 +952,7 @@ Create·GetOrCreate의 실패 조건과 error kind는 다음과 같다.
 | 둘 수 있는 node가 하나도 없다 | `Unavailable` |
 | reservation을 확보한 owner route가 준비되지 않았다 | `Unavailable` |
 | Store resolve·reservation·commit과 activation infrastructure가 실패했다 | `InternalFailure` |
+| Spot `Configure()`의 등록이 검사에 실패했다(§23) | `InvalidOperation` |
 | object kind·stable type이 충돌한다 | `TypeMismatch` |
 | stale authority fence다 | `Unavailable` |
 
@@ -1030,7 +1031,14 @@ Framework는 host가 message를 받기 전에 최소한 다음 설정을 검증�
 - TLS certificate, key와 trust 설정의 완전성
 - bind host, advertised host와 실제 bound port로 만든 endpoint의 유효성
 
-설정 오류는 lazy first call까지 미루지 않고 host startup을 실패시킨다.
+Host 구성에서 정한 설정의 오류는 lazy first call까지 미루지 않고 host startup을 실패시킨다.
+
+**Spot의 `Configure()`에서 정한 등록은 host 시작 검사의 대상이 아니다.** `Configure()`는 identity가 결합된
+실제 Context로만 실행하므로([Spot 모델 「7」](../03-spot-actor/01-spot-model.ko.md#7-net에서-보이는-차이)),
+host 시작 검사를 위해 Spot을 미리 만들거나 `Configure()`를 호출하지 않는다. 그 등록은 그 Spot의
+activation에서 Ready 공개 전에 검사하며, 위반하면 그 activation이 `InvalidOperation`으로 실패한다(§20의
+Create·GetOrCreate 오류 표). Entry Spot은 host startup 안에서 activation되므로 그 실패는 host startup
+실패로 관찰된다.
 
 ## 24. Runtime query와 monitoring
 

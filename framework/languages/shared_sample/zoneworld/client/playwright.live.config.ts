@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { defineConfig } from '@playwright/test';
 
 const previewPort = Number(process.env.ZONEWORLD_BROWSER_PREVIEW_PORT ?? '48180');

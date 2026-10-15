@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/messaging/envelope_codec.hpp"
 
@@ -75,6 +75,13 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
                                          const std::string *flow_id,
                                          const std::optional<flow_origin_t> &flow_origin)
 {
+    if (header.kind < message_kind_t::request || header.kind > message_kind_t::error)
+        return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                        "ZLink envelope header kind is invalid");
+
+    if (!header.correlation_id.empty () && !header.can_correlate_reply ())
+        return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                        "ZLink envelope correlationId must be 1..64 byte ASCII");
     if (format_marker != static_cast<int> (flow_id_t::format_marker)) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "ZLink envelope format marker is invalid");
@@ -414,10 +421,14 @@ struct header_scalar_t
         string = std::move (value);
     }
 
-    void set_number (int value)
+    template <typename TInteger> void set_number (TInteger value)
     {
+        if (!std::in_range<int> (value)) {
+            set_other ();
+            return;
+        }
         type = header_value_t::number;
-        number = value;
+        number = static_cast<int> (value);
         string.clear ();
     }
 
@@ -437,25 +448,21 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
     {
         return scalar ([] (header_scalar_t &value) { value.set_null (); });
     }
-    bool boolean (bool value) override
+    bool boolean (bool) override
     {
-        return scalar (
-          [value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+        return scalar ([] (header_scalar_t &target) { target.set_other (); });
     }
     bool number_integer (number_integer_t value) override
     {
-        return scalar (
-          [value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+        return scalar ([value] (header_scalar_t &target) { target.set_number (value); });
     }
     bool number_unsigned (number_unsigned_t value) override
     {
-        return scalar (
-          [value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+        return scalar ([value] (header_scalar_t &target) { target.set_number (value); });
     }
-    bool number_float (number_float_t value, const string_t &) override
+    bool number_float (number_float_t, const string_t &) override
     {
-        return scalar (
-          [value] (header_scalar_t &target) { target.set_number (static_cast<int> (value)); });
+        return scalar ([] (header_scalar_t &target) { target.set_other (); });
     }
     bool string (string_t &value) override
     {
@@ -527,6 +534,10 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
 
     result_t<envelope_header_t> finish (std::optional<envelope_header_t> *rejection_context)
     {
+        if (!_parse_error.empty ())
+            return failure (_parse_error);
+        if (!_root_object || !_root_closed || _depth != 0)
+            return failure ("ZLink envelope header must be a JSON object");
         envelope_header_t header;
         header.kind = static_cast<message_kind_t> (_kind.number);
         header.channel_name = std::move (_channel_name.string);
@@ -573,10 +584,6 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             header.flow_origin.reset ();
             return reject (valid.error ()->what ());
         }
-        if (!_parse_error.empty ())
-            return reject (_parse_error);
-        if (!_root_object || !_root_closed || _depth != 0)
-            return reject ("ZLink envelope header must be a JSON object");
         if (_invalid_metadata_shape)
             return reject ("ZLink envelope header metadata must be an object");
         if (!_invalid_metadata_keys.empty ())
@@ -783,6 +790,15 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
 };
 
 } // namespace
+
+bool envelope_header_t::can_correlate_reply () const noexcept
+{
+    constexpr std::size_t maximum_correlation_id_bytes = 64;
+    constexpr unsigned char maximum_ascii_character = 0x7f;
+    return !correlation_id.empty () && correlation_id.size () <= maximum_correlation_id_bytes
+           && std::all_of (correlation_id.begin (), correlation_id.end (),
+                           [] (unsigned char value) { return value <= maximum_ascii_character; });
+}
 
 result_t<envelope_header_t>
 envelope_codec_t::decode_header (const zlink::message_t &message,

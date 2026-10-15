@@ -2135,6 +2135,70 @@ test('stream session onDisconnected can explicitly notify bound actors before cl
   assert.equal(await bindingRuntime.find('actor-a'), undefined);
 });
 
+const disconnectShutdownStressIterations = 100;
+for (const termination of ['logical', 'physical', 'disconnect-then-shutdown']) {
+  test(`actor unbound submission follows ${termination} session termination`, async () => {
+    const physical = termination !== 'logical';
+    const iterations =
+      termination === 'disconnect-then-shutdown' ? disconnectShutdownStressIterations : 1;
+    for (let iteration = 0; iteration < iterations; iteration++) {
+      const sessionId = 'unbound-termination-contract';
+      const socket = new FakeStreamSocket();
+      const bindingRuntime = new framework.ZLinkStreamBindingRuntime({
+        async notifyDisconnected() {}
+      });
+      let notifyConnected;
+      const connected = new Promise((resolve) => {
+        notifyConnected = resolve;
+      });
+      let context;
+      const runtime = new framework.ZLinkStreamSessionRuntime(
+        {
+          socket,
+          bindingRuntime,
+          sessionFactory(ctx) {
+            context = ctx;
+            return {
+              context: ctx,
+              onConnected() {
+                notifyConnected();
+              }
+            };
+          }
+        },
+        sessionId
+      );
+      try {
+        runtime.enqueueConnected();
+        await connected;
+        const actor = await context.actors.bind({
+          nodeRid: 'actor-node',
+          actorId: 'actor-a',
+          objectGeneration: 1n,
+          meshName: 'actors'
+        });
+        if (physical) {
+          if (termination === 'disconnect-then-shutdown') runtime.enqueueDisconnected();
+          await runtime.drainClose();
+          await runtime.dispose();
+          assert.deepEqual(socket.disconnects, [sessionId]);
+        } else {
+          await actor.notifyDisconnected();
+          assert.deepEqual(socket.disconnects, []);
+        }
+        const unbound = socket.sent.filter(({ bytes }) => {
+          return decodeServerSentFrame({ bytes }).header.name === '$zlink.actor.unbound';
+        });
+        assert.equal(unbound.length, physical ? 0 : 1);
+        assert.equal(await bindingRuntime.find('actor-a'), undefined);
+      } finally {
+        await runtime.dispose();
+      }
+    }
+  });
+}
+
+
 test('physical stream disconnect automatically notifies every captured actor and always cleans up', async () => {
   const socket = new FakeStreamSocket();
   const events = [];

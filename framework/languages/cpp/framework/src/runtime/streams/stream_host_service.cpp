@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
@@ -1773,7 +1773,7 @@ class stream_host_service_t::listener_t
         return state;
     }
 
-    task_t<void> bind_actor_session (
+    request_task_t<void> bind_actor_session (
       runtime::stateful::stream_connection_t transport_connection,
       zlink::routing_id_t session_rid,
       actor_ref_t actor,
@@ -1844,10 +1844,10 @@ class stream_host_service_t::listener_t
                       detail::application_actor_session_bind_outcome_t::actor_not_ready)
                     && remaining > std::chrono::milliseconds::zero ()) {
                     co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
-                    co_await bind_actor_session (
+                    co_await detail::request_submission (bind_actor_session (
                       transport_connection, session_rid, actor, replacement, binding_generation,
                       publish_client_binding,
-                      detail::application_actor_session_bind_attempt_t::retry, binding_deadline);
+                      detail::application_actor_session_bind_attempt_t::retry, binding_deadline));
                     co_return;
                 }
                 throw framework_exception_t (
@@ -1954,6 +1954,7 @@ class stream_host_service_t::listener_t
             return result_t<void>::success ();
         };
         if (local_node->to_hex () == actor_route->node_rid.to_hex ()) {
+            co_await detail::request_admitted_t{};
             recorded = result_t<void>::success ();
         } else {
             auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
@@ -1963,8 +1964,9 @@ class stream_host_service_t::listener_t
                   result_t<void>::failure (framework_error_kind_t::deadline_exceeded,
                                            "Remote Actor session binding deadline elapsed");
             } else {
-                const auto remote_binding = co_await _mesh_node->bind_application_actor_session (
-                  actor, session_rid, binding.binding_generation, *actor_route, remaining);
+                const auto remote_binding =
+                  co_await detail::request_submission (_mesh_node->bind_application_actor_session (
+                    actor, session_rid, binding.binding_generation, *actor_route, remaining));
                 if (remote_binding
                     == detail::application_actor_session_bind_outcome_t::stale_route) {
                     retryable_outcome = remote_binding;
@@ -2027,10 +2029,10 @@ class stream_host_service_t::listener_t
                 (void) co_await _mesh_node->refresh_application_actor_route (actor, *actor_route);
                 co_await detail::delay (std::min (remaining, std::chrono::milliseconds (10)));
             }
-            co_await bind_actor_session (transport_connection, session_rid, actor, replacement,
-                                         binding_generation, publish_client_binding,
-                                         detail::application_actor_session_bind_attempt_t::retry,
-                                         binding_deadline);
+            co_await detail::request_submission (bind_actor_session (
+              transport_connection, session_rid, actor, replacement, binding_generation,
+              publish_client_binding, detail::application_actor_session_bind_attempt_t::retry,
+              binding_deadline));
             co_return;
         }
         throw recorded.error () ? *recorded.error ()
@@ -2222,7 +2224,7 @@ class stream_host_service_t::listener_t
           [this, transport_connection = created->transport_connection, rid, replacement,
            weak = std::weak_ptr<core_session_t> (created)] (
             actor_ref_t actor, std::uint64_t binding_generation,
-            std::uint16_t actor_slot) -> task_t<void> {
+            std::uint16_t actor_slot) -> request_task_t<void> {
               const auto actor_id = std::string (actor.actor_id ().value ());
               return bind_actor_session (transport_connection, rid, actor, replacement,
                                          binding_generation, [this, weak, actor_slot, actor_id] {
@@ -3297,7 +3299,7 @@ class stream_host_service_t::listener_t
               [this, connection = *connection_state->transport_connection, session_rid, replacement,
                weak = std::weak_ptr<stream_connection_state_t> (connection_state)] (
                 actor_ref_t actor, std::uint64_t binding_generation,
-                std::uint16_t actor_slot) -> task_t<void> {
+                std::uint16_t actor_slot) -> request_task_t<void> {
                   const auto actor_id = std::string (actor.actor_id ().value ());
                   return bind_actor_session (
                     connection, session_rid, actor, replacement, binding_generation,

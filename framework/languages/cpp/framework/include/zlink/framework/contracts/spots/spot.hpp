@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 #include <zlink/Contracts/Messaging/message.hpp>
@@ -1159,7 +1159,7 @@ class spot_context_t
         explicit erased_request_call_t (framework_exception_t error);
         erased_request_call_t (std::string packet_name,
                                serializer_registry_t *serializers,
-                               std::function<task_t<zlink::message_t> (
+                               std::function<request_task_t<zlink::message_t> (
                                  const std::string &,
                                  std::chrono::milliseconds,
                                  const request_call_t<zlink::message_t>::metadata_map_t &)> submit,
@@ -1175,9 +1175,9 @@ class spot_context_t
             auto preflight = _preflight;
             return request_call_t<TReply> (
               _packet_name,
-              [serializers,
-               submit] (const std::string &packet_name, std::chrono::milliseconds timeout,
-                        const request_call_t<TReply>::metadata_map_t &metadata) -> task_t<TReply> {
+              [serializers, submit] (
+                const std::string &packet_name, std::chrono::milliseconds timeout,
+                const request_call_t<TReply>::metadata_map_t &metadata) -> request_task_t<TReply> {
                   if (!submit) {
                       co_return result_t<TReply>::failure (
                         framework_error_kind_t::protocol_error,
@@ -1189,7 +1189,8 @@ class spot_context_t
                         "spot request has no serializer registry");
                   }
                   try {
-                      auto reply = co_await submit (packet_name, timeout, metadata);
+                      auto reply = co_await detail::request_submission (
+                        submit (packet_name, timeout, metadata));
                       co_return serializers->get<TReply> ().deserialize (
                         detail::encoded_payload_from_raw (reply));
                   }
@@ -1204,7 +1205,7 @@ class spot_context_t
         std::optional<framework_exception_t> _error;
         std::string _packet_name;
         serializer_registry_t *_serializers = nullptr;
-        std::function<task_t<zlink::message_t> (
+        std::function<request_task_t<zlink::message_t> (
           const std::string &,
           std::chrono::milliseconds,
           const request_call_t<zlink::message_t>::metadata_map_t &)>

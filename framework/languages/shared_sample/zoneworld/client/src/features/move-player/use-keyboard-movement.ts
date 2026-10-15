@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { useLayoutEffect } from 'preact/hooks';
 
 export function useKeyboardMovement(move: (dx: number, dy: number) => void, enabled: boolean): void {

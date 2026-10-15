@@ -341,7 +341,10 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
 
     @Override
     CompletionStage<Void> dispatchResolvedActorPacket(
-            ZLinkActor actor, ActorPacketFrames.Header packetHeader, ActorMessageRead read) {
+            ZLinkActor actor,
+            ActorPacketFrames.Header packetHeader,
+            ActorMessageRead read,
+            CompletableFuture<Void> requestAdmission) {
         Object actorSpotSurface = host.localActorSpotSurface(actor);
         ZLinkActorSessionCoordinator.ActorRoute route =
                 host.actorSessions()
@@ -357,7 +360,8 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                     packetHeader,
                     read.headerPart(),
                     read.bodyPart(),
-                    read.fromPendingHeader());
+                    read.fromPendingHeader(),
+                    requestAdmission);
         }
         ZLinkBackendActorReceived headerCopy =
                 read.fromPendingHeader()
@@ -368,9 +372,11 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                         ? Message.from(new byte[0])
                         : Message.from(read.bodyPart().message());
         return context.enqueueDispatch(
+                payloadCopy.size(),
                 () ->
                         dispatchRemoteJoinedActorPacket(
-                                actor, route.actorRef(), packetHeader, headerCopy, payloadCopy));
+                                actor, route.actorRef(), packetHeader, headerCopy, payloadCopy),
+                requestAdmission);
     }
 
     private CompletionStage<Void> dispatchRemoteJoinedActorPacket(

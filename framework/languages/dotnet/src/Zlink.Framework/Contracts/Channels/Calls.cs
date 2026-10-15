@@ -33,7 +33,7 @@ public interface IZLinkRequestCall : IZLinkMetadataCall<IZLinkRequestCall>
 {
     IZLinkRequestCall Timeout(TimeSpan timeout);
 
-    ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default);
+    ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Blocks the application thread until the request's application result completes.

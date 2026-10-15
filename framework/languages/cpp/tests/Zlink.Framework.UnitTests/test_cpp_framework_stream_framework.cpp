@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -1435,7 +1435,8 @@ int main ()
           hidden_until_bound =
             slot == 2
             && !actor_manager.find (std::string (actor.actor_id ().value ())).has_value ();
-          return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+          return zlink::framework::request_task_t<void> (
+            zlink::framework::result_t<void>::success ());
       });
     auto publish_actor = zlink::framework::detail::actor_ref_access_t::make (
       zlink::framework::node_rid_t::from_string ("actor-node"), "PlayerActor",

@@ -1,0 +1,23 @@
+# id	transport_request	header_json	action
+metadata	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{"bad":42}}	reply_error
+content-type	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":42,"correlationId":"reply-correlation","metadata":{}}	reply_error
+marker	true	{"formatMarker":0,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{}}	reply_error
+kind-type	true	{"formatMarker":242,"kind":"request","channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{}}	reply_error
+kind-value	true	{"formatMarker":242,"kind":99,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{}}	reply_error
+syntax	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{"bad":42}	drop
+trailing-json	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{"bad":42}}{}	drop
+correlation-65	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","metadata":{}}	drop
+correlation-nonascii	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"\u00e9","metadata":{}}	drop
+correlation-64	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","metadata":{"bad":42}}	reply_error
+correlation-space	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":" ","metadata":{"bad":42}}	reply_error
+correlation-control	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"\u0000\u007f","metadata":{"bad":42}}	reply_error
+correlation-empty	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"","metadata":{"bad":42}}	drop
+correlation-null	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":null,"metadata":{"bad":42}}	drop
+correlation-number	true	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":42,"metadata":{"bad":42}}	drop
+send-metadata	false	{"formatMarker":242,"kind":3,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{"bad":42}}	drop
+send-header-request	false	{"formatMarker":242,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{"bad":42}}	drop
+send-marker	false	{"formatMarker":0,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{}}	drop
+kind-boolean	true	{"formatMarker":242,"kind":true,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{}}	reply_error
+kind-fraction	true	{"formatMarker":242,"kind":3.75,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{}}	reply_error
+kind-overflow	true	{"formatMarker":242,"kind":4294967297,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{}}	reply_error
+marker-fraction	true	{"formatMarker":242.75,"kind":1,"channelName":"play","messageName":"String","contentType":"application/json","correlationId":"reply-correlation","metadata":{}}	reply_error

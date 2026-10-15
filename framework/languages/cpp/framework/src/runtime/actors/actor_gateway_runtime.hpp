@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 #include <zlink/framework/contracts/actors/actor.hpp>
@@ -162,7 +162,7 @@ class session_actor_binding_context_t
     std::map<std::string, std::uint64_t> actor_tokens;
     std::set<std::string> ready_actors;
     std::map<std::string, std::weak_ptr<stream_state_t>> actor_streams;
-    std::function<task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> native_binder;
+    std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> native_binder;
     std::uint32_t next_actor_slot = 1;
 };
 
@@ -171,9 +171,9 @@ class session_actor_manager_access_t
   public:
     static void attach (session_actor_manager_t &manager, stream_t stream);
     static void set_codec (session_actor_manager_t &manager, stream_codec_t codec);
-    static void
-    bind_native (session_actor_manager_t &manager,
-                 std::function<task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> binder);
+    static void bind_native (
+      session_actor_manager_t &manager,
+      std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> binder);
     static void bind_native (session_actor_manager_t &manager,
                              std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder);
     static std::optional<session_actor_t> find_slot (session_actor_manager_t &manager,
@@ -211,7 +211,7 @@ class actor_gateway_state_t
                                                 std::chrono::milliseconds)>;
     using join_entry_spot_dispatcher_t = std::function<task_t<actor_join_reply_t> (
       const actor_ref_t &, const zlink::message_t &, std::chrono::milliseconds)>;
-    using relay_dispatcher_t = std::function<task_t<std::optional<zlink::message_t>> (
+    using relay_dispatcher_t = std::function<request_task_t<std::optional<zlink::message_t>> (
       const actor_ref_t &,
       actor_context_t,
       const stream_header_t &,

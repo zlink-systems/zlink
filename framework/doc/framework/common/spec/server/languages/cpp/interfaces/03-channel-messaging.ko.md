@@ -600,11 +600,18 @@ public:
 };
 
 template <typename TReply>
+class request_task_t : public task_t<TReply> {
+public:
+    // task_t<TReply>로 co_await하면 reply를 얻는다. admitted()는 Submit §2의 admission 단계다.
+    task_t<void> admitted();
+};
+
+template <typename TReply>
 class request_call_t {
 public:
     request_call_t &timeout(std::chrono::milliseconds timeout);
     request_call_t &metadata(std::string key, std::string value);
-    task_t<TReply> async();
+    request_task_t<TReply> async();
     TReply submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
     task_t<TReply> yield();
 };
@@ -615,7 +622,7 @@ public:
     channel_request_call_t &metadata(std::string key, std::string value);
 
     template <typename TReply>
-    task_t<TReply> async();
+    request_task_t<TReply> async();
 
     template <typename TReply>
     TReply submit();   // 동기 blocking; runtime 실행 문맥에서 InvalidOperation (F2-a)
@@ -914,7 +921,7 @@ public:
     spot_request_call_t &in_mesh(std::string mesh_name);
 
     template <typename TReply>
-    task_t<TReply> async();
+    request_task_t<TReply> async();
 
     template <typename TReply>
     task_t<TReply> yield();

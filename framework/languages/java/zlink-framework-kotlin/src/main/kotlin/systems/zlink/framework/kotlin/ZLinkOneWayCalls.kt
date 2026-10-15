@@ -120,21 +120,20 @@ private class KotlinSingleUse {
 private class JavaRequestCall<TReply : Any>(
     private val call: ZLinkRequestCall,
     private val replyType: Class<TReply>,
-    private val terminal: KotlinSingleUse = KotlinSingleUse(),
 ) : ZLinkKotlinRequestCall<TReply> {
     override fun metadata(key: String, value: String): ZLinkKotlinRequestCall<TReply> =
-        JavaRequestCall(call.metadata(key, value), replyType, terminal)
+        JavaRequestCall(call.metadata(key, value), replyType)
 
     override fun timeout(timeout: Duration): ZLinkKotlinRequestCall<TReply> =
-        JavaRequestCall(call.timeout(timeout), replyType, terminal)
+        JavaRequestCall(call.timeout(timeout), replyType)
 
-    override suspend fun await(): TReply {
-        terminal.enter()
-        return awaitFrameworkStage(call.submit(replyType))
+    override fun submit(): systems.zlink.framework.channels.ZLinkRequestStage<TReply> {
+        return call.submit(replyType)
     }
 
+    override suspend fun await(): TReply = awaitFrameworkStage(submit())
+
     override suspend fun yield(): TReply {
-        terminal.enter()
         return awaitFrameworkStage(call.yield(replyType))
     }
 }
@@ -142,21 +141,20 @@ private class JavaRequestCall<TReply : Any>(
 private class JavaActorRequestCall<TReply : Any>(
     private val call: ZLinkActorRequestCall,
     private val replyType: Class<TReply>,
-    private val terminal: KotlinSingleUse = KotlinSingleUse(),
 ) : ZLinkKotlinRequestCall<TReply> {
     override fun metadata(key: String, value: String): ZLinkKotlinRequestCall<TReply> =
-        JavaActorRequestCall(call.metadata(key, value), replyType, terminal)
+        JavaActorRequestCall(call.metadata(key, value), replyType)
 
     override fun timeout(timeout: Duration): ZLinkKotlinRequestCall<TReply> =
-        JavaActorRequestCall(call.timeout(timeout), replyType, terminal)
+        JavaActorRequestCall(call.timeout(timeout), replyType)
 
-    override suspend fun await(): TReply {
-        terminal.enter()
-        return awaitFrameworkStage(call.submit(replyType))
+    override fun submit(): systems.zlink.framework.channels.ZLinkRequestStage<TReply> {
+        return call.submit(replyType)
     }
 
+    override suspend fun await(): TReply = awaitFrameworkStage(submit())
+
     override suspend fun yield(): TReply {
-        terminal.enter()
         return awaitFrameworkStage(call.yield(replyType))
     }
 }
@@ -186,30 +184,29 @@ private class JavaSpotSendCall(
 private class JavaSpotRequestCall<TReply : Any>(
     private val call: ZLinkSpotRequestCall,
     private val replyType: Class<TReply>,
-    private val terminal: KotlinSingleUse = KotlinSingleUse(),
 ) : ZLinkKotlinSpotRequestCall<TReply> {
     override fun metadata(key: String, value: String): ZLinkKotlinSpotRequestCall<TReply> =
-        JavaSpotRequestCall(call.metadata(key, value), replyType, terminal)
+        JavaSpotRequestCall(call.metadata(key, value), replyType)
 
     override fun instanceSpot(): ZLinkKotlinSpotRequestCall<TReply> =
-        JavaSpotRequestCall(call.instanceSpot(), replyType, terminal)
+        JavaSpotRequestCall(call.instanceSpot(), replyType)
 
     override fun instanceSpot(stableType: String): ZLinkKotlinSpotRequestCall<TReply> =
-        JavaSpotRequestCall(call.instanceSpot(stableType), replyType, terminal)
+        JavaSpotRequestCall(call.instanceSpot(stableType), replyType)
 
     override fun inMesh(meshName: String): ZLinkKotlinSpotRequestCall<TReply> =
-        JavaSpotRequestCall(call.inMesh(meshName), replyType, terminal)
+        JavaSpotRequestCall(call.inMesh(meshName), replyType)
 
     override fun timeout(timeout: Duration): ZLinkKotlinSpotRequestCall<TReply> =
-        JavaSpotRequestCall(call.timeout(timeout), replyType, terminal)
+        JavaSpotRequestCall(call.timeout(timeout), replyType)
 
-    override suspend fun await(): TReply {
-        terminal.enter()
-        return awaitFrameworkStage(call.submit(replyType))
+    override fun submit(): systems.zlink.framework.channels.ZLinkRequestStage<TReply> {
+        return call.submit(replyType)
     }
 
+    override suspend fun await(): TReply = awaitFrameworkStage(submit())
+
     override suspend fun yield(): TReply {
-        terminal.enter()
         return awaitFrameworkStage(call.yield(replyType))
     }
 }

@@ -6,8 +6,9 @@ Kotlin application은 Java Channel call을 직접 사용하지 않는다. Kotlin
 call을 내부에 보관하며 일반 완료는 `await()`, 현재 Spot turn을 반납하는 완료는 `yield()`로 투영한다.
 One-way `await()`의 정상 결과는 `Unit`이고 실패는 Java stage의 exception을 그대로 전달한다.
 Typed request의 reified entry method는 wrapper를 만들 때 `KClass<TReply>.java`를 내부 Java
-`Class<TReply>`로 고정한다. Application은 terminal에서 reply type을 다시 넘기거나
-`.submit().await()`를 작성하지 않는다.
+`Class<TReply>`로 고정한다. Application은 terminal에서 reply type을 다시 넘기지 않는다. Reply만
+기다릴 때는 `await()`를 쓰고, admission 단계가 필요하면 `submit()`이 돌려주는 Java
+`ZLinkRequestStage`의 `admitted()`를 쓴다([Submit과 완료 §2](../../../01-execution/01-submit-and-completion.ko.md#request-admitted-stage)).
 
 동기 blocking 종결자는 Kotlin 전용 wrapper를 추가하지 않고 Java 표면의 `submit_sync()`를 그대로
 노출한다. blocking 호출은 suspend가 아니므로 `await()`로 감싸지 않으며, application thread 전용이고
@@ -66,6 +67,7 @@ interface ZLinkKotlinSubmissionCall {
 interface ZLinkKotlinRequestCall<TReply : Any> {
  fun metadata(key: String, value: String): ZLinkKotlinRequestCall<TReply>
  fun timeout(timeout: Duration): ZLinkKotlinRequestCall<TReply>
+ fun submit(): systems.zlink.framework.channels.ZLinkRequestStage<TReply>
  suspend fun await(): TReply
  suspend fun yield(): TReply
 }
@@ -278,6 +280,7 @@ public interface systems.zlink.framework.kotlin.ZLinkKotlinSubmissionCall {
 public interface systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> {
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> metadata(java.lang.String, java.lang.String);
  public abstract systems.zlink.framework.kotlin.ZLinkKotlinRequestCall<TReply> timeout(java.time.Duration);
+ public abstract systems.zlink.framework.channels.ZLinkRequestStage<TReply> submit();
  public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super TReply>);
  public abstract java.lang.Object yield(kotlin.coroutines.Continuation<? super TReply>);
 }

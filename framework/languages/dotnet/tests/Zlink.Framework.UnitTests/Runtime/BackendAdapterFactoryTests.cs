@@ -254,8 +254,13 @@ public sealed class BackendAdapterFactoryTests
         var spotNode = Assert.IsType<ZLinkBackendSpotNodeWrapper>(backend);
 
         var byteHwm = (ulong)int.MaxValue + 1UL;
-        spotNode.SetRouterHighWaterMark(byteHwm);
-        spotNode.SetRouterReceiveHighWaterMark(byteHwm - 1);
+        spotNode.ApplyRouterSocketConfig(
+            new ZLinkSocketConfig
+            {
+                SendHighWaterMark = byteHwm,
+                ReceiveHighWaterMark = byteHwm - 1,
+            }
+        );
         spotNode.SetRouterReceiveTimeout(TimeSpan.FromMilliseconds(29));
 
         Assert.Equal(byteHwm, spotNode.NativeNode.RouterHighWaterMark);

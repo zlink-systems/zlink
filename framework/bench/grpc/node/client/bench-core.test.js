@@ -157,6 +157,55 @@ test('request-backpressure pumps completions and observes admission without awai
   assert.equal(result.abandoned, 0);
 });
 
+test('native immediate admission polls without waiting for another admission signal', async (t) => {
+  installTargetStats(t);
+  let submissions = 0;
+  const transport = {
+    backpressuredResult: 'backpressured',
+    requestCompletionPump: {
+      poll(timeoutMs) { assert.equal(timeoutMs, 0); }
+    },
+    requestSubmission(_stream, payload) {
+      submissions++;
+      return { result: 'accepted', admitted: Promise.resolve(), reply: Promise.resolve(payload) };
+    }
+  };
+  const metrics = new core.SourceMetrics(100);
+  const result = await core.runActive(transport, metrics, options, activeTrigger('request-backpressure'));
+  assert.ok(submissions > 1);
+  assert.equal(result.errors, 0);
+});
+
+test('Framework request-backpressure awaits each admission while replies remain pending', async (t) => {
+  installTargetStats(t);
+  let admissionsPending = 0;
+  let submissions = 0;
+  let repliesPending = 0;
+  const transport = {
+    requestSubmission(_stream, payload) {
+      assert.equal(admissionsPending, 0, 'previous admission must finish before submission');
+      submissions++;
+      admissionsPending++;
+      const admitted = new Promise(resolve => setImmediate(() => {
+        admissionsPending--;
+        resolve();
+      }));
+      repliesPending++;
+      const reply = new Promise(resolve => setTimeout(() => {
+        repliesPending--;
+        resolve(payload);
+      }, 20));
+      return { admitted, reply };
+    }
+  };
+  const metrics = new core.SourceMetrics(100);
+  const result = await core.runActive(transport, metrics, options, activeTrigger('request-backpressure'));
+  assert.ok(submissions > 1);
+  assert.equal(admissionsPending, 0);
+  assert.equal(repliesPending, 0);
+  assert.equal(result.errors, 0);
+});
+
 test('send-saturation yields so every logical stream starts work', async (t) => {
   installTargetStats(t);
   const streams = new Set();

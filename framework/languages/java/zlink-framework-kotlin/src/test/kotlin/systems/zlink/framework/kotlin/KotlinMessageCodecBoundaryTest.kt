@@ -2,12 +2,16 @@ package systems.zlink.framework.kotlin
 
 import java.nio.charset.StandardCharsets
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import systems.zlink.contracts.messaging.Message
 import systems.zlink.framework.ZLinkEncodedPayload
 import systems.zlink.framework.ZLinkMessageSerializer
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer
+import systems.zlink.stream.connector.ZLinkStreamCodec
+import systems.zlink.stream.connector.ZLinkStreamEncodedPayload
+import systems.zlink.stream.connector.ZLinkStreamJson
 
 final class KotlinMessageCodecBoundaryTest {
     @Test
@@ -52,11 +56,50 @@ final class KotlinMessageCodecBoundaryTest {
             serializer.deserialize(encoded, KotlinAcronymPayload::class.java),
         )
     }
+
+    @Test
+    fun defaultJsonSerializerUsesEnumNamesAndRejectsOrdinals() {
+        val serializer = ZLinkJsonMessageSerializer()
+        val expected = KotlinProfileReportReq(ProfileReportReason.profile)
+        val encoded = serializer.serialize(expected)
+
+        assertEquals("{\"reasonId\":\"profile\"}", String(encoded.bytes(), StandardCharsets.UTF_8))
+        assertEquals(expected, serializer.deserialize(encoded, KotlinProfileReportReq::class.java))
+
+        for (json in listOf("{\"reasonId\":1}", "{\"reasonId\":\"1\"}")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                serializer.deserialize(
+                    ZLinkEncodedPayload.from(json.toByteArray(StandardCharsets.UTF_8)),
+                    KotlinProfileReportReq::class.java,
+                )
+            }
+
+            val streamPayload =
+                ZLinkStreamEncodedPayload(
+                    "profile-report",
+                    Message.from(json.toByteArray(StandardCharsets.UTF_8)),
+                    emptyMap(),
+                    ZLinkStreamCodec.JSON,
+                )
+            assertThrows(IllegalArgumentException::class.java) {
+                ZLinkStreamJson.decode(streamPayload, KotlinProfileReportReq::class.java)
+            }
+        }
+    }
 }
 
 data class KotlinBoundaryPayload(val value: String)
 
 data class KotlinAcronymPayload(val xActorId: String)
+
+data class KotlinProfileReportReq(val reasonId: ProfileReportReason)
+
+enum class ProfileReportReason {
+    nickname,
+    profile,
+    harassment,
+    other,
+}
 
 private open class KotlinBoundaryBase
 

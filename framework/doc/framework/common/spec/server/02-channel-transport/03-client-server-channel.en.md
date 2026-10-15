@@ -410,7 +410,7 @@ The [reply token](../00-foundation/02-glossary.en.md#reply-token) a Server reque
 receives can only be used for the current request. Once the final reply is
 made once, it can't be reused.
 
-If a reply route can be restored after any of the following failures, the request
+If [a reply route remains](02-channel-messaging.en.md#reply-route-remains) after any of the following failures, the request
 completes with a structured error reply.
 
 - No handler found
@@ -459,6 +459,11 @@ received ones, processed in the following order.
 4. Once every final result is confirmed, releases the ClientServer Server
    descriptor and [owner lease](../00-foundation/02-glossary.en.md#owner-lease) and closes
    the listener.
+   A reply that was submitted but not yet sent is sent until the remaining
+   deadline and discarded after it. The linger of the listener socket is set to
+   the remaining deadline just before closing, leaving this to Core; if no time
+   remains, it is set to 0. A stop call without a deadline uses the default
+   Shutdown deadline.
 
 A manual Client is notified of the same drain state via a connection control
 message.

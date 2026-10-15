@@ -40,8 +40,8 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
     TMessage message
 ) : IZLinkSendCall, IZLinkSpotSendCall
 {
-    private readonly ZLinkCallMetadata _metadata = new();
-    private readonly ZLinkOneWayCallGate _submission = new("Instance Spot send");
+    private ZLinkCallMetadata? _metadata;
+    private ZLinkOneWayCallGate _submission = new("Instance Spot send");
     private bool _instanceIntent = true;
     private bool _exactSpotIdCall;
     private bool _meshSelected;
@@ -81,7 +81,7 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
 
     IZLinkSpotSendCall IZLinkMetadataCall<IZLinkSpotSendCall>.Metadata(string key, string value)
     {
-        _metadata.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
@@ -89,19 +89,19 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
         ZLinkMessageMetadata metadata
     )
     {
-        _metadata.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
     public IZLinkSendCall Metadata(string key, string value)
     {
-        _metadata.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkSendCall Metadata(ZLinkMessageMetadata metadata)
     {
-        _metadata.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -159,7 +159,7 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
                     parts,
                     request: false,
                     activationTimeout,
-                    _metadata.Encode(),
+                    ZLinkCallMetadata.Encode(_metadata),
                     cancellationToken,
                     activationDeadlineUnixMs: activationDeadlineUnixMs
                 )
@@ -168,7 +168,7 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
         }
 
         var call = new ZLinkRouteSpotSendCall<TMessage>(runtime, handle, message, _instanceIntent);
-        call.Metadata(_metadata.Snapshot());
+        call.Metadata(ZLinkCallMetadata.Snapshot(_metadata));
         await call.Async().ConfigureAwait(false);
     }
 }
@@ -179,7 +179,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
     TRequest request
 ) : IZLinkRequestCall, IZLinkSpotRequestCall
 {
-    private readonly ZLinkCallMetadata _metadata = new();
+    private ZLinkCallMetadata? _metadata;
     private readonly ZLinkApplicationExecutionScope? _executionScope =
         ZLinkApplicationExecutionContext.Current;
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
@@ -226,7 +226,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
         string value
     )
     {
-        _metadata.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
@@ -234,7 +234,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
         ZLinkMessageMetadata metadata
     )
     {
-        _metadata.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -253,18 +253,20 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
 
     public IZLinkRequestCall Metadata(string key, string value)
     {
-        _metadata.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkRequestCall Metadata(ZLinkMessageMetadata metadata)
     {
-        _metadata.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
-    public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
-        ExecuteAsync<TReply>(ZLinkNestedRequestTerminator.Async, cancellationToken);
+    public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
+        ZLinkRequestAdmission.Run<TReply>(admission =>
+            ExecuteAsync<TReply>(ZLinkNestedRequestTerminator.Async, cancellationToken, admission)
+        );
 
     public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>
         ZLinkApplicationExecutionContext
@@ -276,7 +278,8 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
 
     private async ValueTask<TReply> ExecuteAsync<TReply>(
         ZLinkNestedRequestTerminator terminator,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         if (_exactSpotIdCall)
@@ -302,7 +305,8 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
                         handle,
                         terminator,
                         Remaining(deadline),
-                        cancellationToken
+                        cancellationToken,
+                        requestAdmission: requestAdmission
                     )
                     .ConfigureAwait(false);
             }
@@ -347,8 +351,9 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
                 parts,
                 request: true,
                 activationTimeout,
-                _metadata.Encode(),
-                cancellationToken
+                ZLinkCallMetadata.Encode(_metadata),
+                cancellationToken,
+                requestAdmission: requestAdmission
             )
             .ConfigureAwait(false);
         return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
@@ -379,7 +384,8 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
         ZLinkResolvedSpotHandle handle,
         ZLinkNestedRequestTerminator terminator,
         TimeSpan timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         ZLinkApplicationExecutionContext.ValidateSpotRequest(
@@ -394,8 +400,12 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             _instanceIntent
         );
         call.Timeout(timeout);
-        call.Metadata(_metadata.Snapshot());
-        return await call.ExecuteAfterTerminatorAsync<TReply>(terminator, cancellationToken)
+        call.Metadata(ZLinkCallMetadata.Snapshot(_metadata));
+        return await call.ExecuteAfterTerminatorAsync<TReply>(
+                terminator,
+                cancellationToken,
+                requestAdmission: requestAdmission
+            )
             .ConfigureAwait(false);
     }
 
@@ -418,18 +428,18 @@ internal sealed class ZLinkCurrentSpotSendCall<TMessage>(
     TMessage message
 ) : IZLinkSendCall
 {
-    private readonly ZLinkCallMetadata _metadata = new();
-    private readonly ZLinkOneWayCallGate _submission = new("Channel send");
+    private ZLinkCallMetadata? _metadata;
+    private ZLinkOneWayCallGate _submission = new("Channel send");
 
     public IZLinkSendCall Metadata(string key, string value)
     {
-        _metadata.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkSendCall Metadata(ZLinkMessageMetadata metadata)
     {
-        _metadata.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
@@ -443,7 +453,8 @@ internal sealed class ZLinkCurrentSpotSendCall<TMessage>(
             channelName,
             ZLinkMessageNameResolver.ResolveFromMessage(message)
         );
-        var metadata = _metadata.EncodeChannel(
+        var metadata = ZLinkCallMetadata.EncodeChannel(
+            _metadata,
             activation.OutboundEndpoint.IsClientServerClientChannel(channelName)
         );
         header = header with { Metadata = metadata.Header };
@@ -466,7 +477,7 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
     TMessage request
 ) : IZLinkRequestCall
 {
-    private readonly ZLinkCallMetadata _metadata = new();
+    private ZLinkCallMetadata? _metadata;
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
     private TimeSpan? _timeout;
 
@@ -479,29 +490,34 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
 
     public IZLinkRequestCall Metadata(string key, string value)
     {
-        _metadata.Set(key, value);
+        ZLinkCallMetadata.Set(ref _metadata, key, value);
         return this;
     }
 
     public IZLinkRequestCall Metadata(ZLinkMessageMetadata metadata)
     {
-        _metadata.Merge(metadata);
+        ZLinkCallMetadata.Merge(ref _metadata, metadata);
         return this;
     }
 
-    public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default)
+    public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ExecuteAsync<TReply>(cancellationToken);
+        return ZLinkRequestAdmission.Run<TReply>(admission =>
+            ExecuteAsync<TReply>(cancellationToken, admission)
+        );
     }
 
     public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default)
     {
         return ZLinkApplicationExecutionContext
             .RequireYieldTurn(_turn, "Channel request")
-            .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
+            .YieldFrameworkCallAsync(token => ExecuteAsync<TReply>(token), cancellationToken);
     }
 
-    private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
+    private async ValueTask<TReply> ExecuteAsync<TReply>(
+        CancellationToken cancellationToken,
+        ZLinkRequestAdmission? requestAdmission = null
+    )
     {
         var timeout = _timeout ?? activation.DefaultRequestTimeout;
         var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
@@ -525,7 +541,8 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
                 packetName,
                 timeout
             );
-            var metadata = _metadata.EncodeChannel(
+            var metadata = ZLinkCallMetadata.EncodeChannel(
+                _metadata,
                 activation.OutboundEndpoint.IsClientServerClientChannel(channelName)
             );
             header = header with { Metadata = metadata.Header };
@@ -540,7 +557,8 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
                 parts,
                 timeout,
                 cancellationToken,
-                metadata.Frame
+                metadata.Frame,
+                requestAdmission: requestAdmission
             );
             var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
                 reply,

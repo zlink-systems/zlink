@@ -7,7 +7,7 @@ internal abstract class ZLinkSessionStreamCallBase<TMessage>(
     TMessage message
 )
 {
-    private readonly ZLinkOneWayCallGate _submission = new("Session operation");
+    private ZLinkOneWayCallGate _submission = new("Session operation");
 
     private readonly ZLinkStreamSendBuilder<TMessage> _builder = new(
         message,

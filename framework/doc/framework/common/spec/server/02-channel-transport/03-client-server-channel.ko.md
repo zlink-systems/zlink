@@ -362,7 +362,7 @@ sequenceDiagram
 Server request handler가 받는 [reply token](../00-foundation/02-glossary.ko.md#reply-token)은 현재
 request에만 사용할 수 있다. 최종 reply를 한 번 만든 뒤에는 다시 사용할 수 없다.
 
-다음 실패에서 reply 경로를 복원할 수 있으면 구조화된 error reply로 request를
+다음 실패에서 [reply 경로가 남아 있으면](02-channel-messaging.ko.md#reply-route-remains) 구조화된 error reply로 request를
 완료한다.
 
 - Handler를 찾을 수 없음
@@ -404,6 +404,9 @@ Server drain은 새 요청을 막고 이미 받은 요청을 끝내는 절차이
 3. 이미 수락한 handler와 request reply를 [deadline](../00-foundation/02-glossary.ko.md#deadline)까지 진행한다.
 4. 모든 최종 결과가 확정되면 ClientServer Server descriptor와
    [owner lease](../00-foundation/02-glossary.ko.md#owner-lease)를 해제하고 listener를 닫는다.
+   제출했지만 아직 송신되지 않은 reply는 남은 deadline까지 송신하고, deadline이 지나면 버린다.
+   Listener socket의 linger를 닫기 직전에 남은 deadline으로 두어 이를 Core에 맡기며, 남은 deadline이
+   없으면 0으로 둔다. 정지 호출에 deadline이 없으면 Shutdown 기본 deadline을 쓴다.
 
 Manual Client에는 같은 drain state를 연결 control message로 알린다.
 

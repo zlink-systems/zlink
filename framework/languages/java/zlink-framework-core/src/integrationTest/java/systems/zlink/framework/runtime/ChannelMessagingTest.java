@@ -1900,7 +1900,8 @@ final class ChannelMessagingTest {
     private static ZLinkBackendReceived awaitRawReply(
             ZLinkBackendDealerSocket dealer, List<Message> parts) throws Exception {
         CompletableFuture<ZLinkBackendReceived> pending =
-                dealer.request(parts, Duration.ofSeconds(2)).toCompletableFuture();
+                dealer.request(parts, Duration.ofSeconds(2), dealer.receiveAdmission(), null)
+                        .toCompletableFuture();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (!pending.isDone() && System.nanoTime() < deadline) {
             dealer.waitForReadable(Duration.ofNanos(Math.max(1, deadline - System.nanoTime())));

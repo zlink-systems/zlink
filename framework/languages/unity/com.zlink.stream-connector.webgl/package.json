@@ -4,13 +4,13 @@
   "displayName": "ZLink Stream Connector (Unity WebGL)",
   "description": "Unity WebGL adapter for the ZLink STREAM client connector. Wraps the @zlink-systems/stream-connector browser bundle behind the same C# surface as the native Zlink.Stream.Connector NuGet package, so game code is identical in native and WebGL builds. Adds no wire runtime of its own.",
   "unity": "2021.3",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "author": {
     "name": "ZLink Systems",
     "url": "https://zlink.systems/"
   },
   "documentationUrl": "https://docs.zlink.systems/framework/node/guide/stream-connector/03-unity-webgl/",
-  "licensesUrl": "https://github.com/zlink-systems/zlink/blob/main/framework/LICENSE",
+  "licensesUrl": "https://www.apache.org/licenses/LICENSE-2.0",
   "keywords": [
     "zlink",
     "stream",

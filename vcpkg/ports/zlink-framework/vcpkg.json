@@ -3,7 +3,7 @@
   "version": "0.30.0",
   "description": "Zlink C++ server framework, HTTP client and stream connector",
   "homepage": "https://github.com/zlink-systems/zlink",
-  "license": "FSL-1.1-ALv2",
+  "license": null,
   "supports": "!(osx & x64)",
   "dependencies": [
     "zlink",

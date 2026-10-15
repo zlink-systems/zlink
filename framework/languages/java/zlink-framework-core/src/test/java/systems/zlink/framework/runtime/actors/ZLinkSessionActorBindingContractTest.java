@@ -59,6 +59,69 @@ import java.util.concurrent.TimeUnit;
 
 final class ZLinkSessionActorBindingContractTest {
     @Test
+    void physicalDisconnectCleanupDoesNotSubmitActorUnbound() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+
+        stream.close();
+        runtime.notifyDisconnectedAll().toCompletableFuture().join();
+
+        assertTrue(runtime.bound().isEmpty());
+        assertTrue(stream.closed);
+        assertEquals(List.of("$zlink.actor.bound"), stream.controlNames());
+        assertEquals(1, stream.disconnectNotifications);
+    }
+
+    @Test
+    void logicalDisconnectSubmitsExactlyOneActorUnbound() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor actor =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+
+        actor.notifyDisconnected().toCompletableFuture().join();
+
+        assertEquals(List.of("$zlink.actor.bound", "$zlink.actor.unbound"), stream.controlNames());
+        assertEquals(0, stream.disconnectedPeers);
+        assertTrue(runtime.bound().isEmpty());
+    }
+
+    @Test
+    void logicalUnboundSubmissionFailureIsReportedAfterBindingRemoval() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor actor =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        List<java.util.logging.LogRecord> failures = new ArrayList<>();
+        java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(ZLinkSessionActorsRuntime.class.getName());
+        java.util.logging.Handler listener =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (record.getThrown() != null) failures.add(record);
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(listener);
+        try {
+            stream.controlAvailable = false;
+            actor.notifyDisconnected().toCompletableFuture().join();
+
+            assertTrue(runtime.bound().isEmpty());
+            assertEquals(1, failures.size());
+        } finally {
+            logger.removeHandler(listener);
+        }
+    }
+
+    @Test
     void equalDispatchValuesInDifferentSessionsKeepTheirRelayHeadersUntilCompletion() {
         FakeStream firstStream = new FakeStream();
         FakeStream secondStream = new FakeStream();

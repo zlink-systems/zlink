@@ -356,7 +356,7 @@ Enqueue(work)
 **The loop does not start on the submitter's call stack.** A submission enqueues, wakes, and
 returns — running the loop right on the submitter's stack removes any bound on submission
 latency, and runs a handler's synchronous stretch under whatever lock the submission site holds.
-Where the wake-up is posted is decided by the runtime's threading model.
+[Messaging Hot Path "4.4"](08-messaging-hot-path.en.md#44-placing-the-execution-resource--handing-off-the-receive-role) decides which execution resource runs it.
 
 | runtime | where the loop is posted |
 |---|---|

@@ -1,3 +1,9 @@
+import {
+  stringifyFrameworkJsonV1,
+  parseFrameworkJsonV1,
+  readFrameworkPacketJsonContract,
+  isPrototypeKey
+} from '@zlink-systems/stream-wire/internal/json';
 import { ZlinkStreamCodec } from './ZlinkStreamEnums';
 import type { ZlinkStreamPayloadCodec } from './ZlinkStreamConnectorOptions';
 import type { ZlinkStreamEncodedPayload } from './ZlinkStreamModels';
@@ -8,6 +14,9 @@ export interface ZlinkStreamJsonCodecOptions {
   readonly replacer?: (this: unknown, key: string, value: unknown) => unknown;
   readonly reviver?: (this: unknown, key: string, value: unknown) => unknown;
 }
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 let codecOptions: ZlinkStreamJsonCodecOptions = {};
 
@@ -22,22 +31,38 @@ export const zlinkStreamJsonCodec: ZlinkStreamPayloadCodec & {
     return toJson(payload, messageType);
   },
 
-  decode<T = unknown>(payload: ZlinkStreamEncodedPayload): T {
-    return fromJson<T>(payload);
+  decode<T = unknown>(payload: ZlinkStreamEncodedPayload, messageType?: Function): T {
+    return decodeJson<T>(payload, messageType ?? payload.messageType);
   }
 };
 
 export function toJson<T>(value: T, messageType?: Function): ZlinkStreamEncodedPayload {
+  const type = messageType ?? inferMessageType(value);
   return {
     codec: ZlinkStreamCodec.Json,
-    payload: new TextEncoder().encode(JSON.stringify(value, codecOptions.replacer)),
-    messageType: messageType ?? inferMessageType(value)
+    payload: encoder.encode(
+      stringifyFrameworkJsonV1(
+        value,
+        type === undefined ? undefined : readFrameworkPacketJsonContract(type)?.payload,
+        codecOptions.replacer
+      )
+    ),
+    messageType: type
   };
 }
 
 export function fromJson<T>(payload: ZlinkStreamEncodedPayload): T {
+  return decodeJson<T>(payload, payload.messageType);
+}
+
+function decodeJson<T>(payload: ZlinkStreamEncodedPayload, messageType?: Function): T {
   ensureJson(payload);
-  return JSON.parse(new TextDecoder().decode(payload.payload), safeJsonReviver) as T;
+  return parseFrameworkJsonV1(
+    decoder.decode(payload.payload),
+    { rejectPropertyName: isPrototypeKey },
+    messageType === undefined ? undefined : readFrameworkPacketJsonContract(messageType)?.payload,
+    codecOptions.reviver
+  ) as T;
 }
 
 function ensureJson(payload: ZlinkStreamEncodedPayload): void {
@@ -52,18 +77,4 @@ function inferMessageType(value: unknown): Function | undefined {
   }
   const constructor = Object.getPrototypeOf(value)?.constructor;
   return constructor === Object ? undefined : constructor;
-}
-
-function safeJsonReviver(this: unknown, key: string, value: unknown): unknown {
-  if (isPrototypeKey(key)) {
-    throw new Error(`JSON payload key '${key}' is not allowed.`);
-  }
-  if (codecOptions.reviver !== undefined) {
-    return codecOptions.reviver.call(this, key, value);
-  }
-  return value;
-}
-
-function isPrototypeKey(key: string): boolean {
-  return key === '__proto__' || key === 'constructor' || key === 'prototype';
 }

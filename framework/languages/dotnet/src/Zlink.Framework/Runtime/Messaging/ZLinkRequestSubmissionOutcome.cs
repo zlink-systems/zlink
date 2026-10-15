@@ -6,21 +6,25 @@ internal static class ZLinkRequestSubmissionOutcome
         RequestSubmitOperation operation,
         TimeSpan timeout,
         CancellationToken cancellationToken = default,
-        Service.ZLinkServiceLiveness? receiveAdmission = null
+        Service.ZLinkServiceLiveness? receiveAdmission = null,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         // Binding owns the reply timeout and caller cancellation. Only an
         // initial admission wait needs the Framework's end-to-end budget.
         var submission = operation.Async(cancellationToken);
-        if (!ZLinkBindingSubmissionOutcome.RequiresAdmission(submission.Result))
-            return AwaitReplyAsync(submission.Result, submission.Admitted, submission.Reply);
+        if (!ZLinkBindingSubmissionOutcome.RequiresAdmission(submission.Result, requestAdmission))
+            return submission.Reply;
 
+        var admitted = requestAdmission is null
+            ? submission.Admitted
+            : ObserveAdmissionAsync(submission.Admitted, requestAdmission);
         var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         try
         {
             return AwaitWithDeadlineAsync(
-                AwaitReplyAsync(submission.Result, submission.Admitted, submission.Reply),
+                AwaitAdmissionAndReplyAsync(admitted, submission.Reply),
                 deadline,
                 cancellationToken,
                 CancelAtDeadlineAsync(deadline, timeout, started),
@@ -32,6 +36,15 @@ internal static class ZLinkRequestSubmissionOutcome
             deadline.Dispose();
             throw;
         }
+    }
+
+    private static async Task ObserveAdmissionAsync(
+        Task admitted,
+        ZLinkRequestAdmission? requestAdmission
+    )
+    {
+        await admitted.ConfigureAwait(false);
+        requestAdmission?.Complete();
     }
 
     // .NET timers truncate fractional milliseconds. A remaining request
@@ -115,21 +128,12 @@ internal static class ZLinkRequestSubmissionOutcome
         }
     }
 
-    internal static Task<IReadOnlyList<Message>> AwaitReplyAsync(
-        SubmitResult result,
-        Task admitted,
-        Task<IReadOnlyList<Message>> reply
-    ) =>
-        ZLinkBindingSubmissionOutcome.RequiresAdmission(result)
-            ? AwaitAdmissionAndReplyAsync(admitted, reply)
-            : reply;
-
     private static async Task<IReadOnlyList<Message>> AwaitAdmissionAndReplyAsync(
         Task admitted,
         Task<IReadOnlyList<Message>> reply
     )
     {
-        await Task.WhenAll(admitted, reply).ConfigureAwait(false);
+        await admitted.ConfigureAwait(false);
         return await reply.ConfigureAwait(false);
     }
 }

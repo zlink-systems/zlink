@@ -189,6 +189,40 @@ class KotlinFrameworkExtensionsContractTest {
     }
 
     @Test
+    fun `typed Kotlin submit exposes admission and preserves Java terminal ownership`() =
+        runBlocking {
+            val actorClient = RecordingActorClient(ActorReply("reply"))
+            val call =
+                actorClient
+                    .kotlin()
+                    .requestToActor<ActorReply>(ACTOR_REF.actorId(), ActorMessage("request"))
+            val result = call.submit()
+            result.admitted().toCompletableFuture().join()
+            assertEquals(ActorReply("reply"), result.toCompletableFuture().join())
+            val duplicate = call.submit()
+            val failure =
+                assertThrows<java.util.concurrent.CompletionException> {
+                    duplicate.toCompletableFuture().join()
+                }
+            assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                (failure.cause as systems.zlink.framework.errors.ZLinkFrameworkException).kind(),
+            )
+            val admissionFailure =
+                assertThrows<java.util.concurrent.CompletionException> {
+                    duplicate.admitted().toCompletableFuture().join()
+                }
+            org.junit.jupiter.api.Assertions.assertSame(failure.cause, admissionFailure.cause)
+            assertEquals(
+                ActorReply("reply"),
+                actorClient
+                    .kotlin()
+                    .requestToActor<ActorReply>(ACTOR_REF.actorId(), ActorMessage("request"))
+                    .await(),
+            )
+        }
+
+    @Test
     fun `actor request extension delegates to Java global actor id call`() = runBlocking {
         val actorClient = RecordingActorClient(ActorReply("reply"))
 
@@ -287,10 +321,14 @@ class KotlinFrameworkExtensionsContractTest {
     }
 
     private class RecordingRequestCall<TReply>(private val reply: TReply) : ZLinkRequestCall {
+        private val submitted = java.util.concurrent.atomic.AtomicBoolean()
+
         override fun timeout(timeout: Duration): ZLinkRequestCall = this
 
-        override fun <T : Any?> submit(replyType: Class<T>): CompletionStage<T> =
-            CompletableFuture.completedFuture(replyType.cast(reply))
+        override fun <T : Any?> submit(
+            replyType: Class<T>
+        ): systems.zlink.framework.channels.ZLinkRequestStage<T> =
+            testRequestStage(CompletableFuture.completedFuture(replyType.cast(reply)), submitted)
 
         override fun <T : Any?> yield(replyType: Class<T>): CompletionStage<T> = submit(replyType)
     }
@@ -322,23 +360,31 @@ class KotlinFrameworkExtensionsContractTest {
 
     private class RecordingActorRequestCall<TReply>(private val reply: TReply) :
         ZLinkActorRequestCall {
+        private val submitted = java.util.concurrent.atomic.AtomicBoolean()
+
         override fun metadata(key: String, value: String): ZLinkActorRequestCall = this
 
         override fun timeout(timeout: Duration): ZLinkActorRequestCall = this
 
-        override fun <T : Any?> submit(replyType: Class<T>): CompletionStage<T> =
-            CompletableFuture.completedFuture(replyType.cast(reply))
+        override fun <T : Any?> submit(
+            replyType: Class<T>
+        ): systems.zlink.framework.channels.ZLinkRequestStage<T> =
+            testRequestStage(CompletableFuture.completedFuture(replyType.cast(reply)), submitted)
 
         override fun <T : Any?> yield(replyType: Class<T>): CompletionStage<T> = submit(replyType)
     }
 
     private class FailingRequestCall(private val error: Throwable) : ZLinkRequestCall {
+        private val submitted = java.util.concurrent.atomic.AtomicBoolean()
+
         override fun timeout(timeout: Duration): ZLinkRequestCall = this
 
-        override fun <T : Any?> submit(replyType: Class<T>): CompletionStage<T> {
+        override fun <T : Any?> submit(
+            replyType: Class<T>
+        ): systems.zlink.framework.channels.ZLinkRequestStage<T> {
             val future = CompletableFuture<T>()
             future.completeExceptionally(error)
-            return future
+            return testRequestStage(future, submitted)
         }
 
         override fun <T : Any?> yield(replyType: Class<T>): CompletionStage<T> = submit(replyType)
@@ -492,4 +538,22 @@ class KotlinFrameworkExtensionsContractTest {
             ZLinkSpotCreateResult(SPOT_REF, ZLinkSpotCreateState.CREATED, ZLinkMessage.empty())
         private val ACTOR_REF = ActorRef("actor-a", 7, "mesh-a", NODE_RID)
     }
+}
+
+private fun <T> testRequestStage(
+    reply: CompletionStage<T>,
+    submitted: java.util.concurrent.atomic.AtomicBoolean,
+): systems.zlink.framework.channels.ZLinkRequestStage<T> {
+    val duplicate =
+        systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.beginOneWay<T>(submitted)
+    return if (duplicate != null)
+        systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages.observe(
+            duplicate,
+            CompletableFuture(),
+        )
+    else
+        systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages.observe(
+            reply,
+            CompletableFuture.completedFuture(null),
+        )
 }

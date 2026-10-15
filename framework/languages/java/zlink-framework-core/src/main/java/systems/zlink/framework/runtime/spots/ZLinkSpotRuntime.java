@@ -137,6 +137,7 @@ import java.util.stream.Collectors;
 public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         implements ZLinkSpotManager, AutoCloseable {
     private static final int ACTOR_RECV_INFO_NO_BIND = 1;
+    private static final long ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES = 512L;
 
     private static final String REMOTE_BOUND_SESSION_BIND_PACKET_NAME =
             "zlink.framework.actor.bound_session.bind";
@@ -2501,7 +2502,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     Map<String, String> metadata,
                     Duration timeout,
                     systems.zlink.framework.runtime.internal.spots.SpotTransportAddress readyRoute,
-                    SpotTransportAddressResolver resolver) {
+                    SpotTransportAddressResolver resolver,
+                    CompletableFuture<Void> requestAdmission) {
                 Duration effective = timeout == null ? defaultRequestTimeout : timeout;
                 long deadline = System.currentTimeMillis() + effective.toMillis();
                 byte[] applicationMetadata =
@@ -2536,7 +2538,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                 activation,
                                                                                 applicationMetadata,
                                                                                 parts,
-                                                                                deadline)));
+                                                                                deadline,
+                                                                                requestAdmission)));
                 //  Failover policy §4.4: after Close released the authority, the next Instance
                 //  intent message cold-activates. spotMoving is the owner fence refusal made
                 //  before admission, so one authority read decides: Missing continues as a cold
@@ -2576,7 +2579,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     InstanceActivation activation,
                     byte[] applicationMetadata,
                     List<Message> parts,
-                    long deadline) {
+                    long deadline,
+                    CompletableFuture<Void> requestAdmission) {
                 long remainingMillis = deadline - System.currentTimeMillis();
                 if (remainingMillis <= 0) {
                     return CompletableFuture.failedFuture(
@@ -2592,7 +2596,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 primaryNode.entrySpot().spotId(),
                                 applicationMetadata,
                                 parts,
-                                Duration.ofMillis(remainingMillis));
+                                Duration.ofMillis(remainingMillis),
+                                requestAdmission);
             }
         };
     }
@@ -6301,10 +6306,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkActorDispatchTarget target,
             String actorId,
             long payloadBytes,
-            Supplier<CompletionStage<Void>> operation) {
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         return actorSessions
                 .runtime()
-                .submitActorDispatch(target, actorId, payloadBytes, operation);
+                .submitActorDispatch(target, actorId, payloadBytes, operation, admission);
     }
 
     @Override
@@ -6331,7 +6337,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         return actorSessions
                 .runtime()
                 .submitActorDispatchLazyRecord(
@@ -6340,7 +6347,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         acceptedJournalRecord,
                         acceptedJournalRecordSizeHint,
                         operation,
-                        relocationRelease);
+                        relocationRelease,
+                        admission);
     }
 
     private DefaultSpotOutbound createSpotOutbound(
@@ -6473,7 +6481,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
             ZLinkBackendActorReceived bodyPart,
-            boolean pendingHeader) {
+            boolean pendingHeader,
+            CompletableFuture<Void> requestAdmission) {
         SpotActorPacketHandlerRegistration handler =
                 resolveActorPacketHandler(
                         packetHeader.packetName(),
@@ -6576,7 +6585,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         packetHeader,
                                                         handler,
                                                         headerCopy,
-                                                        payloadCopy))
+                                                        payloadCopy,
+                                                        requestAdmission))
                         : enqueueLocalActorPacket(
                                 dispatchLine,
                                 spotSurface,
@@ -6584,7 +6594,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 packetHeader,
                                 handler,
                                 headerCopy,
-                                payloadCopy);
+                                payloadCopy,
+                                requestAdmission);
         queued.whenComplete(
                 (ignored, error) -> {
                     release.run();
@@ -6638,7 +6649,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ActorPacketFrames.Header packetHeader,
             SpotActorPacketHandlerRegistration handler,
             ZLinkBackendActorReceived headerCopy,
-            Message payloadCopy) {
+            Message payloadCopy,
+            CompletableFuture<Void> requestAdmission) {
         CompletionStage<Void> queued;
         ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply = null;
         try {
@@ -6701,13 +6713,18 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             queued =
                     relocationReply == null
                             ? dispatchLine.enqueueActorDispatch(
-                                    actor.context().actorId(), payloadCopy.size(), operation)
+                                    actor.context().actorId(),
+                                    payloadCopy.size(),
+                                    operation,
+                                    requestAdmission)
                             : dispatchLine.enqueueActorDispatch(
                                     actor.context().actorId(),
                                     relocationReply::record,
-                                    headerCopy.message().size() + 512L,
+                                    headerCopy.message().size()
+                                            + ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES,
                                     operation,
-                                    relocationReply::releaseForRelocation);
+                                    relocationReply::releaseForRelocation,
+                                    requestAdmission);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }

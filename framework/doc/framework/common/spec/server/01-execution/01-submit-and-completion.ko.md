@@ -57,9 +57,22 @@ single-use, 중복 option과 terminal 재호출 오류는
 `submit_sync()`를 노출한다). **Node.js는 동기 blocking 종결자를 제공하지 않는다(§4.1).** 실제 shared
 Spot gate를 반납하는 terminal만 `Yield`·`yield`라는 이름을 사용한다.
 
+<a id="request-admitted-stage"></a>
+**Core request admission을 지나는 request는 admission 단계를 함께 돌려준다.** Server runtime의 request
+중 Core request admission을 지나는 것 — node·Channel·Spot·Actor request처럼 Core REQUEST로 제출되는
+operation — 은 reply를 기다리는 비동기 결과를 돌려주는 terminal을 제공하고, 그 결과는 `admitted` 단계를
+member로 가진다. Stream Connector·HTTP request는 Core request admission을 지나지 않으므로 이 단계가 없다.
+`admitted`는 그 call의
+[source-local admission](../00-foundation/02-glossary.ko.md#source-local-admission)에서 one-way 비동기
+terminal과 같은 의미로 끝난다 — 성공하면 반환 데이터 없이 완료하고, admission 전에 실패하면 그 실패로
+완료한다. `admitted`가 실패하면 reply도 같은 원인으로 끝난다. 두 단계는 각각 정확히 한 번 끝난다. 그래서
+send와 request는 같은 admission 경계를 caller에게 준다: caller가 다음 제출을 늦추려면 이전 call의
+admission을 기다린다. `admitted`는 `Backpressured` 상태를 드러내지 않는다(§5) — capacity를 기다리는 동안
+완료되지 않을 뿐이다. 결과 type, 그 terminal과 member의 이름은 §16의 언어별 interface가 정한다.
+
 **Framework가 돌려주는 비동기 완료 표현에도 [binding의 제출 간 stage 격리 규칙](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#submission-stage-isolation)을 적용한다.** 이 문서가 다루는 비동기 종결자가 admission 또는 application 결과를 직접 반환하거나 binding 결과를 변환해서 반환할 때, 반환 표현이나 그것이 참조하는 상태의 공유 때문에 한 호출에 가한 완료 상태 변경·취소·소비·대기 해제가 다른 호출의 완료 상태나 소비 가능성에 전파되어서는 안 된다. 이미 완료된 결과를 공유하는 경우도 같다. 정상적인 자원 회수에 따른 다른 호출의 진행은 기존 admission·lifecycle 계약을 따른다.
 
-검증은 Framework가 실제로 노출하는 종결자의 완료 표현과 관측 결과를 사용하여, 이미 반환된 다른 호출의 결과와 이후 호출의 결과가 공유 상태 때문에 오염되지 않는지 확인한다. Binding 결과 객체의 구조나 `Backpressured` 결과를 Framework에 노출하도록 요구하지 않는다.
+검증은 Framework가 실제로 노출하는 종결자의 완료 표현과 관측 결과를 사용하여, 이미 반환된 다른 호출의 결과와 이후 호출의 결과가 공유 상태 때문에 오염되지 않는지 확인한다. `Backpressured` 결과를 Framework에 노출하도록 요구하지 않는다.
 
 격리의 책임은 그 완료 표현을 반환하는 계층에 있다. Framework queue 대기의 취소, binding operation의 caller wait 취소와 late completion 정리의 소유권은 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다. 반환 표현의 격리를 위해 cancellation을 지원하는 pending stage의 cancellation 연결을 제거하거나, binding의 operation state·registry·재제출을 Framework에 추가하지 않는다.
 
@@ -382,7 +395,7 @@ Timer 취소와 payload 정리도 그 바깥에서 한다.
 잠금을 놓은 직후 같은 호출 stack에서 callback을 바로 실행하는 것만으로는 충분하지
 않다. 그렇게 하면 transport의 응답 처리나 timeout 처리가 끝나기 전에 application
 code가 runtime에 다시 진입할 수 있다. 완료 callback은 process가 공유하는 completion
-dispatcher에 넣고, 현재 처리가 반환된 뒤 새 execution turn에서 실행한다.
+dispatcher에 넣고, 아래에서 정한 새 execution turn 조건에 따라 실행한다.
 
 순서는 이렇다.
 
@@ -390,6 +403,13 @@ dispatcher에 넣고, 현재 처리가 반환된 뒤 새 execution turn에서 �
 2. 잠금을 놓는다.
 3. callback을 dispatcher에 넣는다.
 4. 새 execution turn에서 callback을 실행한다.
+
+**새 execution turn은 다른 thread를 뜻하지 않는다.** 같은 실행 자원에서 callback을 실행할 때는 완료
+확정·게시 처리의 호출 stack과 lane-current scope가 반환된 뒤 다음 turn에서 시작한다. 다른 실행 자원에서
+실행할 때는 완료 판정의 잠금과 lane-current scope를 callback에 넘기지 않고 독립된 turn에서 시작하며,
+다른 자원의 상위 호출 stack 전체가 반환됐다는 전역 순서까지 요구하지 않는다. 그 turn을 어느 실행 자원이
+실행하는지는 [Messaging hot path 「4.4」](08-messaging-hot-path.ko.md#44-실행-자원-배치--수신-역할-인계)가
+정한다.
 
 **완료 callback을 dispatcher에 넣는 일은 실패하지 않는다.** Dispatcher에 상한이 없기
 때문이다. 자리가 없다는 이유로 request를 거부하거나, 이미 수락한 호출의 완료를 버리는
@@ -410,8 +430,8 @@ socket마다 completion 자리를 정해 두고, 그 자리가 다 차면 새 �
 기다리는 일을 센다. 둘은 세는 것이 다르므로 하나로 합치지 않는다([§1](04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)).
 
 Dispatcher는
-callback마다 thread를 만드는 대신 process가 공유하는 lane을 사용하며, shutdown에서는
-이미 수락한 callback을 모두 실행한 뒤 종료한다.
+callback마다 thread를 만들지 않으며, shutdown에서는 이미 수락한 callback을 모두 실행한 뒤
+종료한다.
 
 한 callback의 exception은 뒤
 callback의 실행을 막지 않는다.
@@ -447,8 +467,9 @@ Framework runtime이 binding의 HWM-managed send 계열(PAIR send, routed send,
 `result == BACKPRESSURED`일 때만 `admitted`를 기다렸다가 재개하며, request는 `reply`를 소비한다.
 이렇게 해서 "HWM에 걸렸을 때만 기다린다"를 정확히 구현한다 — 지금까지는 stage 하나로 admission과
 reply를 구분할 수 없어 [3단계 backpressure](04-application-job-queue-and-backpressure.ko.md) 대기가 정확하지
-않았다. framework **공개 terminal은 backpressure를 노출하지 않으며**(§5, `Backpressured`는 public
-result가 아니다), 이 소비는 framework 내부 구현에만 있다. Core send-completion 통지가 완료를
+않았다. framework 공개 terminal은 binding의 `result`를 노출하지 않는다(§5, `Backpressured`는 public
+result가 아니다). One-way terminal의 완료와 messaging request의 공개 `admitted` 단계([§2](#request-admitted-stage))는
+이 소비가 admission에서 끝날 때 일어난다. Core send-completion 통지가 완료를
 구동하므로 framework는 별도 executor나 offload로 감싸지 않는다. Binding terminal의 이름·반환
 타입·결과 객체 계약 자체는
 [바인딩 routed 전송 계약과 비동기 완료 표면 정책](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md)이
@@ -494,11 +515,11 @@ interface가 소유한다.
 
 | 언어 | 일반 비동기 완료 | 동기 blocking | Spot turn 반납 | 언어별 interface owner |
 |---|---|---|---|---|
-| .NET | `Async(...)`가 `ValueTask` 또는 `ValueTask<T>`를 반환한다 | `Submit(...)` | `Yield(...)` | [언어별 interface 목차](../languages/dotnet/interfaces/README.ko.md) |
-| Java | `submit(...)`이 `CompletionStage<T>`를 반환한다 | `submit_sync(...)` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.ko.md) |
+| .NET | `Async(...)` | `Submit(...)` | `Yield(...)` | [언어별 interface 목차](../languages/dotnet/interfaces/README.ko.md) |
+| Java | `submit(...)` | `submit_sync(...)` | `yield(...)` | [Channel messaging](../languages/java/interfaces/channel-messaging.ko.md) |
 | Kotlin | 전용 call wrapper의 suspending `await()`를 사용한다 | Java 표면의 `submit_sync(...)` | 전용 wrapper의 `yield()` | [Channel messaging](../languages/kotlin/interfaces/channel-messaging.ko.md) |
-| Node.js | `submit(...)`이 `Promise<T>`를 반환한다 | **제공하지 않는다(§4.1)** | `yield(...)` | [인터페이스 목차](../languages/node/interfaces/README.ko.md) |
-| C++ | `async(...)`가 `task_t<T>`를 반환한다 | `submit(...)` | `yield(...)` | [framework 인터페이스](../languages/cpp/interfaces/README.ko.md) |
+| Node.js | `submit(...)` | **제공하지 않는다(§4.1)** | `yield(...)` | [인터페이스 목차](../languages/node/interfaces/README.ko.md) |
+| C++ | `async(...)` | `submit(...)` | `yield(...)` | [framework 인터페이스](../languages/cpp/interfaces/README.ko.md) |
 
 동기 blocking 종결자는 runtime 실행 문맥에서 `InvalidOperation`으로 실패한다(§4 F2-a).
 
@@ -514,7 +535,7 @@ sendCall.async();                      // 결과 없이 operation만 시작한�
 auto reply = co_await requestCall.async(); // 비동기 application reply를 기다린다.
 ```
 
-반환형만 다른 overload는 만들지 않는다. C++ Messaging call wrapper는 비동기 `task_t<T> async()`와
+반환형만 다른 overload는 만들지 않는다. C++ Messaging call wrapper는 비동기 `async()`와
 동기 blocking `submit()`을 함께 제공한다(두 종결자는 이름이 다르므로 overload가 아니다). `submit()`은
 application thread 전용이며 runtime 실행 문맥에서는 `InvalidOperation`으로 실패한다(§4 F2-a).
 Callback overload는 parameter list가 다르므로 `submit(callback)`으로 제공할 수 있다.

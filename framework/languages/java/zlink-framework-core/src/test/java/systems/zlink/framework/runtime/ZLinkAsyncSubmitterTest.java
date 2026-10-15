@@ -313,14 +313,33 @@ final class ZLinkChannelSubmissionContractTest {
         @Override
         public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             return new NoReplyDealer() {
-                @Override
+
                 public CompletionStage<ZLinkBackendReceived> request(
-                        List<Message> parts, Duration timeout) {
+                        List<Message> parts,
+                        Duration timeout,
+                        Runnable receiveAdmission,
+                        CompletableFuture<Void> requestAdmission) {
                     RecordingRequestBackend.this.timeout = timeout;
                     if (isClientServerHello(parts)) {
-                        return super.request(parts, timeout);
+                        return ZLinkTestAdmissionFactory.acceptedRequest(
+                                super.request(parts, timeout, null, null)
+                                        .whenComplete(
+                                                (received, failure) -> {
+                                                    if (failure == null && receiveAdmission != null)
+                                                        receiveAdmission.run();
+                                                }),
+                                requestAdmission);
                     }
-                    return new CompletableFuture<>();
+                    return ZLinkTestAdmissionFactory.acceptedRequest(
+                            new CompletableFuture<
+                                            systems.zlink.framework.runtime.internal.backend
+                                                    .ZLinkBackendReceived>()
+                                    .whenComplete(
+                                            (received, failure) -> {
+                                                if (failure == null && receiveAdmission != null)
+                                                    receiveAdmission.run();
+                                            }),
+                            requestAdmission);
                 }
             };
         }
@@ -361,20 +380,38 @@ final class ZLinkChannelSubmissionContractTest {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override
         public CompletionStage<ZLinkBackendReceived> request(
-                List<Message> parts, Duration timeout) {
+                List<Message> parts,
+                Duration timeout,
+                Runnable receiveAdmission,
+                CompletableFuture<Void> requestAdmission) {
             if (isClientServerHello(parts)) {
                 Message response = Message.from(clientServerAdmit());
-                return CompletableFuture.completedFuture(
-                        new ZLinkBackendReceived(
-                                ZLinkBackendRequestResult.OK,
-                                Optional.empty(),
-                                Optional.empty(),
-                                Optional.empty(),
-                                List.of(response)));
+                return ZLinkTestAdmissionFactory.acceptedRequest(
+                        CompletableFuture.completedFuture(
+                                        new ZLinkBackendReceived(
+                                                ZLinkBackendRequestResult.OK,
+                                                Optional.empty(),
+                                                Optional.empty(),
+                                                Optional.empty(),
+                                                List.of(response)))
+                                .whenComplete(
+                                        (received, failure) -> {
+                                            if (failure == null && receiveAdmission != null)
+                                                receiveAdmission.run();
+                                        }),
+                        requestAdmission);
             }
-            return new CompletableFuture<>();
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    new CompletableFuture<
+                                    systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkBackendReceived>()
+                            .whenComplete(
+                                    (received, failure) -> {
+                                        if (failure == null && receiveAdmission != null)
+                                            receiveAdmission.run();
+                                    }),
+                    requestAdmission);
         }
 
         @Override

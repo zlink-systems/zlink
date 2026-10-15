@@ -1,5 +1,6 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include <zlink/framework/contracts/dispatch/request_task.hpp>
 
 #include <span>
 
@@ -133,7 +134,8 @@ class raw_route_port_t
     request (const raw_bytes_t &target_routing_id,
              raw_message_t parts,
              std::chrono::milliseconds timeout,
-             runtime::mesh::service_liveness_registry_t::connection_t admission = {});
+             runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+             std::shared_ptr<task_completion_source_t<void>> admitted = {});
     zlink::poll_event_flag_t poll (std::chrono::milliseconds timeout,
                                    bool accept_application_receive = true);
     void signal_activity () noexcept;

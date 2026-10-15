@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -198,11 +197,11 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
 
     internal static bool TryDecodeFrameworkMultipartView(
         Message frame,
-        [NotNullWhen(true)] out ZLinkMultipartPayloadView? parts
+        out ZLinkMultipartPayloadView parts
     )
     {
         ArgumentNullException.ThrowIfNull(frame);
-        parts = null;
+        parts = default;
         var span = frame.AsReadOnlySpan();
         if (!TryGetFrameworkMultipartPayloadOffset(span, out var offset))
             return false;
@@ -475,10 +474,10 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         Message frame,
         ReadOnlySpan<byte> span,
         int payloadOffset,
-        out ZLinkMultipartPayloadView? parts
+        out ZLinkMultipartPayloadView parts
     )
     {
-        parts = null;
+        parts = default;
         if (span.Length - payloadOffset < sizeof(uint))
             return false;
 
@@ -490,7 +489,12 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         )
             return false;
 
-        var ranges = new int[checked((int)count * 2)];
+        var ranges =
+            count > ZLinkMultipartPayloadView.InlinePartCount
+                ? new int[checked((int)count * ZLinkMultipartPayloadView.RangeWidth)]
+                : null;
+        (int Offset, int Length) first = default;
+        (int Offset, int Length) second = default;
         var offset = payloadOffset + sizeof(uint);
         for (var index = 0; index < checked((int)count); index++)
         {
@@ -500,14 +504,22 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
             offset += sizeof(uint);
             if (length > (uint)(span.Length - offset))
                 return false;
-            ranges[index * 2] = offset;
-            ranges[index * 2 + 1] = checked((int)length);
+            var range = (Offset: offset, Length: checked((int)length));
+            if (ranges is not null)
+            {
+                ranges[index * ZLinkMultipartPayloadView.RangeWidth] = range.Offset;
+                ranges[index * ZLinkMultipartPayloadView.RangeWidth + 1] = range.Length;
+            }
+            else if (index == 0)
+                first = range;
+            else
+                second = range;
             offset += checked((int)length);
         }
         if (offset != span.Length)
             return false;
 
-        parts = new ZLinkMultipartPayloadView(frame, ranges);
+        parts = new ZLinkMultipartPayloadView(frame, checked((int)count), first, second, ranges);
         return true;
     }
 }

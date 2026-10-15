@@ -26,7 +26,6 @@ import {
 import { invokeZLinkHandlerFilters } from '../handlers';
 import {
   decodeChannelPayload,
-  ZLinkChannelMessageKind,
   type ZLinkChannelEnvelope,
   type ZLinkChannelEnvelopeCodecRegistry
 } from './channel-envelope';
@@ -74,8 +73,8 @@ interface ZLinkRequestDispatch<TContext extends ZLinkMessageContext> {
   readonly context: TContext;
   readonly signal?: AbortSignal;
   readonly missingHandlerMessage: string;
-  readonly writeReply: (reply: unknown) => Promise<void>;
-  readonly writeError: (error: unknown) => Promise<void>;
+  readonly writeReply: (reply: unknown) => void | Promise<void>;
+  readonly writeError: (error: unknown) => void | Promise<void>;
 }
 
 export class ZLinkChannelDispatchPipeline {
@@ -113,17 +112,27 @@ export class ZLinkChannelDispatchPipeline {
         this.options.dispatchErrors.flow.flowCreationEnabled(),
         undefined
       );
-      const invocation = await runWithFlow(flow, () =>
-        this.invoke(
-          dispatch.envelope,
-          dispatch.codecs,
-          dispatch.handler!,
-          dispatch.context,
-          dispatch.fields,
-          dispatch.signal
-        )
-      );
-      if (invocation.handlerInvoked) {
+      const invocation = await (flow === undefined
+        ? this.invoke(
+            dispatch.envelope,
+            dispatch.codecs,
+            dispatch.handler,
+            dispatch.context,
+            dispatch.fields,
+            dispatch.signal
+          )
+        : runWithFlow(flow, () =>
+            this.invoke(
+              dispatch.envelope,
+              dispatch.codecs,
+              dispatch.handler!,
+              dispatch.context,
+              dispatch.fields,
+              dispatch.signal
+            )
+          ));
+
+      if (invocation !== HANDLER_FILTER_REJECTED) {
         this.trace(ZLinkMessageFlowOutcome.Completed, dispatch.fields);
       }
     } catch (error) {
@@ -165,23 +174,33 @@ export class ZLinkChannelDispatchPipeline {
         this.options.dispatchErrors.flow.flowCreationEnabled(),
         undefined
       );
-      const invocation = await runWithFlow(flow, () =>
-        this.invoke(
-          dispatch.envelope,
-          dispatch.codecs,
-          dispatch.handler!,
-          dispatch.context,
-          dispatch.fields,
-          dispatch.signal
-        )
-      );
-      if (!invocation.handlerInvoked) {
+      const invocation = await (flow === undefined
+        ? this.invoke(
+            dispatch.envelope,
+            dispatch.codecs,
+            dispatch.handler,
+            dispatch.context,
+            dispatch.fields,
+            dispatch.signal
+          )
+        : runWithFlow(flow, () =>
+            this.invoke(
+              dispatch.envelope,
+              dispatch.codecs,
+              dispatch.handler!,
+              dispatch.context,
+              dispatch.fields,
+              dispatch.signal
+            )
+          ));
+
+      if (invocation === HANDLER_FILTER_REJECTED) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RequestRejected,
           `A handler filter rejected '${this.options.channelName}:${dispatch.fields.packetName}'.`
         );
       }
-      reply = invocation.value;
+      reply = invocation;
     } catch (error) {
       try {
         await dispatch.writeError(error);
@@ -206,7 +225,8 @@ export class ZLinkChannelDispatchPipeline {
     }
 
     try {
-      await dispatch.writeReply(reply);
+      const written = dispatch.writeReply(reply);
+      if (written !== undefined) await written;
       this.trace(ZLinkMessageFlowOutcome.Replied, dispatch.fields);
     } catch (error) {
       // Spec 26 §3.1: a failed reply write means the reply delivery path is
@@ -240,9 +260,7 @@ export class ZLinkChannelDispatchPipeline {
     readonly writeProtocolError?: (error: ZLinkFrameworkException) => Promise<void>;
   }): Promise<void> {
     const { info } = input;
-    const isRequest =
-      info.kind === ZLinkChannelMessageKind.Request ||
-      (info.kind === undefined && input.transportRequest);
+    const isRequest = input.transportRequest;
     let replied = false;
     if (isRequest && input.writeProtocolError !== undefined && info.correlationId !== undefined) {
       const protocolError = new ZLinkFrameworkException(
@@ -271,22 +289,37 @@ export class ZLinkChannelDispatchPipeline {
     });
   }
 
-  private async invoke<TContext extends ZLinkMessageContext, TResult>(
+  private invoke<TContext extends ZLinkMessageContext, TResult>(
     envelope: ZLinkChannelEnvelope,
     codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
     handler: ZLinkChannelDispatchHandler<TContext, TResult>,
     context: TContext,
     fields: ZLinkChannelDispatchFields,
     signal?: AbortSignal
-  ): Promise<{ readonly handlerInvoked: boolean; readonly value?: TResult }> {
+  ):
+    | TResult
+    | undefined
+    | typeof HANDLER_FILTER_REJECTED
+    | Promise<TResult | undefined | typeof HANDLER_FILTER_REJECTED> {
     releaseApplicationJobPermitBeforeHandler();
     if (this.filters.length === 0) {
       //  Fast path for the dominant unfiltered dispatch: skip the filter
       //  context object and chain machinery entirely.
       const payload = decodeChannelPayload(envelope, codecs);
       this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
-      return { handlerInvoked: true, value: await handler.handle(payload, context) };
+      return handler.handle(payload, context);
     }
+    return this.invokeFiltered(envelope, codecs, handler, context, fields, signal);
+  }
+
+  private async invokeFiltered<TContext extends ZLinkMessageContext, TResult>(
+    envelope: ZLinkChannelEnvelope,
+    codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
+    handler: ZLinkChannelDispatchHandler<TContext, TResult>,
+    context: TContext,
+    fields: ZLinkChannelDispatchFields,
+    signal?: AbortSignal
+  ): Promise<TResult | undefined | typeof HANDLER_FILTER_REJECTED> {
     let value: TResult | undefined;
     const handlerInvoked = await invokeZLinkHandlerFilters(
       this.filters,
@@ -300,7 +333,7 @@ export class ZLinkChannelDispatchPipeline {
       },
       signal
     );
-    return { handlerInvoked, value };
+    return handlerInvoked ? value : HANDLER_FILTER_REJECTED;
   }
 
   private createFilterContext(
@@ -400,6 +433,8 @@ export class ZLinkChannelDispatchPipeline {
     }
   }
 }
+
+const HANDLER_FILTER_REJECTED = Symbol('handler-filter-rejected');
 
 const DEFAULT_UNHANDLED_DISPATCH: ZLinkUnhandledDispatchOptions = {
   request: ZLinkUnhandledDispatchAction.ReplyError,

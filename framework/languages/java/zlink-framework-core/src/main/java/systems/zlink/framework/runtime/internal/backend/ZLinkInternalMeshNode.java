@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration.RouterSocketConfig;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.time.Duration;
@@ -96,24 +97,11 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         throw new UnsupportedOperationException("MeshNode max message size is not available");
     }
 
-    default void setRouterHighWaterMark(long value) {
-        // Optional for test and alternate backends that do not expose Core
-        // RouteMesh admission yet.
-    }
-
-    default void setRouterReceiveHighWaterMark(long value) {
-        // Optional for test and alternate backends that do not expose Core
-        // RouteMesh receive admission yet.
-    }
+    default void setRouterSocketConfig(RouterSocketConfig config) {}
 
     default void setRouterReceiveTimeout(Duration value) {
         // Optional for test and alternate backends that do not expose Core
         // RouteMesh admission yet.
-    }
-
-    default void setRouterPendingAdmissionCapacity(int value) {
-        // Optional for test and alternate backends that do not expose bounded
-        // asynchronous RouteMesh admission yet.
     }
 
     void setRoutingId(RoutingId routingId);
@@ -599,17 +587,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 new UnsupportedOperationException("Remote Instance Spot send is unavailable"));
     }
 
-    default CompletionStage<List<Message>> requestInstanceSpot(
-            ZLinkServiceM6BWireCodec.InstanceRoute route,
-            String stableType,
-            String sourceSpotId,
-            byte[] metadata,
-            List<Message> parts,
-            Duration timeout) {
-        return CompletableFuture.failedFuture(
-                new UnsupportedOperationException("Remote Instance Spot request is unavailable"));
-    }
-
     interface UserSpotOperationHandler {
         CompletionStage<UserSpotCreateResponse> create(UserSpotCreateRequest request);
 
@@ -657,17 +634,17 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             boolean accepted,
             long receiveChunkLimitBytes,
             List<Message> applicationReply,
-            java.util.UUID handoffId,
-            String replyContentType) {
-        public CanonicalActorJoinReply(
-                boolean accepted, long receiveChunkLimitBytes, List<Message> applicationReply) {
-            this(accepted, receiveChunkLimitBytes, applicationReply, null, "application/json");
-        }
-
+            java.util.UUID handoffId) {
         public CanonicalActorJoinReply {
             applicationReply =
                     List.copyOf(Objects.requireNonNull(applicationReply, "applicationReply"));
-            Objects.requireNonNull(replyContentType, "replyContentType");
+        }
+
+        public String replyContentType() {
+            return applicationReply.isEmpty()
+                    ? null
+                    : systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                            .FRAMEWORK_MULTIPART_CONTENT_TYPE;
         }
     }
 
@@ -863,4 +840,13 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             Objects.requireNonNull(storeVersion, "storeVersion");
         }
     }
+
+    CompletionStage<List<Message>> requestInstanceSpot(
+            ZLinkServiceM6BWireCodec.InstanceRoute route,
+            String stableType,
+            String sourceSpotId,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission);
 }

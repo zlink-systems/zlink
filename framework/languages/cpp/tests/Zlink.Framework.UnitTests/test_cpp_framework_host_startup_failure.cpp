@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_store_providers.hpp"

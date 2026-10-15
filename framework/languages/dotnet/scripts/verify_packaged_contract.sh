@@ -8,6 +8,11 @@ REPO_ROOT="$(cd "$DOTNET_ROOT/../../.." && pwd)"
 SPEC_ROOT="$DOTNET_ROOT/contract"
 SPEC_API_DIR="$SPEC_ROOT/api"
 SPEC_PACKAGE_DIR="$SPEC_ROOT/packages"
+PACKAGE_TARGET_FRAMEWORK="$(dotnet msbuild "$DOTNET_ROOT/src/Zlink.Framework.Contracts/Zlink.Framework.Contracts.csproj" \
+  -nologo -getProperty:TargetFrameworks -property:Configuration=Release)"
+if [[ "$PACKAGE_TARGET_FRAMEWORK" != "net8.0" ]]; then
+  SPEC_PACKAGE_DIR="$SPEC_PACKAGE_DIR/$PACKAGE_TARGET_FRAMEWORK"
+fi
 VERSION="0.0.0-contract.$(date +%s).$$"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/zlink-dotnet-contract.XXXXXX")"
 PACKAGE_DIR="$WORK_DIR/nuget"
@@ -160,11 +165,11 @@ for index in "${!PACKAGE_IDS[@]}"; do
 done
 
 cp "$SCRIPT_DIR/PackageContractSnapshot.cs" "$INSPECTOR_DIR/PackageContractSnapshot.cs"
-cat >"$INSPECTOR_DIR/PackageInspector.csproj" <<'EOF'
+cat >"$INSPECTOR_DIR/PackageInspector.csproj" <<EOF
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>$PACKAGE_TARGET_FRAMEWORK</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
@@ -194,11 +199,11 @@ framework_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.package.txt"
 contracts_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.Contracts.package.txt"
 redis_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.Locations.Redis.package.txt"
 http_client_snapshot="$WORK_DIR/package-snapshots/Zlink.HttpClient.package.txt"
-exact_connector_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Stream.Connector version=[{VERSION}]"
-exact_framework_contracts_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Contracts version=[{VERSION}]"
-exact_framework_provider_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]"
-exact_redis_provider_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]"
-exact_http_contracts_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Contracts version={VERSION}"
+exact_connector_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Stream.Connector version=[{VERSION}]"
+exact_framework_contracts_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Framework.Contracts version=[{VERSION}]"
+exact_framework_provider_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]"
+exact_redis_provider_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]"
+exact_http_contracts_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Framework.Contracts version={VERSION}"
 grep -Fxq "$exact_connector_dependency" "$framework_snapshot" || {
   echo "Zlink.Framework must pin the connector package to the exact framework package version." >&2
   exit 1
@@ -301,7 +306,7 @@ cat >"$SOURCE_CONSUMER_DIR/SourceConsumer.csproj" <<EOF
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>$PACKAGE_TARGET_FRAMEWORK</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
@@ -349,7 +354,7 @@ cat >"$CONSUMER_DIR/Consumer.csproj" <<EOF
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>$PACKAGE_TARGET_FRAMEWORK</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- The verifier pins each package to its isolated contract version below. -->
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
@@ -373,7 +378,7 @@ cat >"$HTTP_CONSUMER_DIR/HttpConsumer.csproj" <<EOF
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>$PACKAGE_TARGET_FRAMEWORK</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- Keep the standalone package probe independent of the repository's central pins. -->
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>

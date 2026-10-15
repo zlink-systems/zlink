@@ -10,6 +10,8 @@ public sealed class BenchServerMetrics
     private long _allPhaseMessages;
     private long _errors;
     private TimeSpan _cpuStart = Process.GetCurrentProcess().TotalProcessorTime;
+    private long _allocatedStart = GC.GetTotalAllocatedBytes(precise: true);
+    private long _threadPoolStart = ThreadPool.CompletedWorkItemCount;
 
     public void Reset()
     {
@@ -20,6 +22,8 @@ public sealed class BenchServerMetrics
             _errors = 0;
             _latencyNs.Clear();
             _cpuStart = Process.GetCurrentProcess().TotalProcessorTime;
+            _allocatedStart = GC.GetTotalAllocatedBytes(precise: true);
+            _threadPoolStart = ThreadPool.CompletedWorkItemCount;
         }
     }
 
@@ -75,6 +79,8 @@ public sealed class BenchServerMetrics
             allPhaseMessages,
             errors;
         TimeSpan cpuStart;
+        long allocatedStart;
+        long threadPoolStart;
         long[] samples;
         lock (_gate)
         {
@@ -82,6 +88,8 @@ public sealed class BenchServerMetrics
             allPhaseMessages = _allPhaseMessages;
             errors = Interlocked.Read(ref _errors);
             cpuStart = _cpuStart;
+            allocatedStart = _allocatedStart;
+            threadPoolStart = _threadPoolStart;
             samples = _latencyNs.ToArray();
         }
         Array.Sort(samples);
@@ -96,7 +104,9 @@ public sealed class BenchServerMetrics
             Percentile(samples, 0.95) / 1000.0,
             Percentile(samples, 0.99) / 1000.0,
             cpuSeconds,
-            process.WorkingSet64 / 1024.0 / 1024.0
+            process.WorkingSet64 / 1024.0 / 1024.0,
+            GC.GetTotalAllocatedBytes(precise: true) - allocatedStart,
+            ThreadPool.CompletedWorkItemCount - threadPoolStart
         );
     }
 
@@ -125,7 +135,9 @@ public sealed record BenchServerSnapshot(
     double P95Micros,
     double P99Micros,
     double CpuSeconds,
-    double WorkingSetMb
+    double WorkingSetMb,
+    long AllocatedBytes,
+    long ThreadPoolWorkItems
 )
 {
     public bool Ready => true;
@@ -135,5 +147,5 @@ public sealed record BenchServerSnapshot(
     public long Received => ActiveMessages;
     public long CurrentInFlight => 0;
     public long PeakInFlight => 0;
-    public static BenchServerSnapshot Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static BenchServerSnapshot Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }

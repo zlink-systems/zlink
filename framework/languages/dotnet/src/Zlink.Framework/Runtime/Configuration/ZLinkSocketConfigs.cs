@@ -22,9 +22,21 @@ internal sealed class ZLinkSocketConfig
 
     public long MaxMessageSize { get; set; }
 
-    public ulong SendHighWaterMark { get; set; }
+    internal ulong? ConfiguredSendHighWaterMark { get; private set; }
 
-    public ulong ReceiveHighWaterMark { get; set; }
+    internal ulong? ConfiguredReceiveHighWaterMark { get; private set; }
+
+    public ulong SendHighWaterMark
+    {
+        get => ConfiguredSendHighWaterMark ?? 0;
+        set => ConfiguredSendHighWaterMark = value;
+    }
+
+    public ulong ReceiveHighWaterMark
+    {
+        get => ConfiguredReceiveHighWaterMark ?? 0;
+        set => ConfiguredReceiveHighWaterMark = value;
+    }
 
     public int SendBufferSize { get; set; }
 

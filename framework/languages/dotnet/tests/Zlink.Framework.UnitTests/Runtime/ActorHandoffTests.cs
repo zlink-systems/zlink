@@ -16,6 +16,33 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class ActorHandoffTests
 {
+    [Fact]
+    public void MessageFollowCutover_PublishedRouteIsImmediatelyUsable()
+    {
+        var state = new ZLinkActorRuntimeState("actor-1", new ManualTimeProvider());
+        var source = ActorRef("node-a", 1);
+        var target = ActorRef("node-b", 1);
+        state.Handoff.BeginCapture();
+        _ = Cutover(state, 0, source, target);
+
+        var resolution = state.Handoff.RouteFrame(source, source);
+        Assert.Equal(ZLinkActorFrameRoute.MessageFollow, resolution.Route);
+        var route = Assert.IsType<ZLinkActorMessageFollowRoute>(resolution.MessageFollowRoute);
+        var validate =
+            typeof(Zlink.Framework.Runtime.Spots.ZLinkActorMessageFollowDispatcher).GetMethod(
+                "ValidateMessageFollowRoute",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
+            )!;
+        try
+        {
+            validate.Invoke(null, [route, default(ZLinkBackendActorRouteContext)]);
+        }
+        finally
+        {
+            state.Handoff.Reset();
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -590,7 +617,7 @@ public sealed class ActorHandoffTests
         );
 
         Assert.Equal(["after-boundary"], trailing.Select(DecodeBody));
-        _ = state.Handoff.AbortCapture();
+        state.Handoff.Reset();
     }
 
     [Fact]
@@ -759,11 +786,12 @@ public sealed class ActorHandoffTests
             sourceAuthorityOwnerGeneration: 1,
             targetAuthorityOwnerGeneration: 2,
             sourceOwnerLeaseGeneration: 1,
-            targetOwnerLeaseGeneration: 2
+            targetOwnerLeaseGeneration: 2,
+            duration: TimeSpan.FromSeconds(1)
         );
 
         Assert.Equal((0, 0L), admission.Snapshot());
-        _ = handoff.AbortCapture();
+        handoff.Reset();
         Assert.Equal((0, 0L), admission.Snapshot());
     }
 
@@ -783,7 +811,8 @@ public sealed class ActorHandoffTests
             sourceAuthorityOwnerGeneration: 1UL << 62,
             targetAuthorityOwnerGeneration: (1UL << 62) + 17,
             sourceOwnerLeaseGeneration: 3,
-            targetOwnerLeaseGeneration: 4
+            targetOwnerLeaseGeneration: 4,
+            duration: TimeSpan.FromSeconds(1)
         );
 
         Assert.Empty(trailing);
@@ -813,7 +842,8 @@ public sealed class ActorHandoffTests
                 sourceAuthorityOwnerGeneration: sourceGeneration,
                 targetAuthorityOwnerGeneration: targetGeneration,
                 sourceOwnerLeaseGeneration: 3,
-                targetOwnerLeaseGeneration: 4
+                targetOwnerLeaseGeneration: 4,
+                duration: TimeSpan.FromSeconds(1)
             )
         );
     }
@@ -879,8 +909,7 @@ public sealed class ActorHandoffTests
         var target = ActorRef("node-b", 2);
         state.BindNativeActorRef(target);
         state.Handoff.BeginCapture();
-        _ = Cutover(state, 0, source, target);
-        state.Handoff.CommitMessageFollow(TimeSpan.FromMilliseconds(50));
+        _ = Cutover(state, 0, source, target, duration: TimeSpan.FromMilliseconds(50));
 
         Assert.Equal(
             ZLinkActorFrameRoute.MessageFollow,
@@ -906,12 +935,11 @@ public sealed class ActorHandoffTests
         state.BindNativeActorRef(nextTarget);
 
         state.Handoff.BeginCapture();
-        _ = Cutover(state, 0, firstSource, firstTarget);
-        state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
+        _ = Cutover(state, 0, firstSource, firstTarget, duration: TimeSpan.FromSeconds(1));
+
         state.Handoff.CompleteSourceMigration();
         state.Handoff.BeginCapture();
-        _ = Cutover(state, 0, nextSource, nextTarget);
-        state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
+        _ = Cutover(state, 0, nextSource, nextTarget, duration: TimeSpan.FromSeconds(1));
 
         Assert.Equal(
             ZLinkActorFrameRoute.Stale,
@@ -931,8 +959,8 @@ public sealed class ActorHandoffTests
         var previousSource = ActorRef("node-a", 1);
         var previousTarget = ActorRef("node-b", 2);
         state.Handoff.BeginCapture();
-        _ = Cutover(state, 0, previousSource, previousTarget);
-        state.Handoff.CommitMessageFollow(TimeSpan.FromMinutes(1));
+        _ = Cutover(state, 0, previousSource, previousTarget, duration: TimeSpan.FromMinutes(1));
+
         state.Handoff.CompleteSourceMigration();
 
         var imported = HandoffFrame(3, arrivalIndex: 0);
@@ -970,8 +998,7 @@ public sealed class ActorHandoffTests
             sessionOwnerNodeGeneration: 1
         );
         state.Handoff.BeginCapture();
-        _ = Cutover(state, 0, source, target);
-        state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
+        _ = Cutover(state, 0, source, target, duration: TimeSpan.FromSeconds(1));
 
         state.RetireMigratedActorInstance(source);
 
@@ -997,8 +1024,8 @@ public sealed class ActorHandoffTests
 
         state.BindNativeActorRef(source);
         state.Handoff.BeginCapture();
-        _ = Cutover(state, 0, source, ActorRef("node-b", 2));
-        state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
+        _ = Cutover(state, 0, source, ActorRef("node-b", 2), duration: TimeSpan.FromSeconds(1));
+
         state.RetireMigratedActorInstance(source);
 
         Assert.Null(state.NativeActorRef);
@@ -1013,8 +1040,8 @@ public sealed class ActorHandoffTests
         var target = ActorRef("node-b", 2);
         state.BindNativeActorRef(target);
         state.Handoff.BeginCapture();
-        _ = Cutover(state, 0, source, target);
-        state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
+        _ = Cutover(state, 0, source, target, duration: TimeSpan.FromSeconds(1));
+
         state.RetireMigratedActorInstance(source);
 
         var creation = new TaskCompletionSource<IZLinkActor>(
@@ -1043,8 +1070,8 @@ public sealed class ActorHandoffTests
 
         state.BindNativeActorRef(source);
         state.Handoff.BeginCapture();
-        _ = Cutover(state, 0, source, ActorRef("node-b", 2));
-        state.Handoff.CommitMessageFollow(TimeSpan.FromSeconds(1));
+        _ = Cutover(state, 0, source, ActorRef("node-b", 2), duration: TimeSpan.FromSeconds(1));
+
         state.RetireMigratedActorInstance(source);
 
         Assert.Throws<InvalidOperationException>(() => state.HandlerInstances);
@@ -1454,7 +1481,7 @@ public sealed class ActorHandoffTests
             ActorRef("node-b", 2)
         );
         Assert.Equal(["T1"], trailing.Select(DecodeBody));
-        _ = state.Handoff.AbortCapture();
+        state.Handoff.Reset();
     }
 
     [Fact]
@@ -1479,15 +1506,20 @@ public sealed class ActorHandoffTests
         var committed = state.Handoff.SnapshotFrames();
         Capture(state, "T1", "session-1");
 
-        Assert.Equal(
-            ["T1"],
-            Cutover(state, committed.Count, sourceActor, ActorRef("node-b", 2)).Select(DecodeBody)
-        );
         Assert.Equal(["B1", "T1"], state.Handoff.AbortCapture().Select(DecodeBody));
         Assert.Equal(
             ZLinkActorFrameRoute.Current,
             state.Handoff.ResolveFrameRoute(sourceActor, sourceActor, out _)
         );
+        state.Handoff.BeginCapture();
+        Capture(state, "B1", "session-1");
+        Capture(state, "T1", "session-1");
+        Assert.Equal(
+            ["T1"],
+            Cutover(state, committed.Count, sourceActor, ActorRef("node-b", 2)).Select(DecodeBody)
+        );
+        Assert.Throws<InvalidOperationException>(() => state.Handoff.AbortCapture());
+        state.Handoff.Reset();
     }
 
     [Fact]
@@ -1595,8 +1627,7 @@ public sealed class ActorHandoffTests
         state.BindNativeActorRef(source);
         state.Handoff.BeginCapture();
 
-        _ = Cutover(state, 0, source, target);
-        state.Handoff.CommitMessageFollow(TimeSpan.FromMilliseconds(10));
+        _ = Cutover(state, 0, source, target, duration: TimeSpan.FromMilliseconds(10));
 
         var registered = Assert.Single(
             markers,
@@ -1635,13 +1666,16 @@ public sealed class ActorHandoffTests
         var released = false;
         state.Handoff.PendingShutdownToken = new DisposeSpy(() => released = true);
 
-        _ = Cutover(state, 0, source, target);
+        _ = Cutover(
+            state,
+            0,
+            source,
+            target,
+            duration: TimeSpan.FromMilliseconds(15),
+            retransmissionWindow: TimeSpan.FromMilliseconds(60)
+        );
         //  The retransmission window (60ms) outlives the follow duration
         //  (15ms), so SafeToShutdown must wait for the window, not just S4.
-        state.Handoff.CommitMessageFollow(
-            TimeSpan.FromMilliseconds(15),
-            TimeSpan.FromMilliseconds(60)
-        );
 
         Assert.False(released);
         await Task.Delay(30);
@@ -1699,13 +1733,16 @@ public sealed class ActorHandoffTests
         state.Handoff.BeginCapture();
         var released = false;
         state.Handoff.PendingShutdownToken = new DisposeSpy(() => released = true);
-        _ = Cutover(state, 0, source, target);
+        _ = Cutover(
+            state,
+            0,
+            source,
+            target,
+            duration: TimeSpan.FromMilliseconds(15),
+            retransmissionWindow: TimeSpan.FromMilliseconds(150)
+        );
         //  The retransmission window (150ms) far outlives the follow
         //  duration (15ms). The metric must not wait for the window.
-        state.Handoff.CommitMessageFollow(
-            TimeSpan.FromMilliseconds(15),
-            TimeSpan.FromMilliseconds(150)
-        );
 
         for (var attempt = 0; attempt < 40 && measurements.Count == 0; attempt++)
             await Task.Delay(10);
@@ -1763,7 +1800,7 @@ public sealed class ActorHandoffTests
                 trailing.Count
             );
             Assert.Equal((0, 0L), admission.Snapshot());
-            _ = state.Handoff.AbortCapture();
+            state.Handoff.Reset();
             Assert.Equal((0, 0L), admission.Snapshot());
         }
     }
@@ -2838,7 +2875,9 @@ public sealed class ActorHandoffTests
         ZLinkActorRuntimeState state,
         int committedFrameCount,
         ZLinkBackendActorRef source,
-        ZLinkBackendActorRef target
+        ZLinkBackendActorRef target,
+        TimeSpan? duration = null,
+        TimeSpan retransmissionWindow = default
     ) =>
         state.Handoff.CutoverCaptureToMessageFollow(
             committedFrameCount,
@@ -2850,7 +2889,9 @@ public sealed class ActorHandoffTests
             sourceAuthorityOwnerGeneration: 1,
             targetAuthorityOwnerGeneration: 2,
             sourceOwnerLeaseGeneration: 1,
-            targetOwnerLeaseGeneration: 2
+            targetOwnerLeaseGeneration: 2,
+            duration: duration ?? TimeSpan.FromSeconds(1),
+            retransmissionWindow: retransmissionWindow
         );
 
     private static ZLinkRemoteActorJoinRequest CommitRequest(

@@ -199,33 +199,24 @@ export class ZLinkLocalNativeActorJoin {
       );
     }
     const membershipEpoch = location.membershipEpoch + 1n;
+    const currentActor = toFrameworkActorRef(actorRef, meshName);
+    const authorityOwnerGeneration = state.locationGeneration ?? actorRef.generation;
     const commit = async (spot?: ZLinkSpot): Promise<void> => {
       throwIfAborted(signal);
-      if (target.spotKind === ZLinkSpotKind.Entry) {
-        await this.options.locationLifecycle?.notifyActorLeftSpot(
-          actorType,
-          actor.context.actorId,
-          storeSpotId,
-          spotGeneration,
-          membershipEpoch,
-          node.status().lifecycleGeneration
-        );
-      } else {
-        await this.options.locationLifecycle?.notifyActorJoinedSpot(
-          actorType,
-          actor.context.actorId,
-          meshName,
-          storeSpotId,
-          spotGeneration,
-          membershipEpoch,
-          node.status().lifecycleGeneration
-        );
-      }
+      await this.options.locationLifecycle?.commitActorMembership(
+        actorType,
+        currentActor,
+        authorityOwnerGeneration,
+        storeSpotId,
+        spotGeneration,
+        target.spotKind === ZLinkSpotKind.Entry ? ZLinkSpotKind.Entry : ZLinkSpotKind.User,
+        node.status().lifecycleGeneration
+      );
       const committedActor = node.restoreActorAuthority!(
         actor.context.actorId,
         actorType,
         actorRef.generation,
-        state.locationGeneration ?? actorRef.generation,
+        authorityOwnerGeneration,
         target.spotKind === ZLinkSpotKind.Entry ? undefined : String(target.spotId),
         spotGeneration,
         membershipEpoch
@@ -456,11 +447,9 @@ export class ZLinkLocalNativeActorJoin {
                 },
                 requestContentType: canonicalAdmission.request.contentType,
                 request: Buffer.from(canonicalAdmission.request.payload),
-                ...(completionOperationId === undefined
+                ...(completionOperationId === undefined || control.replyContentType === undefined
                   ? {}
-                  : {
-                      replyContentType: control.replyContentType ?? ZlinkStreamContentType.Raw
-                    }),
+                  : { replyContentType: control.replyContentType }),
                 reply:
                   completionOperationId === undefined
                     ? Buffer.alloc(0)

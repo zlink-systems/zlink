@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: FSL-1.1-ALv2
+# SPDX-License-Identifier: Apache-2.0
 #
 # Stage the CMake-built native connector and its link/runtime dependencies in
 # the Unreal plugin's ThirdParty directory. The generated manifest is consumed

@@ -6,9 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.jdi.Bootstrap;
+import com.sun.jdi.event.BreakpointEvent;
 import com.sun.jdi.event.ClassPrepareEvent;
 import com.sun.jdi.event.EventSet;
-import com.sun.jdi.event.MethodEntryEvent;
+import com.sun.jdi.request.BreakpointRequest;
 import com.sun.jdi.request.EventRequest;
 
 import org.junit.jupiter.params.ParameterizedTest;
@@ -29,9 +30,14 @@ import java.util.concurrent.TimeUnit;
 /** Spec 32 §6 and Java §10: connection admission is atomic and CLOSED is terminal. */
 final class ZLinkStreamLifecycleRaceTest {
     private static final long WAIT_SECONDS = 10;
+    private static final String LATE_CONNECT_THREAD = "late-connect";
 
     /**
-     * JDI pauses only the racing caller, before the lifecycle lock is acquired. The checkpoint
+     * JDI pauses only the racing caller, before the lifecycle lock is acquired. The pause is a
+     * breakpoint on the first instruction of the boundary method, not a method-entry request: a
+     * method-entry request runs every thread of the probe in interpreter-only mode and reports
+     * every call to the debugger agent, which stretches the probe's own first connect past its
+     * connect timeout under load. The breakpoint slows only the boundary method. The checkpoint
      * latch proves that the other caller completed connect/close before the paused path resumes. No
      * runtime hook or private-field inspection is needed; the probe observes public API results and
      * the connections accepted by the server.
@@ -67,9 +73,9 @@ final class ZLinkStreamLifecycleRaceTest {
                                     }
                                 });
         try {
-            var entries = vm.eventRequestManager().createMethodEntryRequest();
-            entries.addClassFilter(ZLinkStreamConnectionLifecycle.class.getName());
-            entries.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+            String boundary =
+                    scenario.equals("connect") ? "startConnectionAttempt" : "reconnectOrDisconnect";
+            BreakpointRequest entry = null;
             var preparation = vm.eventRequestManager().createClassPrepareRequest();
             preparation.addClassFilter(ZLinkStreamConnectionLifecycle.class.getName());
             preparation.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
@@ -94,14 +100,20 @@ final class ZLinkStreamLifecycleRaceTest {
                     continue;
                 }
                 for (var event : events) {
-                    if (event instanceof ClassPrepareEvent) {
-                        entries.enable();
+                    if (event instanceof ClassPrepareEvent prepared) {
+                        entry =
+                                vm.eventRequestManager()
+                                        .createBreakpointRequest(
+                                                prepared.referenceType()
+                                                        .methodsByName(boundary)
+                                                        .getFirst()
+                                                        .location());
+                        entry.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+                        entry.enable();
                         preparation.disable();
-                    } else if (event instanceof MethodEntryEvent entry
-                            && (scenario.equals("connect")
-                                    ? entry.method().name().equals("startConnectionAttempt")
-                                            && entry.thread().name().equals("late-connect")
-                                    : entry.method().name().equals("reconnectOrDisconnect"))) {
+                    } else if (event instanceof BreakpointEvent hit
+                            && (!scenario.equals("connect")
+                                    || hit.thread().name().equals(LATE_CONNECT_THREAD))) {
                         paused = events;
                     }
                 }
@@ -110,7 +122,7 @@ final class ZLinkStreamLifecycleRaceTest {
                 }
             }
             assertTrue(paused != null, "racing path did not reach its boundary: " + output);
-            entries.disable();
+            entry.disable();
             process.getOutputStream()
                     .write("proceed\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             process.getOutputStream().flush();
@@ -172,7 +184,7 @@ final class ZLinkStreamLifecycleRaceTest {
                     CompletableFuture<Void> racing = new CompletableFuture<>();
                     if (scenario.equals("connect")) {
                         Thread.ofPlatform()
-                                .name("late-connect")
+                                .name(LATE_CONNECT_THREAD)
                                 .start(
                                         () -> {
                                             try {

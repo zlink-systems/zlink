@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/channels/route_channel_runtime.hpp"
 
@@ -220,10 +220,11 @@ route_channel_runtime_t::submit_request_parts (const zlink::routing_id_t &target
       .get ();
 }
 
-result_t<runtime::messaging::message_parts_t>
-route_channel_runtime_t::request_reply_parts (const zlink::routing_id_t &target_node_rid,
-                                              runtime::messaging::message_parts_t parts,
-                                              std::chrono::milliseconds timeout)
+result_t<runtime::messaging::message_parts_t> route_channel_runtime_t::request_reply_parts (
+  const zlink::routing_id_t &target_node_rid,
+  runtime::messaging::message_parts_t parts,
+  std::chrono::milliseconds timeout,
+  std::shared_ptr<task_completion_source_t<void>> admitted)
 {
     request_backend_t backend;
     std::uint64_t request_seq = 0;
@@ -257,7 +258,13 @@ route_channel_runtime_t::request_reply_parts (const zlink::routing_id_t &target_
         .get ();
     if (!prepared)
         return prepared;
-    auto reply = backend (target_node_rid, std::nullopt, parts, timeout);
+    auto pending = backend (target_node_rid, std::nullopt, parts, timeout);
+    if (admitted) {
+        auto stage = pending.admitted ();
+        detail::observe_task_terminal (
+          stage, [admitted] (const auto &result) { admitted->complete (result); });
+    }
+    auto reply = pending.result ();
     _lane.run ([&, this] { _pending_requests.remove (request_seq); }).get ();
     return reply;
 }
@@ -327,7 +334,8 @@ route_channel_runtime_t::request_to_spot_parts (const zlink::routing_id_t &targe
     if (!registered)
         return registered;
     if (backend) {
-        auto reply = backend (target_node_rid, target_spot_id, parts, default_request_timeout ());
+        auto reply =
+          backend (target_node_rid, target_spot_id, parts, default_request_timeout ()).result ();
         _lane.run ([&, this] { _pending_requests.remove (request_seq); }).get ();
         if (!reply) {
             return result_t<std::uint64_t>::failure (reply.error_kind (),
@@ -338,11 +346,12 @@ route_channel_runtime_t::request_to_spot_parts (const zlink::routing_id_t &targe
     return result_t<std::uint64_t>::success (request_seq);
 }
 
-result_t<runtime::messaging::message_parts_t>
-route_channel_runtime_t::request_reply_spot_parts (const zlink::routing_id_t &target_node_rid,
-                                                   const std::string &target_spot_id,
-                                                   runtime::messaging::message_parts_t parts,
-                                                   std::chrono::milliseconds timeout)
+result_t<runtime::messaging::message_parts_t> route_channel_runtime_t::request_reply_spot_parts (
+  const zlink::routing_id_t &target_node_rid,
+  const std::string &target_spot_id,
+  runtime::messaging::message_parts_t parts,
+  std::chrono::milliseconds timeout,
+  std::shared_ptr<task_completion_source_t<void>> admitted)
 {
     request_backend_t backend;
     std::uint64_t request_seq = 0;
@@ -375,7 +384,13 @@ route_channel_runtime_t::request_reply_spot_parts (const zlink::routing_id_t &ta
         .get ();
     if (!prepared)
         return prepared;
-    auto reply = backend (target_node_rid, target_spot_id, parts, timeout);
+    auto pending = backend (target_node_rid, target_spot_id, parts, timeout);
+    if (admitted) {
+        auto stage = pending.admitted ();
+        detail::observe_task_terminal (
+          stage, [admitted] (const auto &result) { admitted->complete (result); });
+    }
+    auto reply = pending.result ();
     _lane.run ([&, this] { _pending_requests.remove (request_seq); }).get ();
     return reply;
 }

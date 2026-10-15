@@ -470,8 +470,9 @@ public sealed class InstanceSpotContracts
 
         public IZLinkSpotRequestCall Timeout(TimeSpan timeout) => this;
 
-        public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult<TReply>(default!);
+        public Zlink.Framework.Contracts.Channels.ZLinkRequest<TReply> Async<TReply>(
+            CancellationToken cancellationToken = default
+        ) => new(ValueTask.CompletedTask, ValueTask.FromResult<TReply>(default!));
 
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<TReply>(default!);
@@ -494,8 +495,9 @@ public sealed class InstanceSpotContracts
 
         public IZLinkRequestCall Timeout(TimeSpan timeout) => this;
 
-        public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult<TReply>(default!);
+        public Zlink.Framework.Contracts.Channels.ZLinkRequest<TReply> Async<TReply>(
+            CancellationToken cancellationToken = default
+        ) => new(ValueTask.CompletedTask, ValueTask.FromResult<TReply>(default!));
 
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<TReply>(default!);

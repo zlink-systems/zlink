@@ -1,5 +1,6 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/request_admission_fixture.hpp"
 
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -1338,7 +1339,8 @@ void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
           channel_request_call_t ("temporary.reply", &serializers,
                                   [reply_source] (const std::string &, std::chrono::milliseconds,
                                                   const channel_request_call_t::metadata_map_t &) {
-                                      return reply_source->task ();
+                                      return zlink::framework::test::accepted_request_task (
+                                        reply_source->task ());
                                   })
             .yield<reply_t> ();
         detail::observe_task_completion (
@@ -2402,6 +2404,25 @@ void test_actor_join_recovery_round_trip (test_context_t &test)
       .operation = {31, 37},
       .reply_content_type = "application/json",
       .reply = {'[', ']'}};
+    auto empty_reply = recovery;
+    empty_reply.reply.clear ();
+    empty_reply.reply_content_type.clear ();
+    const auto empty_restored = protocol::decode_actor_join_recovery_saved_work (
+      protocol::encode_actor_join_recovery_saved_work (empty_reply));
+    test.require (empty_restored && empty_restored->reply_content_type.empty ()
+                    && empty_restored->reply.empty ()
+                    && empty_restored->operation.high == recovery.operation.high
+                    && empty_restored->operation.low == recovery.operation.low,
+                  "empty Join reply must preserve absent metadata and its completion operation");
+    auto typed_reply = recovery;
+    typed_reply.reply_content_type = protocol::framework_multipart_content_type;
+    const auto typed_restored = protocol::decode_actor_join_recovery_saved_work (
+      protocol::encode_actor_join_recovery_saved_work (typed_reply));
+    test.require (typed_restored
+                    && typed_restored->reply_content_type
+                         == protocol::framework_multipart_content_type
+                    && typed_restored->reply == recovery.reply,
+                  "typed Join reply must preserve the fixed outer profile through recovery");
     const auto frozen = protocol::encode_actor_join_recovery_saved_work (recovery);
     /* Fixed Node vector from encodeCanonicalActorJoinRecoverySavedWork in
      * actor-join-recovery-codec.ts, using this test's recovery fields.  This

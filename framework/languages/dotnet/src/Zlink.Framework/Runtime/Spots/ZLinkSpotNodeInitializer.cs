@@ -48,8 +48,7 @@ internal sealed class ZLinkSpotNodeInitializer(
             var hasRouterBind = routerEndpoint is { Length: > 0 };
             if (spotNodeRegistration.Router is { } router)
             {
-                node.SetRouterHighWaterMark(router.SocketConfig.SendHighWaterMark);
-                node.SetRouterReceiveHighWaterMark(router.SocketConfig.ReceiveHighWaterMark);
+                node.ApplyRouterSocketConfig(router.SocketConfig);
                 node.SetRouterReceiveTimeout(router.SocketConfig.ReceiveTimeout);
             }
             foreach (var membership in spotNodeRegistration.ChannelMemberships)

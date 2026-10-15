@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 #include <zlink/framework/contracts/configuration/mesh_node.hpp>
@@ -381,7 +381,7 @@ class mesh_node_runtime_t
       std::string application_content_type = {});
     result_t<std::shared_ptr<deferred_barrier_t>>
     reserve_application_actor_join_barrier (const actor_ref_t &actor);
-    task_t<std::optional<zlink::message_t>> relay_application_actor (
+    request_task_t<std::optional<zlink::message_t>> relay_application_actor (
       const actor_ref_t &actor,
       const stream_header_t &header,
       const zlink::message_t &payload,
@@ -389,12 +389,12 @@ class mesh_node_runtime_t
       bool await_remote_admission = false,
       std::optional<bound_session_relay_source_t> bound_session_source = std::nullopt,
       runtime::protocol::actor_route_fence_t stale_route = {});
-    task_t<std::optional<zlink::message_t>>
+    request_task_t<std::optional<zlink::message_t>>
     relay_application_actor (const actor_ref_t &actor,
                              const runtime::messaging::envelope_header_t &header,
                              const zlink::message_t &payload,
                              std::chrono::milliseconds timeout);
-    task_t<std::optional<zlink::message_t>> relay_application_actor (
+    request_task_t<std::optional<zlink::message_t>> relay_application_actor (
       actor_ref_t actor,
       runtime::messaging::envelope_header_t header,
       zlink::message_t payload,
@@ -406,7 +406,7 @@ class mesh_node_runtime_t
       std::uint64_t reply_route_id,
       bool await_remote_admission = false,
       std::optional<bound_session_relay_source_t> bound_session_source = std::nullopt);
-    task_t<application_actor_session_bind_outcome_t>
+    request_task_t<application_actor_session_bind_outcome_t>
     bind_application_actor_session (const actor_ref_t &actor,
                                     const zlink::routing_id_t &session_rid,
                                     std::uint64_t binding_generation,
@@ -433,6 +433,13 @@ class mesh_node_runtime_t
                          std::chrono::milliseconds timeout,
                          std::optional<zlink::routing_id_t> target = std::nullopt);
     task_t<operation_completion_t> await_completion (const host::pending_operation_t &operation);
+    void observe_request_failure (const host::pending_operation_t &operation,
+                                  const std::shared_ptr<task_completion_source_t<void>> &admitted,
+                                  std::string_view operation_name);
+    task_t<result_t<runtime::messaging::message_parts_t>>
+    await_request_reply (const host::pending_operation_t &operation,
+                         std::string_view operation_name);
+
     task_t<std::size_t>
     dispatch_ready (const std::function<void (const host::ready_record_t &,
                                               const host::receive_record_t &,

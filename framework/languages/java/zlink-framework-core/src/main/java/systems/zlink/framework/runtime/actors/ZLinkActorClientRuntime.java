@@ -8,6 +8,7 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorRequestCall;
 import systems.zlink.framework.actors.ZLinkActorSendCall;
+import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
@@ -18,6 +19,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
@@ -155,7 +157,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             Duration timeout,
             Class<TReply> replyType,
             ZLinkRequestMetrics.Series metric,
-            long started) {
+            long started,
+            CompletableFuture<Void> requestAdmission) {
         ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
         long requestStarted = System.nanoTime();
         Duration requestTimeout = timeout == null ? defaultTimeout : timeout;
@@ -173,7 +176,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                                                 metadata,
                                                                 requestTimeout,
                                                                 requestStarted,
-                                                                replyType)));
+                                                                replyType,
+                                                                requestAdmission)));
         CompletionStage<TReply> result =
                 logical.whenComplete(
                         (ignored, error) -> {
@@ -304,7 +308,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             Map<String, String> metadata,
             Duration timeout,
             long requestStarted,
-            Class<TReply> replyType) {
+            Class<TReply> replyType,
+            CompletableFuture<Void> requestAdmission) {
         List<Message> parts =
                 createPacketParts(
                         ZLinkStreamMessageKind.REQUEST,
@@ -322,7 +327,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                     SendFlags.NONE,
                                     systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
                                             .remainingTimeout(
-                                                    timeout, requestStarted, System.nanoTime()));
+                                                    timeout, requestStarted, System.nanoTime()),
+                                    requestAdmission);
         } catch (RuntimeException error) {
             closeAll(parts);
             return failed(mapBackendException(error, "Actor request"));
@@ -523,6 +529,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     }
 
     private final class RequestCall implements ZLinkActorRequestCall {
+        private CompletableFuture<Void> requestAdmission;
+
         private final String actorId;
         private final Object request;
         private final AtomicBoolean submitGate = new AtomicBoolean();
@@ -555,11 +563,16 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         }
 
         @Override
-        public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+        public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
             CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
-            if (duplicate != null) {
-                return duplicate;
-            }
+            if (duplicate != null)
+                return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
+            requestAdmission = new CompletableFuture<>();
+            return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
+        }
+
+        private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
+
             try (var flowScope = enterApplicationFlow()) {
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .rejectSameActorWait(actorId);
@@ -581,7 +594,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                     timeout,
                                     replyType,
                                     metric,
-                                    started);
+                                    started,
+                                    requestAdmission);
                 } catch (RuntimeException | Error failure) {
                     ZLinkRequestMetrics.complete(
                             metric,

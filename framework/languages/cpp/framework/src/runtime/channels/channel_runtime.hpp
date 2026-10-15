@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 #include <boost/asio/awaitable.hpp>
 
@@ -130,11 +130,9 @@ class route_client_state_t
   public:
     route_client_state_t (std::shared_ptr<channel_runtime_state_t> runtime,
                           serializer_registry_t &serializers);
-    ~route_client_state_t ();
 
     std::shared_ptr<channel_runtime_state_t> runtime;
     serializer_registry_t *serializers;
-    std::shared_ptr<runtime::offload_executor_t> executor;
 };
 
 class channel_runtime_state_t
@@ -150,7 +148,7 @@ class channel_runtime_state_t
       std::function<serialized_payload_t (serializer_registry_t &)>,
       const std::map<std::string, std::string> &,
       std::chrono::system_clock::time_point)>;
-    using instance_spot_request_t = std::function<task_t<zlink::message_t> (
+    using instance_spot_request_t = std::function<request_task_t<zlink::message_t> (
       const spot_id_t &,
       const spot_activation_intent_t &,
       const std::optional<runtime::spot_address_t> &,
@@ -162,23 +160,23 @@ class channel_runtime_state_t
     using mesh_node_send_t = std::function<task_t<result_t<void>> (
       const zlink::routing_id_t &, runtime::messaging::message_parts_t)>;
     using mesh_node_request_t =
-      std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
+      std::function<request_task_t<result_t<runtime::messaging::message_parts_t>> (
         const zlink::routing_id_t &,
         runtime::messaging::message_parts_t,
         std::chrono::milliseconds)>;
     using mesh_channel_send_t =
       std::function<task_t<result_t<void>> (runtime::messaging::message_parts_t)>;
     using mesh_channel_request_t =
-      std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
+      std::function<request_task_t<result_t<runtime::messaging::message_parts_t>> (
         runtime::messaging::message_parts_t, std::chrono::milliseconds)>;
     using client_server_send_t = std::function<task_t<void> (
       std::string, std::string, zlink::message_t, std::map<std::string, std::string>)>;
     using client_server_request_t =
-      std::function<task_t<zlink::message_t> (std::string,
-                                              std::string,
-                                              zlink::message_t,
-                                              std::chrono::milliseconds,
-                                              std::map<std::string, std::string>)>;
+      std::function<request_task_t<zlink::message_t> (std::string,
+                                                      std::string,
+                                                      zlink::message_t,
+                                                      std::chrono::milliseconds,
+                                                      std::map<std::string, std::string>)>;
     using fanout_publish_t = std::function<task_t<void> (
       std::string, std::string, std::string, zlink::message_t, std::chrono::milliseconds)>;
     using spot_mesh_send_t =
@@ -187,7 +185,7 @@ class channel_runtime_state_t
                                             std::uint64_t,
                                             runtime::messaging::message_parts_t)>;
     using spot_mesh_request_t =
-      std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
+      std::function<request_task_t<result_t<runtime::messaging::message_parts_t>> (
         const zlink::routing_id_t &,
         const std::string &,
         std::uint64_t,
@@ -219,7 +217,9 @@ class channel_runtime_state_t
     std::map<std::string, spot_mesh_request_t> spot_mesh_requesters;
     instance_spot_send_t instance_spot_sender;
     instance_spot_request_t instance_spot_requester;
-    std::vector<std::weak_ptr<runtime::offload_executor_t>> route_client_executors;
+    /* Route client request work. The runtime owns it and its teardown drains it: the last
+     * route client reference can be released on one of its workers. */
+    std::shared_ptr<runtime::offload_executor_t> route_client_executor;
     std::map<std::string, route_handler_registry_t> route_handlers;
     std::map<std::string, int> server_peer_weight_overrides;
     std::map<std::string, std::uint64_t> weighted_discovery_cursors;

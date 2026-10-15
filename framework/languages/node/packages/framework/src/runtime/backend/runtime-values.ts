@@ -39,6 +39,7 @@ export type SubmitResult = (typeof SubmitResult)[keyof typeof SubmitResult];
 export type ZLinkBackendSendFlags = number;
 export type ZLinkBackendRecvFlags = number;
 export const ZLINK_BACKEND_SEND_NONE: ZLinkBackendSendFlags = 0;
+export const ZLINK_BACKEND_SEND_DONT_WAIT: ZLinkBackendSendFlags = 1;
 export const ZLINK_BACKEND_RECV_DONT_WAIT: ZLinkBackendRecvFlags = 1;
 
 export class ZLinkBackendResultError extends Error {

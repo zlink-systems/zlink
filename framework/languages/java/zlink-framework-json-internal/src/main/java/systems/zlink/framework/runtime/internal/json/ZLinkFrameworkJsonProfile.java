@@ -1,9 +1,13 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.framework.runtime.internal.json;
 
+import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.StreamReadFeature;
+import com.fasterxml.jackson.core.io.IOContext;
+import com.fasterxml.jackson.core.io.InputDecorator;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonDeserializer;
@@ -23,25 +27,34 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import systems.zlink.contracts.core.RoutingId;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.PushbackInputStream;
+import java.io.Reader;
 import java.lang.annotation.Annotation;
 import java.util.Base64;
+import java.util.regex.Pattern;
 
 /** Owns the framework-json-v1 mapper decisions shared by JVM transports. */
 public final class ZLinkFrameworkJsonProfile {
     public static final String CONTENT_TYPE = "application/json";
     private static final String KOTLIN_METADATA_CLASS_NAME = "kotlin.Metadata";
+    private static final Pattern CANONICAL_DECIMAL_INTEGER = Pattern.compile("(?:0|-?[1-9][0-9]*)");
 
     private ZLinkFrameworkJsonProfile() {}
 
     public static ObjectMapper mapper(Module... transportModules) {
         JsonMapper.Builder builder =
-                JsonMapper.builder()
+                JsonMapper.builder(
+                                JsonFactory.builder()
+                                        .inputDecorator(new ProfileInputDecorator())
+                                        .build())
                         .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                         .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, false)
                         .configure(MapperFeature.USE_STD_BEAN_NAMING, true)
                         .configure(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES, true)
                         .configure(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY, true)
                         .configure(DeserializationFeature.ACCEPT_FLOAT_AS_INT, false)
+                        .configure(DeserializationFeature.FAIL_ON_NUMBERS_FOR_ENUMS, true)
                         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
                         .propertyNamingStrategy(new KotlinAwareLowerCamelCaseStrategy())
                         .findAndAddModules()
@@ -52,6 +65,40 @@ public final class ZLinkFrameworkJsonProfile {
             builder.addModule(module);
         }
         return builder.build();
+    }
+
+    private static final class ProfileInputDecorator extends InputDecorator {
+        private static final int UTF8_BOM_LENGTH = 3;
+
+        @Override
+        public InputStream decorate(IOContext context, byte[] input, int offset, int length)
+                throws IOException {
+            rejectBom(input, offset, length);
+            return null;
+        }
+
+        @Override
+        public InputStream decorate(IOContext context, InputStream input) throws IOException {
+            PushbackInputStream stream = new PushbackInputStream(input, UTF8_BOM_LENGTH);
+            byte[] prefix = stream.readNBytes(UTF8_BOM_LENGTH);
+            rejectBom(prefix, 0, prefix.length);
+            stream.unread(prefix);
+            return stream;
+        }
+
+        @Override
+        public Reader decorate(IOContext context, Reader reader) {
+            return reader;
+        }
+
+        private static void rejectBom(byte[] input, int offset, int length) throws IOException {
+            if (length >= UTF8_BOM_LENGTH
+                    && (input[offset] & 0xff) == 0xef
+                    && (input[offset + 1] & 0xff) == 0xbb
+                    && (input[offset + 2] & 0xff) == 0xbf) {
+                throw new IOException("framework-json-v1 does not allow a UTF-8 BOM");
+            }
+        }
     }
 
     private static SimpleModule routingIdModule() {
@@ -82,6 +129,44 @@ public final class ZLinkFrameworkJsonProfile {
 
     private static SimpleModule profileModule() {
         SimpleModule module = new SimpleModule("framework-json-v1");
+        JsonSerializer<Number> finiteNumberSerializer =
+                new JsonSerializer<>() {
+                    @Override
+                    public void serialize(
+                            Number value, JsonGenerator generator, SerializerProvider serializers)
+                            throws IOException {
+                        if (!Double.isFinite(value.doubleValue())) {
+                            throw JsonMappingException.from(
+                                    generator, "framework-json-v1 requires finite JSON numbers");
+                        }
+                        generator.writeNumber(value.toString());
+                    }
+                };
+        module.addSerializer(Double.class, finiteNumberSerializer);
+        module.addSerializer(Double.TYPE, finiteNumberSerializer);
+        module.addSerializer(Float.class, finiteNumberSerializer);
+        module.addSerializer(Float.TYPE, finiteNumberSerializer);
+        JsonDeserializer<Double> doubleDeserializer =
+                new JsonDeserializer<>() {
+                    @Override
+                    public Double deserialize(JsonParser parser, DeserializationContext context)
+                            throws IOException {
+                        return readFiniteNumber(parser, false).doubleValue();
+                    }
+                };
+        JsonDeserializer<Float> floatDeserializer =
+                new JsonDeserializer<>() {
+                    @Override
+                    public Float deserialize(JsonParser parser, DeserializationContext context)
+                            throws IOException {
+                        return readFiniteNumber(parser, true).floatValue();
+                    }
+                };
+        module.addDeserializer(Double.class, doubleDeserializer);
+        module.addDeserializer(Double.TYPE, doubleDeserializer);
+        module.addDeserializer(Float.class, floatDeserializer);
+        module.addDeserializer(Float.TYPE, floatDeserializer);
+
         JsonSerializer<Long> longSerializer =
                 new JsonSerializer<>() {
                     @Override
@@ -101,7 +186,7 @@ public final class ZLinkFrameworkJsonProfile {
                                     parser, "64-bit integers must be decimal JSON strings");
                         }
                         String value = parser.getText();
-                        if (!value.matches("-?(0|[1-9][0-9]*)")) {
+                        if (!CANONICAL_DECIMAL_INTEGER.matcher(value).matches()) {
                             throw JsonMappingException.from(
                                     parser, "64-bit integer is not a canonical decimal string");
                         }
@@ -147,6 +232,24 @@ public final class ZLinkFrameworkJsonProfile {
                     }
                 });
         return module;
+    }
+
+    private static Number readFiniteNumber(JsonParser parser, boolean singlePrecision)
+            throws IOException {
+        if (!parser.currentToken().isNumeric()) {
+            throw JsonMappingException.from(parser, "floating-point values must be JSON numbers");
+        }
+        Number value;
+        if (singlePrecision) {
+            value = parser.getFloatValue();
+        } else {
+            value = parser.getDoubleValue();
+        }
+        if (!Double.isFinite(value.doubleValue())) {
+            throw JsonMappingException.from(
+                    parser, "framework-json-v1 requires finite JSON numbers");
+        }
+        return value;
     }
 
     private static final class KotlinAwareLowerCamelCaseStrategy extends PropertyNamingStrategy {

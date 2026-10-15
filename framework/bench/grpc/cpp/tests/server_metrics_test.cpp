@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "bench_metric_reader.hpp"
 #include "bench_stats_server.hpp"
 #include <opentelemetry/metrics/observer_result.h>

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 // §10.10 actor-no-bind-send-send-echo. Question: what do the source admission of a global-ActorId send and the application

@@ -30,7 +30,7 @@ test('the UPM package has the layout Unity requires', () => {
   assert.deepEqual(manifest.dependencies, {});
 
   for (const required of [
-    'LICENSE',
+    'LICENSE.md',
     'README.md',
     'Runtime/Systems.Zlink.Stream.Connector.WebGL.asmdef',
     'Plugins/WebGL/ZlinkStreamConnector.jslib',

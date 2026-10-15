@@ -159,7 +159,7 @@ public sealed partial class StatefulServiceRuntimeTests
             using var reply = await request;
             Assert.Equal(
                 terminal.AsReadOnlyMemory().ToArray(),
-                reply.ApplicationPayloadView!.GetSpan(0).ToArray()
+                reply.ApplicationPayloadView!.Value.GetSpan(0).ToArray()
             );
         }
         Assert.False(claim.Receive(received, RecvFlags.DontWait));

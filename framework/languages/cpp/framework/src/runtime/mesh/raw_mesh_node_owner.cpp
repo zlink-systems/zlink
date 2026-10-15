@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/diagnostics/mesh_trace.hpp"
 #include "runtime/diagnostics/diagnostic_event_sink.hpp"
@@ -210,7 +210,8 @@ class infrastructure_request_retry_state_t final
       detail::backend::raw_message_t request_parts,
       std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)>
         decode_reply,
-      clock_t::time_point deadline) :
+      clock_t::time_point deadline,
+      std::shared_ptr<task_completion_source_t<void>> admitted) :
         _port (std::move (port)),
         _operations (std::move (operations)),
         _operation (operation),
@@ -219,6 +220,7 @@ class infrastructure_request_retry_state_t final
         _request_parts (std::move (request_parts)),
         _decode_reply (std::move (decode_reply)),
         _deadline (deadline),
+        _admission (std::move (admitted)),
         _retry_timer (boost::asio::system_executor ())
     {
     }
@@ -236,8 +238,20 @@ class infrastructure_request_retry_state_t final
             exhaust ();
             return;
         }
+        // Durable lifecycle attempts share one deadline and admission fact.
+        // Consume the binding's admission here; publish only its first success.
+        auto accepted = std::make_shared<task_completion_source_t<void>> ();
         auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-          _port->request (_target_routing_id, _request_parts, remaining));
+          _port->request (_target_routing_id, _request_parts, remaining, {}, accepted));
+        auto admission = accepted->task ();
+        detail::observe_task_terminal (admission,
+                                       [self = shared_from_this ()] (const result_t<void> &result) {
+                                           if (result && !self->_admitted) {
+                                               self->_admitted = true;
+                                               if (self->_admission)
+                                                   self->_admission->complete (result);
+                                           }
+                                       });
         detail::observe_task_terminal (
           *running, [self = shared_from_this (),
                      running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
@@ -254,10 +268,6 @@ class infrastructure_request_retry_state_t final
             return;
         }
         const auto &completion = settled.value ();
-        _admitted |= completion.failure
-                     && completion.failure->phase
-                          == detail::backend::raw_request_failure_phase_t::completion_terminal
-                     && !completion.failure->submit_result;
         trace_mesh ("infrastructure-request-result correlation=" + std::to_string (_correlation)
                     + " result=" + std::to_string (static_cast<int> (completion.terminal)));
         if (completion.terminal == zlink::request_result_t::not_connected
@@ -281,8 +291,7 @@ class infrastructure_request_retry_state_t final
             if (parts.empty ()) {
                 throw protocol::service_wire_error_t ("infrastructure reply has no header");
             }
-            const auto prefix = protocol::decode_reply_header (std::span<const std::uint8_t> (
-              parts.front ().data (), std::min<std::size_t> (parts.front ().size (), 21)));
+            const auto prefix = protocol::decode_reply_header (parts.front ());
             if (prefix.correlation != _correlation) {
                 throw protocol::service_wire_error_t (
                   "infrastructure reply correlation does not match");
@@ -336,6 +345,7 @@ class infrastructure_request_retry_state_t final
     std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> _decode_reply;
     clock_t::time_point _deadline;
     bool _admitted = false;
+    std::shared_ptr<task_completion_source_t<void>> _admission;
     boost::asio::steady_timer _retry_timer;
 };
 
@@ -347,7 +357,8 @@ task_t<bool> submit_registered_infrastructure_request_with_retry (
   std::vector<std::uint8_t> target_routing_id,
   detail::backend::raw_message_t request_parts,
   std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> decode_reply,
-  foundation::operation_registry_t::clock_t::time_point deadline)
+  foundation::operation_registry_t::clock_t::time_point deadline,
+  std::shared_ptr<task_completion_source_t<void>> admitted = {})
 {
     if (!port || deadline <= foundation::operation_registry_t::clock_t::now ()) {
         (void) operations->fail (operation, foundation::operation_terminal_t::route_unavailable);
@@ -355,9 +366,22 @@ task_t<bool> submit_registered_infrastructure_request_with_retry (
     }
     auto retry = std::make_shared<infrastructure_request_retry_state_t> (
       std::move (port), std::move (operations), operation, correlation,
-      std::move (target_routing_id), std::move (request_parts), std::move (decode_reply), deadline);
+      std::move (target_routing_id), std::move (request_parts), std::move (decode_reply), deadline,
+      std::move (admitted));
     retry->start ();
     co_return true;
+}
+
+task_t<bool> await_request_admission (task_t<void> admitted)
+{
+    try {
+        co_await admitted;
+        co_return true;
+    }
+    catch (const framework_exception_t &) {
+        // The existing native reply observer completes the operation failure.
+        co_return false;
+    }
 }
 
 task_t<bool> submit_registered_infrastructure_request (
@@ -368,14 +392,17 @@ task_t<bool> submit_registered_infrastructure_request (
   std::vector<std::uint8_t> target_routing_id,
   detail::backend::raw_message_t request_parts,
   std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> decode_reply,
-  std::chrono::milliseconds timeout)
+  std::chrono::milliseconds timeout,
+  std::shared_ptr<task_completion_source_t<void>> admitted = {})
 {
     if (!port || timeout <= std::chrono::milliseconds::zero ()) {
         (void) operations->fail (operation, foundation::operation_terminal_t::transport_failed);
         co_return false;
     }
+    auto accepted =
+      admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
     auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-      port->request (target_routing_id, std::move (request_parts), timeout));
+      port->request (target_routing_id, std::move (request_parts), timeout, {}, accepted));
     detail::observe_task_terminal (
       *running, [operations = std::move (operations), operation, correlation,
                  decode_reply = std::move (decode_reply),
@@ -404,8 +431,7 @@ task_t<bool> submit_registered_infrastructure_request (
               if (parts.empty ()) {
                   throw protocol::service_wire_error_t ("infrastructure reply has no header");
               }
-              const auto prefix = protocol::decode_reply_header (std::span<const std::uint8_t> (
-                parts.front ().data (), std::min<std::size_t> (parts.front ().size (), 21)));
+              const auto prefix = protocol::decode_reply_header (parts.front ());
               if (prefix.correlation != correlation) {
                   throw protocol::service_wire_error_t (
                     "infrastructure reply correlation does not match");
@@ -418,7 +444,7 @@ task_t<bool> submit_registered_infrastructure_request (
                                        foundation::operation_terminal_t::transport_failed);
           }
       });
-    co_return true;
+    co_return co_await await_request_admission (accepted->task ());
 }
 
 } // namespace
@@ -1092,6 +1118,8 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
         foundation::call_id_t operation;
         std::uint64_t correlation = 0;
         std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running;
+        std::shared_ptr<task_completion_source_t<void>> admitted =
+          std::make_shared<task_completion_source_t<void>> ();
         bool registered = false;
     };
     auto start =
@@ -1125,7 +1153,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
                     value.running =
                       std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
                         port->request (target_routing_id, std::move (wire), timeout,
-                                       std::move (admission)));
+                                       std::move (admission), value.admitted));
                 }
                 catch (...) {
                     (void) _operations->unregister (value.operation);
@@ -1141,8 +1169,10 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "raw mesh request registry is closed");
     }
-    co_return co_await observe_request (start->operation, start->correlation,
-                                        std::move (start->running));
+    auto admitted = start->admitted->task ();
+    (void) co_await observe_request (start->operation, start->correlation,
+                                     std::move (start->running));
+    co_return co_await await_request_admission (std::move (admitted));
 }
 
 struct raw_mesh_node_owner_t::send_completion_state_t
@@ -1864,7 +1894,8 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
   const std::vector<std::uint8_t> &actor_owner_routing_id,
   protocol::bound_session_bind_t record,
   std::chrono::milliseconds timeout,
-  foundation::operation_registry_t::callback_t callback)
+  foundation::operation_registry_t::callback_t callback,
+  std::shared_ptr<task_completion_source_t<void>> admitted)
 {
     if (record.actor.target_node_routing_id != actor_owner_routing_id) {
         throw std::invalid_argument ("bound Session bind Actor authority target is inconsistent");
@@ -1917,7 +1948,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
           }
           return parts.front ();
       },
-      deadline);
+      deadline, std::move (admitted));
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
@@ -2223,8 +2254,9 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     const auto operations = _operations;
     trace_mesh ("infrastructure-request-submit correlation=" + std::to_string (correlation)
                 + " targetBytes=" + std::to_string (target_routing_id.size ()));
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
     auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-      port->request (target_routing_id, std::move (parts), timeout));
+      port->request (target_routing_id, std::move (parts), timeout, {}, admitted));
     detail::observe_task_terminal (
       *running, [operations, id, correlation,
                  running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
@@ -2282,7 +2314,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                 {}, foundation::operation_terminal_t::protocol_error);
           }
       });
-    co_return true;
+    co_return co_await await_request_admission (admitted->task ());
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_user_spot_close (

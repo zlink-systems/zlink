@@ -1,5 +1,6 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include <zlink/framework/contracts/dispatch/request_task.hpp>
 
 #include "runtime/backend/raw_route_port.hpp"
 
@@ -29,7 +30,8 @@ class raw_dealer_port_t
     task_t<raw_request_completion_t>
     request (const raw_message_t &parts,
              std::chrono::milliseconds timeout,
-             runtime::mesh::service_liveness_registry_t::connection_t admission = {});
+             runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+             std::shared_ptr<task_completion_source_t<void>> admitted = {});
     std::optional<raw_message_t> try_receive ();
     void close ();
 

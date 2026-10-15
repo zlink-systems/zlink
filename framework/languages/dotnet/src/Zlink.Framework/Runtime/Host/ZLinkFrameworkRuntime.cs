@@ -34,11 +34,35 @@ internal readonly record struct ZLinkRelocationAdmissionFence(long Generation);
 internal readonly record struct ZLinkInboundOperationAdmission(
     bool Accepted,
     ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease Lease
-);
+)
+{
+    internal ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease? CaptureOperation() =>
+        Lease.IsActive ? Lease : ZLinkFrameworkRuntime.CurrentOperation;
+}
 
 internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 {
     private static readonly AsyncLocal<ZLinkRuntimeOperationLease?> AmbientOperation = new();
+
+    internal static ZLinkRuntimeOperationLease? CurrentOperation => AmbientOperation.Value;
+
+    // Queue callbacks borrow the admitted operation. Dispatch retains its lease
+    // through terminal completion; this scope restores the execution context.
+    internal static ZLinkRuntimeOperationScope EnterAcceptedOperation(
+        ZLinkRuntimeOperationLease? operation
+    )
+    {
+        var scope = new ZLinkRuntimeOperationScope(AmbientOperation.Value);
+        AmbientOperation.Value = operation;
+        return scope;
+    }
+
+    internal readonly struct ZLinkRuntimeOperationScope(ZLinkRuntimeOperationLease? previous)
+        : IDisposable
+    {
+        public void Dispose() => AmbientOperation.Value = previous;
+    }
+
     private readonly ZLinkActorDrainCoordinator _actorDrainCoordinator;
     private readonly ZLinkStandaloneActorRelocationRuntime _standaloneActorRelocationRuntime;
     private readonly ZLinkActorBoundSessionCoordinator _actorBoundSessionCoordinator;
@@ -929,10 +953,17 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         );
 
         /// <summary>Attaches the admitted lease as the caller's ambient operation.</summary>
-        internal ZLinkRuntimeOperationLease Enter() =>
-            runtime is null ? ZLinkRuntimeOperationLease.None
-            : state is null ? new ZLinkRuntimeOperationLease(runtime, countsRequest)
-            : runtime.AttachOperation(state, countsRequest);
+        internal ZLinkRuntimeOperationLease Enter()
+        {
+            if (refused)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ShuttingDown,
+                    "Application admission is sealed for drain."
+                );
+            return runtime is null ? ZLinkRuntimeOperationLease.None
+                : state is null ? new ZLinkRuntimeOperationLease(runtime, countsRequest)
+                : runtime.AttachOperation(state, countsRequest);
+        }
 
         internal ZLinkInboundOperationAdmission EnterInbound() =>
             refused
@@ -1425,6 +1456,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         }
         if (_locationLifecycle is not null)
             await CaptureAsync(_locationLifecycle.PauseBackgroundWorkAsync).ConfigureAwait(false);
+        if (Services.GetService<ZLinkAutoConnectLifecycleCoordinator>() is { } autoConnectLifecycle)
+            await CaptureAsync(() => autoConnectLifecycle.StopAsync(forceStopToken))
+                .ConfigureAwait(false);
         var generationCleanupReporter = (
             state?.ErrorSink ?? Volatile.Read(ref _generationErrorSink)
         )?.CaptureGenerationReporter();

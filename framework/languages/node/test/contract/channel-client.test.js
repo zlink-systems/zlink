@@ -116,9 +116,14 @@ test('two in-process ClientServer nodes deliver a delayed reply to an awaited cl
   try {
     await clientRuntime.start();
     await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'delayed', 1);
-    const reply = await client.requestToChannel('delayed', typedPacket('Ping', { value: 'delayed' }))
+    const pending = client.requestToChannel('delayed', typedPacket('Ping', { value: 'delayed' }))
       .timeout(1_000)
       .submit();
+    let replied = false;
+    void pending.then(() => { replied = true; });
+    await pending.admitted;
+    assert.equal(replied, false);
+    const reply = await pending;
     assert.deepEqual(reply, { value: 'delayed' });
   } finally {
     await clientRuntime.stop();
@@ -1538,6 +1543,10 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
 
     const replyPromise = client.requestToChannel('api', typedPacket('Ping', { value: 'ping' })).timeout(1000).submit();
     const request = await recvRouterMessage(router);
+    let replied = false;
+    void replyPromise.then(() => { replied = true; });
+    await replyPromise.admitted;
+    assert.equal(replied, false);
     const envelope = decodeDotnetEnvelope(request.parts);
     assert.equal(envelope.header.kind, 1);
     assert.equal(envelope.header.channelName, 'api');

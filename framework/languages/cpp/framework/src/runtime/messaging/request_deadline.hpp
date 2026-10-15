@@ -1,7 +1,7 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
-#include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/contracts/dispatch/request_task.hpp>
 #include <zlink/framework/detail/deadline_scheduler.hpp>
 
 #include <optional>
@@ -36,6 +36,17 @@ task_t<T> with_request_deadline (task_t<T> operation,
           });
     }
     return output;
+}
+
+template <typename T>
+request_task_t<T> with_request_deadline (request_task_t<T> operation,
+                                         std::optional<std::chrono::steady_clock::time_point> at)
+{
+    auto admitted = detail::request_task_access_t::admission_source (operation);
+    auto reply = with_request_deadline (std::move (static_cast<task_t<T> &> (operation)), at);
+    detail::observe_request_failure (reply, admitted);
+    static_cast<task_t<T> &> (operation) = std::move (reply);
+    return operation;
 }
 
 } // namespace zlink::framework::runtime::messaging

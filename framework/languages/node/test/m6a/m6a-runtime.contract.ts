@@ -2190,9 +2190,9 @@ test('channel send projects absent routes and propagates other admission failure
         descriptor: { ...descriptor('m6a-transport-target'), state: 'serving' as const },
         connectionId: 'transport-target-connection'
       });
-      (runtime as unknown as { router: Pick<ZLinkRawRouterPort, 'send'> }).router = {
-        async send(): Promise<void> {
-          throw cause;
+      (runtime as unknown as { router: Pick<ZLinkRawRouterPort, 'submitSend'> }).router = {
+        submitSend() {
+          return { result: SubmitResult.Backpressured, admitted: Promise.reject(cause) };
         }
       };
       const pending = runtime.sendToChannel('alpha', {

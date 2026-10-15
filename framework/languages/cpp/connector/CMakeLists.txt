@@ -231,6 +231,9 @@ configure_package_config_file(
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/zlink_stream_connector_cppConfig.cmake"
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_stream_connector_cpp
   COMPONENT StreamConnector)
+install(FILES "${ZLINK_FRAMEWORK_CPP_DIR}/http-client/LICENSE"
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/zlink_stream_connector_cpp"
+  COMPONENT StreamConnector)
 
 add_subdirectory(core)
 add_subdirectory(e2e-client)

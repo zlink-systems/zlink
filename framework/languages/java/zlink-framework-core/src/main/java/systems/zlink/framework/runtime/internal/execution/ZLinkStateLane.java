@@ -96,7 +96,9 @@ public final class ZLinkStateLane {
         if (result.isDone()) {
             return result;
         }
-        return result.handleAsync((value, error) -> result.join());
+        // Observers may hold a source gate while waiting for this completion. Keep its
+        // publication on infrastructure execution, independent of the observation dispatcher.
+        return result.handleAsync((value, error) -> result.join(), DEFAULT_EXECUTOR);
     }
 
     /** Returns null when the owner is busy; a returned stage has already run its turn. */

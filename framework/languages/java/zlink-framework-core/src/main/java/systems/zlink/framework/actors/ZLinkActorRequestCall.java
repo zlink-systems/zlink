@@ -1,5 +1,7 @@
 package systems.zlink.framework.actors;
 
+import systems.zlink.framework.channels.ZLinkRequestStage;
+
 import java.time.Duration;
 import java.util.concurrent.CompletionStage;
 
@@ -8,7 +10,7 @@ public interface ZLinkActorRequestCall {
 
     ZLinkActorRequestCall timeout(Duration timeout);
 
-    <TReply> CompletionStage<TReply> submit(Class<TReply> replyType);
+    <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType);
 
     <TReply> CompletionStage<TReply> yield(Class<TReply> replyType);
 }

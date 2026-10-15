@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/channels/channel_outbound_exchange.hpp"
 #include "runtime/messaging/request_deadline.hpp"
@@ -296,7 +296,7 @@ class channel_native_client_t
 
     ~channel_native_client_t () { close (); }
 
-    task_t<runtime::messaging::message_parts_t>
+    request_task_t<runtime::messaging::message_parts_t>
     request (const runtime::messaging::message_parts_t &parts,
              const endpoint_provider_t &endpoints,
              std::chrono::milliseconds timeout)
@@ -308,7 +308,7 @@ class channel_native_client_t
         return runtime::messaging::with_request_deadline (std::move (operation), caller_deadline);
     }
 
-    task_t<runtime::messaging::message_parts_t>
+    request_task_t<runtime::messaging::message_parts_t>
     request_native (const runtime::messaging::message_parts_t &parts,
                     const endpoint_provider_t &endpoints,
                     std::chrono::milliseconds timeout,
@@ -367,6 +367,9 @@ class channel_native_client_t
                   deadline));
                 caller_deadline = pending->caller_deadline;
             }
+            if (pending->admission)
+                co_await std::move (*pending->admission);
+            co_await detail::request_admitted_t{};
             auto reply = co_await std::move (pending->reply);
             co_return runtime::messaging::message_parts_t (std::move (reply));
         }
@@ -952,7 +955,7 @@ struct channel_request_terminal_trace_t
 
 } // namespace
 
-task_t<zlink::message_t>
+request_task_t<zlink::message_t>
 channel_outbound_exchange_t::submit_request (std::string channel_name,
                                              std::string packet_name,
                                              std::type_index request_type,
@@ -1008,9 +1011,9 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                 }
                 const auto effective_timeout = std::chrono::ceil<std::chrono::milliseconds> (
                   deadline - std::chrono::steady_clock::now ());
-                auto reply =
-                  co_await (*requester) (call_packet_name, std::move (serialized.content_type),
-                                         std::move (payload), effective_timeout, metadata);
+                auto reply = co_await detail::request_submission (
+                  (*requester) (call_packet_name, std::move (serialized.content_type),
+                                std::move (payload), effective_timeout, metadata));
                 auto completion = runtime.complete_outbound_reply (reservation.value ());
                 if (!completion) {
                     co_return completion.error () != nullptr
@@ -1101,10 +1104,10 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             }
             auto native_client = native_selection.value ();
             auto endpoints = make_client_endpoint_provider (state, channel_name);
-            auto native_reply =
-              co_await native_client->request (parts, endpoints,
-                                               std::chrono::ceil<std::chrono::milliseconds> (
-                                                 deadline - std::chrono::steady_clock::now ()));
+            auto native_reply = co_await detail::request_submission (
+              native_client->request (parts, endpoints,
+                                      std::chrono::ceil<std::chrono::milliseconds> (
+                                        deadline - std::chrono::steady_clock::now ())));
             auto validation = validate_channel_native_reply (native_reply);
             if (!validation) {
                 co_return validation.error () != nullptr

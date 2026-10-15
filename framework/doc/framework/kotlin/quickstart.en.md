@@ -56,8 +56,16 @@ Artifacts to add when you need them:
 | `zlink-stream-connector` | When building an external client (a game client, mobile) ([STREAM](guide/server/23-stream.en.md)) |
 | `zlink-http-client` | When the server calls out over HTTP ([HTTP Client guide](guide/http-client/README.en.md)) |
 
-The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
-`zlink-http-client` is Apache-2.0. There is no cost to building and selling a service.
+The server Framework runtime uses [zlink License 1.0](../../../LICENSE).
+Versions before 1.0.0 are free regardless of machine count; starting with
+1.0.0, one server machine is free and each additional machine requires a paid
+license. Releases through 0.30.0 remain under FSL-1.1-ALv2.
+
+Client connector packages and code copied from `samples/`, `tutorial/`,
+`quickstart/`, and `framework/languages/shared_sample/` use Apache-2.0.
+Connector tests, performance-gate source, and connector e2e fixtures retain
+zlink License 1.0.
+`core` and `bindings` use MPL-2.0, and `zlink-http-client` uses Apache-2.0.
 
 ## 2. Shared contract
 

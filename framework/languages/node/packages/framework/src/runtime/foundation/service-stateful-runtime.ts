@@ -454,7 +454,7 @@ export class ServiceStatefulRuntime {
     );
     this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
     this.registry.createEntrySpot(nodeRid);
-    raw.setServiceIngress((record) => this.ingress(record));
+    raw.setServiceIngress((record) => this.ingress(record), acceptsStatefulIngress);
   }
 
   setMailboxDropHandler(
@@ -1326,7 +1326,8 @@ export class ServiceStatefulRuntime {
     sourceSpotId: string,
     requested: ServiceDirectSpotRouteFence,
     payload: ServiceApplicationPayload,
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     const target = this.acceptSpotAuthority(requested);
@@ -1346,7 +1347,9 @@ export class ServiceStatefulRuntime {
       target.targetNodeRid,
       [header, encodeApplicationPayload(payload)],
       timeoutMs,
-      'spotRequest'
+      'spotRequest',
+      undefined,
+      onAdmitted
     );
     return pending;
   }
@@ -1384,7 +1387,8 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     sourceActor?: ServiceActorRef,
-    boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint }
+    boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint },
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     const route = this.tryActorFence(target);
@@ -1413,7 +1417,9 @@ export class ServiceStatefulRuntime {
       target.nodeRid,
       [header, encodeApplicationPayload(payload)],
       timeoutMs,
-      'actorRequest'
+      'actorRequest',
+      undefined,
+      onAdmitted
     );
     return pending;
   }
@@ -1499,7 +1505,8 @@ export class ServiceStatefulRuntime {
     timeoutMs: number,
     sourceSpotId?: string,
     metadataFrame?: Uint8Array,
-    instanceIntent = false
+    instanceIntent = false,
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     this.submitRequest(
@@ -1523,7 +1530,9 @@ export class ServiceStatefulRuntime {
         metadataFrame
       ),
       timeoutMs,
-      'instanceSpotRequest'
+      'instanceSpotRequest',
+      undefined,
+      onAdmitted
     );
     return pending;
   }
@@ -1551,7 +1560,8 @@ export class ServiceStatefulRuntime {
     payloadFrame: Buffer,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
-    metadataFrame?: Uint8Array
+    metadataFrame?: Uint8Array,
+    onAdmitted?: () => void
   ): ServiceStatefulPendingOperation {
     const timeoutMs = remainingDeadlineMs(deadlineUnixMs);
     const pending = this.operations.register(timeoutMs);
@@ -1576,7 +1586,9 @@ export class ServiceStatefulRuntime {
         metadataFrame
       ),
       timeoutMs,
-      'instanceSpotRequest'
+      'instanceSpotRequest',
+      undefined,
+      onAdmitted
     );
     return pending;
   }
@@ -2029,29 +2041,6 @@ export class ServiceStatefulRuntime {
   private async ingress(
     record: RawServiceIngressRecord
   ): Promise<RawServicePumpResult | undefined> {
-    // These frozen relocation controls overlap the legacy stateful command
-    // number range (30-34). They are bare infrastructure records and must
-    // fall through to RawServiceMeshRuntime's relocation ingress instead of
-    // being decoded as stateful actor/spot work.
-    if (
-      record.command === M6bServiceWireCommand.relocationReady ||
-      record.command === M6bServiceWireCommand.relocationData ||
-      record.command === M6bServiceWireCommand.replyRelay ||
-      record.command === M6bServiceWireCommand.relocationCutover
-    ) {
-      return undefined;
-    }
-    if (
-      record.command < M6bServiceWireCommand.spotSend ||
-      (record.command > M6bServiceWireCommand.instanceSpot &&
-        record.command !== M6bServiceWireCommand.userSpotCreate &&
-        record.command !== M6bServiceWireCommand.userSpotClose &&
-        record.command !== M6bServiceWireCommand.actorCreate &&
-        record.command !== M6bServiceWireCommand.messageFollow &&
-        record.command !== M6bServiceWireCommand.boundSessionReplaced)
-    ) {
-      return undefined;
-    }
     let decoded: ServiceStatefulWireRecord;
     let canonicalActorJoin: ActorJoin28 | undefined;
     try {
@@ -2371,6 +2360,7 @@ export class ServiceStatefulRuntime {
         localReply,
         metadataFrame
       ).finally(() => ownedIngress.applicationJobOwner?.close());
+      ingress.onAdmitted?.();
       return 'infrastructure';
     }
     if (
@@ -2384,6 +2374,7 @@ export class ServiceStatefulRuntime {
         payloadFrame,
         metadataFrame
       ).finally(() => ownedIngress.applicationJobOwner?.close());
+      ingress.onAdmitted?.();
       return 'infrastructure';
     }
     const spot = this.requireInstanceActivation(ingress, record);
@@ -3821,7 +3812,10 @@ export class ServiceStatefulRuntime {
       stateful,
       applicationJob
     });
-    if (accepted) return domain;
+    if (accepted) {
+      ingress.onAdmitted?.();
+      return domain;
+    }
     applicationJob.close();
     if (stateful.reply !== undefined) {
       const result = failure(
@@ -4393,7 +4387,8 @@ export class ServiceStatefulRuntime {
       | 'streamBind'
       | 'streamUnbind'
       | 'instanceSpotRequest',
-    actor?: ServiceActorRef
+    actor?: ServiceActorRef,
+    onAdmitted?: () => void
   ): void {
     if (targetNodeRid === this.nodeRid) {
       const deadlineUnixMs = BigInt(Date.now() + Math.max(0, timeoutMs));
@@ -4411,6 +4406,7 @@ export class ServiceStatefulRuntime {
             flags: parts[0]![SERVICE_WIRE_FLAGS_OFFSET]!,
             sourceRoutingId: this.nodeRid,
             requestSequence: pending.id,
+            onAdmitted,
             parts,
             applicationJobOwner
           };
@@ -4429,7 +4425,7 @@ export class ServiceStatefulRuntime {
       })().catch((error) => this.operations.reply(pending.id, failure(error)));
       return;
     }
-    void this.raw.requestService(targetNodeRid, parts, timeoutMs).then(
+    void this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted).then(
       (reply) => this.completeRemoteReply(pending, targetNodeRid, operationKind, actor, reply),
       (error) => this.operations.fail(pending.id, error)
     );
@@ -5936,4 +5932,31 @@ export function statefulMailboxData(
   record: ServiceMailboxRecord
 ): ServiceStatefulMailboxData | undefined {
   return record.stateful as ServiceStatefulMailboxData | undefined;
+}
+
+function acceptsStatefulIngress(command: number): boolean {
+  // These frozen relocation controls overlap the legacy stateful command
+  // number range (30-34). They are bare infrastructure records and must
+  // fall through to RawServiceMeshRuntime's relocation ingress instead of
+  // being decoded as stateful actor/spot work.
+  if (
+    command === M6bServiceWireCommand.relocationReady ||
+    command === M6bServiceWireCommand.relocationData ||
+    command === M6bServiceWireCommand.replyRelay ||
+    command === M6bServiceWireCommand.relocationCutover
+  ) {
+    return false;
+  }
+  if (
+    command < M6bServiceWireCommand.spotSend ||
+    (command > M6bServiceWireCommand.instanceSpot &&
+      command !== M6bServiceWireCommand.userSpotCreate &&
+      command !== M6bServiceWireCommand.userSpotClose &&
+      command !== M6bServiceWireCommand.actorCreate &&
+      command !== M6bServiceWireCommand.messageFollow &&
+      command !== M6bServiceWireCommand.boundSessionReplaced)
+  ) {
+    return false;
+  }
+  return true;
 }

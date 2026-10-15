@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The world rules from scenario §2. The servers hold the same values; the client
 // uses them to render and to predict nothing — the server stays authoritative (§9.1).
 

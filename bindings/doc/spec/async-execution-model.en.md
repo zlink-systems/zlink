@@ -66,8 +66,11 @@ call as `void`, a collection, `Result`, `error`, or a language-specific exceptio
 The [Core completion pull and ownership contract](../../../core/doc/spec/core/socket/README.en.md#completion-pull-and-ownership)
 owns raw C readiness, `zlink_completion_recv()`, and record lifetime.
 
-- **A high-level binding has one completion owner per socket: the thread driving `wait()` on
-  a public poller registered for `PollCompletion`.** Registration makes that thread the owner.
+- **A high-level binding has one completion owner per socket: the driver of `wait()` on
+  a public poller registered for `PollCompletion`.** Registration makes the driving of that poller's `wait()` the owner. The owner is not tied to
+  one thread: after the current `wait()` and drain return, another execution resource may drive the
+  next `wait()` on the same poller, never concurrently with the previous one. Registration and the
+  socket lifetime do not end when the execution resource changes.
   The binding creates no runtime/background owner or automatic completion drain thread; only
   caller-driven poller `wait()` or a blocking terminal's inline drain advances completions.
 - **An async completion-backed terminal (`admitted` or REQUEST `reply`) advances only while the

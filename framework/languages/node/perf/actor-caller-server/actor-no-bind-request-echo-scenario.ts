@@ -88,17 +88,19 @@ export class ActorNoBindRequestEchoScenario {
     const started = measurement.beginOperation();
     if (started === undefined) return;
     request = request.with({ sentTicks: DecimalText.of(started) });
-    try {
-      const reply = await this.actorClient
-        .requestToActor(actorId, request)
-        .timeout(measurement.callTimeout())
-        .submit<PerfEchoReply>();
-      PayloadPattern.validateIdentity(request, reply);
-      measurement.pattern.validate(reply.payload);
-      measurement.completeOperation(started);
-    } catch (error) {
-      measurement.completeOperation(started, error);
-    }
+    const pending = this.actorClient
+      .requestToActor(actorId, request)
+      .timeout(measurement.callTimeout())
+      .submit<PerfEchoReply>();
+    const completion = pending
+      .then((reply) => {
+        PayloadPattern.validateIdentity(request, reply);
+        measurement.pattern.validate(reply.payload);
+        measurement.completeOperation(started);
+      })
+      .catch((error: unknown) => measurement.completeOperation(started, error));
+    // Admission failure shares the reply failure, whose outcome is recorded once.
+    await pending.admitted.catch(() => completion);
   }
 }
 

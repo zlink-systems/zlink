@@ -1,4 +1,5 @@
 import type { ZLinkMessageMetadata } from '../Common';
+import type { ZLinkRequest } from '../Handlers/Attributes';
 
 export interface ZLinkSendCall {
   metadata(key: string, value: string): this;
@@ -10,7 +11,7 @@ export interface ZLinkRequestCall {
   metadata(key: string, value: string): this;
   metadata(metadata: ZLinkMessageMetadata): this;
   timeout(timeoutMs: number): this;
-  submit<TReply>(signal?: AbortSignal): Promise<TReply>;
+  submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply>;
 }
 
 export interface ZLinkChannelRequestCall extends ZLinkRequestCall {

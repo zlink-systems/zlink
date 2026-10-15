@@ -422,7 +422,12 @@ export interface ServiceSpot {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: { flags?: number; timeoutMs?: number; applicationMetadata?: Buffer }
+    options?: {
+      flags?: number;
+      timeoutMs?: number;
+      applicationMetadata?: Buffer;
+      onAdmitted?: () => void;
+    }
   ): MeshOperationId;
   sendToSpot(
     targetNodeRid: unknown,
@@ -445,6 +450,7 @@ export interface ServiceSpot {
       timeoutMs?: number;
       applicationMetadata?: Buffer;
       routeFence?: ServiceDirectSpotRouteFence;
+      onAdmitted?: () => void;
       entrySpot?: boolean;
     }
   ): MeshOperationId;

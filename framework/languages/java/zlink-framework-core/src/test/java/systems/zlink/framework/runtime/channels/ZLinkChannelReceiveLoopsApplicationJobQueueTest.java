@@ -11,6 +11,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -387,10 +388,14 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override
         public CompletionStage<ZLinkBackendReceived> request(
-                RoutingId routingId, List<Message> parts, Duration timeout) {
-            return CompletableFuture.failedFuture(new UnsupportedOperationException());
+                RoutingId routingId,
+                List<Message> parts,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    CompletableFuture.failedFuture(new UnsupportedOperationException()),
+                    requestAdmission);
         }
 
         @Override
@@ -480,10 +485,14 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override
         public CompletionStage<ZLinkBackendReceived> request(
-                RoutingId routingId, List<Message> parts, Duration timeout) {
-            return CompletableFuture.failedFuture(new UnsupportedOperationException());
+                RoutingId routingId,
+                List<Message> parts,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission) {
+            return ZLinkTestAdmissionFactory.acceptedRequest(
+                    CompletableFuture.failedFuture(new UnsupportedOperationException()),
+                    requestAdmission);
         }
 
         @Override

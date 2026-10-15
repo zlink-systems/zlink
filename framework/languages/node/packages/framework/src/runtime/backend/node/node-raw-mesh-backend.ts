@@ -19,7 +19,11 @@ import {
 import { randomBytes } from 'node:crypto';
 import type { ZLinkMeshCompletionHandler } from '../mesh-completion-table';
 import { setImmediate as yieldToIO } from 'node:timers/promises';
-import { type RoutingId, ZLinkFrameworkException } from '../../../contracts';
+import {
+  type RoutingId,
+  ZLinkFrameworkException,
+  ZLinkFrameworkErrorKind
+} from '../../../contracts';
 
 import type { Message as FrameworkMessage } from '../../../contracts/Common/Message';
 import { ZLinkConfigurationException } from '../../../contracts/Configuration/ConfigurationException';
@@ -172,7 +176,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     }
   >();
   private completionHandler?: ZLinkMeshCompletionHandler;
-  private readonly routingId: string;
+  readonly routingId: string;
   private readonly lifecycleGeneration: bigint;
   private bindEndpoint?: string;
   private advertiseHost?: string;
@@ -342,7 +346,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     parts: MessageLike | readonly MessageLike[],
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    onAdmitted?: () => void
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.InstanceSpotRequest,
@@ -351,7 +356,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         encodeMultipartApplicationFrame(parts),
         deadlineUnixMs,
         sourceSpotId,
-        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
+        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
+        onAdmitted
       )
     );
   }
@@ -634,16 +640,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.requireRuntime().isPeerRouteReady(String(targetRid), lifecycleGeneration);
   }
 
-  async sendToNode(
+  sendToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[]
-  ): Promise<SubmitResultValue> {
-    return (await this.requireRuntime().sendToNode(
+  ): SubmitResultValue | Promise<SubmitResultValue> {
+    const submitted = this.requireRuntime().sendToNode(
       String(targetRid),
       encodeMultipartApplicationFrame(parts)
-    ))
-      ? SubmitResult.Ok
-      : SubmitResult.NotConnected;
+    );
+    return submitted instanceof Promise
+      ? submitted.then(nodeSendResult)
+      : nodeSendResult(submitted);
   }
 
   async sendInfrastructureControl(
@@ -685,12 +692,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number }
+    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToNode(
       String(targetRid),
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options?.onAdmitted
     );
     return this.observeCompletion(pending.id, OperationKind.NodeRequest, pending.promise);
   }
@@ -705,12 +713,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number }
+    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options?.onAdmitted
     );
     return this.observeCompletion(pending.id, OperationKind.ChannelRequest, pending.promise);
   }
@@ -1173,7 +1182,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>,
-    instanceIntent = false
+    instanceIntent = false,
+    onAdmitted?: () => void
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.InstanceSpotRequest,
@@ -1183,7 +1193,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         timeoutMs,
         sourceSpotId,
         metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
-        instanceIntent
+        instanceIntent,
+        onAdmitted
       )
     );
   }
@@ -1328,7 +1339,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestToActor(
     actor: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number }
+    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorRequest,
@@ -1337,7 +1348,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         this.peerGeneration(String(actor.nodeRid)),
         actor.generation,
         encodeMultipart(parts),
-        options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+        options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        undefined,
+        undefined,
+        options?.onAdmitted
       )
     );
   }
@@ -1360,7 +1374,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     source: ZLinkBackendActorRef,
     target: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number }
+    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorRequest,
@@ -1370,7 +1384,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         target.generation,
         encodeMultipart(parts),
         options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-        source
+        source,
+        undefined,
+        options?.onAdmitted
       )
     );
   }
@@ -1443,7 +1459,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     source: ServiceSpotState,
     target: ServiceDirectSpotRouteFence,
     parts: MessageLike | readonly MessageLike[],
-    timeoutMs: number
+    timeoutMs: number,
+    onAdmitted?: () => void
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.SpotRequest,
@@ -1451,7 +1468,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         source.ref.spotId,
         target,
         encodeMultipart(parts),
-        timeoutMs
+        timeoutMs,
+        onAdmitted
       )
     );
   }
@@ -1475,6 +1493,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   setSpotSubscription(state: ServiceSpotState, channelName: string, topicFilter: string): void {
+    if (!this.channels.has(channelName))
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.InvalidOperation,
+        `Spot does not participate in subscription channel '${channelName}'.`
+      );
     this.requireStateful().setSubscription(state, channelName, topicFilter);
   }
 
@@ -1719,7 +1742,11 @@ class RawServiceSpot implements ServiceSpot {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly flags?: number; readonly timeoutMs?: number }
+    options?: {
+      readonly flags?: number;
+      readonly timeoutMs?: number;
+      readonly onAdmitted?: () => void;
+    }
   ): MeshOperationId {
     this.requireOpen();
     return this.backend.requestToChannel(channelName, parts, options);
@@ -1755,6 +1782,7 @@ class RawServiceSpot implements ServiceSpot {
     parts: MessageLike | readonly MessageLike[],
     options?: {
       readonly timeoutMs?: number;
+      readonly onAdmitted?: () => void;
       readonly routeFence?: ServiceDirectSpotRouteFence;
       readonly entrySpot?: boolean;
     }
@@ -1773,7 +1801,8 @@ class RawServiceSpot implements ServiceSpot {
       this.state,
       routeFence,
       parts,
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options?.onAdmitted
     );
   }
 
@@ -1821,6 +1850,10 @@ class RawServiceSpot implements ServiceSpot {
   private requireOpen(): void {
     if (this.closed) throw new Error(`Spot '${this.routingId}' is closed.`);
   }
+}
+
+function nodeSendResult(submitted: boolean): SubmitResultValue {
+  return submitted ? SubmitResult.Ok : SubmitResult.NotConnected;
 }
 
 function requireDirectSpotRouteFence(
@@ -1970,7 +2003,10 @@ class RawStreamSessionService implements StreamSessionService {
     const target = this.sessionTargets.get(sessionRid);
     if (target === undefined) return false;
     const operation = this.stream.send(target as unknown as BindingRoutingId);
-    const parts = decodeMultipartBuffers(decodeApplicationPayloadView(payload).payload);
+    const parts = decodeMultipartParts(
+      decodeApplicationPayloadView(payload).payload,
+      borrowMultipartPart
+    );
     if (parts.length === 0) return false;
     const actorSlot = await serviceSessionBindingIngressPortIfRegistered(this)?.actorSlot(
       actorId,
@@ -2584,45 +2620,54 @@ function decodeApplicationEnvelope(frame: Uint8Array) {
 }
 
 function decodeMultipart(payload: Uint8Array): FrameworkMessage[] {
-  const buffers = decodeMultipartBuffers(payload);
-  const parts = new Array<FrameworkMessage>(buffers.length);
-  let materialized = 0;
-  try {
-    for (; materialized < buffers.length; materialized += 1) {
-      parts[materialized] = ZLinkBufferMessage.fromOwned(buffers[materialized]!);
-    }
-    return parts;
-  } catch (error) {
-    for (let index = 0; index < materialized; index += 1) parts[index]!.close();
-    throw error;
-  }
+  return decodeMultipartParts(payload, ZLinkBufferMessage.fromOwned, closeMultipartMessage);
 }
 
-function decodeMultipartBuffers(payload: Uint8Array): Buffer[] {
+function closeMultipartMessage(part: FrameworkMessage): void {
+  part.close();
+}
+
+function borrowMultipartPart(part: Buffer): Buffer {
+  return part;
+}
+
+function decodeMultipartParts<T>(
+  payload: Uint8Array,
+  materialize: (part: Buffer) => T,
+  release?: (part: T) => void
+): T[] {
   const bytes = Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
   if (bytes.length < 4) throw new ServiceWireProtocolError('Truncated multipart payload.');
   const count = bytes.readUInt32BE(0);
   if (count === 0 || count > Math.floor((bytes.length - 4) / 4)) {
     throw new ServiceWireProtocolError('Invalid multipart part count.');
   }
-  const result = new Array<Buffer>(count);
+  const result = new Array<T>(count);
   let offset = 4;
-  for (let index = 0; index < count; index++) {
-    if (bytes.length - offset < 4) {
-      throw new ServiceWireProtocolError('Truncated multipart part length.');
+  let index = 0;
+  try {
+    for (; index < count; index++) {
+      if (bytes.length - offset < 4) {
+        throw new ServiceWireProtocolError('Truncated multipart part length.');
+      }
+      const length = bytes.readUInt32BE(offset);
+      offset += 4;
+      if (bytes.length - offset < length) {
+        throw new ServiceWireProtocolError('Truncated multipart part.');
+      }
+      result[index] = materialize(bytes.subarray(offset, offset + length));
+      offset += length;
     }
-    const length = bytes.readUInt32BE(offset);
-    offset += 4;
-    if (bytes.length - offset < length) {
-      throw new ServiceWireProtocolError('Truncated multipart part.');
+    if (offset !== bytes.length) {
+      throw new ServiceWireProtocolError('Multipart payload has trailing bytes.');
     }
-    result[index] = bytes.subarray(offset, offset + length);
-    offset += length;
+    return result;
+  } catch (error) {
+    if (release !== undefined) {
+      for (let retained = 0; retained < index; retained++) release(result[retained]!);
+    }
+    throw error;
   }
-  if (offset !== bytes.length) {
-    throw new ServiceWireProtocolError('Multipart payload has trailing bytes.');
-  }
-  return result;
 }
 
 function messageBytesView(value: MessageLike): Uint8Array {

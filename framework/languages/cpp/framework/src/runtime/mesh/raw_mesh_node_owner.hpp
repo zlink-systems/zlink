@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
 #include "runtime/backend/raw_route_port.hpp"
@@ -251,7 +251,8 @@ class raw_mesh_node_owner_t
     request_bound_session_bind (const std::vector<std::uint8_t> &actor_owner_routing_id,
                                 protocol::bound_session_bind_t record,
                                 std::chrono::milliseconds timeout,
-                                foundation::operation_registry_t::callback_t callback);
+                                foundation::operation_registry_t::callback_t callback,
+                                std::shared_ptr<task_completion_source_t<void>> admitted = {});
     task_t<bool>
     send_bound_session_replaced (const std::vector<std::uint8_t> &retired_session_owner_routing_id,
                                  const protocol::bound_session_replaced_t &record);

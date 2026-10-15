@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+/* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 // The CS client process (§6.2, §6.1 Client): options, the scenario named by the cell id, and the runner's stdin/stdout
 // JSON control pipe (§16). The measured connector calls live in the scenario headers.
