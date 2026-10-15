@@ -113,17 +113,27 @@ void expect_writable (zlink_completion_id_t id_, void *context_,
     completion_poller = zlink_poller_new ();
     TEST_ASSERT_NOT_NULL (completion_poller);
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_poller_add (completion_poller, sender, NULL, ZLINK_POLLCOMPLETION));
+      ZLINK_CONFIG_OK, zlink_poller_add (completion_poller, sender, NULL, ZLINK_POLLCOMPLETION));
     zlink_poller_event_t event = {};
-    TEST_ASSERT_EQUAL_INT (
-      1, zlink_poller_wait (completion_poller, &event, 1, wait_ms, NULL));
+    TEST_ASSERT_EQUAL_INT (1, zlink_poller_wait (completion_poller, &event, 1, wait_ms, NULL));
     TEST_ASSERT_BITS_HIGH (ZLINK_POLLCOMPLETION, event.events);
+    // EVENTS shares the public poller's WRITABLE readiness, but never
+    // exposes the completion bit or consumes the unread record.
+    for (int observation = 0; observation < 2; ++observation) {
+        int events = 0;
+        size_t events_size = sizeof (events);
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                               zlink_get_option (sender, ZLINK_OPT_EVENTS, &events, &events_size));
+        TEST_ASSERT_BITS_HIGH (ZLINK_POLLOUT, events);
+        TEST_ASSERT_EQUAL_INT (0, events & ~(ZLINK_POLLIN | ZLINK_POLLOUT));
+        zlink_pollitem_t item = {sender, 0, ZLINK_POLLOUT, 0};
+        TEST_ASSERT_EQUAL_INT (1, zlink_poll (&item, 1, 0, NULL));
+        TEST_ASSERT_BITS_HIGH (ZLINK_POLLOUT, item.revents);
+    }
     zlink_completion_t completion = {};
     completion.struct_size = sizeof (completion);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_OK,
-      zlink_completion_recv (sender, &completion, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+                           zlink_completion_recv (sender, &completion, ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
     TEST_ASSERT_EQUAL_UINT64 (id_, completion.completion_id);
     TEST_ASSERT_EQUAL_PTR (context_, completion.user_context);

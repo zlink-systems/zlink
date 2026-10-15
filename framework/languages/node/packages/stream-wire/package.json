@@ -16,7 +16,8 @@
     "dist/index.d.ts",
     "dist/lz4-pickle.js",
     "dist/lz4-pickle.d.ts",
-    "LICENSE"
+    "LICENSE",
+    "dist/internal"
   ],
   "exports": {
     ".": {
@@ -24,6 +25,17 @@
       "import": "./dist/esm/index.mjs",
       "require": "./dist/index.js",
       "default": "./dist/esm/index.mjs"
+    },
+    "./internal/json": {
+      "types": "./dist/internal/json.d.ts",
+      "default": "./dist/internal/json.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "internal/json": [
+        "dist/internal/json.d.ts"
+      ]
     }
   }
 }

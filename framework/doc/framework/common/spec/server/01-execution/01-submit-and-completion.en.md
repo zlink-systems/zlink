@@ -427,8 +427,8 @@ deadlock. Timer cancellation and payload cleanup also occur outside the lock.
 Releasing the lock and immediately invoking the callback on the same call stack is still
 insufficient. It lets application code re-enter the runtime before the current transport
 response or timeout handling has returned. The completion callback is placed on a
-process-shared completion dispatcher and runs on a new execution turn after the current
-handling returns.
+process-shared completion dispatcher and runs under the new-execution-turn conditions defined
+below.
 
 The order is as follows.
 
@@ -436,6 +436,14 @@ The order is as follows.
 2. Release the lock.
 3. Enqueue the callback on the dispatcher.
 4. Run the callback on a new execution turn.
+
+**A new execution turn does not mean another thread.** When the callback runs on the same execution
+resource, it starts in the next turn after the call stack and lane-current scope of the completion
+decision and post have returned. When it runs on another execution resource, it starts in an independent
+turn that receives neither the lock of the completion decision nor the lane-current scope; a global order
+in which the other resource's whole upper call stack has returned is not required.
+[Messaging Hot Path "4.4"](08-messaging-hot-path.en.md#44-placing-the-execution-resource--handing-off-the-receive-role)
+decides which execution resource runs that turn.
 
 **Putting a completion callback on the dispatcher cannot fail.** The dispatcher has no limit.
 Nothing rejects a request for lack of a slot, and nothing throws away the completion of a
@@ -459,8 +467,8 @@ host has **received** and that waits for a handler. The two count different thin
 are never merged
 ([§1](04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities)).
 
-The dispatcher uses a process-shared lane instead of creating a thread per callback,
-and shutdown drains every accepted callback.
+The dispatcher does not create a thread per callback, and shutdown drains every accepted
+callback.
 
 An exception from one callback does not stop
 later callbacks from running.

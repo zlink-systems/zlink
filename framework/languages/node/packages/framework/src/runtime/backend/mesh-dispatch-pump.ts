@@ -58,6 +58,7 @@ export interface ZLinkMeshDispatchFailureContext {
 }
 
 export class ZLinkMeshDispatchPump {
+  private readonly dispatchOwnedRecord = this.dispatchRecord.bind(this);
   private pendingDomains: number = ReadyDomain.None;
   private infrastructureScheduled = false;
   private disposed = false;
@@ -178,6 +179,36 @@ export class ZLinkMeshDispatchPump {
       return Promise.resolve();
     }
     return new Promise((resolve) => this.idleApplicationWorkers.add(resolve));
+  }
+
+  private dispatchRecord(owner: ReadyRecord, record: ReceiveRecord): void | Promise<void> {
+    let result: void | Promise<void>;
+    try {
+      result = this.options.dispatch(owner, record);
+    } catch (error) {
+      this.reportDispatchError(error, meshDispatchFailureContext(record));
+      return;
+    }
+    return result === undefined
+      ? this.finishRecord(record)
+      : Promise.resolve(result).then(
+          () => this.finishRecord(record),
+          (error) => this.reportDispatchError(error, meshDispatchFailureContext(record))
+        );
+  }
+
+  private finishRecord(record: ReceiveRecord): void | Promise<void> {
+    let result: void | Promise<void>;
+    try {
+      result = record.onTerminalCompletion?.();
+    } catch (error) {
+      this.reportDispatchError(error, meshDispatchFailureContext(record));
+      return;
+    }
+    if (result !== undefined)
+      return Promise.resolve(result).catch((error) =>
+        this.reportDispatchError(error, meshDispatchFailureContext(record))
+      );
   }
 
   private reportDispatchError(error: unknown, context?: ZLinkMeshDispatchFailureContext): void {
@@ -304,16 +335,9 @@ export class ZLinkMeshDispatchPump {
                         );
                       }
                       this.recordsSinceYield += 1;
-                      const dispatch = async () => {
-                        try {
-                          await this.options.dispatch(owner, record);
-                          await record.onTerminalCompletion?.();
-                        } catch (error) {
-                          this.reportDispatchError(error, meshDispatchFailureContext(record));
-                        }
-                      };
                       if (permit === undefined) {
-                        await dispatch();
+                        const dispatched = this.dispatchRecord(owner, record);
+                        if (dispatched !== undefined) await dispatched;
                       } else {
                         if (
                           domain === ReadyDomain.Application &&
@@ -324,7 +348,13 @@ export class ZLinkMeshDispatchPump {
                         // and detached handler handoff. Only unused permits remain
                         // owned by the receive attempt's finally block.
                         if (permit === claimPermit) claimPermit = undefined;
-                        await runWithApplicationJobPermit(permit, dispatch);
+                        const dispatched = runWithApplicationJobPermit(
+                          permit,
+                          this.dispatchOwnedRecord,
+                          owner,
+                          record
+                        );
+                        if (dispatched !== undefined) await dispatched;
                       }
                     }
                   } finally {

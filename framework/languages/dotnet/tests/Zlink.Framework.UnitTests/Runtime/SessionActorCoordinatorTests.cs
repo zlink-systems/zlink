@@ -14,6 +14,29 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SessionActorCoordinatorTests
 {
     [Fact]
+    public async Task Unbound_Submit_Failure_Does_Not_Fail_Binding_Mutation()
+    {
+        var runtime = CreateRuntime();
+        var stream = new TestStream(RoutingId.From("unbound-submit-failure"));
+        var context = CreateSessionContext(runtime, stream);
+        var actor = new ActorRef("actor-a", 1, "actors", RoutingId.From("actor-node"));
+        var bound = Assert.IsType<ZLinkSessionActor>(
+            await context.ActorCoordinator.BindOrGetActorAsync(
+                context,
+                actor,
+                CancellationToken.None
+            )
+        );
+        stream.AcceptsWrites = false;
+
+        runtime.UnbindSessionActor(actor.ActorId, context, bound.BindingToken);
+
+        Assert.Empty(context.Actors.Bound);
+        Assert.False(runtime.TryGetSessionActorBinding(actor.ActorId, out _));
+        Assert.Equal(2, stream.ControlWrites.Count);
+    }
+
+    [Fact]
     public async Task Actor_Request_Yields_While_Registry_State_Is_Busy()
     {
         var registry = new ZLinkActorSessionRegistry();

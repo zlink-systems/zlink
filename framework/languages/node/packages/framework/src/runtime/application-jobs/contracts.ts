@@ -2,14 +2,27 @@ export type ApplicationJobOrigin = 'local' | 'remote';
 
 export interface ApplicationJobPermitPort {
   readonly origin: ApplicationJobOrigin;
+  readonly detachedForHandlerTurn: boolean;
   markApplicationQueued(): void;
   /** Transfers ingress-record cleanup to a detached exact-target handler turn. */
-  detachForHandlerTurn?(): void;
+  detachForHandlerTurn(): void;
   releaseBeforeHandler(): void;
   releaseAfterInternalProcessing(): void;
+  /** Returns reusable reservation storage only after its ingress lifetime ends. */
+  releaseStorage?(): void;
+}
+
+export interface ApplicationJobReceiveRotationPort {
+  reserve(): void;
+  take(): ApplicationJobPermitPort | undefined;
+  releaseUnused(): void;
 }
 
 export interface ApplicationJobQueuePort {
+  createReceiveRotation(
+    capacity: number,
+    origin: ApplicationJobOrigin
+  ): ApplicationJobReceiveRotationPort;
   acquire(
     signal: AbortSignal | undefined,
     origin: ApplicationJobOrigin

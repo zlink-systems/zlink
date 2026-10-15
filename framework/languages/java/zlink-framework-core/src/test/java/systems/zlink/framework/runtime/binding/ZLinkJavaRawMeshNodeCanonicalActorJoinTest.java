@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -100,8 +102,10 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
         }
     }
 
-    @Test
-    void actorJoin28UsesStructuralFlavorSelectionAndReturnsTypedReplies() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void actorJoin28UsesStructuralFlavorSelectionAndReturnsTypedReplies(boolean withReply)
+            throws Exception {
         String endpoint = "inproc://jvm-canonical-actor-join-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-canonical-source");
         RoutingId targetRid = RoutingId.from("jvm-canonical-target");
@@ -127,7 +131,11 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
                         received.set(join);
                         return CompletableFuture.completedFuture(
                                 new ZLinkInternalMeshNode.CanonicalActorJoinResponse(
-                                        true, 7L, List.of(Message.from("target-reply"))));
+                                        true,
+                                        7L,
+                                        withReply
+                                                ? List.of(Message.from("target-reply"))
+                                                : List.of()));
                     });
             source.start();
             target.start();
@@ -164,7 +172,14 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
                     32_768L,
                     reply.receiveChunkLimitBytes(),
                     "receiver owns the canonical admission reply chunk limit");
-            assertEquals("target-reply", reply.applicationReply().getFirst().toUtf8String());
+            assertEquals(
+                    withReply ? ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE : null,
+                    reply.replyContentType());
+            if (withReply) {
+                assertEquals("target-reply", reply.applicationReply().getFirst().toUtf8String());
+            } else {
+                assertTrue(reply.applicationReply().isEmpty());
+            }
             reply.applicationReply().forEach(Message::close);
             ServiceWirePilotCodec.ActorJoin28 join = received.get();
             assertEquals("actor-a", join.actor().id());

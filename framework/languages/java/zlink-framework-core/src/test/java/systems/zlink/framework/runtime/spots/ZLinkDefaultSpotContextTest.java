@@ -940,9 +940,10 @@ final class ZLinkDefaultSpotContextTest {
                 ZLinkActorDispatchTarget target,
                 String actorId,
                 long payloadBytes,
-                Supplier<CompletionStage<Void>> operation) {
+                Supplier<CompletionStage<Void>> operation,
+                CompletableFuture<Void> admission) {
             actorDispatchSubmissions.incrementAndGet();
-            return target.executeActor(actorId, payloadBytes, operation, null);
+            return target.executeActor(actorId, payloadBytes, operation, admission);
         }
 
         @Override
@@ -962,7 +963,8 @@ final class ZLinkDefaultSpotContextTest {
                 Supplier<byte[]> acceptedJournalRecord,
                 long acceptedJournalRecordSizeHint,
                 Supplier<CompletionStage<Void>> operation,
-                Runnable relocationRelease) {
+                Runnable relocationRelease,
+                CompletableFuture<Void> admission) {
             actorDispatchSubmissions.incrementAndGet();
             return target.executeActorLazyRecord(
                     actorId,
@@ -970,7 +972,7 @@ final class ZLinkDefaultSpotContextTest {
                     acceptedJournalRecordSizeHint,
                     operation,
                     relocationRelease,
-                    null);
+                    admission);
         }
 
         private static ZLinkBackendSpot backendSpot() {

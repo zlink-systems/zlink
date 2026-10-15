@@ -66,8 +66,10 @@ C의 raw readiness, `zlink_completion_recv()`와 record 수명은
 
 - **고수준 바인딩은 socket마다 completion을 읽어 언어 terminal로 전달하는 completion owner를
   하나만 두며, 그 owner는 public poller에 `PollCompletion`으로 등록해 `wait()`를 구동하는
-  thread뿐이다.** 같은 queue의 record를 두 주체가 소비하지 않도록 하기 위해서다. 등록하면 그
-  `wait()` 구동 thread가 owner가 된다. 등록을 제거하거나 completion bit를 빼면 owner가 없는
+  주체뿐이다.** 같은 queue의 record를 두 주체가 소비하지 않도록 하기 위해서다. 등록하면 그
+  poller의 `wait()` 구동이 owner가 된다. 이 owner는 thread 하나에 묶이지 않는다 — 현재 `wait()`와
+  drain이 반환된 뒤 다른 실행 자원이 같은 poller의 다음 `wait()`를 구동할 수 있으며, 이전 자원과
+  동시에 구동하지 않는다. 등록과 socket 수명은 실행 자원이 바뀌어도 끝나지 않는다. 등록을 제거하거나 completion bit를 빼면 owner가 없는
   상태가 된다. **바인딩은 runtime(백그라운드) owner나 자동 completion drain thread를 두지 않는다**
   — completion은 오직 caller가 구동하는 poller의 `wait()`(비동기 terminal) 또는 blocking
   terminal 자신의 in-line drain(아래)으로만 진행한다.

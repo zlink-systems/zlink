@@ -613,14 +613,11 @@ internal readonly record struct MeshReadyRecord(
     MeshOwnerKind OwnerKind,
     MeshReadyDomains Domain,
     string SpotId,
-    ActorRef Actor,
-    int AvailableRecords = 1,
-    bool ApplicationAdmissionReserved = false
+    ActorRef Actor
 );
 
 internal sealed class MeshReadyBatch : IDisposable
 {
-    internal bool RequireReservedApplicationAdmission { get; set; }
     internal int MaximumRecords { get; set; } = int.MaxValue;
     private readonly List<(MeshReadyRecord Record, MeshClaim Claim)> _entries = new();
     public int Count => _entries.Count;
@@ -660,6 +657,15 @@ internal sealed class MeshReceiveBatch : IDisposable
         return entry.Record.ApplicationPayloadView is { } view
             ? view.RetainMessages()
             : entry.Parts.Select(Message.From).ToArray();
+    }
+
+    internal IReadOnlyList<Message> TakeMessage(int index)
+    {
+        var entry = _entries[index];
+        if (entry.Record.ApplicationPayloadView is { } view)
+            return view.RetainMessages();
+        _entries[index] = (entry.Record, Array.Empty<Message>(), entry.PayloadOwner);
+        return entry.Parts;
     }
 
     internal bool CanAdd(long bytes)

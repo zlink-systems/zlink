@@ -261,15 +261,19 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         SendFlags flags
     );
 
+    /// <summary>Consumes the original parts on success and failure.</summary>
     ValueTask SendToActorAsync(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         SendFlags flags,
         CancellationToken cancellationToken
-    ) =>
-        ValueTask.FromException(
+    )
+    {
+        ZLinkMessageParts.DisposeAll(parts);
+        return ValueTask.FromException(
             new NotSupportedException("This MeshNode backend does not support direct Actor sends.")
         );
+    }
 
     ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
         ZLinkBackendActorRef actor,

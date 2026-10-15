@@ -365,7 +365,7 @@ Payload: 5A 46 01 01
 ### `framework-json-v1` profile 규칙
 
 Framework의 기본 typed application message가 사용하는 `framework-json-v1`의 공개 encoding·validation
-규칙은 [Message model §2.3](../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)이 단독으로
+규칙은 [Message model §5](../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)이 단독으로
 소유한다. Runtime은 그 profile로 payload를 검증하고 typed value로 변환한다. 이 문서는 별도 규칙 집합을
 정의하지 않으며 parser 선택, buffer 재사용과 원본 UTF-8 bytes의 transport 전달 방식만 내부 구현으로 둔다.
 

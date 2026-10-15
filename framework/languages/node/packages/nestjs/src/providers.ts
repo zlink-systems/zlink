@@ -1,4 +1,5 @@
 import type { InjectionToken, OnModuleDestroy, OnModuleInit, Provider } from '@nestjs/common';
+import { Scope } from '@nestjs/common';
 import {
   OPTIONAL_DEPS_METADATA,
   OPTIONAL_PROPERTY_DEPS_METADATA,
@@ -408,13 +409,13 @@ function createProviderResolver(
       }
     }
   }
-  function prepareHandler(type: Type): void {
-    registeredNestHandlerFactory(factories, type, moduleRef);
+  function prepareHandler(type: Type): (() => unknown) | undefined {
+    return registeredNestHandlerFactory(factories, type, moduleRef).scopeFree;
   }
   for (const type of types) prepareHandler(type);
   function createHandler<T>(
     contextId: import('@nestjs/core').ContextId,
-    dependencies: Map<unknown, Promise<unknown>>,
+    dependencies: Map<unknown, unknown>,
     type: Type<T>
   ): T | Promise<T> {
     const factory = factories.get(type);
@@ -438,6 +439,7 @@ function createProviderResolver(
       return await creationModuleRef.create(type as unknown as import('@nestjs/common').Type<T>);
     }
   };
+  let freeScopeStorage: NestHandlerScopeStorage | undefined;
   framework.registerIntegrationHandlerInstanceScopeFactory(resolver, {
     prepare: prepareHandler,
     create(context?: import('@zlink-systems/framework').ZLinkMessageContext) {
@@ -446,42 +448,51 @@ function createProviderResolver(
       if (context !== undefined && currentContextId === undefined) {
         moduleRef.registerRequestByContextId({ zlinkContext: context }, contextId);
       }
-      const instances = new Map<Type, Promise<unknown>>();
-      const dependencies = new Map<unknown, Promise<unknown>>();
-      const owned: unknown[] = [];
+      const storage = freeScopeStorage ?? new NestHandlerScopeStorage();
+      freeScopeStorage = storage.next;
+      storage.next = undefined;
+      const { instances, dependencies, owned } = storage;
       let disposed = false;
       return {
-        async resolve<T>(type: Type<T>): Promise<T> {
+        resolve<T>(type: Type<T>): Promise<T> {
           if (disposed) {
-            throw new Error('Handler instance scope is already disposed.');
+            return Promise.reject(new Error('Handler instance scope is already disposed.'));
           }
           let instance = instances.get(type);
           if (instance === undefined) {
-            instance = Promise.resolve(createHandler(contextId, dependencies, type)).then(
-              async (created) => {
+            try {
+              const finish = (created: unknown) => {
                 if (disposed) {
-                  await framework.disposeIntegrationHandler(created);
-                  throw new Error('Handler instance scope was disposed during activation.');
+                  return framework.disposeIntegrationHandler(created).then(() => {
+                    throw new Error('Handler instance scope was disposed during activation.');
+                  });
                 }
                 owned.push(created);
                 return created;
-              }
-            );
-            instances.set(type, instance);
+              };
+              const created = createHandler(contextId, dependencies, type);
+              instance = isNestPromiseLike(created)
+                ? Promise.resolve(created).then(finish)
+                : Promise.resolve(finish(created));
+              instances.set(type, instance);
+            } catch (error) {
+              return Promise.reject(error);
+            }
           }
-          return (await instance) as T;
+          return instance as Promise<T>;
         },
         async dispose(): Promise<void> {
           if (disposed) return;
           disposed = true;
-          const pending = [...instances.values()];
-          await Promise.allSettled(pending);
+          if (owned.length !== instances.size) await Promise.allSettled(instances.values());
           try {
             await framework.disposeIntegrationHandlers(owned);
           } finally {
             owned.length = 0;
             instances.clear();
             dependencies.clear();
+            storage.next = freeScopeStorage;
+            freeScopeStorage = storage;
           }
         }
       };
@@ -535,30 +546,27 @@ export function registeredNestHandlerFactory<T>(
   return factory as NestHandlerFactory<T>;
 }
 
-export type NestHandlerFactory<T = unknown> = (
+class NestHandlerScopeStorage {
+  readonly instances = new Map<Type, Promise<unknown>>();
+  readonly dependencies = new Map<unknown, unknown>();
+  readonly owned: unknown[] = [];
+  next?: NestHandlerScopeStorage;
+}
+
+export type NestHandlerFactory<T = unknown> = ((
   moduleRef: ModuleRef,
   contextId: import('@nestjs/core').ContextId,
-  dependencies: Map<unknown, Promise<unknown>>
-) => T | Promise<T>;
+  dependencies: Map<unknown, unknown>
+) => T | Promise<T>) & { readonly scopeFree?: () => T };
 
 export function prepareNestHandlerFactory<T>(
   type: Type<T>,
   moduleRef?: ModuleRef
 ): NestHandlerFactory<T> {
   const { reflected, optional } = nestConstructorDependencies(type);
-  const parameters = reflected.map((token, index) => ({
-    token: nestDependencyToken(token),
-    optional: optional.has(index)
-  }));
-  if (moduleRef !== undefined) {
-    for (const parameter of parameters) {
-      try {
-        moduleRef.introspect(parameter.token as Parameters<ModuleRef['introspect']>[0]);
-      } catch (error) {
-        if (!(error instanceof UnknownElementException) || !parameter.optional) throw error;
-      }
-    }
-  }
+  const parameters = reflected.map((token, index) =>
+    prepareNestDependency(nestDependencyToken(token), optional.has(index), moduleRef)
+  );
   const optionalProperties = new Set<string | symbol>(
     (Reflect.getMetadata(OPTIONAL_PROPERTY_DEPS_METADATA, type) as
       readonly (string | symbol)[] | undefined) ?? []
@@ -568,39 +576,110 @@ export function prepareNestHandlerFactory<T>(
       readonly { readonly key: string | symbol; readonly type: InjectionToken }[] | undefined) ?? []
   ).map((property) => ({
     key: property.key,
-    token: nestDependencyToken(property.type),
-    optional: optionalProperties.has(property.key)
+    resolve: prepareNestDependency(
+      nestDependencyToken(property.type),
+      optionalProperties.has(property.key),
+      moduleRef
+    )
   }));
   const Constructor = type as unknown as new (...args: unknown[]) => T;
   if (parameters.length === 0 && properties.length === 0) {
-    return () => new Constructor();
+    const activate = () => new Constructor();
+    return Object.assign(activate, { scopeFree: activate });
   }
-  return async (moduleRef, contextId, dependencies) => {
-    const arguments_ = await Promise.all(
-      parameters.map((parameter) =>
-        resolveNestHandlerDependency(
-          moduleRef,
-          contextId,
-          dependencies,
-          parameter.token,
-          parameter.optional
-        )
-      )
-    );
-    const instance = new Constructor(...arguments_);
-    for (const property of properties) {
-      const dependency = await resolveNestHandlerDependency(
+  return (moduleRef, contextId, dependencies) => {
+    const create = (arguments_: unknown[]) =>
+      injectNestHandlerProperties(
+        new Constructor(...arguments_),
+        properties,
+        0,
         moduleRef,
         contextId,
-        dependencies,
-        property.token,
-        property.optional
+        dependencies
       );
-      if (dependency !== undefined)
-        (instance as Record<string | symbol, unknown>)[property.key] = dependency;
-    }
-    return instance;
+    const arguments_ = parameters.map((resolve) => resolve(moduleRef, contextId, dependencies));
+    return arguments_.some(isNestPromiseLike)
+      ? Promise.all(arguments_).then(create)
+      : create(arguments_);
   };
+}
+
+type NestDependencyResolver = (
+  moduleRef: ModuleRef,
+  contextId: import('@nestjs/core').ContextId,
+  dependencies: Map<unknown, unknown>
+) => unknown;
+
+function prepareNestDependency(
+  token: unknown,
+  optional: boolean,
+  moduleRef?: ModuleRef
+): NestDependencyResolver {
+  let lookup = (ref: ModuleRef, contextId: import('@nestjs/core').ContextId): unknown =>
+    ref.resolve(token as Parameters<ModuleRef['resolve']>[0], contextId, { strict: false });
+  if (moduleRef !== undefined) {
+    try {
+      if (
+        moduleRef.introspect(token as Parameters<ModuleRef['introspect']>[0]).scope ===
+        Scope.DEFAULT
+      ) {
+        lookup = (ref) => ref.get(token as Parameters<ModuleRef['get']>[0], { strict: false });
+      }
+    } catch (error) {
+      if (!(error instanceof UnknownElementException) || !optional) throw error;
+    }
+  }
+  return (ref, contextId, dependencies) =>
+    resolveNestHandlerDependency(dependencies, token, optional, lookup, ref, contextId);
+}
+
+function injectNestHandlerProperties<T>(
+  instance: T,
+  properties: readonly {
+    readonly key: string | symbol;
+    readonly resolve: NestDependencyResolver;
+  }[],
+  index: number,
+  moduleRef: ModuleRef,
+  contextId: import('@nestjs/core').ContextId,
+  dependencies: Map<unknown, unknown>
+): T | Promise<T> {
+  for (; index < properties.length; index++) {
+    const property = properties[index]!;
+    const dependency = property.resolve(moduleRef, contextId, dependencies);
+    if (isNestPromiseLike(dependency)) {
+      const next = index + 1;
+      return Promise.resolve(dependency).then((value) => {
+        assignNestHandlerProperty(instance, property.key, value);
+        return injectNestHandlerProperties(
+          instance,
+          properties,
+          next,
+          moduleRef,
+          contextId,
+          dependencies
+        );
+      });
+    }
+    assignNestHandlerProperty(instance, property.key, dependency);
+  }
+  return instance;
+}
+
+function assignNestHandlerProperty(
+  instance: unknown,
+  key: string | symbol,
+  dependency: unknown
+): void {
+  if (dependency !== undefined) (instance as Record<string | symbol, unknown>)[key] = dependency;
+}
+
+function isNestPromiseLike(value: unknown): value is Promise<unknown> {
+  return (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
 }
 
 function nestConstructorDependencies(type: Type) {
@@ -629,27 +708,42 @@ function nestDependencyToken(token: unknown): unknown {
     : token;
 }
 
-async function resolveNestHandlerDependency(
-  moduleRef: ModuleRef,
-  contextId: import('@nestjs/core').ContextId,
-  dependencies: Map<unknown, Promise<unknown>>,
+function resolveNestHandlerDependency(
+  dependencies: Map<unknown, unknown>,
   token: unknown,
-  optional: boolean
-): Promise<unknown> {
-  let dependency = dependencies.get(token);
-  if (dependency === undefined) {
-    dependency = moduleRef.resolve(token as Parameters<ModuleRef['get']>[0], contextId, {
-      strict: false
-    });
-    dependencies.set(token, dependency);
-  }
+  optional: boolean,
+  lookup: (moduleRef: ModuleRef, contextId: import('@nestjs/core').ContextId) => unknown,
+  moduleRef: ModuleRef,
+  contextId: import('@nestjs/core').ContextId
+): unknown {
+  if (dependencies.has(token)) return dependencies.get(token);
   try {
-    return await dependency;
+    const dependency = lookup(moduleRef, contextId);
+    const result = isNestPromiseLike(dependency)
+      ? Promise.resolve(dependency).then(
+          (value) => {
+            dependencies.set(token, value);
+            return value;
+          },
+          (error) => nestDependencyFailure(dependencies, token, optional, error)
+        )
+      : dependency;
+    dependencies.set(token, result);
+    return result;
   } catch (error) {
-    dependencies.delete(token);
-    if (optional) return undefined;
-    throw error;
+    return nestDependencyFailure(dependencies, token, optional, error);
   }
+}
+
+function nestDependencyFailure(
+  dependencies: Map<unknown, unknown>,
+  token: unknown,
+  optional: boolean,
+  error: unknown
+): undefined {
+  dependencies.delete(token);
+  if (optional) return undefined;
+  throw error;
 }
 
 function findDiscoveredProvider<T>(discovery: DiscoveryService | undefined, type: Type<T>) {

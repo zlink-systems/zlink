@@ -19,12 +19,16 @@ export type ZLinkOperationIdentityKey = string & {
 export function operationIdentityKey(
   operationId: ZLinkOperationIdentity128
 ): ZLinkOperationIdentityKey {
+  validateOperationIdentity(operationId);
+  return `${operationId.high.toString(16)}:${operationId.low.toString(16)}` as ZLinkOperationIdentityKey;
+}
+
+export function validateOperationIdentity(operationId: ZLinkOperationIdentity128): void {
   requireUnsigned64(operationId.high, 'operationId.high');
   requireUnsigned64(operationId.low, 'operationId.low');
   if (operationId.high === 0n && operationId.low === 0n) {
     throw new RangeError('Operation identity must not be all zero.');
   }
-  return `${operationId.high.toString(16)}:${operationId.low.toString(16)}` as ZLinkOperationIdentityKey;
 }
 
 export function createRandomOperationIdentity(

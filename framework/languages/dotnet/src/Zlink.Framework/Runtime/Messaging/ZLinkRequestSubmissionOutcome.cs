@@ -14,12 +14,12 @@ internal static class ZLinkRequestSubmissionOutcome
         // Binding owns the reply timeout and caller cancellation. Only an
         // initial admission wait needs the Framework's end-to-end budget.
         var submission = operation.Async(cancellationToken);
+        if (!ZLinkBindingSubmissionOutcome.RequiresAdmission(submission.Result, requestAdmission))
+            return submission.Reply;
+
         var admitted = requestAdmission is null
             ? submission.Admitted
             : ObserveAdmissionAsync(submission.Admitted, requestAdmission);
-        if (!ZLinkBindingSubmissionOutcome.RequiresAdmission(submission.Result))
-            return submission.Reply;
-
         var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         try
         {

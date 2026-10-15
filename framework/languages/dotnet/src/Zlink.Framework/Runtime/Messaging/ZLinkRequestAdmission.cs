@@ -15,9 +15,15 @@ internal sealed class ZLinkRequestAdmission
     )
     {
         var admission = new ZLinkRequestAdmission();
-        return new ZLinkRequest<TReply>(new ValueTask(admission._completion.Task), ObserveAsync());
+        return new ZLinkRequest<TReply>(
+            new ValueTask(admission._completion.Task),
+            ObserveAsync(execute, admission)
+        );
 
-        async ValueTask<TReply> ObserveAsync()
+        static async ValueTask<TReply> ObserveAsync(
+            Func<ZLinkRequestAdmission, ValueTask<TReply>> execute,
+            ZLinkRequestAdmission admission
+        )
         {
             try
             {

@@ -306,7 +306,9 @@ The registration surface of each capability is owned by the
 [stream-session §7.2](../../04-session/01-stream-session.en.md),
 [runtime-monitoring §6](../../06-observability/01-runtime-monitoring.en.md).
 
-**C++ turns every violation into a failure before host start.** The
+**C++ turns every violation in registrations decided by host configuration into a failure before
+host start.** The check timing of registrations decided in a Spot's `Configure()` is defined by
+[Common API "23"](../../00-foundation/06-framework-api.en.md#23-startup-validation). The
 error follows the `result_t`/`framework_exception_t` boundary
 convention, not an exception
 ([common runtime](interfaces/01-common-runtime.en.md)).

@@ -32,10 +32,13 @@ namespace Zlink.Framework.Runtime.Execution;
 /// </remarks>
 internal sealed class ZLinkStateLane : IAsyncDisposable
 {
-    private readonly ConcurrentQueue<Func<ValueTask>> _mailbox = new();
-    private readonly TaskCompletionSource _completed = new(
-        TaskCreationOptions.RunContinuationsAsynchronously
-    );
+    private ConcurrentQueue<Func<ValueTask>>? _mailbox;
+    private TaskCompletionSource? _completed;
+
+    private ConcurrentQueue<Func<ValueTask>> Mailbox =>
+        LazyInitializer.EnsureInitialized(ref _mailbox, static () => new());
+
+    private bool HasQueuedWork => Volatile.Read(ref _mailbox) is { IsEmpty: false };
 
     private int _scheduled;
     private int _closed;
@@ -74,7 +77,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         // waits for a ThreadPool worker to start the drain.
         if (TryClaimDrain())
         {
-            if (_mailbox.IsEmpty)
+            if (!HasQueuedWork)
             {
                 var previous = CurrentLane.Value;
                 try
@@ -113,7 +116,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         var completion = new TaskCompletionSource<T>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        _mailbox.Enqueue(() =>
+        Mailbox.Enqueue(() =>
         {
             try
             {
@@ -159,7 +162,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        _mailbox.Enqueue(async () =>
+        Mailbox.Enqueue(async () =>
         {
             try
             {
@@ -190,7 +193,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(work);
         if (Volatile.Read(ref _closed) != 0)
             return false;
-        _mailbox.Enqueue(() =>
+        Mailbox.Enqueue(() =>
         {
             try
             {
@@ -253,7 +256,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         {
             do
             {
-                while (_mailbox.TryDequeue(out var work))
+                while (_mailbox is { } mailbox && mailbox.TryDequeue(out var work))
                     await work().ConfigureAwait(false);
             } while (ReleaseDrain());
         }
@@ -270,10 +273,10 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         // The full fence orders the ownership release before the queue check;
         // otherwise a racing producer and drainer can both miss the wakeup.
         Interlocked.Exchange(ref _scheduled, 0);
-        if (!_mailbox.IsEmpty)
+        if (HasQueuedWork)
             return TryClaimDrain();
         if (Volatile.Read(ref _closed) != 0 && Volatile.Read(ref _scheduled) == 0)
-            _completed.TrySetResult();
+            _completed?.TrySetResult();
         return false;
     }
 
@@ -284,12 +287,18 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
 
         //  A drain in flight completes the signal on its way out. With no drain scheduled there is
         //  nothing left to wait for.
-        if (Volatile.Read(ref _scheduled) == 0 && _mailbox.IsEmpty)
-            _completed.TrySetResult();
+        if (Volatile.Read(ref _scheduled) == 0 && !HasQueuedWork)
+            return;
+        var completed = LazyInitializer.EnsureInitialized(
+            ref _completed,
+            static () =>
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+        );
+        if (Volatile.Read(ref _scheduled) == 0 && !HasQueuedWork)
+            completed.TrySetResult();
         else
             ScheduleDrain();
-
-        await _completed.Task.ConfigureAwait(false);
+        await completed.Task.ConfigureAwait(false);
     }
 }
 

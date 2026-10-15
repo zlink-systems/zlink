@@ -18,7 +18,10 @@ import type {
 } from '../../contracts/Configuration/RegistrationTypes';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import { prepareHandlerInstance } from '../handlers/handler-instance-scope';
-import { ZLinkConfigurationException } from '../configuration';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { ZLinkActorPacketKind, ZLinkSpotActorHandlerRegistryRuntime } from '../actors';
 import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes';
 
@@ -47,7 +50,8 @@ export class DefaultZLinkSpotHandlerRegistry<
     );
     const resolvedPacketName = packetName ?? metadata?.packetName;
     if (metadata === undefined || resolvedPacketName === undefined) {
-      throw new ZLinkConfigurationException(
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
         `Actor packet handler '${handlerType.name}' must declare a packet name.`
       );
     }
@@ -67,7 +71,8 @@ export class DefaultZLinkSpotHandlerRegistry<
       (entry) => entry.kind === 'spotActorSend' || entry.kind === 'spotActorRequest'
     );
     if (metadata?.packetName === undefined) {
-      throw new ZLinkConfigurationException(
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
         `Actor packet handler '${handlerType.name}' must declare a packet name.`
       );
     }
@@ -84,10 +89,20 @@ export class DefaultZLinkSpotHandlerRegistry<
       (entry) => entry.kind === 'packet'
     )?.packetName;
     prepareHandlerInstance(this.providerResolver, handlerType);
+    const resolvedPacketName = packetName ?? declared ?? handlerType.name;
+    if (
+      this.entries.some(
+        (entry) => entry.kind === 'packet' && entry.packetName === resolvedPacketName
+      )
+    )
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        `SPOT packet '${resolvedPacketName}' is already registered.`
+      );
     this.entries.push({
       kind: 'packet',
       handlerType,
-      packetName: packetName ?? declared ?? handlerType.name
+      packetName: resolvedPacketName
     });
     return this;
   }
@@ -146,10 +161,16 @@ export class DefaultZLinkSpotHandlerRegistry<
 
   addSubscribe(handlerType: Type, channelName: string, topic: string): this {
     if (channelName.trim().length === 0) {
-      throw new ZLinkConfigurationException('SPOT subscribe channel name must not be empty.');
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        'SPOT subscribe channel name must not be empty.'
+      );
     }
     if (topic.trim().length === 0) {
-      throw new ZLinkConfigurationException('SPOT subscribe topic must not be empty.');
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        'SPOT subscribe topic must not be empty.'
+      );
     }
     if (
       this.entries.some(
@@ -160,7 +181,10 @@ export class DefaultZLinkSpotHandlerRegistry<
           entry.topic === topic
       )
     ) {
-      return this;
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidOperation,
+        `SPOT subscription '${channelName}/${topic}' is already registered.`
+      );
     }
     prepareHandlerInstance(this.providerResolver, handlerType);
     this.entries.push({ kind: 'subscribe', handlerType, channelName, topic });

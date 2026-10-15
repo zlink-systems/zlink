@@ -11,6 +11,53 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class RelocationBehaviorConformanceTests
 {
+    [Fact]
+    public async Task Force_stop_retires_location_peers_before_transport_disposal()
+    {
+        using var flowListener = Environment.GetEnvironmentVariable(
+            "ZLINK_RELOCATION_TEST_FLOW_PATH"
+        )
+            is { } flowPath
+            ? new TestHostMessageFlowListener($"{flowPath}.force-stop")
+            : null;
+        var trace = new RelocationBehaviorTrace();
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var roots = new SynchronizedRelocationStore();
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            store,
+            roots,
+            true
+        );
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            store,
+            roots,
+            true
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
+        var sourceRid = source.LocalNodeRid;
+        var repository = source.Runtime.Registration.Locations.ResolveStore()!;
+
+        await source.Runtime.ForceStopAsync(CancellationToken.None);
+
+        Assert.DoesNotContain(
+            (await repository.ListMeshNodesAsync(RelocationBehaviorHost.MeshName, default)).Items,
+            descriptor => descriptor.Rid == sourceRid
+        );
+    }
+
     // Common relocation §4.4 and Location runtime §10: the owner orders seal
     // against verification, including a successful CAS whose response is lost.
     [Theory]
@@ -155,11 +202,25 @@ public sealed partial class RelocationBehaviorConformanceTests
                     Assert.Single(
                         target.Runtime.StandaloneActorRelocationRuntime.SnapshotPendingAttemptNames()
                     );
+                if (spot && order == 1)
+                {
+                    var targetRid = target.LocalNodeRid;
+                    await WaitUntilAsync(async () =>
+                        (
+                            await target
+                                .Runtime.Registration.Locations.ResolveStore()!
+                                .ListMeshNodesAsync(RelocationBehaviorHost.MeshName, default)
+                        ).Items.Any(descriptor =>
+                            descriptor.Rid == targetRid
+                            && descriptor.State == ZLinkFrameworkRuntimeState.Draining
+                        )
+                    );
+                }
                 settlement.Release.TrySetResult();
                 await cutover!.WaitAsync(TimeSpan.FromSeconds(5));
                 await settlement.Settled.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 // Location runtime §10: a definitive conflict is also settlement.
-                // Sealing publishes Draining before this delayed Spot CAS, so
+                // The observed Draining descriptor precedes this delayed Spot CAS, so
                 // the provider rejects its target placement. Response-loss tests
                 // instead apply the CAS before seal and confirm it with a read.
                 if (spot && order == 1)

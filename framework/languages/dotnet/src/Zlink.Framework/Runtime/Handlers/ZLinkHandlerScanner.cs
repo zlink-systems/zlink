@@ -10,7 +10,7 @@ internal static class ZLinkHandlerScanner
 
         foreach (var type in assembly.GetTypes())
         {
-            if (type.IsAbstract || type.IsInterface)
+            if (!IsScannableHandlerType(type))
                 continue;
 
             var groups = ResolveGroups(type);
@@ -64,6 +64,9 @@ internal static class ZLinkHandlerScanner
 
         return endpoints;
     }
+
+    internal static bool IsScannableHandlerType(Type type) =>
+        !type.IsAbstract && !type.IsInterface && !type.ContainsGenericParameters;
 
     public static ZLinkHandlerEndpointDescriptor CreateExplicitInterfaceDescriptor(
         Type declaringType,

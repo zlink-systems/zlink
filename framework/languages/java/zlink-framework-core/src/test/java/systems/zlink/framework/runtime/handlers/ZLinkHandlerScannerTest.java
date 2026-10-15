@@ -335,11 +335,31 @@ final class ZLinkHandlerScannerTest {
         assertEquals(String.class, handler.replyType());
     }
 
+    @Test
+    void skipsOpenGenericHandlerTypes() {
+        ZLinkScannedHandlerCatalog catalog =
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+
+        assertTrue(
+                catalog.handlers().stream()
+                        .noneMatch(
+                                handler ->
+                                        handler.handlerType() == OpenGenericRequestHandler.class));
+    }
+
     public static final class UngroupedInterfaceHandler
             implements ZLinkRequestHandler<String, String> {
         @Override
         public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
             return CompletableFuture.completedFuture(request);
+        }
+    }
+
+    public static final class OpenGenericRequestHandler<T>
+            implements ZLinkRequestHandler<T, String> {
+        @Override
+        public CompletionStage<String> handle(T request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture("ignored");
         }
     }
 

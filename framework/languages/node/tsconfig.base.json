@@ -56,6 +56,9 @@
       ],
       "@zlink-systems/zlink": [
         "node_modules/@zlink-systems/zlink/dist/index.d.ts"
+      ],
+      "@zlink-systems/stream-wire/internal/json": [
+        "packages/stream-wire/src/internal/json"
       ]
     }
   }

@@ -395,7 +395,7 @@ Timer 취소와 payload 정리도 그 바깥에서 한다.
 잠금을 놓은 직후 같은 호출 stack에서 callback을 바로 실행하는 것만으로는 충분하지
 않다. 그렇게 하면 transport의 응답 처리나 timeout 처리가 끝나기 전에 application
 code가 runtime에 다시 진입할 수 있다. 완료 callback은 process가 공유하는 completion
-dispatcher에 넣고, 현재 처리가 반환된 뒤 새 execution turn에서 실행한다.
+dispatcher에 넣고, 아래에서 정한 새 execution turn 조건에 따라 실행한다.
 
 순서는 이렇다.
 
@@ -403,6 +403,13 @@ dispatcher에 넣고, 현재 처리가 반환된 뒤 새 execution turn에서 �
 2. 잠금을 놓는다.
 3. callback을 dispatcher에 넣는다.
 4. 새 execution turn에서 callback을 실행한다.
+
+**새 execution turn은 다른 thread를 뜻하지 않는다.** 같은 실행 자원에서 callback을 실행할 때는 완료
+확정·게시 처리의 호출 stack과 lane-current scope가 반환된 뒤 다음 turn에서 시작한다. 다른 실행 자원에서
+실행할 때는 완료 판정의 잠금과 lane-current scope를 callback에 넘기지 않고 독립된 turn에서 시작하며,
+다른 자원의 상위 호출 stack 전체가 반환됐다는 전역 순서까지 요구하지 않는다. 그 turn을 어느 실행 자원이
+실행하는지는 [Messaging hot path 「4.4」](08-messaging-hot-path.ko.md#44-실행-자원-배치--수신-역할-인계)가
+정한다.
 
 **완료 callback을 dispatcher에 넣는 일은 실패하지 않는다.** Dispatcher에 상한이 없기
 때문이다. 자리가 없다는 이유로 request를 거부하거나, 이미 수락한 호출의 완료를 버리는
@@ -423,8 +430,8 @@ socket마다 completion 자리를 정해 두고, 그 자리가 다 차면 새 �
 기다리는 일을 센다. 둘은 세는 것이 다르므로 하나로 합치지 않는다([§1](04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)).
 
 Dispatcher는
-callback마다 thread를 만드는 대신 process가 공유하는 lane을 사용하며, shutdown에서는
-이미 수락한 callback을 모두 실행한 뒤 종료한다.
+callback마다 thread를 만들지 않으며, shutdown에서는 이미 수락한 callback을 모두 실행한 뒤
+종료한다.
 
 한 callback의 exception은 뒤
 callback의 실행을 막지 않는다.

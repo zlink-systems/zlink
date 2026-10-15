@@ -48,12 +48,6 @@ internal sealed partial class ZLinkActorSessionManager(
 
     internal int CountActiveActors(string meshName) => _actorSessions.CountActive(meshName);
 
-    internal bool IsCurrentLocalActor(ZLinkBackendActorRef actor) =>
-        _actorSessions.TryGet(
-            ZLinkActorId.FromBoundary(actor.ActorId, nameof(actor)),
-            out var state
-        ) && state.Actor is not null;
-
     public async ValueTask<CreateActorResult> CreateAndBindActorAsync(
         string actorId,
         string actorType,

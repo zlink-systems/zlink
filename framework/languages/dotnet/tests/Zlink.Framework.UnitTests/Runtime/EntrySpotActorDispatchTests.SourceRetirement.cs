@@ -171,7 +171,7 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.IsType<InvalidOperationException>(failure);
         Assert.Null(state.Actor);
         Assert.Null(state.Context);
-        Assert.False(sessions.IsCurrentLocalActor(source));
+        Assert.Null(await sessions.FindActorAsync(source.ActorId));
         Assert.Equal(1, handler.DisposeCount);
         Assert.Equal(1, diagnosticCount);
         await FinalizeSource(CancellationToken.None);
@@ -276,7 +276,7 @@ public sealed partial class EntrySpotActorDispatchTests
             await diagnosed.Task.WaitAsync(TimeSpan.FromSeconds(5))
         );
         Assert.Null(state.Actor);
-        Assert.False(sessions.IsCurrentLocalActor(source));
+        Assert.Null(await sessions.FindActorAsync(source.ActorId));
     }
 
     private sealed class SourceRetirementFailingHandler : IAsyncDisposable

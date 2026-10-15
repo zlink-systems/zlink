@@ -17,10 +17,7 @@ public sealed class StartupDependencyMetadataTests
                 return new Dependency();
             })
             .BuildServiceProvider();
-        await ZLinkSpotStartupValidator.ValidateDependenciesAsync(
-            services,
-            Registration(typeof(RequiredSpot))
-        );
+        await ZLinkSpotStartupValidator.ValidateAsync(services, Registration(typeof(RequiredSpot)));
         Assert.Equal(0, constructed);
     }
 
@@ -29,7 +26,7 @@ public sealed class StartupDependencyMetadataTests
     {
         await using var services = new ServiceCollection().BuildServiceProvider();
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await ZLinkSpotStartupValidator.ValidateDependenciesAsync(
+            await ZLinkSpotStartupValidator.ValidateAsync(
                 services,
                 Registration(typeof(RequiredSpot))
             )
@@ -42,14 +39,8 @@ public sealed class StartupDependencyMetadataTests
         await using var services = new ServiceCollection()
             .AddKeyedScoped<Dependency>("selected")
             .BuildServiceProvider();
-        await ZLinkSpotStartupValidator.ValidateDependenciesAsync(
-            services,
-            Registration(typeof(KeyedSpot))
-        );
-        await ZLinkSpotStartupValidator.ValidateDependenciesAsync(
-            services,
-            Registration(typeof(OptionalSpot))
-        );
+        await ZLinkSpotStartupValidator.ValidateAsync(services, Registration(typeof(KeyedSpot)));
+        await ZLinkSpotStartupValidator.ValidateAsync(services, Registration(typeof(OptionalSpot)));
     }
 
     private static ZLinkFrameworkRegistration Registration(Type type)

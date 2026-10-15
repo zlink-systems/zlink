@@ -269,8 +269,7 @@ void room_spot_t::configure() {
 function을 직접 등록한다.
 
 **완료 결과.** 반환값 없이 동기로 등록된다. Packet name을 생략하면 handler가 처리하는 메시지
-타입의 `packet_name`을 사용하고, 없으면 C++ type name을 사용한다. 같은 owner의 handler key 중복은
-`app.run(...)`의 startup 검증에서 configuration error로 드러난다.
+타입의 `packet_name`을 사용하고, 없으면 C++ type name을 사용한다. 같은 owner의 handler key 중복의 검사 시점과 실패 결과는 [공통 API 「23」](../../common/spec/server/00-foundation/06-framework-api.ko.md#23-startup-validation)을 따른다.
 
 **선택 기준.** `configure()`가 호출될 때마다 이 Spot이 처리할 모든 handler를 등록한다.
 Node·Channel handler는 topology-discovery category의 등록 항목을, STREAM session handler는

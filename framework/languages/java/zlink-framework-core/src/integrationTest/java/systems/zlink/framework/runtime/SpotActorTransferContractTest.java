@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -14,7 +16,11 @@ import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
+import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
+import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -38,12 +44,132 @@ final class SpotActorTransferContractTest {
     private static final AtomicReference<ContractActor> ACTOR = new AtomicReference<>();
     private static CountDownLatch joinCompleted;
     private static CountDownLatch targetJoined;
+    private static final AtomicReference<ZLinkActorJoinCompletion> JOIN_RESULT =
+            new AtomicReference<>();
+    private static boolean includeJoinReply;
 
     @BeforeEach
     void reset() {
         ACTOR.set(null);
+        JOIN_RESULT.set(null);
+        includeJoinReply = false;
         joinCompleted = new CountDownLatch(1);
         targetJoined = new CountDownLatch(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void crossNodeDeferredJoinPreservesEmptyApplicationState(boolean withReply) throws Exception {
+        includeJoinReply = withReply;
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        var sourceOptions = relocationOptions("join-source", locations, relocations, null);
+        try (var source =
+                RuntimeTestSupport.startFramework(
+                        sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
+            var created =
+                    assertInstanceOf(
+                            ZLinkActorCreateResult.Created.class,
+                            source.actorManager()
+                                    .create("empty-state-player", "player")
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .get(3, TimeUnit.SECONDS));
+            var targetOptions =
+                    relocationOptions(
+                            "join-target",
+                            locations,
+                            relocations,
+                            source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game").endpoint());
+            try (var target =
+                    RuntimeTestSupport.startFramework(
+                            targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+                var room =
+                        target.spotManager()
+                                .getOrCreate("target-room", "target")
+                                .submit()
+                                .toCompletableFuture()
+                                .get(3, TimeUnit.SECONDS);
+                assertEquals(RoutingId.from("join-source"), created.actor().nodeRid());
+                assertEquals(RoutingId.from("join-target"), room.spot().nodeRid());
+                assertEquals(
+                        "scheduled",
+                        source.actorClient()
+                                .requestToActor(
+                                        created.actor().actorId(), new JoinRequest("target-room"))
+                                .timeout(Duration.ofSeconds(3))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .get(3, TimeUnit.SECONDS));
+                assertTrue(joinCompleted.await(3, TimeUnit.SECONDS));
+                var accepted =
+                        assertInstanceOf(
+                                ZLinkActorJoinCompletion.Accepted.class, JOIN_RESULT.get());
+                assertEquals(RoutingId.from("join-target"), accepted.actor().nodeRid());
+                if (withReply) {
+                    assertEquals(
+                            new JoinReply("welcome"), accepted.reply().decode(JoinReply.class));
+                } else {
+                    assertTrue(accepted.reply().isEmpty());
+                }
+                assertTrue(targetJoined.await(3, TimeUnit.SECONDS));
+                assertEquals(
+                        "target-room",
+                        target.actorClient()
+                                .requestToActor(created.actor().actorId(), new ProbeRequest())
+                                .timeout(Duration.ofSeconds(3))
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .get(3, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    private static DefaultZLinkFrameworkOptions relocationOptions(
+            String rid,
+            ZLinkInMemoryLocationStore locations,
+            InMemoryRelocationStore relocations,
+            String sourceEndpoint) {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        options.addLocationStore(locations);
+        options.addRelocationStore(relocations);
+        var node = options.addRouteMesh("game");
+        node.listen("tcp://127.0.0.1:0").setRoutingId(RoutingId.from(rid));
+        node.objects()
+                .server()
+                .addEntrySpot(ContractEntrySpot.class)
+                .addActorFactory(
+                        "player",
+                        ContractActor.class,
+                        ContractActorFactory.class,
+                        factory -> factory.preserveStateWith(EmptyStateAdapter.class));
+        if (sourceEndpoint != null) {
+            node.peerConnections().connect(sourceEndpoint);
+            node.objects()
+                    .server()
+                    .addSpotFactory(
+                            "target",
+                            ContractTargetSpot.class,
+                            factory -> factory.disableRelocation());
+        }
+        return options;
+    }
+
+    public static final class EmptyStateAdapter
+            implements ZLinkActorRelocationAdapter<ContractActor> {
+        @Override
+        public CompletionStage<byte[]> capture(
+                ContractActor actor, ZLinkRelocationCancellation cancellation) {
+            return CompletableFuture.completedFuture(new byte[0]);
+        }
+
+        @Override
+        public CompletionStage<Void> restore(
+                ContractActor actor, byte[] state, ZLinkRelocationCancellation cancellation) {
+            assertEquals(0, state.length);
+            return CompletableFuture.completedFuture(null);
+        }
     }
 
     @Test
@@ -91,6 +217,7 @@ final class SpotActorTransferContractTest {
             assertEquals("scheduled", scheduled);
             assertTrue(targetJoined.await(3, TimeUnit.SECONDS));
             assertTrue(joinCompleted.await(3, TimeUnit.SECONDS));
+            assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, JOIN_RESULT.get());
             assertEquals("target-room", ACTOR.get().context().spotId().orElseThrow());
 
             String currentSpot =
@@ -119,7 +246,7 @@ final class SpotActorTransferContractTest {
 
         @Override
         public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
-            assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, completion);
+            JOIN_RESULT.set(completion);
             joinCompleted.countDown();
             return CompletableFuture.completedFuture(null);
         }
@@ -180,7 +307,10 @@ final class SpotActorTransferContractTest {
         @Override
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
                 String actorId, ZLinkMessage request) {
-            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+            return CompletableFuture.completedFuture(
+                    includeJoinReply
+                            ? ZLinkSpotActorJoinResult.accept(new JoinReply("welcome"))
+                            : ZLinkSpotActorJoinResult.accept());
         }
 
         @Override
@@ -196,6 +326,8 @@ final class SpotActorTransferContractTest {
     }
 
     public record JoinRequest(String spotId) {}
+
+    public record JoinReply(String value) {}
 
     public record ProbeRequest() {}
 

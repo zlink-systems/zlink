@@ -278,8 +278,7 @@ you call it through.
 
 **Completion.** Registers synchronously with no return value. If the packet name is omitted, it
 checks the `ZLinkPacketAttribute` on the handled message type, and falls back to the type name if
-that is also absent. A duplicate handler key within the same owner surfaces as
-`ZLinkConfigurationException` during host startup validation.
+that is also absent. For a duplicate handler key within the same owner, the check timing and failure outcome follow [Common API "23"](../../common/spec/server/00-foundation/06-framework-api.en.md#23-startup-validation).
 
 **When to use it.** Register every handler this Spot processes each time `Configure()` is
 called. For Node·Channel handlers, see the topology-discovery category's registration entries;

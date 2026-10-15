@@ -31,6 +31,7 @@ offload_executor_t::offload_executor_t (std::size_t min_worker_count,
     if (_max_worker_count == 0) {
         _max_worker_count = 1;
     }
+    std::lock_guard lock (_mutex);
     _workers.reserve (_max_worker_count);
     for (std::size_t i = 0; i < _min_worker_count; ++i) {
         start_worker_locked ();
@@ -145,11 +146,9 @@ bool offload_executor_t::drain_until (std::chrono::steady_clock::time_point dead
             }
             return false;
         }
-    }
-    for (auto &worker : _workers) {
-        if (worker.joinable ()) {
-            worker.join ();
-        }
+        // Stopping with no work: every worker returns and none starts again.
+        _empty.wait (lock, [this] { return _live_workers == 0; });
+        join_retired_workers_locked ();
     }
     if (trace_enabled) {
         std::cerr << "zlink-cpp-host-stop stage=offload-drain-end name=" << _thread_name
@@ -170,10 +169,38 @@ std::size_t offload_executor_t::live_worker_count () const
     return _live_workers;
 }
 
+std::size_t offload_executor_t::owned_thread_count () const
+{
+    std::lock_guard lock (_mutex);
+    return _workers.size ();
+}
+
 void offload_executor_t::start_worker_locked ()
 {
+    join_retired_workers_locked ();
     ++_live_workers;
     _workers.emplace_back ([this] { worker_loop (); });
+}
+
+// A returning worker leaves the running range. It no longer needs the mutex,
+// so joining it while holding the mutex waits only for its thread exit.
+void offload_executor_t::retire_current_worker_locked ()
+{
+    const auto running = _workers.begin () + static_cast<std::ptrdiff_t> (_live_workers);
+    const auto self = std::find_if (_workers.begin (), running, [] (const std::thread &worker) {
+        return worker.get_id () == std::this_thread::get_id ();
+    });
+    std::iter_swap (self, running - 1);
+    --_live_workers;
+    _empty.notify_all ();
+}
+
+void offload_executor_t::join_retired_workers_locked ()
+{
+    const auto retired = _workers.begin () + static_cast<std::ptrdiff_t> (_live_workers);
+    for (auto worker = retired; worker != _workers.end (); ++worker)
+        worker->join ();
+    _workers.erase (retired, _workers.end ());
 }
 
 void offload_executor_t::worker_loop ()
@@ -207,17 +234,14 @@ void offload_executor_t::worker_loop ()
             --_idle_workers;
             if (!ready && _queue.empty ()) {
                 if (_live_workers > _min_worker_count) {
-                    --_live_workers;
-                    if (_active == 0) {
-                        _empty.notify_all ();
-                    }
+                    retire_current_worker_locked ();
                     trace_exit ();
                     return;
                 }
                 continue;
             }
             if (_stopping && _queue.empty ()) {
-                --_live_workers;
+                retire_current_worker_locked ();
                 trace_exit ();
                 return;
             }

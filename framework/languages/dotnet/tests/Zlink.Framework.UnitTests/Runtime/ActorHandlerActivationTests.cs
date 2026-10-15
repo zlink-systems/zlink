@@ -196,11 +196,6 @@ public sealed class ActorHandlerActivationTests
                 .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(registry)
         );
-        var mailbox = Assert.IsType<ConcurrentQueue<Func<ValueTask>>>(
-            typeof(ZLinkStateLane)
-                .GetField("_mailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(lane)
-        );
         var blockerStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -213,6 +208,11 @@ public sealed class ActorHandlerActivationTests
             await releaseBlocker.Task.ConfigureAwait(false);
         });
         await blockerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var mailbox = Assert.IsType<ConcurrentQueue<Func<ValueTask>>>(
+            typeof(ZLinkStateLane)
+                .GetField("_mailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(lane)
+        );
 
         var reset = Task.Run(async () => await registry.ResetGenerationAsync());
         Assert.True(SpinWait.SpinUntil(() => mailbox.Count == 1, TimeSpan.FromSeconds(5)));

@@ -9,7 +9,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
-import systems.zlink.framework.errors.ZLinkConfigurationException
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotSubscriptionHandler
 import systems.zlink.framework.kotlin.addHandler
@@ -41,10 +42,11 @@ class KotlinSpotHandlerRegistrationTest {
         handlers.addHandler<MissingTopicSubscriptionHandler>()
 
         val failure =
-            assertThrows<ZLinkConfigurationException> {
+            assertThrows<ZLinkFrameworkException> {
                 load(EntrySpotProbe::class.java, handlers.handlerTypes)
             }
 
+        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION, failure.kind())
         assertEquals(
             "SPOT subscription handler topic is required: ${MissingTopicSubscriptionHandler::class.java.name}",
             failure.message,

@@ -32,7 +32,7 @@ object를 처음 배치할 곳을 정할 때 사용하는 속성이며 authority
 `ActorRef`와 `SpotRef`의 [`ObjectGeneration`](../00-foundation/02-glossary.ko.md#objectgeneration)은
 같은 logical identity로 다시 만들어진 incarnation을 구분하는, 0이 아닌 unsigned 63-bit
 conceptual value다. 같은 incarnation에서 membership이나 [owner](../00-foundation/02-glossary.ko.md#owner) MeshNode가 바뀌어도
-`ObjectGeneration`은 유지한다. 대신 provider가 더 큰, 같은 incarnation에서 authority owner가
+`ObjectGeneration`은 유지한다. 대신 Framework가 더 큰, 같은 incarnation에서 authority owner가
 바뀐 순서를 나타내는
 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.ko.md#authorityownergeneration)을
 발급하여 새 owner를 구분한다.

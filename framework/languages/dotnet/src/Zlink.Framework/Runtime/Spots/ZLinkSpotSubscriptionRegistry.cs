@@ -54,10 +54,11 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         object spot,
         IZLinkBackendSpot nativeSpot,
         TimeSpan timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        IEnumerable<string> channelNames
     )
     {
-        foreach (var (target, handlers) in BuildDescriptors(spot))
+        foreach (var (target, handlers) in BuildDescriptors(spot, channelNames))
         {
             _descriptorsByTarget.Add(target, handlers);
             await SetSubscriptionAsync(
@@ -71,9 +72,9 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         }
     }
 
-    public void Bind(object spot, IZLinkBackendSpot nativeSpot)
+    public void Bind(object spot, IZLinkBackendSpot nativeSpot, IEnumerable<string> channelNames)
     {
-        foreach (var (target, handlers) in BuildDescriptors(spot))
+        foreach (var (target, handlers) in BuildDescriptors(spot, channelNames))
         {
             _descriptorsByTarget.Add(target, handlers);
             nativeSpot.SetSubscription(target.ChannelName, target.Topic);
@@ -116,20 +117,19 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         }
     }
 
-    public void Validate(object spot)
-    {
-        _ = BuildDescriptors(spot);
-    }
-
     private Dictionary<
         ZLinkSpotSubscriptionKey,
         List<ZLinkSpotSubscriptionDescriptor>
-    > BuildDescriptors(object spot)
+    > BuildDescriptors(object spot, IEnumerable<string> channelNames)
     {
         var descriptorsByTarget =
             new Dictionary<ZLinkSpotSubscriptionKey, List<ZLinkSpotSubscriptionDescriptor>>();
         foreach (var subscription in _registrations)
         {
+            if (!channelNames.Contains(subscription.ChannelName, StringComparer.Ordinal))
+                throw new ZLinkConfigurationException(
+                    $"SPOT does not participate in subscription channel '{subscription.ChannelName}'."
+                );
             var descriptor = subscription.Method is { } method
                 ? ZLinkSpotDescriptorFactory.CreateAttributedSubscriptionDescriptor(
                     subscription.ChannelName,

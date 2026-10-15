@@ -203,6 +203,63 @@ public sealed class MeshApplicationWorkerTests
     }
 
     [Fact]
+    public async Task LocalActorRecord_KeepsItsLocalPermitOriginThroughThePump()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "local-actor-origin",
+            applicationJobQueue: jobs
+        );
+        node.SetRoutingId(RoutingId.From("local-actor-origin-node"));
+        node.Start();
+        var entrySpotId = ((ZLinkManagedSpot)node.EntrySpot()).SpotId;
+        var actor = node.CreateActor("local-actor");
+        await using var pump = new ZLinkMeshDispatchPump(
+            node,
+            new ZLinkMeshCompletionTable(),
+            jobs
+        );
+        var origin = new TaskCompletionSource<ZLinkApplicationJobOrigin?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        pump.RegisterSpot(entrySpotId);
+        pump.SetDispatchHandler(
+            entrySpotId,
+            info =>
+            {
+                if (
+                    info.Event == ZLinkBackendSpotDispatchEvent.ActorReadable
+                    && info.ActorParts is { } parts
+                )
+                {
+                    origin.TrySetResult(info.ApplicationJobOrigin);
+                    foreach (var part in parts)
+                        part.Message.Dispose();
+                    info.ActorPayloadOwner?.Dispose();
+                }
+                return (ValueTask.CompletedTask, null);
+            }
+        );
+        pump.EnsureStarted();
+
+        using var payload = Message.From(new byte[16]);
+        Assert.Equal(SubmitResult.Ok, node.SendToActor(actor, [payload]));
+
+        // The record entered the mailbox with a local publication permit, and
+        // the queue accounts local backlog by that origin.
+        Assert.Equal(
+            ZLinkApplicationJobOrigin.Local,
+            await origin.Task.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        await pump.DisposeAsync();
+        Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
     public async Task LocalRequest_UsesPublicationPermitUntilHandlerEntry()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

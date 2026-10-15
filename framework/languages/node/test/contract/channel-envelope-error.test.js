@@ -357,6 +357,41 @@ test('typed framework-json-v1 schema consumes every shared golden vector', () =>
   }
 });
 
+test('typed server payload decode requires enum names and rejects ordinal representations', () => {
+  class ProfileReportReq {}
+  framework.ZLinkPacket('profile.report', {
+    payload: {
+      type: 'object',
+      properties: {
+        reasonId: { type: 'enum', names: ['nickname', 'profile', 'harassment', 'other'] }
+      },
+      required: ['reasonId']
+    }
+  })(ProfileReportReq);
+
+  const valid = Message.from(Buffer.from('{"reasonId":"profile"}'));
+  try {
+    assert.equal(
+      payloadCodec.decodeFrameworkTypedPayloadMessage(valid, undefined, ProfileReportReq).reasonId,
+      'profile'
+    );
+  } finally {
+    valid.close();
+  }
+
+  for (const reasonId of [1, '1']) {
+    const message = Message.from(Buffer.from(JSON.stringify({ reasonId })));
+    try {
+      assert.throws(
+        () => payloadCodec.decodeFrameworkTypedPayloadMessage(message, undefined, ProfileReportReq),
+        /PayloadDecodeFailed/
+      );
+    } finally {
+      message.close();
+    }
+  }
+});
+
 test('Channel request and reply apply the packet JSON contract without a codec registration', () => {
   const contract = {
     payload: {

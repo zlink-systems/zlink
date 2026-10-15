@@ -27,6 +27,7 @@ import {
 } from './node-backend-adapter-support';
 import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
 import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
+import { ZLinkBufferMessage } from '../runtime-message';
 import type {
   ZLinkRawBindingPort,
   ZLinkRawDealerPort,
@@ -226,6 +227,42 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
 
 class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLinkRawRouterPort {
   private nextIncomingRequestSequence = 1n;
+  private readonly routingIds = new Map<string, BindingRoutingId>();
+  private readonly nextRequestSequence = () => {
+    const current = this.nextIncomingRequestSequence;
+    this.nextIncomingRequestSequence =
+      current === BigInt(Number.MAX_SAFE_INTEGER) ? 1n : current + 1n;
+    return current;
+  };
+  private readonly replyParts = (
+    targetRid: string | Uint8Array,
+    replyToken: unknown,
+    parts: readonly Uint8Array[]
+  ) => {
+    appendReplyParts(
+      this.socket.reply(
+        this.preparedRoutingId(targetRid),
+        replyToken as Parameters<RouterSocket['reply']>[1]
+      ),
+      parts
+    ).submit();
+  };
+
+  private preparedRoutingId(routingId: string | Uint8Array): BindingRoutingId {
+    if (typeof routingId !== 'string') return bindingRoutingId(routingId);
+    let prepared = this.routingIds.get(routingId);
+    if (prepared === undefined)
+      this.routingIds.set(routingId, (prepared = bindingRoutingId(routingId)));
+    return prepared;
+  }
+
+  override close(): void {
+    try {
+      super.close();
+    } finally {
+      this.routingIds.clear();
+    }
+  }
 
   setReceiveFlowState(state: 'running' | 'paused'): void {
     this.requireOpen();
@@ -240,7 +277,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
       this.socket as RouterSocket & {
         disconnectRid(value: BindingRoutingId): void;
       }
-    ).disconnectRid(bindingRoutingId(routingId));
+    ).disconnectRid(this.preparedRoutingId(routingId));
   }
 
   constructor(socket: RouterSocket, receiveTimeoutMs?: number) {
@@ -260,25 +297,25 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
 
   setRoutingId(routingId: string): void {
     this.requireOpen();
-    this.socket.setRoutingId(bindingRoutingId(routingId));
+    this.socket.setRoutingId(this.preparedRoutingId(routingId));
   }
 
   connectToRoutingId(routingId: string, endpoint: string): void {
     this.requireOpen();
-    this.socket.options.setConnectRoutingId(bindingRoutingId(routingId));
+    this.socket.options.setConnectRoutingId(this.preparedRoutingId(routingId));
     this.connect(endpoint);
   }
 
   send(targetRid: string, parts: readonly Uint8Array[]): Promise<void> {
     this.requireOpen();
     requireParts(parts);
-    return submitBindingAsyncSend(this.socket.send(bindingRoutingId(targetRid)), parts);
+    return submitBindingAsyncSend(this.socket.send(this.preparedRoutingId(targetRid)), parts);
   }
 
   submitSend(targetRid: string, parts: readonly Uint8Array[]) {
     this.requireOpen();
     requireParts(parts);
-    return submitBindingSend(this.socket.send(bindingRoutingId(targetRid)), parts);
+    return submitBindingSend(this.socket.send(this.preparedRoutingId(targetRid)), parts);
   }
 
   async request(
@@ -292,7 +329,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     const deadlineMs = performance.now() + timeoutMs;
     let submission: ReturnType<RequestSubmitOperation['submit']>;
     try {
-      submission = appendRequestParts(this.socket.request(bindingRoutingId(targetRid)), parts)
+      submission = appendRequestParts(this.socket.request(this.preparedRoutingId(targetRid)), parts)
         .timeout(timeoutMs)
         .submit();
     } catch (error) {
@@ -300,7 +337,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     }
     try {
       const replies = await bindingRequestReply(submission, deadlineMs, recordReceived, onAdmitted);
-      return copyAndClose(replies);
+      return retainAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');
     }
@@ -316,22 +353,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {
     this.requireOpen();
-    return receiveRecord(
-      this.socket,
-      dontWait,
-      () => {
-        const current = this.nextIncomingRequestSequence;
-        this.nextIncomingRequestSequence =
-          current === BigInt(Number.MAX_SAFE_INTEGER) ? 1n : current + 1n;
-        return current;
-      },
-      (targetRid, replyToken, parts) => {
-        appendReplyParts(
-          this.socket.reply(bindingRoutingId(targetRid), replyToken),
-          parts
-        ).submit();
-      }
-    );
+    return receiveRecord(this.socket, dontWait, this.nextRequestSequence, this.replyParts);
   }
 }
 
@@ -366,7 +388,7 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
     }
     try {
       const replies = await bindingRequestReply(submission, deadlineMs, undefined, onAdmitted);
-      return copyAndClose(replies);
+      return retainAndClose(replies);
     } catch (error) {
       throw translateBindingResultError(error, 'completion');
     }
@@ -498,9 +520,9 @@ function receiveRecord(
   }
 }
 
-function copyAndClose(messages: readonly Message[]): readonly Buffer[] {
+function retainAndClose(messages: readonly Message[]): readonly Buffer[] {
   try {
-    return messages.map((message) => message.toBytes());
+    return messages.map((message) => ZLinkBufferMessage.retainPayload(message));
   } finally {
     for (const message of messages) message.close();
   }

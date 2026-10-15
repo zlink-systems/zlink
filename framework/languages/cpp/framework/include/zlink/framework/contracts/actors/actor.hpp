@@ -295,7 +295,8 @@ class actor_request_call_t
 
     template <typename TReply> task_t<TReply> yield ()
     {
-        return decode_reply<TReply> (start (true), &serializers ());
+        return detail::release_turn_on_suspend<TReply> (
+          decode_reply<TReply> (start (true), &serializers ()));
     }
 
     request_task_t<message_t> async_message ();

@@ -184,12 +184,7 @@ task_t<actor_create_result_t> actor_create_call_t::yield ()
     if (!detail::current_serial_turn_allows_yield ()) {
         return detail::unsupported_yield_task<actor_create_result_t> ();
     }
-    auto turn_plan = detail::prepare_serial_turn_await (true);
-    auto task = async ();
-    if (!turn_plan) {
-        return task;
-    }
-    return detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+    return detail::release_turn_on_suspend (async ());
 }
 
 actor_manager_t::actor_manager_t () : _state (std::make_shared<detail::actor_manager_state_t> ())
@@ -292,12 +287,8 @@ task_t<void> actor_send_call_t::async ()
           result_t<void>::failure (framework_error_kind_t::protocol_error,
                                    "actor send call is not bound to an actor client"));
     }
-    auto task = _client->send_erased (std::move (_actor_id), std::move (_packet_name),
-                                      std::move (_message), std::move (_metadata));
-    if (auto turn_plan = detail::prepare_serial_turn_await (false)) {
-        task = detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
-    }
-    return task;
+    return _client->send_erased (std::move (_actor_id), std::move (_packet_name),
+                                 std::move (_message), std::move (_metadata));
 }
 
 actor_request_call_t::actor_request_call_t (actor_client_t &client,
@@ -330,7 +321,7 @@ request_task_t<message_t> actor_request_call_t::async_message ()
 
 task_t<message_t> actor_request_call_t::yield_message ()
 {
-    return start (true);
+    return detail::release_turn_on_suspend<message_t> (start (true));
 }
 
 request_task_t<message_t> actor_request_call_t::start (bool release_turn)
@@ -350,14 +341,16 @@ request_task_t<message_t> actor_request_call_t::start (bool release_turn)
     if (release_turn && !detail::current_serial_turn_allows_yield ()) {
         return request_task_t<message_t> (detail::unsupported_yield_task<message_t> ().result ());
     }
-    auto turn_plan = detail::prepare_serial_turn_await (release_turn);
+    // A Yield releases the turn where the handler suspends (task.hpp); until
+    // then the reply decoding resumes in the held turn like an async call.
+    auto held = detail::held_serial_turn_await_scheduler ();
     detail::actor_request_turn_intent_scope_t request_intent (release_turn);
     auto task = _client->request_erased (std::move (_actor_id), std::move (_packet_name),
                                          std::move (_request), _timeout, _metadata);
-    if (!turn_plan) {
+    if (!held) {
         return task;
     }
-    return detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+    return detail::reschedule_task (std::move (task), std::move (held));
 }
 
 serializer_registry_t &actor_request_call_t::serializers () const

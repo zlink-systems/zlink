@@ -166,27 +166,25 @@ offload_route_reply (const std::shared_ptr<runtime::offload_executor_t> &executo
     return output;
 }
 
+constexpr std::chrono::milliseconds route_client_worker_idle_timeout{100};
+
 } // namespace
 
 route_client_state_t::route_client_state_t (std::shared_ptr<channel_runtime_state_t> runtime,
                                             serializer_registry_t &serializers) :
     runtime (std::move (runtime)), serializers (&serializers)
 {
-    const auto hardware_workers =
-      static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
-    executor = std::make_shared<zlink::framework::runtime::offload_executor_t> (
-      0, hardware_workers, std::chrono::milliseconds (100), "zlink-route-cli");
     this->runtime->lane
-      .run_checked ([&] { this->runtime->route_client_executors.push_back (executor); })
+      .run_checked ([&] {
+          if (this->runtime->route_client_executor)
+              return;
+          const auto hardware_workers =
+            static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
+          this->runtime->route_client_executor =
+            std::make_shared<zlink::framework::runtime::offload_executor_t> (
+              0, hardware_workers, route_client_worker_idle_timeout, "zlink-route-cli");
+      })
       .get ();
-}
-
-route_client_state_t::~route_client_state_t ()
-{
-    if (executor) {
-        executor->drain ();
-        executor.reset ();
-    }
 }
 
 channel_capability_snapshot_t &select_capability (channel_builder_state_t &state,
@@ -374,25 +372,12 @@ std::vector<channel_snapshot_t> channel_runtime_t::channel_snapshots () const
 namespace
 {
 
-void drain_route_client_executors (channel_runtime_state_t &state) noexcept
+void drain_route_client_executor (channel_runtime_state_t &state) noexcept
 {
-    std::vector<std::shared_ptr<runtime::offload_executor_t>> route_client_executors;
-    state.lane
-      .run_checked ([&] {
-          for (auto it = state.route_client_executors.begin ();
-               it != state.route_client_executors.end ();) {
-              if (auto executor = it->lock ()) {
-                  route_client_executors.push_back (std::move (executor));
-                  ++it;
-              } else {
-                  it = state.route_client_executors.erase (it);
-              }
-          }
-      })
-      .get ();
-    for (auto &executor : route_client_executors) {
+    const auto executor =
+      state.lane.run_checked ([&] { return state.route_client_executor; }).get ();
+    if (executor)
         executor->drain ();
-    }
 }
 
 void drain_zlink_builder_state_runtime (zlink_builder_state_t &state) noexcept
@@ -402,12 +387,12 @@ void drain_zlink_builder_state_runtime (zlink_builder_state_t &state) noexcept
              .run_checked ([&] {
                  return !state.runtime->native_clients.empty ()
                         || !state.runtime->native_publishers.empty ()
-                        || !state.runtime->route_client_executors.empty ();
+                        || state.runtime->route_client_executor != nullptr;
              })
              .get ()) {
         auto failures = runtime_failures_for (state.runtime->monitoring);
         if (!failures->capture ([&] {
-                drain_route_client_executors (*state.runtime);
+                drain_route_client_executor (*state.runtime);
                 close_native_channel_transports (state.runtime);
             }))
             return;
@@ -669,7 +654,7 @@ void channel_runtime_t::shutdown ()
         route_channel->stop ();
     }
     close_native_channel_transports (_state);
-    drain_route_client_executors (*_state);
+    drain_route_client_executor (*_state);
     drain ();
 }
 
@@ -1397,12 +1382,7 @@ task_t<void> route_send_call_t::async ()
                                      "route send call has already been submitted");
     }
     if (_async_submit) {
-        auto pending = _async_submit (_packet_name, _metadata);
-        if (auto turn_plan = detail::prepare_serial_turn_await (false)) {
-            pending =
-              detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
-        }
-        const auto submitted = co_await pending;
+        const auto submitted = co_await _async_submit (_packet_name, _metadata);
         if (!submitted)
             throw submitted.error ()
               ? *submitted.error ()
@@ -1840,12 +1820,15 @@ request_task_t<zlink::message_t> route_client_t::submit_request_reply_message_er
                 return (*mesh)->request (target_node_rid, std::move (parts), effective_timeout);
             return request_task_t<result_t<runtime::messaging::message_parts_t>> (
               detail::offload_route_reply (
-                state->executor,
-                [runtime = *route, target_node_rid, parts = std::move (parts), effective_timeout,
-                 ambient_context, admitted] () mutable {
+                state->runtime->route_client_executor,
+                [runtime_state = state->runtime, router_channel_id, target_node_rid,
+                 parts = std::move (parts), effective_timeout, ambient_context,
+                 admitted] () mutable {
                     const auto worker_context = detail::enter_ambient_context (ambient_context);
-                    return runtime->request_reply_parts (target_node_rid, std::move (parts),
-                                                         effective_timeout, admitted);
+                    detail::channel_runtime_manager_t manager (runtime_state);
+                    auto &runtime = manager.get_route_channel (router_channel_id);
+                    return runtime.request_reply_parts (target_node_rid, std::move (parts),
+                                                        effective_timeout, admitted);
                 }),
               admitted);
         }();
@@ -2117,7 +2100,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_request_reply_messa
                                           std::move (parts), effective_timeout);
             return request_task_t<result_t<runtime::messaging::message_parts_t>> (
               detail::offload_route_reply (
-                state->executor,
+                state->runtime->route_client_executor,
                 [runtime_state = state->runtime, router_channel_id, target_node_rid,
                  spot_id = std::string (spot_id), packet_name, parts = std::move (parts),
                  effective_timeout, ambient_context, admitted] () mutable {

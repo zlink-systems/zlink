@@ -1,4 +1,5 @@
 using System.Reflection;
+using Zlink.Framework.Runtime.Handlers;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -32,7 +33,7 @@ internal static class ZLinkScannedSpotHandlerScanner
         var handlers = new List<ZLinkScannedSpotHandler>();
         foreach (var type in assembly.GetTypes())
         {
-            if (type.IsAbstract || type.IsInterface)
+            if (!ZLinkHandlerScanner.IsScannableHandlerType(type))
                 continue;
 
             handlers.AddRange(ScanType(type));

@@ -112,8 +112,22 @@ internal static class ZLinkOneWaySubmitOutcome
 
 internal static class ZLinkBindingSubmissionOutcome
 {
-    internal static bool RequiresAdmission(SubmitResult result) =>
-        result == SubmitResult.Backpressured;
+    internal static bool RequiresAdmission(
+        SubmitResult result,
+        ZLinkRequestAdmission? requestAdmission = null
+    )
+    {
+        switch (result)
+        {
+            case SubmitResult.Ok:
+                requestAdmission?.Complete();
+                return false;
+            case SubmitResult.Backpressured:
+                return true;
+            default:
+                return false;
+        }
+    }
 }
 
 internal static class ZLinkMeshCallSupport

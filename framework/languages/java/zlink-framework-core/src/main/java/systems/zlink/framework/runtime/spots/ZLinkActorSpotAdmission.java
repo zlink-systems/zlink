@@ -5,7 +5,6 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
@@ -169,11 +168,6 @@ final class ZLinkActorSpotAdmission {
                                                                                     .expectedOwnerLeaseGeneration(),
                                                                             targetSpot,
                                                                             joinedCallback,
-                                                                            response.reply() == null
-                                                                                    ? ZLinkMessage
-                                                                                            .empty()
-                                                                                    : response
-                                                                                            .reply(),
                                                                             requestContentType,
                                                                             rawRequest,
                                                                             Duration.ofMillis(

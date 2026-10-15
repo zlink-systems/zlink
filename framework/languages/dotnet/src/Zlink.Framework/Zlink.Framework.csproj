@@ -2,10 +2,14 @@
     <PropertyGroup>
         <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
         <AssemblyName>Zlink.Framework</AssemblyName>
+        <DefineConstants>$(DefineConstants);ZLINK_FRAMEWORK</DefineConstants>
         <RootNamespace>Zlink.Framework</RootNamespace>
         <Description>ZLink framework core abstractions and runtime for .NET.</Description>
         <IsPackable>true</IsPackable>
         <NoWarn>$(NoWarn);ZLINK1100</NoWarn>
+        <!-- Use value-type async state machines in both Debug and Release so
+             synchronous completions do not allocate a state-machine object. -->
+        <Optimize>true</Optimize>
     </PropertyGroup>
 
     <ItemGroup>
@@ -50,4 +54,8 @@
             </_ProjectReferencesWithVersions>
         </ItemGroup>
     </Target>
+    <ItemGroup>
+        <Compile Include="../Shared/ZLinkJsonSerializerOptions.cs" Link="Internal/ZLinkJsonSerializerOptions.cs"/>
+        <Compile Include="../Shared/ZLinkFrameworkJsonDocument.cs" Link="Internal/ZLinkFrameworkJsonDocument.cs"/>
+    </ItemGroup>
 </Project>

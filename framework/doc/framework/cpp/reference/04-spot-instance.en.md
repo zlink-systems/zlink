@@ -284,8 +284,7 @@ functions are registered directly instead of building a separate handler class.
 
 **Completion result.** Registers synchronously with no return value. Omitting the packet name
 uses the `packet_name` of the message type the handler processes, and the C++ type name if there
-is none. A duplicate handler key under the same owner surfaces as a configuration error in
-`app.run(...)`'s startup validation.
+is none. For a duplicate handler key within the same owner, the check timing and failure outcome follow [Common API "23"](../../common/spec/server/00-foundation/06-framework-api.en.md#23-startup-validation).
 
 **When to use.** Registers every handler this Spot will process, each time `configure()` is
 called. See the registration entries in the topology-discovery category for Node/Channel

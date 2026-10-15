@@ -1313,7 +1313,14 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         IReadOnlyList<Message> parts,
         SendFlags flags,
         CancellationToken cancellationToken
-    ) => _node.SendToActorDirectAsync(ToNativeActor(actor), parts, flags, cancellationToken);
+    ) =>
+        _node.SendToActorDirectAsync(
+            ToNativeActor(actor),
+            parts,
+            flags,
+            cancellationToken,
+            ownsParts: true
+        );
 
     public async ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
         ZLinkBackendActorRef actor,

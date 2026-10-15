@@ -279,22 +279,30 @@ public sealed class SubmitAdmissionRuntimeTests
         );
 
         using var cancellation = new CancellationTokenSource();
-        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        var completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
-            operation,
-            TimeSpan.FromSeconds(5),
-            cancellation.Token
-        );
-        var frameworkAllocated =
-            GC.GetAllocatedBytesForCurrentThread() - allocatedBefore - operation.AllocatedBytes;
-
+        var frameworkAllocated = 0L;
+        Task<IReadOnlyList<Message>>? completion = null;
+        var requestResult = ZLinkRequestAdmission.Run<IReadOnlyList<Message>>(admission =>
+        {
+            var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                operation,
+                TimeSpan.FromSeconds(5),
+                cancellation.Token,
+                requestAdmission: admission
+            );
+            frameworkAllocated =
+                GC.GetAllocatedBytesForCurrentThread() - allocatedBefore - operation.AllocatedBytes;
+            return new ValueTask<IReadOnlyList<Message>>(completion!);
+        });
         Assert.Equal(1, operation.SubmissionCount);
         Assert.Equal(SubmitResult.Ok, operation.LastSubmission.Result);
-        // Measure only the Framework wrapper: the public binding's allocations
-        // are counted separately inside Async on the same thread.
+        // Measure only the Framework submission adapter. The public binding's
+        // allocations are counted separately inside Async on the same thread.
         Assert.Equal(0, frameworkAllocated);
         Assert.Equal(cancellation.Token, operation.SubmissionToken);
         Assert.Same(operation.LastSubmission.Reply, completion);
+        Assert.True(requestResult.Admitted.IsCompletedSuccessfully);
+        Assert.False(requestResult.Reply.IsCompleted);
         using var received = Received.Create();
         Assert.True(pair.Server.Recv(received));
         Assert.Equal("request-once", received.SinglePartOrThrow().GetString());
@@ -304,13 +312,13 @@ public sealed class SubmitAdmissionRuntimeTests
                 () =>
                 {
                     pair.DrainCompletions();
-                    return completion.IsCompleted;
+                    return requestResult.Reply.IsCompleted;
                 },
                 TimeSpan.FromSeconds(5)
             )
         );
 
-        var terminal = await completion;
+        var terminal = await requestResult;
         try
         {
             Assert.Equal("reply-once", Assert.Single(terminal).GetString());
@@ -324,6 +332,29 @@ public sealed class SubmitAdmissionRuntimeTests
 
         using var extra = Received.Create();
         Assert.False(pair.Server.Recv(extra, RecvFlags.DontWait));
+    }
+
+    [Fact]
+    public async Task ImmediateRequestSubmissionError_FailsPublicAdmissionAndReplyTogether()
+    {
+        var expected = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
+        var requiresAdmission = true;
+        var request = ZLinkRequestAdmission.Run<int>(admission =>
+        {
+            requiresAdmission = ZLinkBindingSubmissionOutcome.RequiresAdmission(
+                SubmitResult.NotConnected,
+                admission
+            );
+            return new ValueTask<int>(Task.FromException<int>(expected));
+        });
+
+        Assert.False(requiresAdmission);
+        var replyFailure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => request.AsTask());
+        var admissionFailure = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
+            request.Admitted.AsTask()
+        );
+        Assert.Same(expected, replyFailure);
+        Assert.Same(replyFailure, admissionFailure);
     }
 
     [Fact]
@@ -776,6 +807,80 @@ public sealed class SubmitAdmissionRuntimeTests
             Assert.True(pair.Server.Recv(filler));
             pair.DrainCompletions();
         }
+    }
+
+    // Spec 04-messaging/08 section 3 E4: only Backpressured consumes the
+    // binding's admitted task. The public default submission has Result=Ok and
+    // no admitted task, so consuming it would fault inside the Framework.
+    [Fact]
+    public async Task OkSubmission_CompletesAdmissionWithoutConsumingBindingAdmitted()
+    {
+        var unobserved = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            foreach (var error in args.Exception.Flatten().InnerExceptions)
+            {
+                if (
+                    error is NullReferenceException
+                    && error.StackTrace?.Contains(nameof(ZLinkRequestSubmissionOutcome)) == true
+                )
+                    unobserved.Add(error);
+            }
+        }
+
+        var admitted = false;
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            admitted = await SubmitDefaultOkSubmissionAdmitsBeforeReply();
+            for (var round = 0; round < 3; round++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+            await Task.Yield();
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+        Assert.Empty(unobserved);
+        Assert.True(admitted);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
+    private static async Task<bool> SubmitDefaultOkSubmissionAdmitsBeforeReply()
+    {
+        var pending = new TaskCompletionSource<IReadOnlyList<Message>>();
+        Task<IReadOnlyList<Message>>? reply = null;
+        var request = ZLinkRequestAdmission.Run<IReadOnlyList<Message>>(admission =>
+        {
+            reply = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                new FixedSubmissionOperation(default),
+                TimeSpan.FromSeconds(5),
+                requestAdmission: admission
+            );
+            return new ValueTask<IReadOnlyList<Message>>(pending.Task);
+        });
+        Assert.Null(reply);
+        var admitted = request.Admitted.IsCompletedSuccessfully;
+        pending.SetResult([]);
+        await request;
+        return admitted;
+    }
+
+    private sealed class FixedSubmissionOperation(RequestSubmission submission)
+        : RequestSubmitOperation
+    {
+        public RequestSubmitOperation Message(Message message) => this;
+
+        public RequestSubmitOperation Timeout(TimeSpan timeout) => this;
+
+        public IReadOnlyList<Message> Submit() => throw new NotSupportedException();
+
+        public RequestSubmission Async(CancellationToken cancellationToken = default) => submission;
     }
 
     private static Zlink.Framework.Contracts.Channels.ZLinkRequest<

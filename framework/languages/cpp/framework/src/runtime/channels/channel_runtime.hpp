@@ -130,11 +130,9 @@ class route_client_state_t
   public:
     route_client_state_t (std::shared_ptr<channel_runtime_state_t> runtime,
                           serializer_registry_t &serializers);
-    ~route_client_state_t ();
 
     std::shared_ptr<channel_runtime_state_t> runtime;
     serializer_registry_t *serializers;
-    std::shared_ptr<runtime::offload_executor_t> executor;
 };
 
 class channel_runtime_state_t
@@ -224,7 +222,9 @@ class channel_runtime_state_t
     std::map<std::string, spot_mesh_request_t> spot_mesh_requesters;
     instance_spot_send_t instance_spot_sender;
     instance_spot_request_t instance_spot_requester;
-    std::vector<std::weak_ptr<runtime::offload_executor_t>> route_client_executors;
+    /* Route client request work. The runtime owns it and its teardown drains it: the last
+     * route client reference can be released on one of its workers. */
+    std::shared_ptr<runtime::offload_executor_t> route_client_executor;
     std::map<std::string, route_handler_registry_t> route_handlers;
     std::map<std::string, int> server_peer_weight_overrides;
     std::map<std::string, std::uint64_t> weighted_discovery_cursors;

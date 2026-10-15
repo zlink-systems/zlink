@@ -137,6 +137,7 @@ import java.util.stream.Collectors;
 public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         implements ZLinkSpotManager, AutoCloseable {
     private static final int ACTOR_RECV_INFO_NO_BIND = 1;
+    private static final long ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES = 512L;
 
     private static final String REMOTE_BOUND_SESSION_BIND_PACKET_NAME =
             "zlink.framework.actor.bound_session.bind";
@@ -5081,13 +5082,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     <T> CompletionStage<T> admitNewApplicationJob(
             SpotDispatchLine destination, Supplier<CompletionStage<T>> operation) {
-        return admitNewApplicationJob(destination, operation, null);
-    }
-
-    <T> CompletionStage<T> admitNewApplicationJob(
-            SpotDispatchLine destination,
-            Supplier<CompletionStage<T>> operation,
-            CompletableFuture<Void> requestAdmission) {
         Objects.requireNonNull(operation, "operation");
         try {
             ensureOwnerAdmissionOpen();
@@ -5102,11 +5096,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     task.run();
                                     return CompletableFuture.completedFuture(null);
                                 }),
-                permit -> {
-                    var published = publishApplicationJob(permit, operation);
-                    if (requestAdmission != null) requestAdmission.complete(null);
-                    return published;
-                });
+                permit -> publishApplicationJob(permit, operation));
     }
 
     private <T> CompletionStage<T> publishApplicationJob(
@@ -6316,10 +6306,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkActorDispatchTarget target,
             String actorId,
             long payloadBytes,
-            Supplier<CompletionStage<Void>> operation) {
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
         return actorSessions
                 .runtime()
-                .submitActorDispatch(target, actorId, payloadBytes, operation);
+                .submitActorDispatch(target, actorId, payloadBytes, operation, admission);
     }
 
     @Override
@@ -6346,7 +6337,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             Supplier<byte[]> acceptedJournalRecord,
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         return actorSessions
                 .runtime()
                 .submitActorDispatchLazyRecord(
@@ -6355,7 +6347,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         acceptedJournalRecord,
                         acceptedJournalRecordSizeHint,
                         operation,
-                        relocationRelease);
+                        relocationRelease,
+                        admission);
     }
 
     private DefaultSpotOutbound createSpotOutbound(
@@ -6488,7 +6481,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
             ZLinkBackendActorReceived bodyPart,
-            boolean pendingHeader) {
+            boolean pendingHeader,
+            CompletableFuture<Void> requestAdmission) {
         SpotActorPacketHandlerRegistration handler =
                 resolveActorPacketHandler(
                         packetHeader.packetName(),
@@ -6591,7 +6585,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         packetHeader,
                                                         handler,
                                                         headerCopy,
-                                                        payloadCopy))
+                                                        payloadCopy,
+                                                        requestAdmission))
                         : enqueueLocalActorPacket(
                                 dispatchLine,
                                 spotSurface,
@@ -6599,7 +6594,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 packetHeader,
                                 handler,
                                 headerCopy,
-                                payloadCopy);
+                                payloadCopy,
+                                requestAdmission);
         queued.whenComplete(
                 (ignored, error) -> {
                     release.run();
@@ -6653,7 +6649,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ActorPacketFrames.Header packetHeader,
             SpotActorPacketHandlerRegistration handler,
             ZLinkBackendActorReceived headerCopy,
-            Message payloadCopy) {
+            Message payloadCopy,
+            CompletableFuture<Void> requestAdmission) {
         CompletionStage<Void> queued;
         ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply = null;
         try {
@@ -6716,13 +6713,18 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             queued =
                     relocationReply == null
                             ? dispatchLine.enqueueActorDispatch(
-                                    actor.context().actorId(), payloadCopy.size(), operation)
+                                    actor.context().actorId(),
+                                    payloadCopy.size(),
+                                    operation,
+                                    requestAdmission)
                             : dispatchLine.enqueueActorDispatch(
                                     actor.context().actorId(),
                                     relocationReply::record,
-                                    headerCopy.message().size() + 512L,
+                                    headerCopy.message().size()
+                                            + ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES,
                                     operation,
-                                    relocationReply::releaseForRelocation);
+                                    relocationReply::releaseForRelocation,
+                                    requestAdmission);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
