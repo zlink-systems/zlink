@@ -911,8 +911,10 @@ export class ZLinkSpotNodeRuntimeManager {
   ): void | Promise<void> {
     const dispatcher = this.options.meshRecordDispatcher;
     if (dispatcher === undefined) {
-      throw new ZLinkConfigurationException(
-        `MeshNode '${meshName}' received a record before its framework dispatcher was registered.`
+      return Promise.reject(
+        new ZLinkConfigurationException(
+          `MeshNode '${meshName}' received a record before its framework dispatcher was registered.`
+        )
       );
     }
     return dispatcher(meshName, owner, record);

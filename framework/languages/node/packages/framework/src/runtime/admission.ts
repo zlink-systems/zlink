@@ -81,13 +81,19 @@ export class ZLinkRuntimeAdmissionGate {
    * continuation on its result.
    */
   run<T>(meshName: string, operation: string, work: () => T | Promise<T>): T | Promise<T> {
-    const state = this.enter(meshName, operation);
+    let state: ZLinkMeshAdmissionState;
     let result: T | Promise<T>;
+    try {
+      state = this.enter(meshName, operation);
+    } catch (error) {
+      // A closed admission and a failing dispatch stay asynchronous rejections.
+      return Promise.reject(error);
+    }
     try {
       result = work();
     } catch (error) {
       exitAdmission(state);
-      throw error;
+      return Promise.reject(error);
     }
     if (!isPromiseLike(result)) {
       exitAdmission(state);
