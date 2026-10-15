@@ -3363,14 +3363,11 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
     };
     const auto admitted = pump_until (
       [&] {
-          return source.topology ().peer (target_descriptor.node_routing_id).has_value ()
-                 && target.transport ()
-                      .topology ()
-                      .peer (source_descriptor.node_routing_id)
-                      .has_value ();
+          return source.peer_route (target_descriptor.node_routing_id).second
+                 && target.transport ().peer_route (source_descriptor.node_routing_id).second;
       },
       5s);
-    test.require (admitted, "the raw relocation source must be admitted by the target");
+    test.require (admitted, "both relocation peers must be ready before PREPARE and STATE_CHUNK");
 
     const protocol::relocation_coordinator_fence_t coordinator{
       "source-owner", 1, source_descriptor.node_routing_id, source_descriptor.lifecycle_generation,
@@ -3594,12 +3591,14 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     };
     const auto admitted = pump_until (
       [&] {
-          return source.topology ().peer (target_descriptor.node_routing_id).has_value ()
-                 && target.has_admitted_peer (zlink::routing_id_t::from ("settlement-source"),
-                                              source_descriptor.lifecycle_generation);
+          return source.peer_route (target_descriptor.node_routing_id).second
+                 && target.native_node ()
+                      .transport ()
+                      .peer_route (source_descriptor.node_routing_id)
+                      .second;
       },
       5s);
-    test.require (admitted, "the raw relocation source must be admitted by the target");
+    test.require (admitted, "both relocation peers must be ready before PREPARE and STATE_CHUNK");
 
     const protocol::relocation_coordinator_fence_t coordinator{
       "source-owner", 1, source_descriptor.node_routing_id, source_descriptor.lifecycle_generation,
