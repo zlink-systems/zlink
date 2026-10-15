@@ -1315,12 +1315,14 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
                     source.Runtime.EnsureKnownRouteMeshPeer(
                         SpotCloseHost.MeshName,
                         host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RoutingId,
-                        "Instance Spot test peer"
+                        "Instance Spot",
+                        "test peer"
                     );
                     host.Runtime.EnsureKnownRouteMeshPeer(
                         SpotCloseHost.MeshName,
                         source.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RoutingId,
-                        "Instance Spot test peer"
+                        "Instance Spot",
+                        "test peer"
                     );
                     break;
                 }

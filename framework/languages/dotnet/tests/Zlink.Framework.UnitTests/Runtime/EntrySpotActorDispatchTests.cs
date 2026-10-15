@@ -358,7 +358,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.EnsureKnownRouteMeshPeer(
                     "entry",
                     RoutingId.From("remote-node"),
-                    "SPOT 'remote'"
+                    "SPOT",
+                    "remote"
                 )
             );
 
@@ -389,7 +390,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.EnsureKnownRouteMeshPeer(
                     "entry",
                     RoutingId.From("remote-node"),
-                    "SPOT 'remote'"
+                    "SPOT",
+                    "remote"
                 )
             );
 
@@ -431,7 +433,7 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         try
         {
-            runtime.EnsureKnownRouteMeshPeer("entry", targetRid, "packet 'GetNodeStatus'");
+            runtime.EnsureKnownRouteMeshPeer("entry", targetRid, "packet", "GetNodeStatus");
             Assert.Equal(0, node.MeshPeerSnapshotReads);
         }
         finally

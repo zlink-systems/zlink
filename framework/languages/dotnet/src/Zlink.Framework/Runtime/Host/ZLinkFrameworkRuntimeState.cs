@@ -105,6 +105,8 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         ZLinkChannelRuntimeBundle
     > ClientServerServerBundles { get; } = [];
 
+    // Written only by the state factory before the runtime publishes Running;
+    // read-only afterwards, so message paths read it without a lane turn.
     public Dictionary<ZLinkSpotNodeName, ZLinkSpotNodeRuntime> SpotNodes { get; } = [];
 
     // Channel routing is fixed after startup. Keeping the resolved runtime in
