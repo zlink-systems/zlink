@@ -39,15 +39,18 @@ class Table(
     ): ZLinkSpotActorJoinResult {
         val join = request.decode<JoinTableRequest>()
         require(join.playerId == actorId && join.tableId == context.spotId())
-        if (state.seats.none { it.playerId == actorId } && state.seats.size == Rules.SEATS)
-            return ZLinkSpotActorJoinResult.reject()
-        return ZLinkSpotActorJoinResult.accept()
+        return if (admit(actorId)) ZLinkSpotActorJoinResult.accept()
+        else ZLinkSpotActorJoinResult.reject()
     }
 
-    override suspend fun onJoinedActorSuspending(actor: Player) {
-        val actorId = actor.context().actorId()
-        if (state.seats.none { it.playerId == actorId }) state.seats.add(Seat(actorId))
-        broadcastViews()
+    override suspend fun onJoinedActorSuspending(actor: Player) = broadcastViews()
+
+    // Seats the player at admission; a seated player is admitted again without a new seat.
+    private fun admit(actorId: String): Boolean {
+        if (state.seats.any { it.playerId == actorId }) return true
+        if (state.seats.size == Rules.SEATS) return false
+        state.seats.add(Seat(actorId))
+        return true
     }
 
     override suspend fun onLeaveActorSuspending(actor: Player) {}
