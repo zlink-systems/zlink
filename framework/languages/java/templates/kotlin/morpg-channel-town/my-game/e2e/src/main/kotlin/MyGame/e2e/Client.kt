@@ -40,14 +40,14 @@ class Client(endpoint: String, val playerId: String) {
     @Volatile var disconnects = 0
 
     init {
-        listOf(TownView::class.java, DungeonView::class.java, ActionRejected::class.java)
-            .forEach { type ->
-                registrations +=
-                    connector.on(type) { message ->
-                        queue.add(message.payload())
-                        CompletableFuture.completedFuture(null)
-                    }
-            }
+        listOf(TownView::class.java, DungeonView::class.java, ActionRejected::class.java).forEach {
+            type ->
+            registrations +=
+                connector.on(type) { message ->
+                    queue.add(message.payload())
+                    CompletableFuture.completedFuture(null)
+                }
+        }
         registrations +=
             connector.onDisconnected { event ->
                 disconnects++

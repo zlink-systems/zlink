@@ -129,7 +129,9 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
             val spots = app.getBean(ZLinkSpotManager::class.java)
             for (id in config.townIds) {
                 val result = spots.kotlin().getOrCreate(id, Names.TOWN).inMesh(Names.MESH).await()
-                check(result.state() != ZLinkSpotCreateState.REJECTED) { "Town bootstrap failed: $result" }
+                check(result.state() != ZLinkSpotCreateState.REJECTED) {
+                    "Town bootstrap failed: $result"
+                }
             }
         }
         println(

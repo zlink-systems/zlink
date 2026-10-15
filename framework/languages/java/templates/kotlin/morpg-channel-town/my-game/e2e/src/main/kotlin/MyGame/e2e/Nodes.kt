@@ -137,10 +137,7 @@ class Nodes(private val root: Path) : AutoCloseable {
                     root.resolve(node["config"].asText()).toFile(),
                     NodeConfig::class.java,
                 )
-            val config = source.copy(
-                redisEndpoint = redis,
-                keyPrefix = "my-game:$runId:",
-            )
+            val config = source.copy(redisEndpoint = redis, keyPrefix = "my-game:$runId:")
             val path = logs.resolve("$id.json")
             Json.mapper.writeValue(path.toFile(), config)
             configs[id] = path

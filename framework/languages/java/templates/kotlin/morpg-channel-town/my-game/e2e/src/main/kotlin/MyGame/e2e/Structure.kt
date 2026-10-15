@@ -33,7 +33,11 @@ fun checkStructure(root: Path) {
         }
         return resolved
     }
-    check(structure["version"]?.isIntegralNumber == true && structure["version"].canConvertToInt() && structure["version"].asInt() == 1)
+    check(
+        structure["version"]?.isIntegralNumber == true &&
+            structure["version"].canConvertToInt() &&
+            structure["version"].asInt() == 1
+    )
     for (key in listOf("id", "name", "language")) text(structure, key)
     check(text(structure, "language") == Names.LANGUAGE) {
         "Structure language differs from server"
@@ -88,13 +92,20 @@ fun checkStructure(root: Path) {
         val role = roles[owner(spot)]
         when (text(spot, "kind")) {
             "entry" ->
-                check(role == "town" &&
-                    spot["type"]?.isNull == true && !spot.has("logicalId") && !spot.has("dynamic")
+                check(
+                    role == "town" &&
+                        spot["type"]?.isNull == true &&
+                        !spot.has("logicalId") &&
+                        !spot.has("dynamic")
                 )
             "user" -> {
                 val type = text(spot, "type")
-                check((role == "town" && type == Names.TOWN) || (role == "instance" && type == Names.DUNGEON))
-                if (type == Names.DUNGEON) check(spot["dynamic"]?.isBoolean == true && spot["dynamic"].asBoolean())
+                check(
+                    (role == "town" && type == Names.TOWN) ||
+                        (role == "instance" && type == Names.DUNGEON)
+                )
+                if (type == Names.DUNGEON)
+                    check(spot["dynamic"]?.isBoolean == true && spot["dynamic"].asBoolean())
                 if (spot["dynamic"]?.asBoolean() == true) check(!spot.has("logicalId"))
                 else logicalIds += text(spot, "logicalId")
                 if (spot.has("dynamic")) check(spot["dynamic"].isBoolean)
@@ -108,12 +119,20 @@ fun checkStructure(root: Path) {
         when (roles[id]) {
             "town" -> {
                 check(config.townCapacity > 0 && config.townIds.isNotEmpty())
-                check(config.townIds.all { townId -> (1..Names.CHANNEL_COUNT).any { Names.townId(it) == townId } })
-                val declared = declaredTowns[id].orEmpty().map {
-                    check(it["dynamic"]?.asBoolean() != true)
-                    text(it, "logicalId")
-                }
-                check(config.townIds.toSet() == declared.toSet() && config.townIds.distinct() == config.townIds) {
+                check(
+                    config.townIds.all { townId ->
+                        (1..Names.CHANNEL_COUNT).any { Names.townId(it) == townId }
+                    }
+                )
+                val declared =
+                    declaredTowns[id].orEmpty().map {
+                        check(it["dynamic"]?.asBoolean() != true)
+                        text(it, "logicalId")
+                    }
+                check(
+                    config.townIds.toSet() == declared.toSet() &&
+                        config.townIds.distinct() == config.townIds
+                ) {
                     "Fixed Town declarations differ from bootstrap: $id"
                 }
                 check(spots.any { owner(it) == id && it["kind"].asText() == "entry" })

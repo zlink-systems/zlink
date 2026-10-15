@@ -4,34 +4,60 @@ import MyGame.*
 import java.util.UUID
 
 private fun sameDungeon(before: DungeonView, after: DungeonView) {
-    check(before.copy(nodeId = after.nodeId) == after) { "Dungeon state changed: $before -> $after" }
+    check(before.copy(nodeId = after.nodeId) == after) {
+        "Dungeon state changed: $before -> $after"
+    }
 }
+
 private suspend fun enter(a: Client, b: Client, partyId: String): DungeonView {
     a.send(CreatePartyRequest(partyId))
-    a.next<TownView> { it.parties.any { party -> party.partyId == partyId && party.members == listOf(a.playerId) } }
+    a.next<TownView> {
+        it.parties.any { party -> party.partyId == partyId && party.members == listOf(a.playerId) }
+    }
     b.send(JoinPartyRequest(partyId))
-    val party: (TownView) -> Boolean = { it.parties.any { party -> party.partyId == partyId && party.members == listOf(a.playerId, b.playerId) } }
+    val party: (TownView) -> Boolean = {
+        it.parties.any { party ->
+            party.partyId == partyId && party.members == listOf(a.playerId, b.playerId)
+        }
+    }
     check(a.next(party) == b.next<TownView>(party)) { "Party views differ" }
     a.send(EnterDungeonRequest())
     val dungeon = a.next<DungeonView> { it.partyId == partyId }
     check(dungeon == b.next<DungeonView> { it.partyId == partyId }) { "Dungeon views differ" }
-    check(dungeon.dungeonId == Names.dungeonId(partyId) && dungeon.stage == 0 && dungeon.members == listOf(a.playerId, b.playerId))
+    check(
+        dungeon.dungeonId == Names.dungeonId(partyId) &&
+            dungeon.stage == 0 &&
+            dungeon.members == listOf(a.playerId, b.playerId)
+    )
     // Current-Spot replies confirm both deferred joins completed before Advance.
     sameDungeon(dungeon, a.view())
     sameDungeon(dungeon, b.view())
     return dungeon
 }
+
 private suspend fun newDungeon(endpoint: String, replacement: String) {
     val suffix = UUID.randomUUID().toString()
     val a = Client(endpoint, "new-a-$suffix")
     val b = Client(endpoint, "new-b-$suffix")
     try {
-        a.connect(); b.connect()
-        a.join(); a.next<TownView> { it.townId == Names.townId(2) }
-        b.join(); b.next<TownView> { it.players.containsAll(listOf(a.playerId, b.playerId)) }
-        check(enter(a, b, "new-party-$suffix").nodeId == replacement) { "Replacement did not accept new work" }
-    } finally { try { b.close() } finally { a.close() } }
+        a.connect()
+        b.connect()
+        a.join()
+        a.next<TownView> { it.townId == Names.townId(2) }
+        b.join()
+        b.next<TownView> { it.players.containsAll(listOf(a.playerId, b.playerId)) }
+        check(enter(a, b, "new-party-$suffix").nodeId == replacement) {
+            "Replacement did not accept new work"
+        }
+    } finally {
+        try {
+            b.close()
+        } finally {
+            a.close()
+        }
+    }
 }
+
 suspend fun scenario(id: String, nodes: Nodes) {
     val suffix = UUID.randomUUID().toString()
     val a = Client(nodes.endpoint, "p1-$suffix")
@@ -50,14 +76,18 @@ suspend fun scenario(id: String, nodes: Nodes) {
         } else {
             requireNotNull(b)
             b.connect()
-            a.join(); a.next<TownView> { it.townId == Names.townId(2) }
-            b.join(); b.next<TownView> { it.players.containsAll(listOf(a.playerId, b.playerId)) }
+            a.join()
+            a.next<TownView> { it.townId == Names.townId(2) }
+            b.join()
+            b.next<TownView> { it.players.containsAll(listOf(a.playerId, b.playerId)) }
             val session1 = a.sessionInfo()
             val session2 = b.sessionInfo()
             val dungeon = enter(a, b, "party-$suffix")
             a.send(AdvanceRequest())
             val before = a.next<DungeonView> { it.stage == 1 }
-            check(before == b.next<DungeonView> { it.stage == 1 } && before.nodeId == dungeon.nodeId)
+            check(
+                before == b.next<DungeonView> { it.stage == 1 } && before.nodeId == dungeon.nodeId
+            )
             check(a.sessionInfo() == session1 && b.sessionInfo() == session2)
             when (id) {
                 "dungeon" -> Unit
@@ -66,12 +96,19 @@ suspend fun scenario(id: String, nodes: Nodes) {
                     b.close()
                     val again = Client(nodes.endpoint, b.playerId)
                     try {
-                        again.connect(); again.join()
+                        again.connect()
+                        again.join()
                         val restored = again.next<DungeonView>()
                         check(restored == before) { "Reconnect changed dungeon state" }
                         val identity = again.sessionInfo()
-                        check(identity.sessionId != session2.sessionId && identity.actorId == session2.actorId && identity.objectGeneration == session2.objectGeneration)
-                    } finally { again.close() }
+                        check(
+                            identity.sessionId != session2.sessionId &&
+                                identity.actorId == session2.actorId &&
+                                identity.objectGeneration == session2.objectGeneration
+                        )
+                    } finally {
+                        again.close()
+                    }
                 }
                 "update" -> {
                     nodes.drain(before.nodeId)
@@ -80,7 +117,12 @@ suspend fun scenario(id: String, nodes: Nodes) {
                     check(relocated == b.view { it.nodeId != before.nodeId })
                     check(relocated.nodeId in listOf("instanceA", "instanceB"))
                     check(a.sessionInfo() == session1 && b.sessionInfo() == session2)
-                    check(a.disconnects == 0 && b.disconnects == 0 && a.connector.isConnected && b.connector.isConnected)
+                    check(
+                        a.disconnects == 0 &&
+                            b.disconnects == 0 &&
+                            a.connector.isConnected &&
+                            b.connector.isConnected
+                    )
                     nodes.replace(before.nodeId)
                     newDungeon(nodes.endpoint, before.nodeId)
                     check(a.sessionInfo() == session1 && b.sessionInfo() == session2)
@@ -91,6 +133,10 @@ suspend fun scenario(id: String, nodes: Nodes) {
         }
         check(a.disconnects == 0 && a.connector.isConnected)
     } finally {
-        try { if (!bClosed) b?.close() } finally { a.close() }
+        try {
+            if (!bClosed) b?.close()
+        } finally {
+            a.close()
+        }
     }
 }
