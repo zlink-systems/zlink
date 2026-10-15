@@ -783,15 +783,15 @@ maintenance_runtime_t::relocate_terminal (std::shared_ptr<relocation_terminal_st
     co_return std::move (*state->result);
 }
 
-task_t<bool> maintenance_runtime_t::capture_relocation_session_routes (
+task_t<bool> maintenance_runtime_t::capture_relocation_session_bindings (
   eligible_relocation_unit_t::canonical_wire_context_t &context)
 {
-    if (!context.capture_session_routes)
+    if (!context.capture_session_bindings)
         co_return true;
-    const auto routes = co_await context.capture_session_routes ();
-    if (!routes)
+    auto bindings = co_await context.capture_session_bindings ();
+    if (!bindings)
         co_return false;
-    context.session_routes = *routes;
+    context.session_bindings = std::move (*bindings);
     co_return true;
 }
 
@@ -800,7 +800,7 @@ maintenance_runtime_t::relocate_seal (std::shared_ptr<relocation_terminal_state_
 {
     std::vector<object_ref_t> participants{state->source};
     std::function<task_t<bool> ()> before_capture = [this, state] {
-        return capture_relocation_session_routes (state->context);
+        return capture_relocation_session_bindings (state->context);
     };
     auto seal_task =
       _objects.try_seal_relocation_aggregate (participants, state->cancellation, before_capture);
@@ -836,7 +836,7 @@ bool maintenance_runtime_t::relocate_encode (
         }
         state->payload =
           encode_envelope (state->seal_attempt.seal.participants, state->context.relocation,
-                           state->context.application_version, state->context.session_routes);
+                           state->context.application_version, state->context.session_bindings);
         if (state->payload.empty () || state->payload.size () > state->encoded_upper_bound) {
             (void) _objects.abort_relocation (state->seal_attempt.seal.token);
             state->result.emplace (
@@ -1070,8 +1070,9 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
           relocation_terminal_t::blocked, relocation_reason_t::permit_unavailable, {}};
     }
     const auto seal_attempt = co_await _objects.try_seal_relocation_aggregate (
-      sources, cancellation,
-      [this, &persisted_context] { return capture_relocation_session_routes (persisted_context); });
+      sources, cancellation, [this, &persisted_context] {
+          return capture_relocation_session_bindings (persisted_context);
+      });
     const auto seal_error = seal_attempt.error;
     const auto &seal = seal_attempt.seal;
     if (seal_error != stateful_error_t::none) {
@@ -1097,9 +1098,9 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
             co_return aggregate_relocation_result_t{
               relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
         }
-        state->payload =
-          encode_envelope (state->seal_attempt.seal.participants, persisted_context.relocation,
-                           persisted_context.application_version, persisted_context.session_routes);
+        state->payload = encode_envelope (
+          state->seal_attempt.seal.participants, persisted_context.relocation,
+          persisted_context.application_version, persisted_context.session_bindings);
         state->manifest = plan_relocation_payload (state->payload, state->effective_chunk_limit);
     }
     catch (...) {
@@ -1278,7 +1279,7 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
   const std::vector<frozen_object_state_t> &participants,
   const protocol::relocation_id_t &relocation,
   std::uint64_t application_version,
-  const std::vector<protocol::session_relocation_route_t> &session_routes)
+  const std::vector<relocation_session_binding_t> &session_bindings)
 {
     if (participants.empty () || (relocation.high == 0 && relocation.low == 0))
         return {};
@@ -1318,20 +1319,20 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
     envelope.application_version = static_cast<std::int64_t> (application_version);
     for (std::size_t index = 0; index != ordered.size (); ++index) {
         const auto &participant = *ordered[index];
-        const auto route = std::find_if (
-          session_routes.begin (), session_routes.end (), [&participant] (const auto &candidate) {
+        const auto binding = std::find_if (
+          session_bindings.begin (), session_bindings.end (),
+          [&participant] (const auto &candidate) {
               return participant.owner.kind == object_kind_t::actor
-                     && candidate.actor.actor_id == participant.owner.key
-                     && candidate.actor.object_generation == participant.owner.object_generation;
+                     && candidate.first.actor_id == participant.owner.key
+                     && candidate.first.object_generation == participant.owner.object_generation;
           });
-        if (route != session_routes.end ())
-            envelope.session_bindings.push_back (
-              {static_cast<std::uint64_t> (index + 1), route->session_owner_node_routing_id,
-               route->session_owner_node_generation, route->session_owner_id,
-               route->session_owner_lease_generation, route->session_routing_id,
-               route->binding_generation});
+        if (binding != session_bindings.end ()) {
+            auto token = binding->second;
+            token.participant_id = static_cast<std::uint64_t> (index + 1);
+            envelope.session_bindings.push_back (std::move (token));
+        }
     }
-    if (envelope.session_bindings.size () != session_routes.size ())
+    if (envelope.session_bindings.size () != session_bindings.size ())
         throw protocol::service_wire_error_t (
           "relocation Session binding does not match the participant inventory");
 

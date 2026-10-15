@@ -1090,8 +1090,7 @@ mesh_node_runtime_t::seal_bound_sessions (
     const auto abort_prepared = [&] () -> task_t<bool> {
         if (outcome.checkpoints.empty ())
             co_return true;
-        co_return co_await route_bound_sessions (
-          outcome.checkpoints, {}, runtime::protocol::session_relocation_route_action_t::abort);
+        co_return co_await abort_bound_sessions (outcome.checkpoints);
     };
 
     const auto report_resolver_failure = [this] (const runtime::stateful::object_ref_t &source) {
@@ -1214,12 +1213,11 @@ mesh_node_runtime_t::seal_bound_sessions (
     co_return outcome;
 }
 
-task_t<std::optional<std::vector<runtime::protocol::session_relocation_route_t>>>
-mesh_node_runtime_t::capture_session_routes (
+task_t<std::optional<std::vector<runtime::stateful::relocation_session_binding_t>>>
+mesh_node_runtime_t::capture_session_bindings (
   std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
   runtime::protocol::relocation_id_t relocation,
   runtime::protocol::relocation_coordinator_fence_t coordinator,
-  mesh_node_descriptor_t target,
   std::shared_ptr<session_relocation_seal_outcome_t> outcome,
   std::shared_ptr<bool> attempted,
   std::chrono::steady_clock::time_point operation_deadline)
@@ -1229,28 +1227,20 @@ mesh_node_runtime_t::capture_session_routes (
                                              _session_relocation_seal_timeout, operation_deadline);
     if (!outcome->completed)
         co_return std::nullopt;
-    std::vector<runtime::protocol::session_relocation_route_t> routes;
-    routes.reserve (outcome->checkpoints.size ());
-    for (const auto &checkpoint : outcome->checkpoints) {
-        routes.push_back (make_session_relocation_route (
-          checkpoint, target.rid, target.lifecycle_generation,
-          static_cast<std::uint64_t> (target.lease_generation),
-          runtime::protocol::session_relocation_route_action_t::commit));
-    }
-    co_return routes;
+    std::vector<runtime::stateful::relocation_session_binding_t> bindings;
+    bindings.reserve (outcome->checkpoints.size ());
+    for (const auto &checkpoint : outcome->checkpoints)
+        bindings.push_back (make_session_binding (checkpoint));
+    co_return bindings;
 }
 
-task_t<bool> mesh_node_runtime_t::route_bound_sessions (
-  const std::vector<session_relocation_checkpoint_t> &checkpoints,
-  const mesh_node_descriptor_t &target,
-  runtime::protocol::session_relocation_route_action_t action)
+task_t<bool> mesh_node_runtime_t::abort_bound_sessions (
+  const std::vector<session_relocation_checkpoint_t> &checkpoints)
 {
     if (!_node)
         co_return checkpoints.empty ();
     for (const auto &checkpoint : checkpoints) {
-        const auto route = make_session_relocation_route (
-          checkpoint, target.rid, target.lifecycle_generation,
-          static_cast<std::uint64_t> (target.lease_generation), action);
+        const auto route = make_session_relocation_abort (checkpoint);
         try {
             if (!co_await _node->route_session_remote (checkpoint.session.session_owner_node,
                                                        route))
@@ -1263,32 +1253,39 @@ task_t<bool> mesh_node_runtime_t::route_bound_sessions (
     co_return true;
 }
 
-runtime::protocol::session_relocation_route_t mesh_node_runtime_t::make_session_relocation_route (
-  const session_relocation_checkpoint_t &checkpoint,
-  const zlink::routing_id_t &target_node,
-  std::uint64_t target_node_generation,
-  std::uint64_t target_owner_lease_generation,
-  runtime::protocol::session_relocation_route_action_t action) const
+runtime::stateful::relocation_session_binding_t
+mesh_node_runtime_t::make_session_binding (const session_relocation_checkpoint_t &checkpoint)
 {
-    const auto commit = action == runtime::protocol::session_relocation_route_action_t::commit;
+    // The envelope encoder assigns participant ids in canonical inventory order.
+    return {runtime::protocol::actor_identity_t{checkpoint.source.key,
+                                                checkpoint.source.object_generation},
+            runtime::protocol::relocation_envelope_session_binding_t{
+              .session_owner_node_rid = checkpoint.session.session_owner_node.to_bytes (),
+              .session_owner_node_generation = checkpoint.session.session_owner_node_generation,
+              .session_owner_id = checkpoint.session.session_owner.owner_id,
+              .session_owner_lease_generation =
+                static_cast<std::uint64_t> (checkpoint.session.session_owner.lease_generation),
+              .session_rid = checkpoint.session.session.to_bytes (),
+              .binding_generation = checkpoint.session.binding_generation}};
+}
+
+runtime::protocol::session_relocation_route_t mesh_node_runtime_t::make_session_relocation_abort (
+  const session_relocation_checkpoint_t &checkpoint) const
+{
+    auto [actor, binding] = make_session_binding (checkpoint);
     return runtime::protocol::session_relocation_route_t{
       checkpoint.seal.sealed.relocation,
       checkpoint.seal.sealed.coordinator,
-      commit ? runtime::protocol::relocation_role_t::target
-             : runtime::protocol::relocation_role_t::source,
-      {checkpoint.source.key, checkpoint.source.object_generation},
-      checkpoint.session.session_owner_node.to_bytes (),
-      checkpoint.session.session_owner_node_generation,
-      checkpoint.session.session_owner.owner_id,
-      static_cast<std::uint64_t> (checkpoint.session.session_owner.lease_generation),
-      checkpoint.session.session.to_bytes (),
-      checkpoint.session.binding_generation,
-      {action, commit ? checkpoint.source.authority_owner_generation : 0,
-       commit ? checkpoint.source.authority_owner_generation : 0,
-       commit ? target_node.to_bytes () : std::vector<std::uint8_t>{},
-       commit ? target_node_generation : 0,
-       commit ? 0 : checkpoint.source.authority_owner_generation,
-       commit ? target_owner_lease_generation : 0}};
+      runtime::protocol::relocation_role_t::source,
+      std::move (actor),
+      std::move (binding.session_owner_node_rid),
+      binding.session_owner_node_generation,
+      std::move (binding.session_owner_id),
+      binding.session_owner_lease_generation,
+      std::move (binding.session_rid),
+      binding.binding_generation,
+      {.action = runtime::protocol::session_relocation_route_action_t::abort,
+       .current_authority_owner_generation = checkpoint.source.authority_owner_generation}};
 }
 
 task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_application_actor (
@@ -1336,12 +1333,12 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
       .target_node_generation = target.lifecycle_generation,
       .application_version =
         static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version)),
-      .capture_session_routes =
-        [this, source = *source, authority, relocation, coordinator, target, session_seal,
+      .capture_session_bindings =
+        [this, source = *source, authority, relocation, coordinator, session_seal,
          session_checkpoint_attempted, restore_deadline] () {
-            return capture_session_routes ({{source, authority}}, relocation, coordinator, target,
-                                           session_seal, session_checkpoint_attempted,
-                                           restore_deadline);
+            return capture_session_bindings ({{source, authority}}, relocation, coordinator,
+                                             session_seal, session_checkpoint_attempted,
+                                             restore_deadline);
         },
       .prepare_target =
         [this, target, source_status = status, source = *source,
@@ -1449,9 +1446,7 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
         co_return result;
     }
     if (result.terminal == runtime::stateful::relocation_terminal_t::blocked) {
-        if (!co_await route_bound_sessions (
-              session_seal->checkpoints, {},
-              runtime::protocol::session_relocation_route_action_t::abort)) {
+        if (!co_await abort_bound_sessions (session_seal->checkpoints)) {
             result.terminal = runtime::stateful::relocation_terminal_t::recovery_required;
             result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
         }
@@ -1586,12 +1581,12 @@ mesh_node_runtime_t::relocate_application_unit (
       .target_node_generation = target.lifecycle_generation,
       .application_version =
         static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version)),
-      .capture_session_routes =
-        [this, session_participants, relocation, coordinator, target, session_seal,
+      .capture_session_bindings =
+        [this, session_participants, relocation, coordinator, session_seal,
          session_checkpoint_attempted, restore_deadline] () {
-            return capture_session_routes (session_participants, relocation, coordinator, target,
-                                           session_seal, session_checkpoint_attempted,
-                                           restore_deadline);
+            return capture_session_bindings (session_participants, relocation, coordinator,
+                                             session_seal, session_checkpoint_attempted,
+                                             restore_deadline);
         },
       .prepare_target =
         [this, target, status, sources, stable_types, principal_index, relocation,
@@ -1694,9 +1689,7 @@ mesh_node_runtime_t::relocate_application_unit (
             result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
         }
         if (result.terminal == relocation_terminal_t::blocked) {
-            if (!co_await route_bound_sessions (
-                  session_seal->checkpoints, {},
-                  runtime::protocol::session_relocation_route_action_t::abort)) {
+            if (!co_await abort_bound_sessions (session_seal->checkpoints)) {
                 result.terminal = relocation_terminal_t::recovery_required;
                 result.reason =
                   runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
@@ -1714,9 +1707,7 @@ mesh_node_runtime_t::relocate_application_unit (
         result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
     }
     if (result.terminal == relocation_terminal_t::blocked) {
-        if (!co_await route_bound_sessions (
-              session_seal->checkpoints, {},
-              runtime::protocol::session_relocation_route_action_t::abort)) {
+        if (!co_await abort_bound_sessions (session_seal->checkpoints)) {
             result.terminal = relocation_terminal_t::recovery_required;
             result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
         }
@@ -2693,10 +2684,7 @@ mesh_node_runtime_t::abort_remote_actor_join_seal (std::shared_ptr<remote_actor_
     if (s->session_seal.checkpoints.empty ())
         co_return true;
     try {
-        mesh_node_descriptor_t none;
-        co_return co_await route_bound_sessions (
-          s->session_seal.checkpoints, none,
-          runtime::protocol::session_relocation_route_action_t::abort);
+        co_return co_await abort_bound_sessions (s->session_seal.checkpoints);
     }
     catch (...) {
         co_return false;
@@ -3217,12 +3205,10 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
           "Actor Join recovery encode failed");
     }
 
-    std::vector<runtime::protocol::session_relocation_route_t> session_routes;
+    std::vector<runtime::stateful::relocation_session_binding_t> session_bindings;
+    session_bindings.reserve (s->session_seal.checkpoints.size ());
     for (const auto &checkpoint : s->session_seal.checkpoints)
-        session_routes.push_back (make_session_relocation_route (
-          checkpoint, s->target.node_rid, s->target.node_generation,
-          static_cast<std::uint64_t> (s->target.owner.lease_generation),
-          runtime::protocol::session_relocation_route_action_t::commit));
+        session_bindings.push_back (make_session_binding (checkpoint));
     const runtime::protocol::relocation_object_t object{
       runtime::protocol::relocation_object_kind_t::actor, recovery.actor_type, recovery.actor_id,
       recovery.actor_generation, recovery.actor_authority_owner_generation};
@@ -3233,7 +3219,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .target_node_routing_id = s->target.node_rid.to_bytes (),
       .target_node_generation = s->target.node_generation,
       .application_version = s->target_application_version,
-      .session_routes = std::move (session_routes),
+      .session_bindings = std::move (session_bindings),
       .augment_frozen =
         [recovery,
          recovery_frozen] (std::vector<runtime::stateful::frozen_object_state_t> &participants) {

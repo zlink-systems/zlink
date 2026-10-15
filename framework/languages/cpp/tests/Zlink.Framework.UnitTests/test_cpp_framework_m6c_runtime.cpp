@@ -2306,10 +2306,8 @@ void test_envelope_round_trip (test_context_t &test)
     const protocol::relocation_id_t relocation{0, 9};
     bool unmatched_binding_rejected = false;
     try {
-        protocol::session_relocation_route_t route;
-        route.actor.actor_id = "missing-actor";
-        route.actor.object_generation = 1;
-        (void) maintenance_runtime_t::encode_envelope ({frozen}, relocation, 1, {route});
+        const relocation_session_binding_t binding{{"missing-actor", 1}, {}};
+        (void) maintenance_runtime_t::encode_envelope ({frozen}, relocation, 1, {binding});
     }
     catch (const protocol::service_wire_error_t &) {
         unmatched_binding_rejected = true;
@@ -2365,6 +2363,15 @@ void test_envelope_round_trip (test_context_t &test)
                     && aggregate_envelope->saved_work.size () == 1
                     && aggregate_envelope->saved_work.front ().participant_id == 2,
                   "participant ids must follow the sorted authority-key inventory");
+    const relocation_session_binding_t binding{{actor.owner.key, actor.owner.object_generation},
+                                               {0, {'s'}, 7, "session-owner", 9, {'r'}, 11}};
+    const auto bound_envelope = maintenance_runtime_t::decode_envelope (
+      maintenance_runtime_t::encode_envelope ({frozen, actor}, relocation, 1, {binding}));
+    auto expected_binding = binding.second;
+    expected_binding.participant_id = 1;
+    test.require (
+      bound_envelope && bound_envelope->session_bindings == std::vector{expected_binding},
+      "Session binding fields use the Actor's canonical participant id without a route");
     const auto aggregate_materialized = maintenance_runtime_t::materialize_envelope (
       *aggregate_envelope,
       {relocation_participant_identity_t{frozen.owner, frozen.stable_type, std::nullopt},

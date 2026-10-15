@@ -26,12 +26,15 @@
 #include <stop_token>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace zlink::framework::runtime::stateful
 {
 
 using inventory_digest_t = std::array<std::uint8_t, 32>;
+using relocation_session_binding_t =
+  std::pair<protocol::actor_identity_t, protocol::relocation_envelope_session_binding_t>;
 
 struct relocation_stored_t
 {
@@ -306,13 +309,13 @@ struct eligible_relocation_unit_t
         std::vector<std::uint8_t> target_node_routing_id;
         std::uint64_t target_node_generation = 0;
         std::uint64_t application_version = 0;
-        std::vector<protocol::session_relocation_route_t> session_routes;
+        std::vector<relocation_session_binding_t> session_bindings;
         /* Join relocation appends its canonical ZLJR saved-work record to
          * the sealed Actor snapshot before the immutable envelope is
          * encoded. Ordinary relocation leaves this callback empty. */
         std::function<bool (std::vector<frozen_object_state_t> &)> augment_frozen;
-        std::function<task_t<std::optional<std::vector<protocol::session_relocation_route_t>>> ()>
-          capture_session_routes;
+        std::function<task_t<std::optional<std::vector<relocation_session_binding_t>>> ()>
+          capture_session_bindings;
         /* Sends the Restore request carrying the payload manifest. The
          * request frame must be enqueued on the ordered mesh connection
          * before the first suspension so the relocationState chunks the
@@ -561,7 +564,7 @@ class maintenance_runtime_t
     encode_envelope (const std::vector<frozen_object_state_t> &participants,
                      const protocol::relocation_id_t &relocation,
                      std::uint64_t application_version = 1,
-                     const std::vector<protocol::session_relocation_route_t> &session_routes = {});
+                     const std::vector<relocation_session_binding_t> &session_bindings = {});
     static std::optional<protocol::relocation_envelope_t>
     decode_envelope (const std::vector<std::uint8_t> &payload) noexcept;
     /* Target-side model mapping: the caller supplies the store-derived
@@ -601,7 +604,7 @@ class maintenance_runtime_t
     task_t<relocation_result_t>
     relocate_terminal (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_seal (std::shared_ptr<relocation_terminal_state_t> state);
-    task_t<bool> capture_relocation_session_routes (
+    task_t<bool> capture_relocation_session_bindings (
       eligible_relocation_unit_t::canonical_wire_context_t &context);
     bool relocate_encode (const std::shared_ptr<relocation_terminal_state_t> &state);
     task_t<bool> relocate_prepare_target (std::shared_ptr<relocation_terminal_state_t> state);
