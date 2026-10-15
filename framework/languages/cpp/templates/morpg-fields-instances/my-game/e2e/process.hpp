@@ -5,7 +5,9 @@
 #include <thread>
 #include <sstream>
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <csignal>
@@ -188,14 +190,22 @@ class Process
             GetExitCodeProcess (process_, &value);
             code = static_cast<int> (value);
 #else
-            int status = 0;
-            while (waitpid (pid_, &status, 0) < 0)
+            // Keep the child unreaped until the ownership mutex is held. Its PID cannot
+            // be reused while terminate() still regards it as an owned live process.
+            siginfo_t observed{};
+            while (waitid (P_PID, static_cast<id_t> (pid_), &observed, WEXITED | WNOWAIT) < 0)
                 if (errno != EINTR)
                     break;
-            code = WIFEXITED (status) ? WEXITSTATUS (status) : 128 + WTERMSIG (status);
 #endif
             {
                 std::lock_guard lock (mutex_);
+#ifndef _WIN32
+                int status = 0;
+                while (waitpid (pid_, &status, 0) < 0)
+                    if (errno != EINTR)
+                        break;
+                code = WIFEXITED (status) ? WEXITSTATUS (status) : 128 + WTERMSIG (status);
+#endif
                 if (!pending.empty ())
                     lines_.push_back (pending);
                 if (!log)
@@ -236,6 +246,9 @@ class Process
     }
     void terminate () noexcept
     {
+        std::lock_guard lock (mutex_);
+        if (exited_)
+            return;
 #ifdef _WIN32
         TerminateProcess (process_, 1);
 #else
