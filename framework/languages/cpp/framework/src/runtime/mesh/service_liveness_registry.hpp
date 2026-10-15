@@ -7,6 +7,7 @@
 #include <atomic>
 #include <memory>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <span>
@@ -84,6 +85,10 @@ class service_liveness_registry_t
     acknowledge_probe (const std::vector<std::uint8_t> &node_routing_id,
                        std::span<const std::uint8_t> connection_id,
                        std::uint64_t probe_id) const;
+    // True when a probe or timeout may be due at now. The registry keeps an
+    // early bound of its next due instant (spec 08 section 4.2): a rotation
+    // with nothing due neither enters the lane nor visits the peers.
+    bool due (clock_t::time_point now) const noexcept;
     service_liveness_tick_t tick (clock_t::time_point now);
     std::optional<clock_t::time_point> next_activity () const;
     std::size_t size () const;
@@ -101,6 +106,13 @@ class service_liveness_registry_t
     mutable runtime::state_lane_t _lane{_lane_executor};
     std::map<std::vector<std::uint8_t>, connection_t, byte_vector_less_t> _peers;
     std::uint64_t _next_probe_id = 1;
+    // Earliest instant a peer can be due, written on the lane. A receive only
+    // moves a deadline later, so the value stays an early bound. unknown_due
+    // asks the next tick or next_activity to recompute it.
+    static constexpr clock_t::rep unknown_due = std::numeric_limits<clock_t::rep>::min ();
+    static constexpr clock_t::rep never_due = std::numeric_limits<clock_t::rep>::max ();
+    mutable std::atomic<clock_t::rep> _next_due{unknown_due};
+    void publish_next_due_on_lane () const;
 };
 
 } // namespace zlink::framework::runtime::mesh

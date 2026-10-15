@@ -1162,6 +1162,17 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     runtime::offload_executor_t _relocation_session_terminal_lane_executor;
     mutable runtime::state_lane_t _relocation_session_terminal_lane{
       _relocation_session_terminal_lane_executor};
+    // Earliest instant relocation assembly expiry, target finalize polling or
+    // session seal flushing can be due, written on the terminal lane. A lane
+    // turn that can make that work due earlier resets it to due_now; an
+    // unsettled seal keeps it due_now because its readiness is polled.
+    static constexpr std::chrono::steady_clock::rep relocation_due_now =
+      std::numeric_limits<std::chrono::steady_clock::rep>::min ();
+    static constexpr std::chrono::steady_clock::rep relocation_never_due =
+      std::numeric_limits<std::chrono::steady_clock::rep>::max ();
+    mutable std::atomic<std::chrono::steady_clock::rep> _relocation_next_due{relocation_due_now};
+    bool relocation_management_due (std::chrono::steady_clock::time_point now) const noexcept;
+    void publish_relocation_next_due_on_lane () const;
     runtime::offload_executor_t _user_spot_terminal_lane_executor;
     mutable runtime::state_lane_t _user_spot_terminal_lane{_user_spot_terminal_lane_executor};
     mutable std::mutex _mutex;

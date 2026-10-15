@@ -1302,6 +1302,7 @@ bool raw_relocation_replay_coordinator_t::register_terminal_target (
             state.retained_bytes = bytes;
             state.next_retry = clock_t::time_point::min ();
             _terminal_targets.emplace (item_key, std::move (state));
+            _next_due.store (due_now, std::memory_order_release);
             _terminal_retained_bytes += bytes;
             return true;
         })
@@ -1313,6 +1314,14 @@ bool raw_relocation_replay_coordinator_t::register_terminal_target (
 
 task_t<std::size_t>
 raw_relocation_replay_coordinator_t::retry_terminal_relays (clock_t::time_point now)
+{
+    if (!due (now))
+        return task_t<std::size_t> (result_t<std::size_t>::success (0));
+    return retry_due_terminal_relays (now);
+}
+
+task_t<std::size_t>
+raw_relocation_replay_coordinator_t::retry_due_terminal_relays (clock_t::time_point now)
 {
     struct pending_send_t
     {
@@ -1335,6 +1344,7 @@ raw_relocation_replay_coordinator_t::retry_terminal_relays (clock_t::time_point 
                                 state.registration.relay, state.registration.application_reply});
                              state.next_retry = now + _relay_retry_interval;
                          }
+                         publish_next_due_on_lane ();
                          return pending;
                      })
                      .get ();
@@ -1455,6 +1465,7 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::proc
                                      found->second.completed = true;
                                      found->second.digest = digest;
                                      found->second.completed_at = clock_t::now ();
+                                     _next_due.store (due_now, std::memory_order_release);
                                      return raw_relocation_replay_result_t::terminal_received;
                                  })
                                  .get ();
@@ -1540,6 +1551,7 @@ raw_relocation_replay_coordinator_t::process_reply_relay_ack (
                               if (found == _terminal_targets.end ())
                                   return raw_relocation_replay_result_t::not_registered;
                               found->second.acknowledging = false;
+                              _next_due.store (due_now, std::memory_order_release);
                               if (!persisted) {
                                   found->second.registration.persist_ack = std::move (work.persist);
                                   return raw_relocation_replay_result_t::persistence_failed;
@@ -1596,6 +1608,7 @@ bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired 
                                  if (found == _terminal_targets.end ())
                                      return false;
                                  found->second.acknowledging = false;
+                                 _next_due.store (due_now, std::memory_order_release);
                                  if (!persisted) {
                                      found->second.registration.persist_source_lease_expiry =
                                        std::move (work.persist);
@@ -1612,8 +1625,31 @@ bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired 
     return confirmed;
 }
 
+bool raw_relocation_replay_coordinator_t::due (clock_t::time_point now) const noexcept
+{
+    return now.time_since_epoch ().count () >= _next_due.load (std::memory_order_acquire);
+}
+
+void raw_relocation_replay_coordinator_t::publish_next_due_on_lane () const
+{
+    auto next = never_due;
+    for (const auto &[key, state] : _terminal_targets) {
+        if (!state.acknowledging)
+            next = std::min (next, state.next_retry.time_since_epoch ().count ());
+    }
+    for (const auto &[key, state] : _terminal_sources) {
+        if (state.completed)
+            next = std::min (
+              next,
+              (state.completed_at + _terminal_tombstone_retention).time_since_epoch ().count ());
+    }
+    _next_due.store (next, std::memory_order_release);
+}
+
 std::size_t raw_relocation_replay_coordinator_t::reap_terminal_tombstones (clock_t::time_point now)
 {
+    if (!due (now))
+        return 0;
     return _lane
       .run ([this, now] {
           std::size_t removed = 0;
@@ -1626,6 +1662,7 @@ std::size_t raw_relocation_replay_coordinator_t::reap_terminal_tombstones (clock
                   ++iterator;
               }
           }
+          publish_next_due_on_lane ();
           return removed;
       })
       .get ();
@@ -1634,24 +1671,14 @@ std::size_t raw_relocation_replay_coordinator_t::reap_terminal_tombstones (clock
 std::optional<raw_relocation_replay_coordinator_t::clock_t::time_point>
 raw_relocation_replay_coordinator_t::next_activity () const
 {
-    return _lane
-      .run ([this] {
-          std::optional<clock_t::time_point> next;
-          const auto include = [&] (clock_t::time_point deadline) {
-              if (!next || deadline < *next)
-                  next = deadline;
-          };
-          for (const auto &[key, state] : _terminal_targets) {
-              if (!state.acknowledging)
-                  include (state.next_retry);
-          }
-          for (const auto &[key, state] : _terminal_sources) {
-              if (state.completed)
-                  include (state.completed_at + _terminal_tombstone_retention);
-          }
-          return next;
-      })
-      .get ();
+    auto next = _next_due.load (std::memory_order_acquire);
+    if (next == due_now) {
+        _lane.run ([this] { publish_next_due_on_lane (); }).get ();
+        next = _next_due.load (std::memory_order_acquire);
+    }
+    if (next == never_due)
+        return std::nullopt;
+    return clock_t::time_point (clock_t::duration (next));
 }
 
 std::size_t raw_relocation_replay_coordinator_t::pending_terminal_relays () const

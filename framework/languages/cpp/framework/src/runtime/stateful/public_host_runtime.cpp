@@ -1893,6 +1893,7 @@ public_host_runtime_t::admit_session_relocation_seal (
               record.local_completions.push_back (local_completion);
           const auto [stored, was_inserted] =
             _session_seal_terminals.emplace (relocation_key, std::move (record));
+          _relocation_next_due.store (relocation_due_now, std::memory_order_release);
           inserted = was_inserted;
           if (inserted)
               _transport->signal_activity ();
@@ -2968,6 +2969,7 @@ task_t<void> public_host_runtime_t::seal_relocation_targets ()
       _relocation_session_terminal_lane
         .run ([this] {
             _options.mesh.shutdown_admission_seal->store (true, std::memory_order_release);
+            _relocation_next_due.store (relocation_due_now, std::memory_order_release);
             std::vector<task_t<void>> result;
             for (const auto &[key, attempt] : _relocation_target_attempts)
                 if (attempt.terminal)
@@ -3837,6 +3839,7 @@ void public_host_runtime_t::activate_relocation_assembly (
         .run ([&] {
             if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
                 return false;
+            _relocation_next_due.store (relocation_due_now, std::memory_order_release);
             return _relocation_target_attempts.try_emplace (key, std::move (attempt)).second;
         })
         .get ();
@@ -4909,52 +4912,66 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     bound_session_operations_t bound_session_operations;
     std::function<void (const protocol::session_relocation_route_t &)>
       late_session_route_update_reporter;
-    _lifecycle_configuration_lane
-      .run ([&] {
-          store = _user_spot_store;
-          materializer = _user_spot_materializer;
-          user_spot_closer = _user_spot_closer;
-          actor_create_target = _actor_create_target;
-          actor_join_target = _actor_join_target;
-          session_route_owner_resolver = _session_route_owner_resolver;
-          message_follow_handler = _message_follow_handler;
-          bound_session_operations = _bound_session_operations;
-          late_session_route_update_reporter = _late_session_route_update_reporter;
-      })
-      .get ();
-    std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
+    // The configured operations are read only when an infrastructure record
+    // needs them; a rotation without one takes no configuration turn.
+    bool configuration_loaded = false;
+    const auto load_configuration = [&] {
+        if (configuration_loaded)
+            return;
+        configuration_loaded = true;
+        _lifecycle_configuration_lane
+          .run ([&] {
+              store = _user_spot_store;
+              materializer = _user_spot_materializer;
+              user_spot_closer = _user_spot_closer;
+              actor_create_target = _actor_create_target;
+              actor_join_target = _actor_join_target;
+              session_route_owner_resolver = _session_route_owner_resolver;
+              message_follow_handler = _message_follow_handler;
+              bound_session_operations = _bound_session_operations;
+              late_session_route_update_reporter = _late_session_route_update_reporter;
+          })
+          .get ();
+    };
     const auto now = std::chrono::steady_clock::now ();
-    _relocation_session_terminal_lane
-      .run ([&] {
-          for (auto pending = _relocation_assemblies.begin ();
-               pending != _relocation_assemblies.end ();) {
-              if (pending->second.expires_at > now) {
-                  ++pending;
-                  continue;
+    if (relocation_management_due (now)) {
+        std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
+        _relocation_session_terminal_lane
+          .run ([&] {
+              for (auto pending = _relocation_assemblies.begin ();
+                   pending != _relocation_assemblies.end ();) {
+                  if (pending->second.expires_at > now) {
+                      ++pending;
+                      continue;
+                  }
+                  expired_relocation_assemblies.push_back (std::move (pending->second));
+                  pending = _relocation_assemblies.erase (pending);
               }
-              expired_relocation_assemblies.push_back (std::move (pending->second));
-              pending = _relocation_assemblies.erase (pending);
-          }
-      })
-      .get ();
-    for (const auto &expired : expired_relocation_assemblies) {
-        (void) _transport->reply_relocation_failed (
-          expired.request,
-          protocol::relocation_failed_t{
-            expired.prepare.relocation, expired.prepare.target_attempt_generation,
-            expired.prepare.coordinator, expired.prepare.target, expired.prepare.object,
-            protocol::relocation_role_t::target,
-            messaging::request_failure_mapper_t{}.target_failure_code (
-              framework_error_kind_t::data_lost,
-              static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost))});
+          })
+          .get ();
+        for (const auto &expired : expired_relocation_assemblies) {
+            (void) _transport->reply_relocation_failed (
+              expired.request,
+              protocol::relocation_failed_t{
+                expired.prepare.relocation, expired.prepare.target_attempt_generation,
+                expired.prepare.coordinator, expired.prepare.target, expired.prepare.object,
+                protocol::relocation_role_t::target,
+                messaging::request_failure_mapper_t{}.target_failure_code (
+                  framework_error_kind_t::data_lost,
+                  static_cast<std::uint32_t> (
+                    protocol::framework_error_code::relocationDataLost))});
+        }
+        poll_relocation_target_attempts ();
+        flush_pending_session_relocation_seals ();
+        _relocation_session_terminal_lane.run ([this] { publish_relocation_next_due_on_lane (); })
+          .get ();
     }
-    poll_relocation_target_attempts ();
-    flush_pending_session_relocation_seals ();
     std::size_t count = 0;
     receive_batch_budget_t infrastructure_budget;
     while (auto claim = _transport->mailbox ().try_claim (
              mesh::service_mailbox_domain_t::infrastructure,
              dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)) {
+        load_configuration ();
         for (auto &mailbox_record : claim->records) {
             std::size_t record_bytes = 0;
             for (const auto &part : mailbox_record.parts)
@@ -5138,6 +5155,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 || current_state == node_status_t::state_t::stopped
                                 || current_state == node_status_t::state_t::error)
                                 return false;
+                            _relocation_next_due.store (relocation_due_now,
+                                                        std::memory_order_release);
                             _relocation_assemblies.emplace (
                               key,
                               pending_relocation_assembly_t{
@@ -5273,6 +5292,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           }
                           if (matches) {
                               found->second.cutover_received = true;
+                              _relocation_next_due.store (relocation_due_now,
+                                                          std::memory_order_release);
                               verified.emplace (
                                 std::make_move_iterator (batch.end ()
                                                          - static_cast<std::ptrdiff_t> (count)),
@@ -6550,25 +6571,53 @@ public_host_runtime_t::next_dispatch_activity_async ()
     const auto local_pending = co_await _local_dispatch_completion_lane.run_task (
       [this] { return !_local_application_dispatches.empty (); });
     auto next = _relocation_wire->next_activity ();
-    co_return std::make_pair (
-      local_pending, co_await _relocation_session_terminal_lane.run_task ([this, next] () mutable {
-          const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
-              if (!next || deadline < *next)
-                  next = deadline;
-          };
-          for (const auto &[key, assembly] : _relocation_assemblies)
-              include (assembly.expires_at);
-          for (const auto &[key, attempt] : _relocation_target_attempts) {
-              if (!relocation_target_terminal (attempt)
-                  && attempt.next_finalize_at != std::chrono::steady_clock::time_point{})
-                  include (attempt.next_finalize_at);
-          }
-          for (const auto &[key, seal] : _session_seal_terminals) {
-              if (!seal.consumed)
-                  include (seal.expires_at);
-          }
-          return next;
-      }));
+    auto relocation_next = _relocation_next_due.load (std::memory_order_acquire);
+    if (relocation_next == relocation_due_now) {
+        co_await _relocation_session_terminal_lane.run_task (
+          [this] { publish_relocation_next_due_on_lane (); });
+        relocation_next = _relocation_next_due.load (std::memory_order_acquire);
+    }
+    if (relocation_next != relocation_never_due) {
+        const auto deadline = relocation_next == relocation_due_now
+                                ? std::chrono::steady_clock::now ()
+                                : std::chrono::steady_clock::time_point (
+                                    std::chrono::steady_clock::duration (relocation_next));
+        if (!next || deadline < *next)
+            next = deadline;
+    }
+    co_return std::make_pair (local_pending, next);
+}
+
+bool public_host_runtime_t::relocation_management_due (
+  std::chrono::steady_clock::time_point now) const noexcept
+{
+    return now.time_since_epoch ().count ()
+           >= _relocation_next_due.load (std::memory_order_acquire);
+}
+
+void public_host_runtime_t::publish_relocation_next_due_on_lane () const
+{
+    auto next = relocation_never_due;
+    const auto include = [&next] (std::chrono::steady_clock::time_point deadline) {
+        next = std::min (next, deadline.time_since_epoch ().count ());
+    };
+    for (const auto &[key, assembly] : _relocation_assemblies)
+        include (assembly.expires_at);
+    for (const auto &[key, attempt] : _relocation_target_attempts) {
+        if (!relocation_target_terminal (attempt)
+            && attempt.next_finalize_at != std::chrono::steady_clock::time_point{})
+            include (attempt.next_finalize_at);
+    }
+    for (const auto &[key, seal] : _session_seal_terminals) {
+        if (seal.consumed)
+            continue;
+        if (!seal.ready) {
+            next = relocation_due_now;
+            break;
+        }
+        include (seal.expires_at);
+    }
+    _relocation_next_due.store (next, std::memory_order_release);
 }
 
 void public_host_runtime_t::signal_dispatch_activity () noexcept

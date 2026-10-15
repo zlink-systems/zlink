@@ -3644,6 +3644,15 @@ std::size_t raw_mesh_node_owner_t::apply_route_snapshot ()
 task_t<service_liveness_tick_t>
 raw_mesh_node_owner_t::tick_liveness (service_liveness_registry_t::clock_t::time_point now)
 {
+    if (!_liveness.due (now))
+        return task_t<service_liveness_tick_t> (
+          result_t<service_liveness_tick_t>::success (service_liveness_tick_t{}));
+    return tick_due_liveness (now);
+}
+
+task_t<service_liveness_tick_t>
+raw_mesh_node_owner_t::tick_due_liveness (service_liveness_registry_t::clock_t::time_point now)
+{
     const auto [result, port] =
       _lane
         .run ([this, now] {

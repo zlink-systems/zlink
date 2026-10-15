@@ -362,6 +362,8 @@ class raw_mesh_node_owner_t
                             bool accept_application_receive = true) noexcept;
     void signal_activity () noexcept;
     std::size_t last_pump_bytes () const;
+    // A rotation with no probe or timeout due returns at once (spec 08
+    // section 4.2); the liveness registry owns that decision.
     task_t<service_liveness_tick_t>
     tick_liveness (service_liveness_registry_t::clock_t::time_point now);
     // Polls this ROUTER through its ingress poller and applies the Core
@@ -382,6 +384,8 @@ class raw_mesh_node_owner_t
     node_target_t classify_node_target (const std::vector<std::uint8_t> &target_routing_id) const;
 
   private:
+    task_t<service_liveness_tick_t>
+    tick_due_liveness (service_liveness_registry_t::clock_t::time_point now);
     static std::string owner_key (const std::vector<std::uint8_t> &routing_id);
     static foundation::call_id_t operation_id (std::uint64_t lifecycle_generation,
                                                std::uint64_t correlation);
