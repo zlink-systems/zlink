@@ -717,8 +717,11 @@ void verify_local_join_timeout_releases_membership ()
       .dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
                             std::vector<zlink::message_t>) {
           if (record.kind == host::record_kind_t::spot_control)
-              replied = host::actor_join_reply (record.reply_token,
-                                                host::actor_join_result_t::accepted, {});
+              replied = host::actor_join_reply (
+                record.reply_token,
+                zlink::framework::result_t<host::actor_join_result_t>::success (
+                  host::actor_join_result_t::accepted),
+                {});
       })
       .result ()
       .value ();
