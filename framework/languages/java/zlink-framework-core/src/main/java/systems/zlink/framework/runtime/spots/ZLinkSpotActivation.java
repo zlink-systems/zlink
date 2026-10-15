@@ -208,44 +208,32 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
         return dispatched;
     }
 
-    Boolean admitTopic(ZLinkBackendTopicMessage message) {
-        var permit = host.reserveApplicationJob();
-        if (permit == null) {
-            Thread.currentThread().interrupt();
+    @Override
+    boolean postTopic(ZLinkBackendTopicMessage message) {
+        if (host.spotHostAdmissionFailure(context.spotId()) != null) {
             message.parts().forEach(Message::close);
             return false;
         }
-        try (var ignored =
-                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
-                        permit)) {
-            if (host.spotHostAdmissionFailure(context.spotId()) != null) {
-                message.parts().forEach(Message::close);
-                return false;
-            }
-            var ownership =
-                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
-                            .transferToQueuedJob();
-            boolean accepted;
-            try {
-                accepted =
-                        context.tryEnqueueSpot(
-                                () ->
-                                        host.runQueuedApplicationJob(
-                                                ownership,
-                                                () -> dispatchSpotSubscription(message)));
-            } catch (RuntimeException | Error failure) {
-                ownership.close();
-                message.parts().forEach(Message::close);
-                throw failure;
-            }
-            if (!accepted) {
-                ownership.close();
-                message.parts().forEach(Message::close);
-            }
-            return accepted;
-        } finally {
-            permit.abandonReservation();
+        var ownership =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                        .transferToQueuedJob();
+        boolean accepted;
+        try {
+            accepted =
+                    context.tryEnqueueSpot(
+                            () ->
+                                    host.runQueuedApplicationJob(
+                                            ownership, () -> dispatchSpotSubscription(message)));
+        } catch (RuntimeException | Error failure) {
+            ownership.close();
+            message.parts().forEach(Message::close);
+            throw failure;
         }
+        if (!accepted) {
+            ownership.close();
+            message.parts().forEach(Message::close);
+        }
+        return accepted;
     }
 
     CompletionStage<ZLinkSpotActorJoinResult> admitLocalActorJoin(

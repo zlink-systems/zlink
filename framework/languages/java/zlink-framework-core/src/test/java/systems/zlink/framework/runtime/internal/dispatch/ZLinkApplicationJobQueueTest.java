@@ -621,6 +621,7 @@ final class ZLinkApplicationJobQueueTest {
                         candidates(1),
                         100,
                         0);
+        java.util.concurrent.Executor executor = Thread::startVirtualThread;
         CountDownLatch firstPauseEntered = new CountDownLatch(1);
         CountDownLatch releaseFirstPause = new CountDownLatch(1);
         AtomicLong pauseCalls = new AtomicLong();
@@ -644,10 +645,11 @@ final class ZLinkApplicationJobQueueTest {
                         () ->
                                 queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
                                         .toCompletableFuture()
-                                        .join());
+                                        .join(),
+                        executor);
         assertTrue(firstPauseEntered.await(1, TimeUnit.SECONDS));
 
-        CompletableFuture<Void> close = CompletableFuture.runAsync(queue::close);
+        CompletableFuture<Void> close = CompletableFuture.runAsync(queue::close, executor);
         CompletableFuture<Void> unregister = null;
         try {
             close.get(1, TimeUnit.SECONDS);
@@ -658,7 +660,8 @@ final class ZLinkApplicationJobQueueTest {
                                 unregisterStarted.countDown();
                                 first.close();
                                 second.close();
-                            });
+                            },
+                            executor);
             assertTrue(unregisterStarted.await(1, TimeUnit.SECONDS));
             CompletableFuture<Void> currentUnregister = unregister;
             assertThrows(
