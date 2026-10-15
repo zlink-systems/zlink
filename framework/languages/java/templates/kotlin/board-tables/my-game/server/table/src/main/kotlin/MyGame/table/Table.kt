@@ -40,7 +40,7 @@ class Table(
         val join = request.decode<JoinTableRequest>()
         require(join.playerId == actorId && join.tableId == context.spotId())
         if (state.seats.none { it.playerId == actorId } && state.seats.size == Rules.SEATS)
-            return ZLinkSpotActorJoinResult.reject(ActionRejected(Rules.TABLE_FULL))
+            return ZLinkSpotActorJoinResult.reject()
         return ZLinkSpotActorJoinResult.accept()
     }
 
