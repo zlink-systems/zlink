@@ -8,9 +8,12 @@ public static class GameNames
     public const string DungeonType = "Dungeon";
     public const string SessionStream = "players";
     public const int MaximumPartyMembers = 4;
+
     public static string PartyId(string partyId) => $"party-{partyId}";
+
     public static string DungeonId(string partyId) => $"dungeon-{partyId}";
 }
+
 public static class Rejection
 {
     public const string JoinRejected = "join-rejected";
@@ -18,24 +21,49 @@ public static class Rejection
     public const string NotLeader = "not-leader";
     public const string NotReady = "not-ready";
 }
+
 public sealed record JoinLobbyRequest(string PlayerId);
+
 public sealed record LobbyView;
+
 public sealed record CreatePartyRequest(string PartyId);
+
 public sealed record JoinPartyRequest(string PartyId);
+
 public sealed record PartyJoin(string PartyId, bool Create);
+
 public sealed record ReadyRequest;
+
 public sealed record EnterDungeonRequest;
+
 public sealed record AdvanceRequest;
+
 public sealed record ViewRequest;
+
 public sealed record PartyView(string PartyId, string[] Members, bool[] Ready);
-public sealed record DungeonView(string DungeonId, string NodeId, string PartyId, string[] Members, int Stage);
+
+public sealed record DungeonView(
+    string DungeonId,
+    string NodeId,
+    string PartyId,
+    string[] Members,
+    int Stage
+);
+
 public sealed record PrepareDungeon(string PartyId, string[] Members);
+
 public sealed record DungeonPrepared(string DungeonId);
+
 public sealed record JoinDungeon(string DungeonId, string PartyId);
+
 public sealed record ActionRejected(string Reason);
+
 public sealed record SessionInfoRequest;
+
 public sealed record SessionInfo(string SessionId, string ActorId, ulong ObjectGeneration);
+
 public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEndpoint);
+
 public static class NodeProtocol
 {
     public const string ReadyPrefix = "READY ";

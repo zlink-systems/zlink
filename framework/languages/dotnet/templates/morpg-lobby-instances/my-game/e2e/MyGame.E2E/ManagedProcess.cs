@@ -163,6 +163,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
 internal static class Commands
 {
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(60);
+
     public static async Task<string> RunAsync(
         string file,
         IEnumerable<string> arguments,

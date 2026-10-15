@@ -7,10 +7,7 @@ namespace MyGame.Shared;
 
 public static class NodeControl
 {
-    public static async Task RunAsync(
-        IHost host,
-        NodeSettings settings
-    )
+    public static async Task RunAsync(IHost host, NodeSettings settings)
     {
         using var lifetime = new CancellationTokenSource();
         await host.StartAsync(lifetime.Token);
