@@ -112,10 +112,16 @@ void from_json (const nlohmann::json &, quest_probe_t &)
 {
 }
 
-zlink::framework::task_t<std::vector<zlink::message_t>>
-await_native_reply (zlink::async_result_t<std::vector<zlink::message_t>> pending)
+zlink::framework::task_t<zlink::request_result_t>
+await_native_request_terminal (zlink::async_result_t<std::vector<zlink::message_t>> pending)
 {
-    co_return co_await std::move (pending);
+    try {
+        (void) co_await std::move (pending);
+        co_return zlink::request_result_t::ok;
+    }
+    catch (const zlink::request_error_t &error) {
+        co_return error.result ();
+    }
 }
 
 class actor_send_spot_resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
@@ -5136,7 +5142,7 @@ void verify_node_request_requires_remote_admission ()
     target.close ();
 }
 
-void verify_unadmitted_request_is_rejected_without_framework_queue ()
+void verify_unadmitted_request_is_dropped_without_framework_queue ()
 {
     mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
       .descriptor = descriptor ("overflow-target"),
@@ -5149,9 +5155,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     zlink::framework::test::completion_poller_driver_t completion_owner (source);
     source.set_routing_id (zlink::routing_id_t::from ("overflow-source"));
     source.connect (target.endpoint ());
-    std::this_thread::sleep_for (50ms);
 
-    using native_reply_t = std::vector<zlink::message_t>;
     const auto payload = protocol::encode_application_payload (
       {"DeferredRequest", "application/json", bytes ("request")});
     auto header = zlink::message_t::from (protocol::encode_node_request_header (1));
@@ -5167,7 +5171,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
         pumped =
           target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
     }
-    assert (pumped == mesh::raw_mesh_pump_result_t::protocol_error);
+    assert (pumped == mesh::raw_mesh_pump_result_t::infrastructure);
     assert (target.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application) == 0);
 
     zlink::received_t hello;
@@ -5176,14 +5180,9 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     assert (protocol::decode_header (hello.parts ().front ().to_bytes ()).kind
             == protocol::command::hello);
 
-    auto rejected_reply = await_native_reply (std::move (request)).result ().value ();
-    assert (rejected_reply.size () == 1);
-    const auto reply = protocol::decode_reply_header (rejected_reply.front ().to_bytes ());
-    assert (reply.correlation == 1);
-    assert (reply.terminal_result
-            == static_cast<std::uint32_t> (protocol::request_terminal_result::notConnected));
-    assert (reply.failure_code
-            == static_cast<std::uint32_t> (protocol::framework_error_code::none));
+    // MeshNode §7.1: admission rejection is silent; only the original native deadline ends it.
+    assert (await_native_request_terminal (std::move (request)).result ().value ()
+            == zlink::request_result_t::timed_out);
     target.close ();
 }
 
@@ -7459,6 +7458,10 @@ int main (int argc, char **argv)
 {
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    if (argc == 2 && std::string_view (argv[1]) == "--unadmitted-request") {
+        verify_unadmitted_request_is_dropped_without_framework_queue ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--owner-request-rejection") {
         verify_queued_owner_accepts_request_without_blocking_other_owner ();
         return 0;
@@ -7521,7 +7524,7 @@ int main (int argc, char **argv)
     verify_atomic_raw_stateful_ingress_commit ();
     verify_relocated_source_reply_failure_keeps_terminal_record ();
     verify_node_request_requires_remote_admission ();
-    verify_unadmitted_request_is_rejected_without_framework_queue ();
+    verify_unadmitted_request_is_dropped_without_framework_queue ();
     verify_queued_owner_accepts_request_without_blocking_other_owner ();
     verify_raw_terminal_reply_relay ();
     verify_relocation_data_duplicates_are_distinct_arrivals ();
