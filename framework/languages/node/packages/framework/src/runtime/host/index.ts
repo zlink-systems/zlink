@@ -3,6 +3,7 @@ import { currentApplicationJobOrigin } from '../application-jobs/application-job
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import {
   type ActorRef,
   type RoutingId,
@@ -244,7 +245,7 @@ export class ZLinkFrameworkRuntimeHost
   private readonly lifecycleSink?: string[];
   private executionState?: ZLinkFrameworkExecutionState;
   private runtimeState = ZLinkFrameworkRuntimeState.Preparing;
-  private runtimeSequence = 0n;
+  private runtimeStatus?: ZLinkFrameworkRuntimeStatus;
   private readonly runtimeObservationSource = Symbol('zlink.framework-runtime');
   private runtimeDeadline?: Date;
   private shutdownDeadline?: AbortController;
@@ -777,6 +778,7 @@ export class ZLinkFrameworkRuntimeHost
     this.serviceRelocation = new ZLinkHostServiceRelocationRuntime({
       registration: options.registration,
       targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
+      sourceQuiescenceChanged: () => this.publishCurrentRuntimeStatus(),
       providerResolver: options.providerResolver,
       locationStore: () => this.locationOwner.currentStores?.locationStore,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
@@ -867,6 +869,10 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   get status(): ZLinkFrameworkRuntimeStatus {
+    return this.publishCurrentRuntimeStatus();
+  }
+
+  private buildRuntimeStatus(): ZLinkFrameworkRuntimeStatus {
     return {
       state: this.runtimeState,
       isReady: runtimeStateIsReady(this.runtimeState),
@@ -876,8 +882,8 @@ export class ZLinkFrameworkRuntimeHost
       deadline: this.runtimeDeadline,
       relocationResult: this.runtimeRelocationResult,
       terminationResult: this.runtimeTerminationResult,
-      sequence: this.runtimeSequence,
-      observedAt: new Date()
+      sequence: this.runtimeStatus?.sequence ?? 0n,
+      observedAt: this.runtimeStatus?.observedAt ?? new Date()
     };
   }
 
@@ -895,10 +901,11 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> {
+    const status = this.status;
     const queue = new RuntimeEventQueue<ZLinkFrameworkRuntimeStatus>(undefined, signal);
     this.runtimeObservers.add(queue);
     queue.onClose(() => this.runtimeObservers.delete(queue));
-    this.publishRuntimeStatus(queue, this.status);
+    this.publishRuntimeStatus(queue, status);
     return queue;
   }
 
@@ -1121,6 +1128,9 @@ export class ZLinkFrameworkRuntimeHost
         );
         const drain = await shutdown;
         await unscopedStreamDrain;
+        if (drain.kind === 'forceStopped' && drain.error !== undefined) {
+          this.runtimeOrPreStartErrorSink.reportRuntimeTaskException('host shutdown', drain.error);
+        }
         await this.stop();
         if (drain.kind === 'forceStopped') {
           return this.completeTermination({
@@ -1268,12 +1278,25 @@ export class ZLinkFrameworkRuntimeHost
   private setRuntimeState(state: ZLinkFrameworkRuntimeState): void {
     if (this.runtimeState === state) return;
     this.runtimeState = state;
-    this.runtimeSequence += 1n;
     this.notifyTopologyHostStateChanged();
-    const status = this.status;
+    this.publishCurrentRuntimeStatus();
+  }
+
+  private publishCurrentRuntimeStatus(): ZLinkFrameworkRuntimeStatus {
+    const current = this.buildRuntimeStatus();
+    if (this.runtimeStatus !== undefined && isDeepStrictEqual(this.runtimeStatus, current)) {
+      return this.runtimeStatus;
+    }
+    const status = {
+      ...current,
+      sequence: (this.runtimeStatus?.sequence ?? 0n) + 1n,
+      observedAt: new Date()
+    };
+    this.runtimeStatus = status;
     for (const observer of this.runtimeObservers) {
       this.publishRuntimeStatus(observer, status);
     }
+    return status;
   }
 
   private publishRuntimeStatus(

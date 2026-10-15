@@ -22,6 +22,7 @@ import type {
 import type { ZLinkBackendSpotNode } from '../backend/contracts';
 
 export interface ZLinkEntryActorRuntime {
+  releaseMembers?(meshName: string): Promise<void>;
   resolveActor(actorId: string): ZLinkActor | undefined;
   commitActorTransaction(actor: ZLinkActor, onJoined: () => Promise<void>): Promise<void>;
   destroyActor(

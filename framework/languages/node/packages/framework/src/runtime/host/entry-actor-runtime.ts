@@ -33,6 +33,10 @@ export class ZLinkEntryActorRuntimeService implements ZLinkEntryActorRuntime {
     return this.options.actorManager()?.getState(actorId)?.actor;
   }
 
+  async releaseMembers(meshName: string): Promise<void> {
+    await this.options.actorManager()?.releaseSpotActorMembers(meshName);
+  }
+
   async commitActorTransaction(actor: ZLinkActor, onJoined: () => Promise<void>): Promise<void> {
     const state = this.options.actorManager()?.getState(actor.context.actorId);
     const entryNode = this.options.spotNodeRuntime()?.primaryMeshNode;
