@@ -1283,6 +1283,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             new Class<?>[] {ZLinkInternalMeshNode.class},
                             (proxy, method, arguments) ->
                                     switch (method.getName()) {
+                                        case "observePeerRoute" ->
+                                                new ZLinkInternalMeshNode.PeerRouteObservation(
+                                                        1, true);
+                                        case "targetLifecycleEnded" -> false;
+                                        case "onStateChanged" -> {
+                                            ((Runnable) arguments[0]).run();
+                                            yield (AutoCloseable) () -> {};
+                                        }
                                         case "status" -> status;
                                         case "setActorLeftHandler" -> {
                                             if (sourceSide) {

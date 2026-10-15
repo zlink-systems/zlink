@@ -384,6 +384,18 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                         "Canonical relocation prepare request is unavailable"));
     }
 
+    default CompletionStage<byte[]> requestCanonicalRelocationPrepare(
+            RoutingId targetNodeRid,
+            byte[] command,
+            Duration timeout,
+            java.util.concurrent.CompletableFuture<Void> admission) {
+        return requestCanonicalRelocationPrepare(targetNodeRid, command, timeout)
+                .whenComplete(
+                        (reply, failure) -> {
+                            if (failure == null) admission.complete(null);
+                        });
+    }
+
     default void setActorLeftHandler(ActorLeftHandler handler) {
         // Alternate backends may not yet support command 29 dispatch.
     }

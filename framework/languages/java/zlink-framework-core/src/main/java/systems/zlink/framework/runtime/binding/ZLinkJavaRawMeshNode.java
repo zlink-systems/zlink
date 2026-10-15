@@ -3366,6 +3366,15 @@ final class ZLinkJavaRawMeshNode
     @Override
     public CompletionStage<byte[]> requestCanonicalRelocationPrepare(
             RoutingId targetNodeRid, byte[] command, Duration timeout) {
+        return requestCanonicalRelocationPrepare(targetNodeRid, command, timeout, null);
+    }
+
+    @Override
+    public CompletionStage<byte[]> requestCanonicalRelocationPrepare(
+            RoutingId targetNodeRid,
+            byte[] command,
+            Duration timeout,
+            CompletableFuture<Void> admission) {
         Objects.requireNonNull(targetNodeRid, "targetNodeRid");
         byte[] record = Objects.requireNonNull(command, "command").clone();
         Objects.requireNonNull(timeout, "timeout");
@@ -3392,7 +3401,7 @@ final class ZLinkJavaRawMeshNode
             }
         }
         RouterSocket router = requireStarted();
-        return port.request(router, targetNodeRid, List.of(record), timeout, null)
+        return port.request(router, targetNodeRid, List.of(record), timeout, admission)
                 .thenApply(
                         parts -> {
                             if (parts.size() != 1) {
@@ -7452,7 +7461,8 @@ final class ZLinkJavaRawMeshNode
                     requireStarted();
                     return prepare.get();
                 },
-                (frames, remaining) -> requestApplication(target, frames, remaining, null),
+                (frames, remaining, admission) ->
+                        requestApplication(target, frames, remaining, admission),
                 () -> targetLifecycleEnded(target),
                 () -> observePeerRoute(target),
                 listener -> onPeerStateChanged(target, listener),

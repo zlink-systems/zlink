@@ -626,6 +626,13 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                         new Class<?>[] {ZLinkInternalMeshNode.class},
                         (proxy, method, args) ->
                                 switch (method.getName()) {
+                                    case "observePeerRoute" ->
+                                            new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
+                                    case "targetLifecycleEnded" -> false;
+                                    case "onStateChanged" -> {
+                                        ((Runnable) args[0]).run();
+                                        yield (AutoCloseable) () -> {};
+                                    }
                                     case "status" -> status;
                                     case "sendCanonicalRelocationControl" -> {
                                         byte[] encoded = (byte[]) args[1];
@@ -687,6 +694,13 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                         new Class<?>[] {ZLinkInternalMeshNode.class},
                         (proxy, method, args) ->
                                 switch (method.getName()) {
+                                    case "observePeerRoute" ->
+                                            new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
+                                    case "targetLifecycleEnded" -> false;
+                                    case "onStateChanged" -> {
+                                        ((Runnable) args[0]).run();
+                                        yield (AutoCloseable) () -> {};
+                                    }
                                     case "status" -> status;
                                     case "sendCanonicalRelocationControl" -> {
                                         byte[] encoded = (byte[]) args[1];

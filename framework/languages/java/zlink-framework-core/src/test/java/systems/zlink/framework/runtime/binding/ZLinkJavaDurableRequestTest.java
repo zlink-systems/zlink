@@ -100,7 +100,8 @@ final class ZLinkJavaDurableRequestTest {
         var result =
                 ZLinkJavaDurableRequest.request(
                                 () -> List.of(new byte[] {1}),
-                                (frames, remaining) -> {
+                                (frames, remaining, admission) -> {
+                                    admission.complete(null);
                                     attempts.incrementAndGet();
                                     return pending;
                                 },
@@ -458,7 +459,8 @@ final class ZLinkJavaDurableRequestTest {
         var completion =
                 ZLinkJavaDurableRequest.request(
                         () -> List.of(new byte[] {1}),
-                        (frames, remaining) -> CompletableFuture.completedFuture(List.of()),
+                        (frames, remaining, admission) ->
+                                CompletableFuture.completedFuture(List.of()),
                         () -> false,
                         () -> source.route,
                         source::observe,
@@ -591,7 +593,12 @@ final class ZLinkJavaDurableRequestTest {
                 Duration timeout) {
             return ZLinkJavaDurableRequest.request(
                     prepare,
-                    submit,
+                    (frames, remaining, admission) -> {
+                        var pending = submit.apply(frames, remaining);
+                        if (!pending.toCompletableFuture().isCompletedExceptionally())
+                            admission.complete(null);
+                        return pending;
+                    },
                     ended,
                     () -> route,
                     this::observe,

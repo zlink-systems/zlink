@@ -16,7 +16,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -28,7 +27,14 @@ import java.util.logging.Logger;
 public final class ZLinkJavaDurableRequest {
     private static final Logger LOGGER = Logger.getLogger(ZLinkJavaDurableRequest.class.getName());
     private final Supplier<List<byte[]>> prepare;
-    private final BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit;
+
+    @FunctionalInterface
+    public interface Submit {
+        CompletionStage<List<byte[]>> apply(
+                List<byte[]> frames, Duration remaining, CompletableFuture<Void> admission);
+    }
+
+    private final Submit submit;
     private final BooleanSupplier targetLifecycleEnded;
     private final Supplier<PeerRouteObservation> route;
     private final CompletableFuture<List<byte[]>> completion = new CompletableFuture<>();
@@ -37,14 +43,14 @@ public final class ZLinkJavaDurableRequest {
     private final long timeoutNanos;
     private final Function<Runnable, CompletionStage<Void>> owner;
     private List<byte[]> frames;
-    private boolean admitted;
+    private final CompletableFuture<Void> admission = new CompletableFuture<>();
     private Throwable lastFailure;
     private CompletionStage<List<byte[]>> pending;
     private long submittedRoute;
 
     private ZLinkJavaDurableRequest(
             Supplier<List<byte[]>> prepare,
-            BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
+            Submit submit,
             BooleanSupplier targetLifecycleEnded,
             Supplier<PeerRouteObservation> route,
             Duration timeout,
@@ -62,7 +68,7 @@ public final class ZLinkJavaDurableRequest {
 
     public static CompletionStage<List<byte[]>> request(
             Supplier<List<byte[]>> prepare,
-            BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
+            Submit submit,
             BooleanSupplier targetLifecycleEnded,
             Supplier<PeerRouteObservation> route,
             Function<Runnable, AutoCloseable> observe,
@@ -81,7 +87,7 @@ public final class ZLinkJavaDurableRequest {
 
     public static CompletionStage<List<byte[]>> request(
             Supplier<List<byte[]>> prepare,
-            BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
+            Submit submit,
             BooleanSupplier targetLifecycleEnded,
             Supplier<PeerRouteObservation> route,
             Function<Runnable, AutoCloseable> observe,
@@ -101,11 +107,15 @@ public final class ZLinkJavaDurableRequest {
                 ZLinkProcessExecutionLanes.deadlines()
                         .schedule(
                                 () -> {
-                                    // A started attempt already owns the binding's remaining
-                                    // deadline.
                                     request.post(
                                             () -> {
-                                                if (request.pending == null) request.exhaust();
+                                                if (request.pending != null
+                                                        && request.pending
+                                                                .toCompletableFuture()
+                                                                .isDone()) {
+                                                    request.sourceChanged();
+                                                }
+                                                if (!request.completion.isDone()) request.exhaust();
                                             });
                                 },
                                 Math.max(0, request.remaining()),
@@ -201,7 +211,7 @@ public final class ZLinkJavaDurableRequest {
                 return;
             }
             submittedRoute = currentRoute.selectedGeneration();
-            pending = submit.apply(frames, Duration.ofNanos(remaining));
+            pending = submit.apply(frames, Duration.ofNanos(remaining), admission);
             var submitted = pending;
             submitted.whenComplete(
                     (reply, failure) -> post(() -> settle(submitted, reply, failure)));
@@ -228,7 +238,7 @@ public final class ZLinkJavaDurableRequest {
             return;
         }
         if (cause instanceof ZlinkRequestException request) {
-            admitted = true;
+            admission.complete(null);
             if (request.getResult() == RequestResult.NOT_CONNECTED) {
                 replayWhenReady();
                 return;
@@ -272,12 +282,13 @@ public final class ZLinkJavaDurableRequest {
     private void exhaust() {
         completion.completeExceptionally(
                 new ZLinkFrameworkException(
-                        admitted
+                        admission.isDone() && !admission.isCompletedExceptionally()
                                 ? ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED
                                 : ZLinkFrameworkErrorKind.UNAVAILABLE,
-                        admitted
+                        admission.isDone() && !admission.isCompletedExceptionally()
                                 ? "durable request reply was not received before its deadline"
                                 : "durable request was not admitted before its deadline",
                         lastFailure));
+        if (pending != null) pending.toCompletableFuture().cancel(false);
     }
 }
