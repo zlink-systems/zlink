@@ -1764,7 +1764,7 @@ request_task_t<zlink::message_t> route_client_t::submit_request_reply_message_er
                                                        "route client is not configured");
     }
     runtime::messaging::message_parts_t parts;
-    const auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
+    auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
     if (!transport)
         co_return detail::propagate_failure<zlink::message_t> (transport,
                                                                "node transport lookup failed");
@@ -1811,6 +1811,11 @@ request_task_t<zlink::message_t> route_client_t::submit_request_reply_message_er
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
+    /* The frame must not keep the route channel across a suspension: it can resume and end on
+     * a route client worker, and the route channel's last release drains its own executor.
+     * The worker finds the route channel again through the runtime state. */
+    if (route)
+        route->reset ();
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
         runtime::messaging::envelope_codec_t envelope;
