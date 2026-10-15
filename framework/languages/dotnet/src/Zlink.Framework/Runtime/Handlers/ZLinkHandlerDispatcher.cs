@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Zlink.Framework.Runtime.Handlers;
@@ -9,9 +8,9 @@ internal sealed class ZLinkHandlerDispatcher(
 )
 {
     // Every scope of this factory shares one DI service catalog, so the
-    // activation factory of a handler type is chosen once per dispatcher
-    // (spec 08 §4.3, construction decided before dispatch).
-    private readonly ConcurrentDictionary<Type, Func<IServiceProvider, object>> _factories = new();
+    // dispatcher looks the catalog up once and each dispatch reads the handler
+    // factory from it (spec 08 §4.3, construction decided before dispatch).
+    private ZLinkScopedHandlerInstanceOwner.DispatchCatalog? _catalog;
 
     public ValueTask<ZLinkHandlerDispatchResult> DispatchAsync(
         ZLinkHandlerEndpointDescriptor endpoint,
@@ -90,12 +89,11 @@ internal sealed class ZLinkHandlerDispatcher(
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var services = scope.ServiceProvider;
-        var handler = _factories.GetOrAdd(
-            handlerType,
-            static (type, services) =>
-                ZLinkScopedHandlerInstanceOwner.GetDispatchFactory(services, type),
-            services
-        )(services);
+        var catalog =
+            Volatile.Read(ref _catalog)
+            ?? Interlocked.CompareExchange(ref _catalog, new(services), null)
+            ?? _catalog!;
+        var handler = catalog.Create(services, handlerType);
         try
         {
             var result = await ZLinkHandlerInvocationEngine
