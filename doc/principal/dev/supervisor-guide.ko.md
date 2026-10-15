@@ -147,3 +147,4 @@ resume한 세션은 쌓인 context 전체를 tool 호출마다 다시 보낸다.
 | 2026-10-14 | #1743 Java(PR #1759) 리뷰에서 "owner 관찰자는 owner 스레드에서 실행된다"는 시험을 JDK `CompletableFuture`의 실행 스레드 보장과 대조하지 않고 승인 | 그 시험이 간헐적으로 실패해 다른 job이 찾아냈고, #1743을 다시 열었다 |
 | 2026-10-14 | #1743 .NET(PR #1747)의 수정 전 실패가 컴파일 오류(CS1501)뿐인데, 한계를 PR에 적고 머지 | 동작 차이를 보이는 시험 없이 결함 수정이 main에 들어갔다 |
 | 2026-10-14 | 여러 브리프를 "진단하고 바로 고치라"로 쓰고, 설계 대안 선택도 sub-agent에게 넘김(§3) | 소유 표를 승인하기 전에 구현이 진행됐다. #1716·#1738은 두 lane이 같은 상태를 바꾸는 구현으로 돌아와 반려 |
+| 2026-10-15 | #1648 Java 종료 순서 변경(port를 먼저 닫고 pump를 나중에 기다림)을 "Core polling §5가 close를 POLLERR로 깨운다"는 근거만 보고 승인했다. 같은 handle의 동시 socket 호출 중 close를 정한 Core socket 계약(`core/doc/spec/core/socket/README.en.md:62`, `:697`)을 `rg`로 대조하지 않았다(§1.1-3) | close가 `EBUSY`로 거부돼 CanonicalDirectJoin이 20회 중 1회 실패하고 M6A 시험이 `ctxTerm`에서 26분 멈췄다. job의 반복 실행에서 드러나 main 순서로 되돌림 |
