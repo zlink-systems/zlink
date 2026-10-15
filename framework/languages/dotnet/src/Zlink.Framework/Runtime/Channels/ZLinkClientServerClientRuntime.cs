@@ -1466,12 +1466,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             {
                 try
                 {
+                    // ClientServer section 5: receive pushed DATA even before admission,
+                    // so the Admit reply behind it can reach the binding completion owner.
                     var readiness = _receivePoller.Wait(ControlReceivePollInterval);
-                    var admissionEstablished = RunState(() =>
-                        !IsDisposing && CurrentAdmission is not null
-                    );
-                    if (!admissionEstablished)
-                        continue;
                     if (
                         (
                             readiness

@@ -2541,6 +2541,55 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     }
 
     [Fact]
+    public async Task AdmissionReply_ProgressesBehindAPushedUpdate()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = CreateClientServerRouter(context);
+        router.Bind("tcp://127.0.0.1:0");
+        var endpoint = router.Options.LastEndpoint;
+        await using var client = CreateClient(endpoint);
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            using var hello = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(hello.Parts, out _));
+            var clientRid =
+                hello.RoutingId ?? throw new InvalidOperationException("missing client routing id");
+            using var update = ZLinkClientServerControlProtocol.EncodeUpdate(
+                new ZLinkClientServerControlProtocol.Admission(
+                    "work",
+                    RoutingId.From("manual-server"),
+                    1,
+                    1,
+                    100,
+                    ZLinkFrameworkRuntimeState.Serving,
+                    "plaintext",
+                    1024 * 1024,
+                    endpoint
+                )
+            );
+            await router.Send(clientRid).Message(update).Async(CancellationToken.None).Admitted;
+            ReplyAdmission(router, hello, endpoint);
+
+            await WaitUntilAsync(
+                transport,
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5)
+            );
+            Assert.Equal(1, transport.PhysicalConnectionCount);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task RequestedLivenessProbe_RepliesAndProcessesFollowingUpdate()
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
