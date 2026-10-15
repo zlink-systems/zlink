@@ -10,12 +10,15 @@
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 
 #include <gtest/gtest.h>
+#include <zlink.hpp>
 
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -23,6 +26,8 @@ namespace
 
 using namespace std::chrono_literals;
 namespace mesh = zlink::framework::runtime::mesh;
+namespace protocol = zlink::framework::runtime::protocol;
+namespace backend = zlink::framework::detail::backend;
 
 std::vector<std::uint8_t> bytes (const std::string &value)
 {
@@ -45,16 +50,11 @@ mesh::raw_mesh_node_options_t options (const std::string &rid, std::uint64_t lif
     return result;
 }
 
-// One host ingress pass per owner: the route observation step and one pump.
-// Before #1087 the observation step was the monitor drain; the fixture
-// accepts either so the same scenario shows the behavior on both sides.
-template <typename Owner> void progress (Owner &owner)
+// One host ingress pass observes the Core selected routes and pumps one record.
+void progress (mesh::raw_mesh_node_owner_t &owner)
 {
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-    if constexpr (requires { owner.observe_routes (); })
-        (void) owner.observe_routes ();
-    else
-        (void) std::move (owner.drain_monitor_events (now)).result ();
+    (void) owner.observe_routes ();
     (void) std::move (owner.pump_one (now)).result ();
 }
 
@@ -111,6 +111,124 @@ TEST (CppFrameworkMeshSelectedRoute, AdmissionFollowsCoreSelectedRouteAcrossHand
 
     source.close ();
     first->close ();
+}
+
+class CppFrameworkHelloExchange : public testing::TestWithParam<bool>
+{
+};
+
+TEST_P (CppFrameworkHelloExchange, RetainsFirstDescriptorUntilAdmit)
+{
+    mesh::raw_mesh_node_owner_t source (options ("hello-source", 101));
+    source.start ();
+    const auto initial = source.topology ().local_descriptor ();
+    zlink::router_socket_t remote (source.context ());
+    remote.set_routing_id (zlink::routing_id_t::from ("hello-target"));
+    remote.options ().linger (0ms);
+    remote.bind ("tcp://127.0.0.1:0");
+    backend::raw_route_port_t port (remote);
+    ASSERT_TRUE (source.connect_peer (remote.options ().last_endpoint ()));
+    std::optional<backend::raw_received_t> received;
+    const auto receive = [&] {
+        received.reset ();
+        return pump_until ({&source}, [&] {
+            if (!received)
+                received = port.try_receive ();
+            return received.has_value ();
+        });
+    };
+    ASSERT_TRUE (receive ());
+    ASSERT_EQ (1u, received->parts.size ());
+    const auto first = received->parts.front ().to_bytes ();
+    EXPECT_EQ (protocol::encode_route_mesh_admission (protocol::command::hello,
+                                                      source.topology ().local_descriptor ()),
+               first);
+    auto descriptor = options ("hello-target", 201).descriptor;
+    descriptor.advertised_endpoint = remote.options ().last_endpoint ();
+    if (GetParam ()) {
+        ASSERT_TRUE (port
+                       .send (bytes ("hello-source"), {protocol::encode_route_mesh_admission (
+                                                        protocol::command::hello, descriptor)})
+                       .result ()
+                       .value ());
+        ASSERT_TRUE (receive ());
+        EXPECT_EQ (protocol::encode_route_mesh_admission (protocol::command::admit, initial),
+                   received->parts.front ().to_bytes ());
+        ASSERT_TRUE (source.topology ().peer (descriptor.node_routing_id));
+        EXPECT_FALSE (source.topology ().peer (descriptor.node_routing_id)->ready);
+    }
+    const auto latest = source.publish_descriptor_update ([] (auto &descriptor) {
+        ++descriptor.descriptor_revision;
+        descriptor.state = mesh::service_node_state_t::serving;
+    });
+    ASSERT_EQ (initial.descriptor_revision + 1, latest.descriptor_revision);
+    // A successful send has completed; only the remote ADMIT remains withheld.
+    const auto tick =
+      source.tick_liveness (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
+    ASSERT_TRUE (receive ());
+    EXPECT_EQ (first, received->parts.front ().to_bytes ());
+    if (GetParam ()) {
+        ASSERT_EQ (1u, tick.probes.size ());
+        ASSERT_TRUE (receive ());
+        EXPECT_EQ (protocol::encode_liveness (protocol::command::livenessProbe,
+                                              tick.probes.front ().probe_id),
+                   received->parts.front ().to_bytes ());
+        ASSERT_TRUE (port
+                       .send (bytes ("hello-source"),
+                              {protocol::encode_liveness (protocol::command::livenessAck,
+                                                          tick.probes.front ().probe_id)})
+                       .result ()
+                       .value ());
+    }
+
+    ASSERT_TRUE (port
+                   .send (bytes ("hello-source"), {protocol::encode_route_mesh_admission (
+                                                    protocol::command::admit, descriptor)})
+                   .result ()
+                   .value ());
+    ASSERT_TRUE (receive ());
+    EXPECT_EQ (protocol::encode_route_mesh_admission (protocol::command::update, latest),
+               received->parts.front ().to_bytes ());
+    source.close ();
+}
+
+INSTANTIATE_TEST_SUITE_P (WithAndWithoutRemoteHello,
+                          CppFrameworkHelloExchange,
+                          testing::Values (false, true));
+
+TEST (CppFrameworkMeshSelectedRoute, AdmissionRevisionIntegrity)
+{
+    auto baseline = options ("guard-peer", 201).descriptor;
+    baseline.descriptor_revision = 23;
+    auto higher = baseline;
+    ++higher.descriptor_revision;
+    higher.state = mesh::service_node_state_t::serving;
+    auto equal_mutated = higher;
+    equal_mutated.descriptor_revision = baseline.descriptor_revision;
+    auto lower = baseline;
+    --lower.descriptor_revision;
+    auto immutable = higher;
+    immutable.advertised_endpoint = "tcp://127.0.0.1:7071";
+    for (const auto &[command, incoming, expected] :
+         std::vector<std::tuple<protocol::command, mesh::service_node_descriptor_t,
+                                mesh::peer_admission_result_t>>{
+           {protocol::command::hello, higher, mesh::peer_admission_result_t::stale_descriptor},
+           {protocol::command::admit, higher, mesh::peer_admission_result_t::stale_descriptor},
+           {protocol::command::update, higher, mesh::peer_admission_result_t::admitted},
+           {protocol::command::hello, baseline,
+            mesh::peer_admission_result_t::duplicate_connection},
+           {protocol::command::hello, equal_mutated,
+            mesh::peer_admission_result_t::stale_descriptor},
+           {protocol::command::hello, lower, mesh::peer_admission_result_t::stale_descriptor},
+           {protocol::command::hello, immutable,
+            mesh::peer_admission_result_t::stale_descriptor}}) {
+        SCOPED_TRACE (static_cast<int> (command));
+        mesh::service_topology_registry_t topology (options ("guard-local", 101).descriptor);
+        ASSERT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (baseline, {1}));
+        EXPECT_EQ (expected,
+                   topology.admit (incoming, {1},
+                                   mesh::service_liveness_registry_t::clock_t::now (), command));
+    }
 }
 
 } // namespace
