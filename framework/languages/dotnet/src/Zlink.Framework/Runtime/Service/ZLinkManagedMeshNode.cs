@@ -79,6 +79,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private event Action<RoutingId>? PeerConnectionIntentRemoved;
     private readonly ZLinkMeshSelectedRoutes _selectedRoutes = new();
     private readonly ConcurrentDictionary<MailboxKey, OwnedMailbox> _ownedMailboxes = new();
+
+    // True means ready; false reserves that owner until its claim is released.
+    // Enqueue only adds absent owners, so it cannot release an existing reservation.
+    private readonly ConcurrentDictionary<MailboxKey, bool> _readyMailboxes = new();
     private readonly ConcurrentDictionary<ulong, PendingOperation> _operations = new();
     private readonly Dictionary<
         RelocationReplyTerminalKey,
@@ -2273,10 +2277,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RecvFlags flags = RecvFlags.None
     ) => AwaitStateLane(DrainReadyAsync(domains, batch, flags));
 
-    // The owned mailboxes are a concurrent registry, and each mailbox lane owns
-    // its claim. The node lane owns no state this scan reads, so it does not
-    // take a node turn.
-    public async ValueTask<bool> DrainReadyAsync(
+    // The ready registry reserves each owner once. Its mailbox lane captures and
+    // drains the FIFO prefix together on the first receive.
+    public ValueTask<bool> DrainReadyAsync(
         MeshReadyDomains domains,
         MeshReadyBatch batch,
         RecvFlags flags = RecvFlags.None
@@ -2284,12 +2287,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         ArgumentNullException.ThrowIfNull(batch);
         if ((domains & MeshReadyDomains.All) == 0)
-            return false;
+            return ValueTask.FromResult(false);
 
         Volatile.Write(ref _readyPosted, 0);
         foreach (
-            var entry in _ownedMailboxes
-                .Where(entry => (entry.Key.Domain & domains) != 0)
+            var entry in _readyMailboxes
+                .Where(entry => entry.Value && (entry.Key.Domain & domains) != 0)
                 .OrderBy(static entry =>
                     entry.Key.Domain == MeshReadyDomains.Infrastructure ? 0 : 1
                 )
@@ -2297,13 +2300,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 .ThenBy(static entry => entry.Key.Identity, StringComparer.Ordinal)
         )
         {
-            var mailbox = entry.Value;
-            var canClaim = batch.Count < batch.MaximumRecords;
-            var claim = await mailbox.TryClaimAsync(canClaim).ConfigureAwait(false);
-            if (!claim.Ready)
+            if (batch.Count >= batch.MaximumRecords)
+                return ValueTask.FromResult(true);
+            if (!_readyMailboxes.TryUpdate(entry.Key, false, true))
                 continue;
-            if (!canClaim)
-                return true;
+            if (!_ownedMailboxes.TryGetValue(entry.Key, out var mailbox))
+                continue;
             batch.Add(
                 new MeshReadyRecord(
                     entry.Key.OwnerKind,
@@ -2314,15 +2316,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 new MeshClaim
                 {
                     Receiver = (receiveBatch, receiveFlags) =>
-                        mailbox.DrainAsync(
+                        mailbox.ClaimAndDrainAsync(
                             receiveBatch,
                             Math.Min(ReceiveBatchSize, receiveBatch.MaximumRecords)
                         ),
-                    Releaser = () => mailbox.Release(SignalReadyIfNeeded),
+                    Releaser = () => mailbox.Release(),
                 }
             );
         }
-        return false;
+        return ValueTask.FromResult(false);
     }
 
     public ISpot CreateSpot()
@@ -3367,6 +3369,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         foreach (var mailbox in _ownedMailboxes.Values)
             mailbox.Dispose();
         _ownedMailboxes.Clear();
+        _readyMailboxes.Clear();
         Interlocked.Exchange(ref _reservedRawApplicationAdmission, null)?.Dispose();
         // The receive loop has stopped, so its unposted fanout children end here.
         _pendingRawMulticast?.Dispose();
@@ -11480,9 +11483,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var mailbox = _ownedMailboxes.GetOrAdd(
             MailboxKey.ForNode(MeshReadyDomains.Infrastructure),
-            _ => new OwnedMailbox(RecordOwnedRecordEnqueued, RecordOwnedRecordDequeued)
+            static (key, node) => node.CreateOwnedMailbox(key),
+            this
         );
-        return mailbox.TryEnqueue(queued, SignalReadyIfNeeded);
+        return mailbox.TryEnqueue(queued);
     }
 
     private static IDisposable AttachApplicationAdmission(
@@ -11614,11 +11618,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             var mailbox = _ownedMailboxes.GetOrAdd(
                 key,
-                static (_, node) =>
-                    new OwnedMailbox(
-                        node.RecordOwnedRecordEnqueued,
-                        node.RecordOwnedRecordDequeued
-                    ),
+                static (key, node) => node.CreateOwnedMailbox(key),
                 this
             );
             if (
@@ -11627,7 +11627,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     is ZLinkApplicationJobQueueRecordOwner { Admission: { } applicationAdmission }
             )
                 applicationAdmission.MarkQueued();
-            if (!mailbox.TryEnqueue(queued, SignalReadyIfNeeded))
+            if (!mailbox.TryEnqueue(queued))
             {
                 RecordInboundBackpressureDrop(record.Kind);
                 queued.Dispose();
@@ -11667,6 +11667,27 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         return total;
     }
+
+    private OwnedMailbox CreateOwnedMailbox(MailboxKey key) =>
+        new(
+            RecordOwnedRecordEnqueued,
+            RecordOwnedRecordDequeued,
+            () =>
+            {
+                if (_readyMailboxes.TryAdd(key, true))
+                    SignalReadyIfNeeded();
+            },
+            recordsRemain =>
+            {
+                if (recordsRemain)
+                {
+                    _readyMailboxes[key] = true;
+                    SignalReadyIfNeeded();
+                }
+                else
+                    _readyMailboxes.TryRemove(key, out _);
+            }
+        );
 
     private void RecordOwnedRecordEnqueued(ulong pendingBytes)
     {
