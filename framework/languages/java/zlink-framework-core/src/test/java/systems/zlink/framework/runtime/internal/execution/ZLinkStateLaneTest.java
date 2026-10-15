@@ -25,6 +25,43 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkStateLaneTest {
+    private static final int POOL_OCCUPATION_TIMEOUT_SECONDS = 5;
+    private static final int COMPLETION_TIMEOUT_SECONDS = 1;
+
+    @Test
+    void pendingCompletionProgressesWhileObservationPoolIsBlocked() throws Exception {
+        var pool = java.util.concurrent.ForkJoinPool.commonPool();
+        int workers = pool.getParallelism();
+        var occupied = new java.util.concurrent.CountDownLatch(workers);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        try {
+            for (int i = 0; i < workers; i++) {
+                pool.execute(
+                        () -> {
+                            occupied.countDown();
+                            try {
+                                release.await();
+                            } catch (InterruptedException failure) {
+                                Thread.currentThread().interrupt();
+                                throw new AssertionError(failure);
+                            }
+                        });
+            }
+            assertTrue(occupied.await(POOL_OCCUPATION_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            var scheduled = new java.util.ArrayDeque<Runnable>();
+            var lane = new ZLinkStateLane(scheduled::addLast);
+            var result = lane.runAsync(() -> 42).toCompletableFuture();
+            scheduled.removeFirst().run();
+            assertEquals(42, result.get(COMPLETION_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            while (!scheduled.isEmpty()) scheduled.removeFirst().run();
+            lane.closeAsync()
+                    .toCompletableFuture()
+                    .get(COMPLETION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+        }
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
     void closeWaitsForAnAdmissionThatHasNotYetPublishedItsTurn(boolean post) throws Exception {
