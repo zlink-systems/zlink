@@ -6396,38 +6396,54 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return new ActorMessageRead(true, fromPendingHeader, headerPart, bodyPart, null, index);
     }
 
-    boolean dispatchActorControlPacket(
+    CompletionStage<Void> dispatchActorControlPacket(
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
             ZLinkActor actor,
             boolean pendingHeader) {
         if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                 packetHeader.packetName())) {
-            CompletionStage<Void> callback = notifySpotActorDisconnected(actor);
-            callback.whenComplete(
-                    (ignored, error) -> {
-                        try {
-                            if (packetHeader.requestSeq().isPresent()) {
-                                // The acknowledgement marks the exact callback's
-                                // terminal boundary. Callback failure is diagnostic;
-                                // it does not restore the previous binding.
-                                try (Message acknowledgement = Message.from(new byte[0])) {
-                                    primaryNode.replyActorNoBind(
-                                            headerPart.actor(),
-                                            headerPart.sourceNodeRid(),
-                                            headerPart.sourceSessionRid(),
-                                            headerPart.requestId(),
-                                            headerPart.flags(),
-                                            List.of(acknowledgement));
+            return actorSessions
+                    .runtime()
+                    .notifyDisconnected(actor)
+                    .handle(
+                            (ignored, error) -> {
+                                try {
+                                    if (error != null && flowCaptureEnabled()) {
+                                        reportDispatchError(
+                                                DispatchFailureReport.of(
+                                                                ZLinkDispatchErrorSurface
+                                                                        .SPOT_ACTOR,
+                                                                ZLinkDispatchMessageKind.CONTROL,
+                                                                ZLinkDispatchErrorReason
+                                                                        .HANDLER_EXCEPTION,
+                                                                ZLinkDispatchErrorAction.DROP)
+                                                        .packetName(packetHeader.packetName())
+                                                        .actorId(actor.context().actorId())
+                                                        .sourceRid(headerPart.sourceNodeRid())
+                                                        .error(error));
+                                    }
+                                    if (packetHeader.requestSeq().isPresent()) {
+                                        // The acknowledgement marks the exact callback's
+                                        // terminal boundary. Callback failure is diagnostic;
+                                        // it does not restore the previous binding.
+                                        try (Message acknowledgement = Message.from(new byte[0])) {
+                                            primaryNode.replyActorNoBind(
+                                                    headerPart.actor(),
+                                                    headerPart.sourceNodeRid(),
+                                                    headerPart.sourceSessionRid(),
+                                                    headerPart.requestId(),
+                                                    headerPart.flags(),
+                                                    List.of(acknowledgement));
+                                        }
+                                    }
+                                } finally {
+                                    closePendingActorHeader(headerPart, pendingHeader);
                                 }
-                            }
-                        } finally {
-                            closePendingActorHeader(headerPart, pendingHeader);
-                        }
-                    });
-            return true;
+                                return null;
+                            });
         }
-        return false;
+        return null;
     }
 
     boolean isActorInfrastructureControl(List<ZLinkBackendActorReceived> actorMessages) {

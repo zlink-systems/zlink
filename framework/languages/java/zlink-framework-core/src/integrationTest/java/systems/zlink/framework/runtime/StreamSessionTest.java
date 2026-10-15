@@ -63,6 +63,9 @@ final class StreamSessionTest {
     private static final String PARALLEL_REQUEST_PACKET = "StreamActorParallelRequest";
     private static final String HEARTBEAT_PING_PACKET = "$zlink.heartbeat.ping";
     private static final String HEARTBEAT_PONG_PACKET = "$zlink.heartbeat.pong";
+    private static final String RETIREMENT_ACTOR_NODE = "remote-binding-actor";
+    private static final String RETIREMENT_SESSION_NODE = "remote-binding-session";
+    private static final String RETIREMENT_TARGET_NODE = "remote-binding-target";
 
     private enum CloseOrder {
         BEFORE_BIND,
@@ -216,10 +219,27 @@ final class StreamSessionTest {
                                                 + java.util.UUID.randomUUID()))) {
             var relocations = new InMemoryRelocationStore();
             var actorOptions =
-                    retirementActorOptions("remote-binding-actor", locations, relocations);
+                    retirementActorOptions(RETIREMENT_ACTOR_NODE, locations, relocations);
+            var sessionOptions = new DefaultZLinkFrameworkOptions();
+            sessionOptions.addLocationStore(locations);
+            var sessionNode = sessionOptions.addRouteMesh("game");
+            sessionNode.objects().client();
+            sessionNode
+                    .listen("tcp://127.0.0.1:0")
+                    .setRoutingId(RoutingId.from(RETIREMENT_SESSION_NODE));
+            var stream = sessionOptions.addStreamNode("gateway");
+            stream.bind("tcp://127.0.0.1:0");
+            stream.enableActorDispatch();
+            stream.registerSession(ActorRelaySession.class);
             try (var actorHost =
-                    RuntimeTestSupport.startFramework(
-                            actorOptions, new ZLinkJavaBackendAdapterFactory())) {
+                            RuntimeTestSupport.startFramework(
+                                    actorOptions, new ZLinkJavaBackendAdapterFactory());
+                    var sessionHost =
+                            RuntimeTestSupport.startFramework(
+                                    sessionOptions, new ZLinkJavaBackendAdapterFactory());
+                    AutoCloseable completeDisconnectCallback = () -> release.complete(null)) {
+                assertEventually(actorHost::isReady);
+                assertEventually(sessionHost::isReady);
                 actorHost
                         .actorManager()
                         .create("remote-player", "player")
@@ -250,44 +270,48 @@ final class StreamSessionTest {
                                                         .submit(String.class)
                                                         .toCompletableFuture()
                                                         .join()));
-                var sessionOptions = new DefaultZLinkFrameworkOptions();
-                sessionOptions.addLocationStore(locations);
-                var sessionNode = sessionOptions.addRouteMesh("game");
-                sessionNode.objects().client();
-                sessionNode
-                        .listen("tcp://127.0.0.1:0")
-                        .setRoutingId(RoutingId.from("remote-binding-session"));
-                sessionNode
-                        .peerConnections()
-                        .connect(
-                                actorHost
-                                        .listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game")
-                                        .endpoint());
-                var stream = sessionOptions.addStreamNode("gateway");
-                stream.bind("tcp://127.0.0.1:0");
-                stream.enableActorDispatch();
-                stream.registerSession(ActorRelaySession.class);
-                try (var sessionHost =
-                        RuntimeTestSupport.startFramework(
-                                sessionOptions, new ZLinkJavaBackendAdapterFactory())) {
-                    ActorRelaySession previousSession;
-                    try (var client = new Socket("127.0.0.1", streamPort(sessionHost))) {
-                        client.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
-                        client.getOutputStream()
+                assertMeshPeerReady(actorHost, RETIREMENT_SESSION_NODE);
+                assertMeshPeerReady(sessionHost, RETIREMENT_ACTOR_NODE);
+                ActorRelaySession.lastConnected = null;
+                ActorRelaySession previousSession;
+                try (var client = new Socket("127.0.0.1", streamPort(sessionHost))) {
+                    client.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+                    client.getOutputStream()
+                            .write(frame(requestHeader(1L, "Bind"), bytes("\"remote-player\"")));
+                    client.getOutputStream().flush();
+                    assertBoundControl(client.getInputStream(), "remote-player");
+                    assertReply(client, 1L, "\"bound\"");
+                    client.getOutputStream()
+                            .write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"live\"")));
+                    client.getOutputStream().flush();
+                    assertReply(client, 2L, "\"remote-player:live\"");
+                    assertEquals(
+                            "BOUND",
+                            actorHost
+                                    .actorClient()
+                                    .requestToActor("remote-player", new BoundSessionProbe())
+                                    .submit(String.class)
+                                    .toCompletableFuture()
+                                    .get(3, TimeUnit.SECONDS));
+                    assertRetirementPush(client);
+                    previousSession = ActorRelaySession.lastConnected;
+                }
+                entered.get(3, TimeUnit.SECONDS);
+                if (replaceBeforeCallbackTerminal) {
+                    try (var replacement = new Socket("127.0.0.1", streamPort(sessionHost))) {
+                        replacement.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+                        replacement
+                                .getOutputStream()
                                 .write(
                                         frame(
-                                                requestHeader(1L, "Bind"),
+                                                requestHeader(3L, "Bind"),
                                                 bytes("\"remote-player\"")));
-                        client.getOutputStream().flush();
-                        assertBoundControl(client.getInputStream(), "remote-player");
-                        assertReply(client, 1L, "\"bound\"");
-                        client.getOutputStream()
-                                .write(
-                                        frame(
-                                                requestHeader(2L, "StreamActorEcho"),
-                                                bytes("\"live\"")));
-                        client.getOutputStream().flush();
-                        assertReply(client, 2L, "\"remote-player:live\"");
+                        replacement.getOutputStream().flush();
+                        assertBoundControl(replacement.getInputStream(), "remote-player");
+                        assertReply(replacement, 3L, "\"bound\"");
+                        release.complete(null);
+                        assertEventually(
+                                () -> previousSession.context().actors().bound().isEmpty());
                         assertEquals(
                                 "BOUND",
                                 actorHost
@@ -296,136 +320,100 @@ final class StreamSessionTest {
                                         .submit(String.class)
                                         .toCompletableFuture()
                                         .get(3, TimeUnit.SECONDS));
-                        assertRetirementPush(client);
-                        previousSession = ActorRelaySession.lastConnected;
+                        assertRetirementPush(replacement);
+                        replacement
+                                .getOutputStream()
+                                .write(
+                                        frame(
+                                                requestHeader(4L, "StreamActorEcho"),
+                                                bytes("\"replacement\"")));
+                        replacement.getOutputStream().flush();
+                        assertReply(replacement, 4L, "\"remote-player:replacement\"");
                     }
-                    entered.get(3, TimeUnit.SECONDS);
-                    if (replaceBeforeCallbackTerminal) {
-                        try (var replacement = new Socket("127.0.0.1", streamPort(sessionHost))) {
-                            replacement.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
-                            replacement
-                                    .getOutputStream()
-                                    .write(
-                                            frame(
-                                                    requestHeader(3L, "Bind"),
-                                                    bytes("\"remote-player\"")));
-                            replacement.getOutputStream().flush();
-                            assertBoundControl(replacement.getInputStream(), "remote-player");
-                            assertReply(replacement, 3L, "\"bound\"");
-                            release.complete(null);
-                            assertEventually(
-                                    () -> previousSession.context().actors().bound().isEmpty());
-                            assertEquals(
-                                    "BOUND",
-                                    actorHost
-                                            .actorClient()
-                                            .requestToActor(
-                                                    "remote-player", new BoundSessionProbe())
-                                            .submit(String.class)
-                                            .toCompletableFuture()
-                                            .get(3, TimeUnit.SECONDS));
-                            assertRetirementPush(replacement);
-                            replacement
-                                    .getOutputStream()
-                                    .write(
-                                            frame(
-                                                    requestHeader(4L, "StreamActorEcho"),
-                                                    bytes("\"replacement\"")));
-                            replacement.getOutputStream().flush();
-                            assertReply(replacement, 4L, "\"remote-player:replacement\"");
-                        }
-                        return;
-                    }
+                    return;
+                }
+                assertEventually(
+                        () ->
+                                "INVALID_OPERATION"
+                                        .equals(
+                                                actorHost
+                                                        .actorClient()
+                                                        .requestToActor(
+                                                                "remote-player",
+                                                                new BoundSessionProbe())
+                                                        .submit(String.class)
+                                                        .toCompletableFuture()
+                                                        .join()));
+                var targetOptions =
+                        retirementActorOptions(RETIREMENT_TARGET_NODE, locations, relocations);
+                try (var target =
+                        RuntimeTestSupport.startFramework(
+                                targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+                    assertEventually(target::isReady);
+                    assertMeshPeerReady(actorHost, RETIREMENT_TARGET_NODE);
+                    target.actorManager()
+                            .create("target-ready-player", "player")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+                    assertEquals(
+                            "",
+                            actorHost
+                                    .actorClient()
+                                    .requestToActor("target-ready-player", new MembershipProbe())
+                                    .submit(String.class)
+                                    .toCompletableFuture()
+                                    .get(3, TimeUnit.SECONDS));
+                    var relocation =
+                            actorHost
+                                    .relocate(
+                                            new systems.zlink.framework.runtime.host
+                                                    .ZLinkFrameworkRelocationOptions(
+                                                    systems.zlink.framework.runtime.host
+                                                            .ZLinkFrameworkRelocationMode
+                                                            .PLANNED_MAINTENANCE,
+                                                    null,
+                                                    java.time.Duration.ofSeconds(3)))
+                                    .toCompletableFuture()
+                                    .get(5, TimeUnit.SECONDS);
+                    assertEquals(
+                            systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome
+                                    .RELOCATED,
+                            relocation.outcome(),
+                            relocation::toString);
                     assertEventually(
-                            () ->
-                                    "INVALID_OPERATION"
-                                            .equals(
-                                                    actorHost
-                                                            .actorClient()
-                                                            .requestToActor(
-                                                                    "remote-player",
-                                                                    new BoundSessionProbe())
-                                                            .submit(String.class)
-                                                            .toCompletableFuture()
-                                                            .join()));
-                    var targetOptions =
-                            retirementActorOptions("remote-binding-target", locations, relocations);
-                    try (var target =
-                            RuntimeTestSupport.startFramework(
-                                    targetOptions, new ZLinkJavaBackendAdapterFactory())) {
-                        assertEventually(target::isReady);
-                        assertEventually(
-                                () ->
-                                        actorHost
-                                                .routeMeshRuntime()
-                                                .snapshot("game")
-                                                .peers()
-                                                .stream()
-                                                .anyMatch(
-                                                        peer ->
-                                                                peer.nodeRid()
-                                                                                .equals(
-                                                                                        RoutingId
-                                                                                                .from(
-                                                                                                        "remote-binding-target"))
-                                                                        && peer.state()
-                                                                                == systems.zlink
-                                                                                        .framework
-                                                                                        .monitoring
-                                                                                        .ZLinkPeerState
-                                                                                        .READY));
-                        target.actorManager()
-                                .create("target-ready-player", "player")
-                                .submit()
-                                .toCompletableFuture()
-                                .get(3, TimeUnit.SECONDS);
-                        assertEquals(
-                                "",
-                                actorHost
-                                        .actorClient()
-                                        .requestToActor(
-                                                "target-ready-player", new MembershipProbe())
-                                        .submit(String.class)
-                                        .toCompletableFuture()
-                                        .get(3, TimeUnit.SECONDS));
-                        var relocation =
-                                actorHost
-                                        .relocate(
-                                                new systems.zlink.framework.runtime.host
-                                                        .ZLinkFrameworkRelocationOptions(
-                                                        systems.zlink.framework.runtime.host
-                                                                .ZLinkFrameworkRelocationMode
-                                                                .PLANNED_MAINTENANCE,
-                                                        null,
-                                                        java.time.Duration.ofSeconds(3)))
-                                        .toCompletableFuture()
-                                        .get(5, TimeUnit.SECONDS);
-                        assertEquals(
-                                systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome
-                                        .RELOCATED,
-                                relocation.outcome(),
-                                relocation::toString);
-                        assertEventually(
-                                () -> actorHost.status().safeToShutdown(),
-                                actorOptions
-                                        .configureLocations()
-                                        .messageFollowDuration()
-                                        .plusMillis(CLIENT_TIMEOUT_MILLIS));
-                        assertEquals(
-                                "INVALID_OPERATION",
-                                target.actorClient()
-                                        .requestToActor("remote-player", new BoundSessionProbe())
-                                        .submit(String.class)
-                                        .toCompletableFuture()
-                                        .get(3, TimeUnit.SECONDS));
-                    }
-                } finally {
-                    release.complete(null);
-                    GameEntrySpot.disconnectCallback =
-                            actor -> CompletableFuture.completedFuture(null);
+                            () -> actorHost.status().safeToShutdown(),
+                            actorOptions
+                                    .configureLocations()
+                                    .messageFollowDuration()
+                                    .plusMillis(CLIENT_TIMEOUT_MILLIS));
+                    assertEquals(
+                            "INVALID_OPERATION",
+                            target.actorClient()
+                                    .requestToActor("remote-player", new BoundSessionProbe())
+                                    .submit(String.class)
+                                    .toCompletableFuture()
+                                    .get(3, TimeUnit.SECONDS));
                 }
             }
+        } finally {
+            GameEntrySpot.disconnectCallback = GameEntrySpot.DEFAULT_DISCONNECT_CALLBACK;
         }
+    }
+
+    private static void assertMeshPeerReady(ZLinkFrameworkRuntime runtime, String nodeRid)
+            throws Exception {
+        RoutingId expected = RoutingId.from(nodeRid);
+        assertEventually(
+                () ->
+                        runtime.routeMeshRuntime().snapshot("game").peers().stream()
+                                .anyMatch(
+                                        peer ->
+                                                peer.nodeRid().equals(expected)
+                                                        && peer.state()
+                                                                == systems.zlink.framework
+                                                                        .monitoring.ZLinkPeerState
+                                                                        .READY));
     }
 
     private static void assertRetirementPush(Socket client) throws Exception {
@@ -691,8 +679,10 @@ final class StreamSessionTest {
     }
 
     public static final class GameEntrySpot implements ZLinkEntrySpot<ZLinkActor> {
+        private static final java.util.function.Function<ZLinkActor, CompletionStage<Void>>
+                DEFAULT_DISCONNECT_CALLBACK = actor -> CompletableFuture.completedFuture(null);
         static java.util.function.Function<ZLinkActor, CompletionStage<Void>> disconnectCallback =
-                actor -> CompletableFuture.completedFuture(null);
+                DEFAULT_DISCONNECT_CALLBACK;
 
         @Override
         public CompletionStage<Void> onDisconnectActor(ZLinkActor actor) {
@@ -993,7 +983,6 @@ final class StreamSessionTest {
         private final ZLinkActorManager actors;
 
         public ActorRelaySession(ZLinkSessionContext context, ZLinkActorManager actors) {
-            lastConnected = this;
             this.context = context;
             this.actors = actors;
         }
@@ -1005,6 +994,7 @@ final class StreamSessionTest {
 
         @Override
         public CompletionStage<Void> onConnected() {
+            lastConnected = this;
             return CompletableFuture.completedFuture(null);
         }
 
