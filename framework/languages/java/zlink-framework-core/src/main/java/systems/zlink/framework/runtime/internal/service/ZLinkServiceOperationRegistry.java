@@ -17,7 +17,7 @@ import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
-/** Owns request correlation, deadline, and terminal-once completion. */
+/** Owns operation correlation, request deadlines, and terminal-once completion. */
 public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final ScheduledFuture<?> maintenance;
     private final LongSupplier nanoTime;
@@ -88,8 +88,31 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private <T> Operation<T> register(Duration timeout, UUID suppliedId) {
         long timeoutNanos = timeoutNanos(timeout);
         synchronized (gate) {
-            return registerLocked(timeoutNanos, suppliedId);
+            return registerLocked(timeoutNanos, suppliedId, Kind.REQUEST);
         }
+    }
+
+    /** Registers a backpressured send before observing its binding admission terminal. */
+    public CompletionStage<Void> submitSend(Supplier<CompletionStage<Void>> admitted) {
+        Objects.requireNonNull(admitted, "admitted");
+        Operation<Void> operation;
+        synchronized (gate) {
+            if (closed) return CompletableFuture.failedStage(closeFailure);
+            operation = registerLocked(0, null, Kind.SEND);
+        }
+        UUID id = operation.id();
+        try {
+            Objects.requireNonNull(admitted.get(), "binding admission")
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null) completeExceptionally(id, failure);
+                                else complete(id, null);
+                            });
+        } catch (RuntimeException | Error failure) {
+            completeExceptionally(id, failure);
+        }
+        // JVM cancellation ends only this caller's wait, never the send or binding admission.
+        return operation.minimalCompletionStage();
     }
 
     public <T> CompletableFuture<T> submit(
@@ -128,7 +151,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         Operation<T> operation;
         synchronized (gate) {
             if (closed) return CompletableFuture.failedFuture(closeFailure);
-            operation = registerLocked(timeoutNanos, id);
+            operation = registerLocked(timeoutNanos, id, Kind.REQUEST);
         }
         BiConsumer<T, Throwable> terminal =
                 (value, failure) -> {
@@ -206,16 +229,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Entry<?> current = detachedHead;
             while (current != null) {
                 Entry<?> next = current.activeNext;
-                current.activePrevious = null;
-                current.activeNext = null;
+                takeLocked(current.id);
                 current.dispatchNext(next);
                 current.completeWithFailure(closeFailure);
                 current = next;
             }
-            Arrays.fill(buckets, null);
-            pendingCount = 0;
-            activeHead = null;
-            activeTail = null;
         }
         try {
             maintenance.cancel(false);
@@ -247,8 +265,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                     || expected.completion.isDone()) {
                 return false;
             }
-            removeEntry(expected.id);
-            unlinkActive(expected);
+            takeLocked(expected.id);
         }
         expected.completeWithCancellation();
         completions.post(expected);
@@ -290,9 +307,9 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Entry<?> current = activeHead;
             while (current != null) {
                 Entry<?> next = current.activeNext;
-                if (deadlineReached(nowNanos, current.deadlineNanos)) {
-                    removeEntry(current.id);
-                    unlinkActive(current);
+                if (current.kind == Kind.REQUEST
+                        && deadlineReached(nowNanos, current.deadlineNanos)) {
+                    takeLocked(current.id);
                     current.completeWithFailure(
                             Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
                     current.dispatchNext(null);
@@ -315,7 +332,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         expire(nanoTime.getAsLong());
     }
 
-    private <T> Operation<T> registerLocked(long timeoutNanos, UUID suppliedId) {
+    private <T> Operation<T> registerLocked(long timeoutNanos, UUID suppliedId, Kind kind) {
         if (closed) {
             throw new IllegalStateException("operation registry is closed");
         }
@@ -332,9 +349,12 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         Entry<T> entry = (Entry<T>) claimSlot();
         completions.register(entry);
         entry.id = id;
-        entry.deadlineNanos = nanoTime.getAsLong() + timeoutNanos;
+        entry.kind = kind;
+        if (kind == Kind.REQUEST) entry.deadlineNanos = nanoTime.getAsLong() + timeoutNanos;
         entry.generation++;
-        Operation<T> operation = new Operation<>(this, entry.slot, entry.generation, id);
+        Operation<T> operation =
+                new Operation<>(
+                        kind == Kind.REQUEST ? this : null, entry.slot, entry.generation, id);
         entry.completion = operation;
         int bucket = bucket(id);
         entry.hashNext = buckets[bucket];
@@ -483,6 +503,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
     }
 
+    private enum Kind {
+        REQUEST,
+        SEND
+    }
+
     private static final class Entry<T> extends ZLinkServiceCompletionDispatcher.WorkItem {
         private static final int NONE = 0;
         private static final int VALUE = 1;
@@ -496,6 +521,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private Entry<?> hashNext;
         private Operation<T> completion;
         private UUID id;
+        private Kind kind;
         private long deadlineNanos;
         private Entry<?> activePrevious;
         private Entry<?> activeNext;

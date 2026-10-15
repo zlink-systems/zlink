@@ -20,6 +20,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import java.time.Duration;
 import java.util.List;
@@ -55,17 +56,29 @@ final class ZLinkJavaSocketSupport {
         return mode == ZLinkBackendRecvMode.DONT_WAIT ? RecvFlags.DONT_WAIT : RecvFlags.NONE;
     }
 
-    static CompletionStage<Void> submit(SendOperation operation, List<Message> parts) {
+    static CompletionStage<Void> submit(
+            SendOperation operation,
+            List<Message> parts,
+            ZLinkServiceOperationRegistry operations) {
         var submit = operation.message(parts.get(0));
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
-        return submit(submit);
+        return submit(submit, operations);
     }
 
-    static CompletionStage<Void> submit(SendSubmitOperation operation) {
+    static CompletionStage<Void> submit(
+            SendSubmitOperation operation, ZLinkServiceOperationRegistry operations) {
+        if (operations.isClosed()) {
+            return CompletableFuture.failedStage(
+                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+        }
         var submission = operation.submit();
-        return admission(submission.result(), submission::admitted);
+        var result = submission.result();
+        if (result == SubmitResult.BACKPRESSURED) {
+            return operations.submitSend(submission::admitted);
+        }
+        return admission(result, submission::admitted);
     }
 
     static CompletionStage<List<Message>> reply(

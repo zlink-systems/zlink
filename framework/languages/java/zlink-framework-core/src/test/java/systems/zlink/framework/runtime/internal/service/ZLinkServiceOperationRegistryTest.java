@@ -34,6 +34,169 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkServiceOperationRegistryTest {
     @Test
+    void sendIgnoresRequestDeadlineAndCallerCancellation() {
+        AtomicLong clock = new AtomicLong(100);
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler, new IllegalStateException("closed"), clock::get)) {
+            var binding = new CompletableFuture<Void>();
+            var send = registry.submitSend(() -> binding);
+            var request = registry.register(Duration.ofNanos(10));
+            assertTrue(send.toCompletableFuture().cancel(false));
+            assertFalse(binding.isDone());
+            assertEquals(2, registry.pendingCount());
+            clock.set(110);
+            assertEquals(1, registry.expire(clock.get()));
+            assertTrue(
+                    assertThrows(CompletionException.class, request::join).getCause()
+                            instanceof TimeoutException);
+            assertEquals(1, registry.pendingCount());
+            assertFalse(send.toCompletableFuture().isDone());
+            var cancelledRequest = registry.register(Duration.ofNanos(10));
+            assertTrue(cancelledRequest.cancel(false));
+            assertThrows(CancellationException.class, cancelledRequest::join);
+            assertEquals(1, registry.pendingCount());
+            binding.complete(null);
+            assertNull(send.toCompletableFuture().join());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void closeBetweenRegistrationAndObserverWinsAgainstAlreadyCompletedAdmission()
+            throws Exception {
+        var closeFailure = new IllegalStateException("closed");
+        try (var scheduler = new CountingScheduler();
+                var registry = new ZLinkServiceOperationRegistry(scheduler, closeFailure)) {
+            var send =
+                    registry.submitSend(
+                            () -> {
+                                assertEquals(1, registry.pendingCount());
+                                registry.close();
+                                return CompletableFuture.completedFuture(null);
+                            });
+            assertSame(
+                    closeFailure,
+                    assertThrows(CompletionException.class, () -> send.toCompletableFuture().join())
+                            .getCause());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void lateSendTerminalCannotCompleteReusedSlot() throws Exception {
+        try (var scheduler = new CountingScheduler();
+                var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            var oldBinding = new CompletableFuture<Void>();
+            var old = registry.submitSend(() -> oldBinding);
+            var active = ZLinkServiceOperationRegistry.class.getDeclaredField("activeHead");
+            active.setAccessible(true);
+            var oldEntry = active.get(registry);
+            var idField = oldEntry.getClass().getDeclaredField("id");
+            idField.setAccessible(true);
+            var oldId = (UUID) idField.get(oldEntry);
+            assertTrue(registry.discard(oldId));
+            var nextBinding = new CompletableFuture<Void>();
+            var next = registry.submitSend(() -> nextBinding);
+            assertSame(oldEntry, active.get(registry));
+            oldBinding.complete(null);
+            assertEquals(1, registry.pendingCount());
+            assertFalse(next.toCompletableFuture().isDone());
+            assertFalse(old.toCompletableFuture().isDone());
+            nextBinding.complete(null);
+            assertNull(next.toCompletableFuture().join());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void sendTerminalCallbackRunsOnDispatcherOutsideRegistryGate() throws Exception {
+        try (var scheduler = new CountingScheduler();
+                var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+            var binding = new CompletableFuture<Void>();
+            var send = registry.submitSend(() -> binding);
+            var gateField = ZLinkServiceOperationRegistry.class.getDeclaredField("gate");
+            gateField.setAccessible(true);
+            var gate = gateField.get(registry);
+            var callback =
+                    send.thenRun(
+                            () -> {
+                                assertSame(dispatcherWorker(), Thread.currentThread());
+                                assertFalse(Thread.holdsLock(gate));
+                                var request = registry.register(Duration.ofSeconds(1));
+                                assertTrue(registry.discard(request.id()));
+                            });
+            binding.complete(null);
+            callback.toCompletableFuture().get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void closeAndBindingTerminalRaceCompletesEachSendExactlyOnce() throws Exception {
+        try (var workers = Executors.newFixedThreadPool(2);
+                var scheduler = new CountingScheduler()) {
+            for (int index = 0; index < 32; index++) {
+                var closeFailure = new IllegalStateException("closed");
+                var routeLoss = new IllegalStateException("route lost");
+                boolean failAdmission = index % 2 == 0;
+                try (var registry = new ZLinkServiceOperationRegistry(scheduler, closeFailure)) {
+                    var binding = new CompletableFuture<Void>();
+                    var send = registry.submitSend(() -> binding);
+                    var callbacks = new AtomicInteger();
+                    var observed =
+                            send.handle(
+                                    (ignored, failure) -> {
+                                        callbacks.incrementAndGet();
+                                        return failure;
+                                    });
+                    var start = new java.util.concurrent.CyclicBarrier(3);
+                    var closing =
+                            workers.submit(
+                                    () -> {
+                                        start.await(5, TimeUnit.SECONDS);
+                                        registry.close();
+                                        return null;
+                                    });
+                    var admitting =
+                            workers.submit(
+                                    () -> {
+                                        start.await(5, TimeUnit.SECONDS);
+                                        if (failAdmission) binding.completeExceptionally(routeLoss);
+                                        else binding.complete(null);
+                                        return null;
+                                    });
+                    start.await(5, TimeUnit.SECONDS);
+                    closing.get(5, TimeUnit.SECONDS);
+                    admitting.get(5, TimeUnit.SECONDS);
+                    var failure = observed.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                    if (failure != null) {
+                        var terminal =
+                                org.junit.jupiter.api.Assertions.assertInstanceOf(
+                                                CompletionException.class, failure)
+                                        .getCause();
+                        assertTrue(
+                                terminal == closeFailure
+                                        || (failAdmission && terminal == routeLoss));
+                    } else assertFalse(failAdmission);
+                    assertEquals(1, callbacks.get());
+                    assertEquals(0, registry.pendingCount());
+                }
+            }
+        }
+    }
+
+    private static Thread dispatcherWorker() {
+        try {
+            var worker = ZLinkServiceCompletionDispatcher.class.getDeclaredField("worker");
+            worker.setAccessible(true);
+            return (Thread) worker.get(ZLinkServiceCompletionDispatcher.INSTANCE);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    @Test
     void registrationUsesTheCallerResultAsItsHandle() {
         try (var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
                 var registry = new ZLinkServiceOperationRegistry(scheduler)) {
