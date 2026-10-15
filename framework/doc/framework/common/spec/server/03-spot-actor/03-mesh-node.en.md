@@ -360,8 +360,8 @@ sequenceDiagram
 ```
 
 **The accepting side records the other side as an admitted peer and then submits the admission
-acceptance.** Records this node sends to that peer leave after the admission acceptance on the
-same ordered connection.
+acceptance.** Records this node sends to that peer on the same Application lane as the admission acceptance
+(DATA and REQUEST) leave after the admission acceptance.
 
 ### 7.2 Channel Weight Update
 

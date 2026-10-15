@@ -331,7 +331,8 @@ sequenceDiagram
 ```
 
 **수락하는 쪽은 상대를 admitted peer로 기록한 뒤 admission 수락을 제출한다.** 이 node가 그 peer로
-보내는 record는 admission 수락보다 뒤에 같은 ordered connection으로 나간다.
+admission 수락과 같은 Application lane에 보내는 record(DATA·REQUEST)는 admission 수락보다 뒤에
+나간다.
 
 ### 7.2 Channel weight 갱신
 
