@@ -7152,6 +7152,10 @@ final class ZLinkJavaRawMeshNode
                         endRouteAdmission(peerRid, generation);
                     }
                 });
+        observed.forEach(
+                (peerRid, generation) -> {
+                    if (!generation.equals(previous.get(peerRid))) signalStateChanged(peerRid);
+                });
         finishRequestedIntentCloses();
     }
 
@@ -7365,7 +7369,24 @@ final class ZLinkJavaRawMeshNode
                                                         peerIntentRoutingIds.get(entry.getKey())));
     }
 
-    boolean targetLifecycleEnded(RoutingId target) {
+    @Override
+    public PeerRouteObservation observePeerRoute(RoutingId peerRid) {
+        long generation = selectedRoutes.getOrDefault(peerRid, 0L);
+        var peer =
+                topology == null
+                        ? Optional.<ZLinkServiceTopologyRegistry.Peer>empty()
+                        : topology.peer(peerRid);
+        boolean ready =
+                generation != 0
+                        && peer.isPresent()
+                        && Long.parseUnsignedLong(peer.orElseThrow().connectionId(), 16)
+                                == generation
+                        && isReadyPeer(peer.orElseThrow());
+        return new PeerRouteObservation(generation, ready);
+    }
+
+    @Override
+    public boolean targetLifecycleEnded(RoutingId target) {
         // Location owns logical removal. A physical disconnect still has an
         // expectation and must retain durable replay (routing §2, actor model §5).
         return !hasPeerExpectation(target) && (topology == null || topology.peer(target).isEmpty());
@@ -7433,6 +7454,7 @@ final class ZLinkJavaRawMeshNode
                 },
                 (frames, remaining) -> requestApplication(target, frames, remaining, null),
                 () -> targetLifecycleEnded(target),
+                () -> observePeerRoute(target),
                 listener -> onPeerStateChanged(target, listener),
                 this::runDurableTurn,
                 timeout,

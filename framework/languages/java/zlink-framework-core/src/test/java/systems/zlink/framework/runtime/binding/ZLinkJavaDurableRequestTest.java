@@ -14,6 +14,7 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.PeerRouteObservation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
@@ -26,6 +27,132 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkJavaDurableRequestTest {
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void selectedRouteChangeCancelsPendingAttemptAndReplaysWhenReady(boolean readyAtObservation) {
+        var source = new Source();
+        var pending = new CompletableFuture<List<byte[]>>();
+        var terminal = List.of(new byte[] {9});
+        var attempts = new AtomicInteger();
+        var preparations = new AtomicInteger();
+        var frames = List.of(new byte[] {1});
+        var result =
+                source.request(
+                                () -> {
+                                    preparations.incrementAndGet();
+                                    return frames;
+                                },
+                                (wire, remaining) -> {
+                                    assertSame(frames, wire);
+                                    return attempts.incrementAndGet() == 1
+                                            ? pending
+                                            : CompletableFuture.completedFuture(terminal);
+                                },
+                                () -> false,
+                                Duration.ofSeconds(5))
+                        .toCompletableFuture();
+        source.route = new PeerRouteObservation(2, readyAtObservation);
+        source.signal();
+        assertTrue(pending.isCancelled(), "the replaced route must release its request");
+        assertEquals(readyAtObservation ? 2 : 1, attempts.get());
+        if (!readyAtObservation) {
+            assertFalse(result.isDone());
+            source.route = new PeerRouteObservation(2, true);
+            source.signal();
+        }
+        assertSame(terminal, result.join());
+        assertEquals(1, preparations.get());
+        assertEquals(2, attempts.get());
+        assertNull(source.listener);
+    }
+
+    @Test
+    void initialUnreadyRouteDoesNotSubmitEvenWithPreparedFrames() {
+        var source = new Source();
+        source.route = new PeerRouteObservation(1, false);
+        var attempts = new AtomicInteger();
+        var terminal = List.of(new byte[] {9});
+        var result =
+                source.request(
+                                () -> List.of(new byte[] {1}),
+                                (frames, remaining) -> {
+                                    attempts.incrementAndGet();
+                                    return CompletableFuture.completedFuture(terminal);
+                                },
+                                () -> false,
+                                Duration.ofSeconds(5))
+                        .toCompletableFuture();
+        assertEquals(0, attempts.get());
+        assertFalse(result.isDone());
+        source.route = new PeerRouteObservation(1, true);
+        source.signal();
+        assertSame(terminal, result.join());
+        assertEquals(1, attempts.get());
+    }
+
+    @Test
+    void terminalReceivedBeforeTheRouteOwnerTurnWinsOverReplay() {
+        var source = new Source();
+        var turns = new java.util.ArrayDeque<Runnable>();
+        var pending = new CompletableFuture<List<byte[]>>();
+        var terminal = List.of(new byte[] {9});
+        var attempts = new AtomicInteger();
+        var result =
+                ZLinkJavaDurableRequest.request(
+                                () -> List.of(new byte[] {1}),
+                                (frames, remaining) -> {
+                                    attempts.incrementAndGet();
+                                    return pending;
+                                },
+                                () -> false,
+                                () -> source.route,
+                                source::observe,
+                                action -> {
+                                    turns.add(action);
+                                    return CompletableFuture.completedStage(null);
+                                },
+                                Duration.ofSeconds(5),
+                                () -> 0)
+                        .toCompletableFuture();
+        turns.remove().run();
+        source.route = new PeerRouteObservation(2, true);
+        source.signal();
+        pending.complete(terminal);
+        while (!turns.isEmpty()) turns.remove().run();
+        assertSame(terminal, result.join());
+        assertEquals(1, attempts.get());
+    }
+
+    @Test
+    void retiredAttemptCompletionCannotEndItsReplacement() {
+        var source = new Source();
+        var retired =
+                new CompletableFuture<List<byte[]>>() {
+                    @Override
+                    public boolean cancel(boolean mayInterruptIfRunning) {
+                        return false;
+                    }
+                };
+        var replacement = new CompletableFuture<List<byte[]>>();
+        var attempts = new AtomicInteger();
+        var result =
+                source.request(
+                                () -> List.of(new byte[] {1}),
+                                (frames, remaining) ->
+                                        attempts.incrementAndGet() == 1 ? retired : replacement,
+                                () -> false,
+                                Duration.ofSeconds(5))
+                        .toCompletableFuture();
+        source.route = new PeerRouteObservation(2, true);
+        source.signal();
+        retired.completeExceptionally(new IllegalArgumentException("retired terminal"));
+        assertFalse(result.isDone());
+        var terminal = List.of(new byte[] {9});
+        replacement.complete(terminal);
+        assertSame(terminal, result.join());
+        assertEquals(2, attempts.get());
+    }
+
     enum Operation {
         ACTOR_JOIN,
         ACTOR_CREATE,
@@ -333,6 +460,7 @@ final class ZLinkJavaDurableRequestTest {
                         () -> List.of(new byte[] {1}),
                         (frames, remaining) -> CompletableFuture.completedFuture(List.of()),
                         () -> false,
+                        () -> source.route,
                         source::observe,
                         action -> CompletableFuture.failedStage(failure),
                         Duration.ofSeconds(5));
@@ -430,6 +558,7 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     private static final class Source {
+        PeerRouteObservation route = new PeerRouteObservation(1, true);
         private final java.util.function.LongSupplier nanoTime;
         private Runnable listener;
 
@@ -464,6 +593,7 @@ final class ZLinkJavaDurableRequestTest {
                     prepare,
                     submit,
                     ended,
+                    () -> route,
                     this::observe,
                     action -> {
                         try {

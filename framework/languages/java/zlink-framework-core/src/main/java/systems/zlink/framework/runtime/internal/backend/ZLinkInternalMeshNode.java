@@ -191,6 +191,17 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return false;
     }
 
+    /** Core selection and logical admission, observed without controlling physical routes. */
+    record PeerRouteObservation(long selectedGeneration, boolean ready) {}
+
+    default PeerRouteObservation observePeerRoute(RoutingId peerRid) {
+        return new PeerRouteObservation(0, false);
+    }
+
+    default boolean targetLifecycleEnded(RoutingId peerRid) {
+        return false;
+    }
+
     /** Returns peers that currently satisfy this backend's ready predicate. */
     default long readyPeerCount() {
         return peers().stream()
