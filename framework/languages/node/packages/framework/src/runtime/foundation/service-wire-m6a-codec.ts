@@ -244,10 +244,7 @@ function allocateApplicationPayload(
   );
   if (payloadLength > MAX_U32) fail('Application payload exceeds u32.');
   const frameLength =
-    APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES +
-    packetNameLength +
-    contentTypeLength +
-    payloadLength;
+    APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES + packetNameLength + contentTypeLength + payloadLength;
   const prefixLength = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
   const bodyLength = frameLength - prefixLength;
   if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
@@ -585,7 +582,9 @@ function readNonZeroU64(bytes: Buffer, offset: number, field: string): bigint {
 }
 
 function asBuffer(value: Uint8Array): Buffer {
-  return Buffer.isBuffer(value) ? value : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  return Buffer.isBuffer(value)
+    ? value
+    : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
 }
 
 function validateAdmissionCommand(command: number): void {
