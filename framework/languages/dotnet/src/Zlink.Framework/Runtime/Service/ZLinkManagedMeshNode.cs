@@ -9387,27 +9387,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ProcessInfrastructure(long now)
     {
-        var (intents, peers) = RunState(() =>
-            (_peersByIntent.Values.ToArray(), _peersByRid.Values.ToArray())
+        // Spec 08 §4.2: the management work of a receive rotation reads the
+        // node state in one node turn — the intents that still need a Hello and
+        // the liveness activity of every admitted peer.
+        var (intents, activities) = AwaitStateLane(
+            _lane.RunAsync(
+                static state => state.Node.CollectInfrastructureUnderLock(state.Now),
+                (Node: this, Now: now)
+            )
         );
         bool? admissionSealed = null;
 
-        foreach (var intent in intents)
+        foreach (var intent in intents ?? [])
         {
-            var knownRid = intent.ResolvedRid.IsEmpty
-                ? intent.ExpectedRid ?? default
-                : intent.ResolvedRid;
-            if (
-                !knownRid.IsEmpty
-                && peers.Any(peer =>
-                    intent.IsAdmitted(peer)
-                    || peer.State == MeshPeerState.NotRequired && intent.IsBoundTo(peer)
-                )
-            )
-                continue;
             admissionSealed ??= _peerAdmissionSealed?.Invoke() == true;
             if (admissionSealed.Value)
-                continue;
+                break;
             var (target, routeGeneration, unboundRoutes) = RunState(() =>
             {
                 if (
@@ -9435,35 +9430,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
         }
 
-        foreach (var peer in peers)
+        foreach (var activity in activities ?? [])
         {
-            var activity = RunState(() =>
-            {
-                (RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId) result =
-                    default;
-                if (
-                    !_peersByRid.TryGetValue(peer.RoutingId, out var current)
-                    || !ReferenceEquals(current, peer)
-                    || !current.Admitted
-                    || current.Liveness is not { } liveness
-                )
-                    return result;
-                if (liveness.IsExpired(now))
-                {
-                    var physicalRid = current.PhysicalRoutingId;
-                    result.Closed = EndRouteAdmissionUnderLock(
-                        new RouterRoute(peer.RoutingId, peer.RouteGeneration)
-                    );
-                    DisconnectTransport(current, physicalRid);
-                }
-                else if (liveness.TryGetProbe(now, out var probeId))
-                {
-                    result.Target = current.PhysicalRoutingId;
-                    result.Generation = current.RouteGeneration;
-                    result.ProbeId = probeId;
-                }
-                return result;
-            });
             if (activity.Closed is { } closedRid)
                 Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
             if (activity.ProbeId != 0)
@@ -9479,6 +9447,64 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
             }
         }
+    }
+
+    private (
+        List<ZLinkMeshConnectionIntent>? Intents,
+        List<(RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId)>? Activities
+    ) CollectInfrastructureUnderLock(long now)
+    {
+        List<ZLinkMeshConnectionIntent>? intents = null;
+        foreach (var intent in _peersByIntent.Values)
+        {
+            var knownRid = intent.ResolvedRid.IsEmpty
+                ? intent.ExpectedRid ?? default
+                : intent.ResolvedRid;
+            if (!knownRid.IsEmpty && HasIntentPeerUnderLock(intent))
+                continue;
+            (intents ??= []).Add(intent);
+        }
+
+        List<(RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId)>? activities =
+            null;
+        List<Peer>? expired = null;
+        foreach (var peer in _peersByRid.Values)
+        {
+            if (!peer.Admitted || peer.Liveness is not { } liveness)
+                continue;
+            if (liveness.IsExpired(now))
+                (expired ??= []).Add(peer);
+            else if (liveness.TryGetProbe(now, out var probeId))
+                (activities ??= []).Add(
+                    (null, peer.PhysicalRoutingId, peer.RouteGeneration, probeId)
+                );
+        }
+        foreach (var peer in expired ?? [])
+        {
+            if (
+                !_peersByRid.TryGetValue(peer.RoutingId, out var current)
+                || !ReferenceEquals(current, peer)
+            )
+                continue;
+            var physicalRid = peer.PhysicalRoutingId;
+            var closed = EndRouteAdmissionUnderLock(
+                new RouterRoute(peer.RoutingId, peer.RouteGeneration)
+            );
+            DisconnectTransport(peer, physicalRid);
+            (activities ??= []).Add((closed, default, 0, 0));
+        }
+        return (intents, activities);
+    }
+
+    private bool HasIntentPeerUnderLock(ZLinkMeshConnectionIntent intent)
+    {
+        foreach (var peer in _peersByRid.Values)
+            if (
+                intent.IsAdmitted(peer)
+                || peer.State == MeshPeerState.NotRequired && intent.IsBoundTo(peer)
+            )
+                return true;
+        return false;
     }
 
     // Monitor events are transport observations, not the selected route
