@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "id": "morpg-fields-instances",
+  "name": "my-game",
+  "language": "kotlin",
+  "run": {
+    "commands": {
+      "sh": [
+        "./gradlew --no-daemon installDist",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario field,dungeon,reconnect,update"
+      ],
+      "powershell": [
+        "./gradlew.bat --no-daemon installDist",
+        "./run-e2e.ps1",
+        "./run-e2e.ps1 -Scenario field,dungeon,reconnect,update"
+      ]
+    },
+    "scenarios": [
+      "field",
+      "dungeon",
+      "reconnect",
+      "update"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "players",
+      "role": "external",
+      "title": "Players",
+      "config": null
+    },
+    {
+      "id": "session",
+      "role": "session",
+      "title": "session",
+      "config": "server/config/session.json"
+    },
+    {
+      "id": "fieldA",
+      "role": "field",
+      "title": "fieldA",
+      "config": "server/config/fieldA.json"
+    },
+    {
+      "id": "fieldB",
+      "role": "field",
+      "title": "fieldB",
+      "config": "server/config/fieldB.json"
+    },
+    {
+      "id": "instanceA",
+      "role": "instance",
+      "title": "instanceA",
+      "config": "server/config/instanceA.json"
+    },
+    {
+      "id": "instanceB",
+      "role": "instance",
+      "title": "instanceB",
+      "config": "server/config/instanceB.json"
+    },
+    {
+      "id": "location",
+      "role": "location-store",
+      "title": "Redis",
+      "config": "docker-compose.yml"
+    }
+  ],
+  "channels": [
+    {
+      "name": "border",
+      "owner": "fieldA",
+      "mesh": "my-game-world"
+    },
+    {
+      "name": "border",
+      "owner": "fieldB",
+      "mesh": "my-game-world"
+    }
+  ],
+  "spots": [
+    {
+      "id": "entryA",
+      "kind": "entry",
+      "type": null,
+      "owner": "fieldA"
+    },
+    {
+      "id": "entryB",
+      "kind": "entry",
+      "type": null,
+      "owner": "fieldB"
+    },
+    {
+      "id": "field-1",
+      "kind": "user",
+      "type": "Field",
+      "owner": "fieldA",
+      "logicalId": "field-1"
+    },
+    {
+      "id": "field-2",
+      "kind": "user",
+      "type": "Field",
+      "owner": "fieldA",
+      "logicalId": "field-2"
+    },
+    {
+      "id": "field-3",
+      "kind": "user",
+      "type": "Field",
+      "owner": "fieldB",
+      "logicalId": "field-3"
+    },
+    {
+      "id": "field-4",
+      "kind": "user",
+      "type": "Field",
+      "owner": "fieldB",
+      "logicalId": "field-4"
+    },
+    {
+      "id": "dungeon",
+      "kind": "user",
+      "type": "Dungeon",
+      "owner": "instanceA",
+      "dynamic": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "players",
+      "to": "session",
+      "label": "STREAM"
+    },
+    {
+      "from": "session",
+      "to": "fieldA",
+      "label": "relay"
+    },
+    {
+      "from": "fieldA",
+      "to": "fieldB",
+      "label": "relocation"
+    },
+    {
+      "from": "fieldB",
+      "to": "fieldA",
+      "label": "border pub/sub",
+      "semantic": "border-updates"
+    },
+    {
+      "from": "fieldB",
+      "to": "instanceA",
+      "label": "GetOrCreate"
+    },
+    {
+      "from": "fieldB",
+      "to": "location",
+      "label": "Location / lease",
+      "semantic": "location-authority"
+    }
+  ]
+}
