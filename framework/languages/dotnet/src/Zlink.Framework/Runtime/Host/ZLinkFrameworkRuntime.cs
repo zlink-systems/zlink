@@ -1645,7 +1645,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     // The release joins the lane FIFO before Dispose returns, so every later
     // admission, snapshot and drain turn observes it.
     private void ExitOperation(bool countsOperation, int requests) =>
-        _stateLane.TryPost(() => ExitOperationOnLane(countsOperation, requests));
+        _stateLane.TryPost(
+            static state =>
+                state.Runtime.ExitOperationOnLane(state.CountsOperation, state.Requests),
+            (Runtime: this, CountsOperation: countsOperation, Requests: requests)
+        );
 
     private void ExitOperationOnLane(bool countsOperation, int requests)
     {

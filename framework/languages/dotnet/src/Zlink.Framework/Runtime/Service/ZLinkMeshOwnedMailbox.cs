@@ -74,19 +74,24 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     // so a readiness signal can never precede the record it announces.
     internal bool TryEnqueue(ZLinkMeshQueuedRecord record, Action? enqueued = null)
     {
-        var pendingBytes = record.PendingBytes;
-        if (pendingBytes == ulong.MaxValue)
+        if (record.PendingBytes == ulong.MaxValue)
             return false;
-        return _lane.TryPost(() =>
-        {
-            _records.Enqueue(record);
-            _pendingBytes = checked(_pendingBytes + pendingBytes);
+        return _lane.TryPost(
+            static state => state.Mailbox.EnqueueOnLane(state.Record, state.Enqueued),
+            (Mailbox: this, Record: record, Enqueued: enqueued)
+        );
+    }
 
-            // Publish accounting before another mailbox turn can dequeue
-            // this record. Readiness reads this existing aggregate directly.
-            onRecordEnqueued(pendingBytes);
-            enqueued?.Invoke();
-        });
+    private void EnqueueOnLane(ZLinkMeshQueuedRecord record, Action? enqueued)
+    {
+        var pendingBytes = record.PendingBytes;
+        _records.Enqueue(record);
+        _pendingBytes = checked(_pendingBytes + pendingBytes);
+
+        // Publish accounting before another mailbox turn can dequeue
+        // this record. Readiness reads this existing aggregate directly.
+        onRecordEnqueued(pendingBytes);
+        enqueued?.Invoke();
     }
 
     internal ValueTask<(bool Ready, int Count)> TryClaimAsync(bool claim) =>
