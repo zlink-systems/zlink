@@ -140,7 +140,7 @@ public final class ZLinkStateLane {
     public static <T> void publishOutsideLane(
             CompletableFuture<T> result, BiConsumer<? super T, ? super Throwable> publication) {
         if (result.isDone() && CURRENT.get() == null) result.whenComplete(publication);
-        else result.whenCompleteAsync(publication);
+        else result.whenCompleteAsync(publication, DEFAULT_EXECUTOR);
     }
 
     /** Returns null when the owner is busy; a returned stage has already run its turn. */
