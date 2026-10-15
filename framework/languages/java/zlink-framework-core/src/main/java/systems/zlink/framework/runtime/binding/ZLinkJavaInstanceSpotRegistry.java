@@ -150,24 +150,27 @@ final class ZLinkJavaInstanceSpotRegistry {
             current.whenCompleteAsync(
                     (value, failure) -> {
                         if (failure != null) {
-                            result.completeExceptionally(failure);
                             candidate.completeExceptionally(failure);
+                            result.completeExceptionally(failure);
                             return;
                         }
+                        CompletionStage<Void> admission;
                         try {
-                            restoreFirst
-                                    .apply(value.spot())
-                                    .whenComplete(
-                                            (ignored, terminalFailure) -> {
-                                                if (terminalFailure == null) result.complete(value);
-                                                else result.completeExceptionally(terminalFailure);
-                                            });
+                            admission =
+                                    Objects.requireNonNull(
+                                            restoreFirst.apply(value.spot()),
+                                            "Instance Spot admission returned null");
                         } catch (RuntimeException | Error refusal) {
-                            result.completeExceptionally(refusal);
-                        } finally {
-                            // Preserve Ready even when this operation's queue admission fails.
-                            candidate.complete(value);
+                            admission = CompletableFuture.failedFuture(refusal);
                         }
+                        // Publish Ready before callers can observe admission completion. A failed
+                        // admission still preserves the existing activation for later operations.
+                        candidate.complete(value);
+                        admission.whenComplete(
+                                (ignored, terminalFailure) -> {
+                                    if (terminalFailure == null) result.complete(value);
+                                    else result.completeExceptionally(terminalFailure);
+                                });
                     },
                     applicationExecutor);
             return result;

@@ -13142,6 +13142,12 @@ public sealed partial class EntrySpotActorDispatchTests
         private readonly CapturingSpot _entrySpot = new();
         private long _nextOperationId;
 
+        private static readonly Task NoRouteChange = new TaskCompletionSource().Task;
+        private const ulong StableRouteGeneration = 1;
+
+        public ZLinkPeerRouteObservation ObservePeerRoute(RoutingId target) =>
+            new(StableRouteGeneration, StableRouteGeneration, NoRouteChange);
+
         public CapturingSpotNode()
         {
             _entrySpot.RoutingIdChanged = routingId =>

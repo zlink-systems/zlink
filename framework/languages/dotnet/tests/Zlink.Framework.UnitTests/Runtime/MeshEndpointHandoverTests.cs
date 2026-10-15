@@ -92,12 +92,11 @@ public sealed partial class StatefulServiceRuntimeTests
         try
         {
             var replacementIntent = owner.ConnectPeer(endpoint, replacement.RoutingId);
-            await scheduler.Queued.WaitAsync(TimeSpan.FromSeconds(5));
-            // Hello is validated, but the executor has not submitted its Admit.
-            // Neither the status nor route selection may expose readiness yet.
-            Assert.Equal(0U, replacement.Status().AdmittedPeerCount);
-            Assert.Equal(MeshPeerState.Connecting, Assert.Single(replacement.Peers()).State);
-            Assert.Equal(0U, owner.Status().AdmittedPeerCount);
+            // MeshNode §7.1: the replacement records the owner as admitted when it
+            // accepts the Hello, then submits its Admit; the owner admits on receipt.
+            await WaitUntilAsync(() => replacement.Status().AdmittedPeerCount == 1);
+            Assert.Equal(MeshPeerState.Admitted, Assert.Single(replacement.Peers()).State);
+            await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 1);
             replacement.ObserveSpotAuthority(
                 owner.RoutingId,
                 spot.SpotId,
@@ -130,9 +129,9 @@ public sealed partial class StatefulServiceRuntimeTests
                     TimeSpan.FromSeconds(2)
                 )
             );
-            // Model a reverse record arriving after remote Admit receipt but before
-            // the local send continuation. The validated Hello authenticates ingress
-            // independently of local outbound readiness; no binding internals are used.
+            // A reverse record from the owner reaches the replacement while the join
+            // is outstanding (the owner replies to it only below). The admitted peer
+            // authenticates that ingress; no binding internals are used.
             using (
                 var header = Message.From(
                     ZLinkServiceWireCodec.EncodeApplication(
@@ -166,7 +165,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 }
                 return reverse is not null;
             });
-            Assert.Equal(0U, replacement.Status().AdmittedPeerCount);
+            Assert.Equal(1U, replacement.Status().AdmittedPeerCount);
             scheduler.Release();
 
             var joins = 0;
