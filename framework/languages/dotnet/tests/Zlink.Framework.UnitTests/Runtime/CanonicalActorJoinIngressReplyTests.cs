@@ -1171,6 +1171,29 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
+    public async Task ImmediatelyAdmittedSend_CompletesFromTheSubmitResultWithoutACompletionEntry()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
+        // Spec 01-submit-and-completion §10: an immediately admitted send completes
+        // from its submit result and makes no completion-table entry, so the
+        // submitter holds a completed send and a closed table cannot reject it.
+        runtime.Target.Completions.FailAll(RequestResult.Terminated);
+        for (var index = 0; index < 16; index++)
+        {
+            using var payload = Message.From(new byte[] { 1 });
+            var send = runtime.Target.SendToNodeDirectAsync(
+                runtime.SourceRid,
+                [payload],
+                SendFlags.None,
+                default,
+                CancellationToken.None
+            );
+            Assert.True(send.IsCompletedSuccessfully);
+            await send;
+        }
+    }
+
+    [Fact]
     public async Task WritableRouteWithoutInboundRecords_DoesNotCreateReceivePressure()
     {
         const int capacity = ZLinkReceiveBatchBudget.MaximumRecords * 2;

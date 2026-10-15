@@ -32,25 +32,6 @@ public sealed class MeshCompletionTableConvergenceTests
     }
 
     [Fact]
-    public void ImmediateSendCompletesBeforeTheSubmitterReturnsItsCompletion()
-    {
-        var table = new ZLinkMeshCompletionTable();
-        // A pool turn could finish before the next statement once, but not on
-        // every iteration; the observing call itself must complete each send.
-        for (var index = 1UL; index <= 1_000; index++)
-        {
-            var operation = new MeshOperationId(95, index);
-            var pending = table.RegisterSend(operation);
-            pending.Observe(Task.CompletedTask);
-            // The entry is taken and its accounting released in the observing
-            // call, so the submitter's continuation needs no dispatcher turn.
-            Assert.True(pending.Completion.IsCompletedSuccessfully);
-            Assert.False(table.TryCancel(operation));
-            Assert.True(table.CompletionDrained.IsCompletedSuccessfully);
-        }
-    }
-
-    [Fact]
     public async Task SendShutdownWinsOverLateBindingAdmission()
     {
         var table = new ZLinkMeshCompletionTable();

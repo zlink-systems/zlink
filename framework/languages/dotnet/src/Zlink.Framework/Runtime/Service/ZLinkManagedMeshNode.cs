@@ -9993,10 +9993,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         var ownershipTransferred = false;
-        ZLinkMeshCompletionTable.PendingSend? pending = null;
         try
         {
-            pending = Completions.RegisterSend(NextStandaloneOperationId());
             Task admission;
             lock (_socketGate)
             {
@@ -10010,6 +10008,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     .EnsureAcceptedAsync();
                 ownershipTransferred = true;
             }
+            // Spec 01 §10, 08 §3 E3: a send whose admission is decided by the
+            // submit result completes from it without a completion-table entry.
+            // Only an admission that arrives later registers before it is observed.
+            if (admission.IsCompleted)
+                return new ValueTask(admission);
+            var pending = Completions.RegisterSend(NextStandaloneOperationId());
             pending.Observe(admission);
             return pending.Completion;
         }
@@ -10017,10 +10021,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             if (!ownershipTransferred)
                 DisposeParts(messages);
-            if (pending is null)
-                return ValueTask.FromException(failure);
-            pending.Reject(failure);
-            return pending.Completion;
+            return ValueTask.FromException(failure);
         }
     }
 
