@@ -121,6 +121,21 @@ service_liveness_registry_t::acknowledge_probe (const std::vector<std::uint8_t> 
       .get ();
 }
 
+void service_liveness_registry_t::set_admission_pending (bool pending)
+{
+    _lane
+      .run ([this, pending] {
+          if (pending) {
+              if (!_admission_activity)
+                  _admission_activity = clock_t::now ();
+          } else {
+              _admission_activity.reset ();
+          }
+          publish_next_due_on_lane ();
+      })
+      .get ();
+}
+
 bool service_liveness_registry_t::due (clock_t::time_point now) const noexcept
 {
     const auto next = _next_due.load (std::memory_order_acquire);
@@ -129,7 +144,10 @@ bool service_liveness_registry_t::due (clock_t::time_point now) const noexcept
 
 void service_liveness_registry_t::publish_next_due_on_lane () const
 {
-    auto next = never_due;
+    const auto admission_due =
+      _admission_activity ? (*_admission_activity + _probe_interval).time_since_epoch ().count ()
+                          : never_due;
+    auto next = admission_due;
     for (const auto &[_, peer] : _peers) {
         const auto candidate =
           std::min (peer->deadline.load (std::memory_order_relaxed), peer->next_probe);
@@ -166,6 +184,8 @@ service_liveness_tick_t service_liveness_registry_t::tick (clock_t::time_point n
               }
               ++entry;
           }
+          if (_admission_activity)
+              _admission_activity = now;
           publish_next_due_on_lane ();
           return result;
       })

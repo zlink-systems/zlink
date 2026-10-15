@@ -362,7 +362,7 @@ class raw_mesh_node_owner_t
                             bool accept_application_receive = true) noexcept;
     void signal_activity () noexcept;
     std::size_t last_pump_bytes () const;
-    // A rotation with no probe or timeout due returns at once (spec 08
+    // A rotation with no probe, timeout or admission retry due returns at once (spec 08
     // section 4.2); the liveness registry owns that decision.
     task_t<service_liveness_tick_t>
     tick_liveness (service_liveness_registry_t::clock_t::time_point now);
@@ -382,6 +382,10 @@ class raw_mesh_node_owner_t
         unknown
     };
     node_target_t classify_node_target (const std::vector<std::uint8_t> &target_routing_id) const;
+    // Selected Core route generation and remote ADMIT readiness.
+    std::pair<std::uint64_t, bool>
+    peer_route (const std::vector<std::uint8_t> &rid,
+                std::optional<std::uint64_t> lifecycle_generation = std::nullopt) const;
 
   private:
     task_t<service_liveness_tick_t>
@@ -460,7 +464,11 @@ class raw_mesh_node_owner_t
     // The one route observer of this ROUTER (Core ROUTER §10.1): reads the
     // selected-route snapshot, ends admission of every route that ended or
     // was replaced and starts the handshake on every new route.
-    std::size_t apply_route_snapshot ();
+    std::size_t apply_route_snapshot (zlink::poll_event_flag_t readiness);
+    bool route_needs_hello_on_lane (const std::vector<std::uint8_t> &rid,
+                                    std::uint64_t generation) const;
+    void refresh_admission_due_on_lane ();
+    void submit_pending_hellos_on_lane ();
     bool route_current_locked (const std::vector<std::uint8_t> &node_routing_id,
                                std::uint64_t route_generation) const;
     void

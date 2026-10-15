@@ -251,7 +251,8 @@ class mesh_node_runtime_t
     void connect_peer (const zlink::routing_id_t &expected_routing_id,
                        const std::string &endpoint,
                        std::uint64_t expected_lifecycle_generation = 0,
-                       std::string security_identity = "default");
+                       std::string security_identity = "default",
+                       bool automatic = false);
     void connect_peer (const std::string &endpoint, std::string security_identity = "default");
     void expect_peer (const zlink::routing_id_t &expected_routing_id,
                       const std::string &endpoint,
@@ -260,7 +261,8 @@ class mesh_node_runtime_t
     void forget_peer (const zlink::routing_id_t &expected_routing_id, const std::string &endpoint);
     void disconnect_peer (const std::string &endpoint) noexcept;
     void disconnect_peer (const zlink::routing_id_t &expected_routing_id,
-                          const std::string &endpoint) noexcept;
+                          const std::string &endpoint,
+                          bool automatic = false) noexcept;
     bool wait_for_peer_ready (const zlink::routing_id_t &target,
                               std::chrono::milliseconds timeout) const;
 
@@ -552,8 +554,11 @@ class mesh_node_runtime_t
     prepare_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<actor_join_reply_t>
     finalize_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<result_t<void>> deliver_remote_actor_join (const remote_actor_join_state_t &state,
-                                                      const result_t<actor_join_reply_t> &joined);
+    task_t<result_t<void>> deliver_actor_join (actor_ref_t actor,
+                                               std::optional<spot_id_t> source_spot,
+                                               std::uint64_t operation_high,
+                                               std::uint64_t operation_low,
+                                               const result_t<actor_join_reply_t> &joined);
     task_t<actor_join_reply_t> fail_remote_actor_join (const remote_actor_join_state_t &state,
                                                        const result_t<actor_join_reply_t> &failed,
                                                        std::string message);

@@ -699,6 +699,48 @@ public sealed class StandaloneActorRelocationPrecommitTests
     }
 
     [Fact]
+    public async Task Target_commit_then_authority_removal_ends_source_without_preserve()
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(inner);
+        var committed = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
+            inner
+        ).CommitTargetAsync(
+            source.Captured,
+            source.Envelope,
+            source.Prepare,
+            source.TargetAuthority,
+            CancellationToken.None
+        );
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
+            await inner.CompareExchangeAuthorityAsync(
+                source.Key,
+                committed.StoreVersion,
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
+        var store = new LostStoredResponseAuthorityStore(inner);
+        var settlement = await ZLinkStandaloneActorRelocationRuntime.SettleSourceAsync(
+            store,
+            source.Key,
+            source.Steady,
+            new ZLinkRelocationStored(string.Empty, 0, default, default),
+            source.RelocationId,
+            source.Target,
+            source.Prepare.TargetAttemptGeneration,
+            Stopwatch.GetElapsedTime(0) + TimeSpan.FromSeconds(30),
+            static () => true,
+            static _ => throw new InvalidOperationException("Missing must not resubmit."),
+            TimeSpan.FromMilliseconds(5),
+            CancellationToken.None,
+            ReadyRoute
+        );
+        Assert.Equal(ZLinkSourceSettlement.SourceLeaseExpired, settlement.Outcome);
+        Assert.Equal(0, store.CompareExchangeCount);
+        Assert.Equal(1, store.ReadCount);
+    }
+
+    [Fact]
     public async Task Source_settlement_ends_on_source_lease_expiry_without_a_preserve_write()
     {
         var inner = new ZLinkInMemoryLocationStore();

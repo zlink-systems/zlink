@@ -43,6 +43,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
@@ -918,7 +919,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 8, 23);
             assertTrue(
-                    spots.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            spots,
                             sourceRid,
                             11,
                             "source-owner",
@@ -2326,10 +2328,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     new ZLinkServiceM6BWireCodec.BoundSessionBind(
                             1, route, RoutingId.from("jvm-m6b-unbind-session"), false, 3);
 
-            assertTrue(target.acceptRemoteStreamBinding(sourceRid, 7, inactive));
-            assertTrue(target.acceptRemoteStreamBinding(sourceRid, 7, inactive));
+            assertTrue(acceptRemoteStreamBinding(target, sourceRid, 7, inactive));
+            assertTrue(acceptRemoteStreamBinding(target, sourceRid, 7, inactive));
             assertFalse(
-                    target.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            target,
                             sourceRid,
                             7,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
@@ -2357,7 +2360,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 41, 1);
             assertTrue(
-                    target.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            target,
                             sourceRid,
                             7,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
@@ -2365,26 +2369,29 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             CompletableFuture<CompletionStage<Void>> submitted = new CompletableFuture<>();
             try (Message late = Message.from("late")) {
                 assertTrue(
-                        target.acceptRemoteStreamBinding(
-                                sourceRid,
-                                7,
-                                sourceRid.toString(),
-                                1,
-                                new ZLinkServiceM6BWireCodec.BoundSessionBind(
-                                        2, route, sessionRid, false, 3),
-                                accepted -> {
-                                    assertTrue(accepted);
-                                    Thread.ofVirtual()
-                                            .start(
-                                                    () ->
-                                                            submitted.complete(
-                                                                    target
-                                                                            .sendRemoteActorBoundSession(
-                                                                                    actor,
-                                                                                    List.of(
-                                                                                            late))));
-                                    assertDoesNotThrow(() -> submitted.get(1, TimeUnit.SECONDS));
-                                }));
+                        target.applyRemoteStreamBinding(
+                                        sourceRid,
+                                        7,
+                                        sourceRid.toString(),
+                                        1,
+                                        new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                                2, route, sessionRid, false, 3),
+                                        accepted -> {
+                                            assertTrue(accepted);
+                                            Thread.ofVirtual()
+                                                    .start(
+                                                            () ->
+                                                                    submitted.complete(
+                                                                            target
+                                                                                    .sendRemoteActorBoundSession(
+                                                                                            actor,
+                                                                                            List.of(
+                                                                                                    late))));
+                                            assertDoesNotThrow(
+                                                    () -> submitted.get(1, TimeUnit.SECONDS));
+                                        })
+                                .toCompletableFuture()
+                                .get(1, TimeUnit.SECONDS));
                 ExecutionException failure =
                         assertThrows(
                                 ExecutionException.class,
@@ -2419,21 +2426,49 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             var route =
                     new ZLinkServiceM6BWireCodec.ActorRouteFence(
                             actor, node.lifecycleGeneration(), 41, 1);
+            var actorBinding =
+                    new java.util.concurrent.atomic.AtomicReference<
+                            ZLinkInternalSpotNode.BoundSessionRoute>();
+            target.setRemoteSessionBindingOwner(
+                    (spotNode, ref, transition) ->
+                            CompletableFuture.completedFuture(
+                                    transition.apply(
+                                            new ZLinkInternalSpotNode
+                                                    .RemoteSessionBindingTransition() {
+                                                @Override
+                                                public void bind(
+                                                        ZLinkInternalSpotNode.BoundSessionRoute
+                                                                bound) {
+                                                    actorBinding.set(bound);
+                                                }
+
+                                                @Override
+                                                public void retire(
+                                                        ZLinkInternalSpotNode.BoundSessionRoute
+                                                                retired) {
+                                                    actorBinding.set(null);
+                                                }
+                                            })));
             var command =
                     new ZLinkServiceM6BWireCodec.BoundSessionBind(
                             1, route, RoutingId.from("jvm-m6b-linearized-session"), true, 3);
 
             assertTrue(
-                    target.acceptRemoteStreamBinding(
-                            sourceRid,
-                            7,
-                            sourceRid.toString(),
-                            1,
-                            command,
-                            accepted -> {
-                                assertTrue(accepted);
-                                assertFalse(target.hasRemoteActorBoundSessionRoute(actor));
-                            }));
+                    target.applyRemoteStreamBinding(
+                                    sourceRid,
+                                    7,
+                                    sourceRid.toString(),
+                                    1,
+                                    command,
+                                    accepted -> {
+                                        assertTrue(accepted);
+                                        assertEquals(
+                                                command.bindingGeneration(),
+                                                actorBinding.get().bindingGeneration());
+                                        assertFalse(target.hasRemoteActorBoundSessionRoute(actor));
+                                    })
+                            .toCompletableFuture()
+                            .join());
             assertTrue(target.hasRemoteActorBoundSessionRoute(actor));
         }
     }
@@ -2461,10 +2496,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             var session =
                     new ZLinkServiceM6BWireCodec.SessionOwnerFence(
                             sessionOwnerRid, 11, sessionOwnerRid.toString(), 1, sessionRid, 5);
-            target.installRelocatingActorBoundSession(route, session);
+            target.installRelocatingActorBoundSession(route, session).toCompletableFuture().join();
 
             assertTrue(
-                    target.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            target,
                             sessionOwnerRid,
                             11,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
@@ -2472,12 +2508,135 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             assertEquals(5, target.boundSessionRoute(actor).orElseThrow().bindingGeneration());
 
             assertTrue(
-                    target.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            target,
                             sessionOwnerRid,
                             11,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
                                     2, route, sessionRid, true, 6)));
             assertEquals(6, target.boundSessionRoute(actor).orElseThrow().bindingGeneration());
+        }
+    }
+
+    @Test
+    void remoteRouteChangesOnlyInTheRemoteBindingOwnerTurn() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId sessionOwnerRid = RoutingId.from("jvm-m6b-owner-turn-session-owner");
+            RoutingId sessionRid = RoutingId.from("jvm-m6b-owner-turn-session");
+            node.setRoutingId(RoutingId.from("jvm-m6b-owner-turn-target"));
+            node.setBind("inproc://jvm-m6b-owner-turn-" + System.nanoTime());
+            node.start();
+
+            ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = target.createActor("owner-turn-actor", create);
+            }
+            target.rememberActorAuthority(actor, 41, 7);
+            var route =
+                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            actor, node.lifecycleGeneration(), 41, 7);
+            var session =
+                    new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                            sessionOwnerRid, 11, sessionOwnerRid.toString(), 1, sessionRid, 5);
+            ZLinkStateLane ownerTurn = new ZLinkStateLane();
+            target.setRemoteSessionBindingOwner(
+                    (spotNode, ref, transition) ->
+                            ownerTurn.runAsync(
+                                    () ->
+                                            transition.apply(
+                                                    ZLinkInternalSpotNode
+                                                            .RemoteSessionBindingTransition.NONE)));
+
+            CompletableFuture<Void> release = new CompletableFuture<>();
+            ownerTurn.runAsync(
+                    () -> {
+                        release.join();
+                        return null;
+                    });
+            CompletionStage<Void> installed =
+                    target.installRelocatingActorBoundSession(route, session);
+            assertFalse(target.hasRemoteActorBoundSessionRoute(actor));
+            release.complete(null);
+            installed.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(5, target.boundSessionRoute(actor).orElseThrow().bindingGeneration());
+
+            CompletableFuture<Void> retireRelease = new CompletableFuture<>();
+            ownerTurn.runAsync(
+                    () -> {
+                        retireRelease.join();
+                        return null;
+                    });
+            target.closeActorBoundSession(actor, Duration.ofSeconds(1));
+            assertTrue(target.hasRemoteActorBoundSessionRoute(actor));
+            retireRelease.complete(null);
+            ownerTurn.runAsync(() -> null).toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertFalse(target.hasRemoteActorBoundSessionRoute(actor));
+        }
+    }
+
+    @Test
+    void laterLocalBindIsNotErasedByAnEarlierRemoteBind() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId sessionOwnerRid = RoutingId.from("jvm-m6b-two-owners-session-owner");
+            RoutingId localSessionRid = RoutingId.from("jvm-m6b-two-owners-local-session");
+            node.setRoutingId(RoutingId.from("jvm-m6b-two-owners-actor-node"));
+            node.setBind("inproc://jvm-m6b-two-owners-" + System.nanoTime());
+            node.start();
+            ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = target.createActor("two-owners-actor", create);
+            }
+            target.rememberActorAuthority(actor, 41, 1);
+            var route =
+                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            actor, node.lifecycleGeneration(), 41, 1);
+            ZLinkStateLane ownerTurn = new ZLinkStateLane();
+            target.setRemoteSessionBindingOwner(
+                    (spotNode, ref, transition) ->
+                            ownerTurn.runAsync(
+                                    () ->
+                                            transition.apply(
+                                                    ZLinkInternalSpotNode
+                                                            .RemoteSessionBindingTransition.NONE)));
+            CompletableFuture<Void> release = new CompletableFuture<>();
+            ownerTurn.runAsync(
+                    () -> {
+                        release.join();
+                        return null;
+                    });
+            // The remote bind is submitted first and the same-node bind second.
+            CompletionStage<Boolean> remote =
+                    target.applyRemoteStreamBinding(
+                            sessionOwnerRid,
+                            7,
+                            sessionOwnerRid.toString(),
+                            1,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    1,
+                                    route,
+                                    RoutingId.from("jvm-m6b-two-owners-remote-session"),
+                                    true,
+                                    3),
+                            accepted -> {});
+            CompletionStage<Void> local =
+                    target.bindStreamSession(
+                            localSessionRid, actor, 9, 1, null, Duration.ofSeconds(1));
+            target.publishStreamSession(localSessionRid, actor, 9, 1, null);
+            release.complete(null);
+            assertTrue(remote.toCompletableFuture().get(5, TimeUnit.SECONDS));
+            local.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            ownerTurn.runAsync(() -> null).toCompletableFuture().get(5, TimeUnit.SECONDS);
+
+            assertTrue(
+                    target.hasLocalActorBoundSessionRoute(actor),
+                    "the later same-node bind was erased");
+            assertFalse(
+                    target.hasRemoteActorBoundSessionRoute(actor),
+                    "the earlier remote bind stayed current");
         }
     }
 
@@ -2504,19 +2663,22 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             RoutingId sessionB = RoutingId.from("session-b");
 
             assertTrue(
-                    target.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            target,
                             ownerA,
                             90,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
                                     1, route, sessionA, true, 50)));
             assertTrue(
-                    target.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            target,
                             ownerB,
                             1,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
                                     2, route, sessionB, true, 1)));
             assertTrue(
-                    target.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            target,
                             ownerA,
                             90,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
@@ -2525,13 +2687,15 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             assertBoundIngressAccepted(target, ownerB, 1, route, sessionB, 1, 1);
 
             assertTrue(
-                    target.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            target,
                             ownerB,
                             2,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
                                     4, route, sessionB, true, 1)));
             assertTrue(
-                    target.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            target,
                             ownerB,
                             1,
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
@@ -2993,7 +3157,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             }
 
             assertTrue(
-                    target.acceptRemoteStreamBinding(
+                    acceptRemoteStreamBinding(
+                            target,
                             sessionNodeRid,
                             sessionNode.lifecycleGeneration(),
                             new ZLinkServiceM6BWireCodec.BoundSessionBind(
@@ -3071,6 +3236,32 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             .get(1, TimeUnit.SECONDS);
             assertEquals("alpha", reactivated.stableType());
             assertTrue(reactivated.spot().lifecycleGeneration() > firstGeneration);
+        }
+    }
+
+    @Test
+    void joinedInstanceActivationIsRegisteredWhenItCompletes() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("jvm-m6b-instance-join-node"));
+            ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) node.spotNode();
+            String spotId = "jvm-m6b-instance-join";
+            spots.registerInstanceSpotType("alpha");
+
+            var first = spots.activateInstanceSpot(spotId, null).toCompletableFuture();
+            // The join's completion continuation observes the registry the moment it runs.
+            var closedOnJoin =
+                    spots.activateInstanceSpot(spotId, "alpha")
+                            .thenApply(
+                                    joined ->
+                                            spots.closeInstanceSpot(
+                                                    spotId, joined.spot().lifecycleGeneration()))
+                            .toCompletableFuture();
+
+            first.get(1, TimeUnit.SECONDS);
+            assertTrue(
+                    closedOnJoin.get(1, TimeUnit.SECONDS),
+                    "the joined activation completed before its registry entry was Ready");
         }
     }
 
@@ -3522,5 +3713,32 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             outstanding = context.coreHwmBudgetSnapshot().outstandingApplicationLeaseCount();
         }
         assertEquals(expected, outstanding);
+    }
+
+    private static boolean acceptRemoteStreamBinding(
+            ZLinkJavaRawSpotNode node,
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionBind command) {
+        return acceptRemoteStreamBinding(
+                node, sourceNodeRid, sourceNodeGeneration, sourceNodeRid.toString(), 1L, command);
+    }
+
+    private static boolean acceptRemoteStreamBinding(
+            ZLinkJavaRawSpotNode node,
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            String sessionOwnerId,
+            long sessionOwnerLeaseGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionBind command) {
+        return node.applyRemoteStreamBinding(
+                        sourceNodeRid,
+                        sourceNodeGeneration,
+                        sessionOwnerId,
+                        sessionOwnerLeaseGeneration,
+                        command,
+                        ignored -> {})
+                .toCompletableFuture()
+                .join();
     }
 }
