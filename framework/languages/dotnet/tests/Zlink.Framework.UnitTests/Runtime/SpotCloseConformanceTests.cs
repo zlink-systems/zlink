@@ -680,6 +680,65 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
+    public async Task Close_reincarnates_an_intent_delivered_while_another_ingress_holds_the_state_lane()
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var spotId = $"close-late-admit-{Guid.NewGuid():N}";
+        await host.RequestInstanceAsync(spotId);
+        host.State.HoldOnClosing = true;
+        host.State.HandlerMode = "closeAndReturn";
+        await host.RequestInstanceAsync(spotId);
+        var closed = host.State.ContextCloseTask!;
+        await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+        host.State.HandlerMode = null;
+        var store = host.Runtime.Registration.Locations.ResolveStore()!;
+        var authority = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await store.ReadAuthorityAsync(
+                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId)
+                )
+            )
+            .Snapshot;
+        var activation = await host
+            .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
+            .Catalog.TryGetInstanceActivationAsync(
+                spotId,
+                SpotCloseHost.InstanceType,
+                authority.ObjectGeneration
+            );
+        Assert.NotNull(activation);
+
+        // Another ingress turn of this Spot holds the state lane while the
+        // intent is delivered and Close continues to step 3.
+        var laneEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var laneRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var busyIngress = activation
+            ._serial.RunIngressAsync(async () =>
+            {
+                laneEntered.TrySetResult();
+                await laneRelease.Task;
+            })
+            .AsTask();
+        await laneEntered.Task.WaitAsync(Wait);
+        var pending = QueueRetainedIntent(host, activation, authority, spotId, "pending-late");
+        host.State.ReleaseOnClosing.TrySetResult();
+        laneRelease.TrySetResult();
+        await busyIngress.WaitAsync(Wait);
+
+        // Spot messaging §7 steps 1 and 3: the intent reached this node before
+        // the step 3 decision, so it stays behind Close and runs on the next
+        // incarnation.
+        Assert.Equal(RequestResult.Ok, (await pending.WaitAsync(Wait)).Result);
+        Assert.True(await closed.WaitAsync(Wait));
+        Assert.Contains("pending-late", host.State.InstanceHandlerMarkers);
+        Assert.Equal(2, host.State.InitializedGenerations.Count);
+    }
+
+    [Fact]
     public async Task Retained_intent_waits_for_successor_publication()
     {
         await using var host = await SpotCloseHost.StartAsync();

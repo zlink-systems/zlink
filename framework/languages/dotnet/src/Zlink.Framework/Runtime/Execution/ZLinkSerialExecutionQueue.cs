@@ -647,13 +647,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             return (succeeded, held);
         });
 
-    internal ValueTask<bool> HasPendingAcceptedStateOrCloseApplicationAdmissionAsync(
-        Func<object, bool> predicate
-    ) =>
-        RunOnSharedGateAsync(() =>
-            HasPendingAcceptedStateOrCloseApplicationAdmissionOnGate(predicate)
-        );
-
     private bool TrySealRelocationOnGate(out ZLinkSerialRelocationSeal seal)
     {
         RequireSharedGate();
@@ -1607,43 +1600,37 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     internal bool HasPendingAcceptedState(Func<object, bool> predicate)
     {
-        if (_sharedOwner is not null && !IsInsideSharedGate)
-        {
-            lock (_admissionGate)
-                return _relocation is null
-                    && !_relocated
-                    && _applicationQueue.AnyPublishedOrQueued(item =>
-                        item.AcceptedState is { } state && predicate(state)
-                    );
-        }
         lock (_admissionGate)
-        {
-            if (_sharedOwner is not null)
-                ImportSharedPublished();
-            return _applicationQueue.Any(item =>
-                item.AcceptedState is { } state && predicate(state)
-            );
-        }
+            return HasPendingAcceptedStateUnderLock(predicate);
     }
 
-    // Spot messaging §7 step 3 under the admission gate: an accepted state
+    // Spot messaging §7 step 3 under the admission lock: an accepted state
     // already waiting keeps admission open for the next incarnation; otherwise
     // application admission closes in the same decision, so a later message is
-    // refused before admission.
-    private bool HasPendingAcceptedStateOrCloseApplicationAdmissionOnGate(
-        Func<object, bool> predicate
-    )
+    // refused before admission. The caller runs this in the turn that admits
+    // accepted states, so a state admitted before the decision is seen here.
+    internal bool HasPendingAcceptedStateOrCloseApplicationAdmission(Func<object, bool> predicate)
     {
-        RequireSharedGate();
         lock (_admissionGate)
         {
-            if (_sharedOwner is not null)
-                ImportSharedPublished();
-            if (_applicationQueue.Any(item => item.AcceptedState is { } state && predicate(state)))
+            if (HasPendingAcceptedStateUnderLock(predicate))
                 return true;
             _applicationAdmissionClosed = true;
             return false;
         }
+    }
+
+    private bool HasPendingAcceptedStateUnderLock(Func<object, bool> predicate)
+    {
+        if (_sharedOwner is not null && !IsInsideSharedGate)
+            return _relocation is null
+                && !_relocated
+                && _applicationQueue.AnyPublishedOrQueued(item =>
+                    item.AcceptedState is { } state && predicate(state)
+                );
+        if (_sharedOwner is not null)
+            ImportSharedPublished();
+        return _applicationQueue.Any(item => item.AcceptedState is { } state && predicate(state));
     }
 
     internal void VisitPendingAcceptedStateOnGate(

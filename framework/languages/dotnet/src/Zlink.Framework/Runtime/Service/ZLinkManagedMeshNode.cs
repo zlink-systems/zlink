@@ -218,6 +218,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private long _queuedMessages;
     private long _queuedBytes;
     private ZLinkApplicationJobQueueLease? _reservedRawApplicationAdmission;
+    private RawMulticastFanout? _pendingRawMulticast;
     private int _readyPosted;
     private bool IsDisposing => Volatile.Read(ref _disposeTask) is not null;
     private bool _inboundOperationAdmissionClosed;
@@ -2206,13 +2207,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             var mailbox = entry.Value;
             var canClaim = batch.Count < batch.MaximumRecords;
-            var claim = await mailbox
-                .TryClaimAsync(
-                    batch.RequireReservedApplicationAdmission
-                        && entry.Key.Domain == MeshReadyDomains.Application,
-                    canClaim
-                )
-                .ConfigureAwait(false);
+            var claim = await mailbox.TryClaimAsync(canClaim).ConfigureAwait(false);
             if (!claim.Ready)
                 continue;
             if (!canClaim)
@@ -2222,9 +2217,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     entry.Key.OwnerKind,
                     entry.Key.Domain,
                     entry.Key.SpotId,
-                    entry.Key.Actor,
-                    Math.Min(claim.Count, ReceiveBatchSize),
-                    entry.Key.Domain == MeshReadyDomains.Application && claim.Admitted
+                    entry.Key.Actor
                 ),
                 new MeshClaim
                 {
@@ -3296,6 +3289,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             mailbox.Dispose();
         _ownedMailboxes.Clear();
         Interlocked.Exchange(ref _reservedRawApplicationAdmission, null)?.Dispose();
+        // The receive loop has stopped, so its unposted fanout children end here.
+        _pendingRawMulticast?.Dispose();
+        _pendingRawMulticast = null;
         RunState(_selectedRoutes.Clear);
         RunInboundOperationState(_controlSends.Clear);
         foreach (var spot in _spots.Values)
@@ -4165,10 +4161,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 (ulong)DateTimeOffset.UtcNow.Add(effectiveTimeout).ToUnixTimeMilliseconds()
             );
             StartDetached(() => ExpireOperationAsync(correlation, operation, effectiveTimeout));
+            // Caller cancellation competes for the operation like every other
+            // completion path; only the path that removes it completes the caller.
             using var cancellation = cancellationToken.Register(() =>
             {
                 if (TryRemoveOperation(correlation, out _))
-                    operation.Cancel();
+                    operation.Cancel(cancellationToken);
             });
             var result = SubmitSpot(
                 targetRid,
@@ -4188,9 +4186,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 operation.Cancel();
                 throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
             }
-            var completion = await operation
-                .AwaitedCompletion!.Task.WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
+            var completion = await operation.AwaitedCompletion!.Task.ConfigureAwait(false);
             if (completion.Result != RequestResult.Ok)
             {
                 DisposeParts(completion.Parts);
@@ -5431,72 +5427,145 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkApplicationJobQueueLease?[] admissions
     )
     {
-        var count = ReceiveBatchSize;
         var queue = _applicationJobQueue;
+        if (queue is null)
+        {
+            ReceiveRawBatch(admissions, ReceiveBatchSize);
+            return;
+        }
+        var count = 0;
         try
         {
-            if (queue is not null)
+            var reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
+            admissions[0] = reserved;
+            if (reserved is not null)
             {
-                var reserved = Interlocked.Exchange(ref _reservedRawApplicationAdmission, null);
-                count = 0;
-                admissions[0] = reserved;
-                if (reserved is not null)
-                {
-                    count = 1;
-                    _poller!.Modify(_socket!, PollEventFlags.PollIn | InfrastructurePollEvents);
-                }
-                count += queue.TryAcquireBatch(
-                    admissions,
-                    count,
-                    ReceiveBatchSize - count,
-                    ZLinkApplicationJobOrigin.Remote
-                );
-                if (count == 0)
-                {
-                    // A full host leaves arrived records in Core. Keep this socket's
-                    // completion and route observer active while its existing waiter
-                    // obtains the next receive permit.
-                    _poller!.Modify(_socket!, InfrastructurePollEvents);
-                    using (ExecutionContext.SuppressFlow())
-                        _ = WaitForRawApplicationAdmissionAsync(queue, cancellationToken);
-                    return;
-                }
+                count = 1;
+                _poller!.Modify(_socket!, PollEventFlags.PollIn | InfrastructurePollEvents);
             }
+            count += queue.TryAcquireBatch(
+                admissions,
+                count,
+                ReceiveBatchSize - count,
+                ZLinkApplicationJobOrigin.Remote
+            );
+            ReceiveRawBatch(admissions, count);
+        }
+        finally
+        {
+            queue.ReleaseBatch(admissions);
+            Array.Clear(admissions);
+        }
 
-            var startedAt = Stopwatch.GetTimestamp();
-            long bytes = 0;
-            for (var index = 0; index < count; index++)
+        if (count == 0 || _pendingRawMulticast is not null)
+        {
+            // This source needs a permit before it receives again: for the next
+            // record, or for the next child of a fanout it already received. A
+            // full host leaves arrived records in Core. Keep this socket's
+            // completion and route observer active while its one waiter
+            // obtains the next permit.
+            _poller!.Modify(_socket!, InfrastructurePollEvents);
+            using (ExecutionContext.SuppressFlow())
+                _ = WaitForRawApplicationAdmissionAsync(queue, cancellationToken);
+        }
+    }
+
+    // Each permit of the batch admits one record, or the next child of a
+    // fanout this source received before.
+    private void ReceiveRawBatch(ZLinkApplicationJobQueueLease?[] admissions, int count)
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        long bytes = 0;
+        for (var index = 0; index < count; index++)
+        {
+            if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
+                return;
+            var admission = admissions[index];
+            admissions[index] = null;
+            if (_pendingRawMulticast is { } fanout)
             {
-                if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
+                ContinueRawMulticast(fanout, admission);
+                continue;
+            }
+            Received? received = Received.Create();
+            try
+            {
+                bool available;
+                lock (_socketGate)
+                    available = _socket!.Recv(received, RecvFlags.DontWait);
+                if (!available)
                     return;
-                Received? received = Received.Create();
-                var admission = admissions[index];
-                admissions[index] = null;
+                bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
+                using var ownership = new RawIngressOwnership(received, admission);
+                received = null;
+                admission = null;
+                ProcessReceived(ownership);
+            }
+            finally
+            {
+                received?.Dispose();
+                admission?.Dispose();
+            }
+        }
+    }
+
+    // Spec 04 application job queue: a 1:N fanout posts no more children than
+    // the permits it holds. With an application queue the given permit admits
+    // one child, and the rest stay with this source until its next permits.
+    private bool ContinueRawMulticast(
+        RawMulticastFanout fanout,
+        ZLinkApplicationJobQueueLease? admission
+    )
+    {
+        var delivered = false;
+        try
+        {
+            while (fanout.HasNext)
+            {
+                var spot = fanout.TakeNext();
+                IDisposable? childRecordOwner = null;
                 try
                 {
-                    bool available;
-                    lock (_socketGate)
-                        available = _socket!.Recv(received, RecvFlags.DontWait);
-                    if (!available)
-                        return;
-                    bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
-                    using var ownership = new RawIngressOwnership(received, admission);
-                    received = null;
+                    childRecordOwner = AttachApplicationAdmission(
+                        fanout.Envelope.Retain(),
+                        admission
+                    );
                     admission = null;
-                    ProcessReceived(ownership);
+                    var parts = CloneParts(fanout.Parts);
+                    if (
+                        EnqueueOwned(
+                            MailboxKey.ForSpot(spot, MeshReadyDomains.Application),
+                            fanout.Record,
+                            parts,
+                            true,
+                            childRecordOwner
+                        )
+                    )
+                    {
+                        delivered = true;
+                        childRecordOwner = null;
+                    }
                 }
                 finally
                 {
-                    received?.Dispose();
-                    admission?.Dispose();
+                    childRecordOwner?.Dispose();
                 }
+                if (_applicationJobQueue is not null)
+                    break;
             }
         }
         finally
         {
-            queue?.ReleaseBatch(admissions);
-            Array.Clear(admissions);
+            admission?.Dispose();
+            if (fanout.HasNext)
+                _pendingRawMulticast = fanout;
+            else
+            {
+                _pendingRawMulticast = null;
+                fanout.Dispose();
+            }
         }
+        return delivered;
     }
 
     private async Task WaitForRawApplicationAdmissionAsync(
@@ -5524,6 +5593,41 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         finally
         {
             admission?.Dispose();
+        }
+    }
+
+    // A received Logical Multicast whose children are not all posted yet. The
+    // receive loop owns it; the envelope and decoded parts live until the last
+    // child is posted or the node stops.
+    private sealed class RawMulticastFanout(
+        ZLinkManagedSpot[] spots,
+        MeshReceiveRecord record,
+        IReadOnlyList<Message> parts,
+        ZLinkSharedEnvelopeOwner envelope
+    ) : IDisposable
+    {
+        private int _next;
+
+        internal MeshReceiveRecord Record => record;
+
+        internal IReadOnlyList<Message> Parts => parts;
+
+        internal ZLinkSharedEnvelopeOwner Envelope => envelope;
+
+        internal bool HasNext => _next < spots.Length;
+
+        internal ZLinkManagedSpot TakeNext() => spots[_next++];
+
+        public void Dispose()
+        {
+            try
+            {
+                envelope.Dispose();
+            }
+            finally
+            {
+                DisposeParts(parts);
+            }
         }
     }
 
@@ -6281,68 +6385,31 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                     .OrderBy(static spot => spot.RoutingId.ToHex(), StringComparer.Ordinal)
                     .ToArray();
-                var envelopeOwner = ownership.ShareEnvelope();
-                var delivered = false;
-                try
-                {
-                    for (var index = 0; index < matchingSpots.Length; index++)
-                    {
-                        var spot = matchingSpots[index];
-                        ZLinkApplicationJobQueueLease? childAdmission = null;
-                        IDisposable? childRecordOwner = null;
-                        try
-                        {
-                            childAdmission = null;
-                            childRecordOwner = AttachApplicationAdmission(
-                                envelopeOwner.Retain(),
-                                childAdmission
-                            );
-                            childAdmission = null;
-                            var multicastParts = CloneParts(decodedMulticastParts);
-                            if (
-                                EnqueueOwned(
-                                    MailboxKey.ForSpot(spot, MeshReadyDomains.Application),
-                                    new MeshReceiveRecord(
-                                        MeshRecordKind.SpotMulticast,
-                                        MeshReadyDomains.Application,
-                                        sourceRid,
-                                        logicalMulticast.SourceSpotId,
-                                        ResolvePeerGeneration(sourceRid),
-                                        default,
-                                        default,
-                                        default,
-                                        logicalMulticast.ChannelName,
-                                        logicalMulticast.Topic,
-                                        multicastMetadata,
-                                        0,
-                                        multicastParts.Count,
-                                        0,
-                                        0,
-                                        null
-                                    ),
-                                    multicastParts,
-                                    true,
-                                    childRecordOwner
-                                )
-                            )
-                            {
-                                delivered = true;
-                                childRecordOwner = null;
-                            }
-                        }
-                        finally
-                        {
-                            childRecordOwner?.Dispose();
-                            childAdmission?.Dispose();
-                        }
-                    }
-                }
-                finally
-                {
-                    envelopeOwner.Dispose();
-                    DisposeParts(decodedMulticastParts);
-                }
-                return delivered;
+                var fanout = new RawMulticastFanout(
+                    matchingSpots,
+                    new MeshReceiveRecord(
+                        MeshRecordKind.SpotMulticast,
+                        MeshReadyDomains.Application,
+                        sourceRid,
+                        logicalMulticast.SourceSpotId,
+                        ResolvePeerGeneration(sourceRid),
+                        default,
+                        default,
+                        default,
+                        logicalMulticast.ChannelName,
+                        logicalMulticast.Topic,
+                        multicastMetadata,
+                        0,
+                        decodedMulticastParts.Length,
+                        0,
+                        0,
+                        null
+                    ),
+                    decodedMulticastParts,
+                    ownership.ShareEnvelope()
+                );
+                // The record's receive permit admits the first child.
+                return ContinueRawMulticast(fanout, ownership.TakeAdmission());
             }
         }
         if (
@@ -12769,14 +12836,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return true;
         }
 
-        internal void Cancel()
+        // The token cancellation ends this operation's Framework queue wait
+        // before the caller observes its result. A caller cancellation completes
+        // the caller as cancelled; every other path completes it as Terminated.
+        internal void Cancel(CancellationToken callerCancellation = default)
         {
             if (Interlocked.Exchange(ref _terminal, 1) == 0)
             {
                 _timeout.Cancel();
-                AwaitedCompletion?.TrySetResult(
-                    new ManagedRequestCompletion(RequestResult.Terminated, Array.Empty<Message>())
-                );
+                if (callerCancellation.IsCancellationRequested)
+                    AwaitedCompletion?.TrySetCanceled(callerCancellation);
+                else
+                    AwaitedCompletion?.TrySetResult(
+                        new ManagedRequestCompletion(
+                            RequestResult.Terminated,
+                            Array.Empty<Message>()
+                        )
+                    );
             }
             _timeout.Dispose();
         }

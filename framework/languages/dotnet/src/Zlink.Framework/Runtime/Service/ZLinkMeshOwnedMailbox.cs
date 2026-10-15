@@ -59,7 +59,6 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     private readonly Queue<ZLinkMeshQueuedRecord> _records = new();
     private readonly ZLinkStateLane _lane = new();
     private ulong _pendingBytes;
-    private int _applicationAdmissionRecords;
 
     // An active claim owns only the FIFO prefix present when it was granted.
     // Zero still holds that claim until Release; -1 means no active claim.
@@ -81,8 +80,6 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         return _lane.TryPost(() =>
         {
             _records.Enqueue(record);
-            if (record.HasApplicationJobAdmission)
-                _applicationAdmissionRecords++;
             _pendingBytes = checked(_pendingBytes + pendingBytes);
 
             // Publish accounting before another mailbox turn can dequeue
@@ -92,22 +89,14 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         });
     }
 
-    internal ValueTask<(bool Ready, int Count, bool Admitted)> TryClaimAsync(
-        bool requireApplicationAdmission,
-        bool claim
-    ) =>
+    internal ValueTask<(bool Ready, int Count)> TryClaimAsync(bool claim) =>
         _lane.RunAsync(() =>
         {
-            var admitted = _applicationAdmissionRecords == _records.Count;
-            if (
-                _claimedRecordCount >= 0
-                || _records.Count == 0
-                || (requireApplicationAdmission && !admitted)
-            )
-                return (Ready: false, Count: 0, Admitted: false);
+            if (_claimedRecordCount >= 0 || _records.Count == 0)
+                return (Ready: false, Count: 0);
             if (claim)
                 _claimedRecordCount = _records.Count;
-            return (Ready: true, Count: _records.Count, Admitted: admitted);
+            return (Ready: true, Count: _records.Count);
         });
 
     internal ValueTask<bool> DrainAsync(MeshReceiveBatch batch, int maximumRecords) =>
@@ -122,8 +111,6 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
                     break;
                 var record = _records.Dequeue();
                 _claimedRecordCount--;
-                if (record.HasApplicationJobAdmission)
-                    _applicationAdmissionRecords--;
                 _pendingBytes -= record.PendingBytes;
                 onRecordDequeued(record.PendingBytes);
                 batch.Add(record.Record, record.TakeParts(), record.TakePayloadOwner());
@@ -155,7 +142,6 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
                     onRecordDequeued(record.PendingBytes);
                 }
                 _pendingBytes = 0;
-                _applicationAdmissionRecords = 0;
                 _claimedRecordCount = -1;
             })
         );
@@ -208,9 +194,6 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
     internal ulong PayloadBytes => _payloadBytes;
 
     internal ulong PendingBytes => _pendingBytes;
-
-    internal bool HasApplicationJobAdmission =>
-        _payloadOwner is ZLinkApplicationJobQueueRecordOwner;
 
     internal IReadOnlyList<Message> TakeParts() =>
         Interlocked.Exchange(ref _parts, null) ?? Array.Empty<Message>();
