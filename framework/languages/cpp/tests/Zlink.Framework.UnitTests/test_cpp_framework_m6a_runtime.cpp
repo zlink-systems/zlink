@@ -2368,9 +2368,27 @@ void verify_raw_owner_node_send_and_liveness (
     // A missing host-wide Application Job Queue permit fences the ordinary
     // ROUTER before Core receive.  Poll readiness alone must not consume or
     // retain the application record in the Framework owner.
-    // Activity waiting can end at a management deadline before DATA arrives.
-    // Observe the permit fence and the subsequent claim of the same payload,
-    // rather than requiring a particular poll wakeup after successful submit.
+    // The fence is meaningful only once the record is at the ROUTER: wait on
+    // the ingress poller until it reports POLLIN without receiving. A
+    // management deadline can end a wait first, so the wait repeats within
+    // the test deadline.
+    const auto wait_for_router_input = [&deadline] (mesh::raw_mesh_node_owner_t &node) {
+        const auto router_input_ready = [&node] {
+            const auto readiness = node.begin_receive_turn ();
+            return readiness
+                   && (static_cast<short> (*readiness)
+                       & static_cast<short> (zlink::poll_event_flag_t::pollin))
+                        != 0;
+        };
+        while (!router_input_ready ()
+               && mesh::service_liveness_registry_t::clock_t::now () < deadline)
+            (void) node.wait_for_activity (
+              std::max (0ms, std::chrono::ceil<std::chrono::milliseconds> (
+                               deadline - mesh::service_liveness_registry_t::clock_t::now ())),
+              true);
+        assert (router_input_ready ());
+    };
+    wait_for_router_input (second);
     const auto without_shared_permit =
       await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now (), false));
     assert (without_shared_permit == mesh::raw_mesh_pump_result_t::no_data);
@@ -2463,6 +2481,7 @@ void verify_raw_owner_node_send_and_liveness (
     const auto paused_liveness_base = mesh::service_liveness_registry_t::clock_t::now ();
     const auto paused_probe = await_task (first.tick_liveness (paused_liveness_base + 5s));
     assert (paused_probe.probes.size () == 1);
+    wait_for_router_input (second);
     const auto paused_without_shared_permit =
       await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now (), false));
     assert (paused_without_shared_permit == mesh::raw_mesh_pump_result_t::no_data);
