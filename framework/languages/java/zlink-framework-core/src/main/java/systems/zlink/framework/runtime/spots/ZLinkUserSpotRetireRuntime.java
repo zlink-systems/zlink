@@ -311,6 +311,10 @@ public final class ZLinkUserSpotRetireRuntime {
                 .allMatch(ZLinkCanonicalRelocationStateMachine::sourceQuiescent);
     }
 
+    public void onSourceQuiescenceChanged(Runnable listener) {
+        stateMachines.forEach(machine -> machine.onSourceQuiescenceChanged(listener));
+    }
+
     public CompletionStage<Void> sealAcceptedTargetRelocations() {
         return CompletableFuture.allOf(
                 stateMachines.stream()
