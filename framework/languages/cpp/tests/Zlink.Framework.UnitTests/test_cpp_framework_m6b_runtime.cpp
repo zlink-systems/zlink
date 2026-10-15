@@ -66,6 +66,51 @@
 #include <type_traits>
 #include <vector>
 
+namespace zlink::framework::runtime::host
+{
+// Drives the relocation terminal lane directly so a test can build the state
+// between two management passes without waiting for time to pass.
+struct public_host_runtime_test_access_t
+{
+    using key_t = public_host_runtime_t::relocation_attempt_key_t;
+
+    static void insert_unscheduled_target_attempt (public_host_runtime_t &host, const key_t &key)
+    {
+        host._relocation_session_terminal_lane
+          .run ([&] {
+              host.lower_relocation_next_due_on_lane (public_host_runtime_t::relocation_due_now);
+              (void) host._relocation_target_attempts.try_emplace (key);
+          })
+          .get ();
+    }
+
+    static void publish_relocation_bound (public_host_runtime_t &host)
+    {
+        host._relocation_session_terminal_lane
+          .run ([&] { host.publish_relocation_next_due_on_lane (); })
+          .get ();
+    }
+
+    static void schedule_finalize (public_host_runtime_t &host,
+                                   const key_t &key,
+                                   std::chrono::steady_clock::time_point at)
+    {
+        host._relocation_session_terminal_lane
+          .run ([&] {
+              host.set_relocation_finalize_at_on_lane (host._relocation_target_attempts.at (key),
+                                                       at);
+          })
+          .get ();
+    }
+
+    static bool relocation_due (const public_host_runtime_t &host,
+                                std::chrono::steady_clock::time_point now)
+    {
+        return host.relocation_management_due (now);
+    }
+};
+} // namespace zlink::framework::runtime::host
+
 namespace foundation = zlink::framework::runtime::foundation;
 namespace mesh = zlink::framework::runtime::mesh;
 namespace protocol = zlink::framework::runtime::protocol;
@@ -3892,6 +3937,28 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     target->close ();
 }
 
+void verify_relocation_finalize_write_lowers_published_bound ()
+{
+    // An attempt inserted unscheduled is excluded from a management pass that
+    // runs before its first finalize instant is written. That write must make
+    // the attempt due again; without it the bound stays never-due.
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("finalize-bound"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    using access = host::public_host_runtime_test_access_t;
+    const access::key_t key{1, 2, 3};
+    const auto now = std::chrono::steady_clock::now ();
+    access::insert_unscheduled_target_attempt (*host, key);
+    assert (access::relocation_due (*host, now));
+    access::publish_relocation_bound (*host);
+    assert (!access::relocation_due (*host, now + 24h));
+    access::schedule_finalize (*host, key, now + 1h);
+    assert (!access::relocation_due (*host, now));
+    assert (access::relocation_due (*host, now + 1h));
+}
+
 void verify_pending_relocation_management_bounds_dispatch_wait ()
 {
     auto host = std::make_shared<host::public_host_runtime_t> (
@@ -7513,6 +7580,7 @@ int main (int argc, char **argv)
     verify_public_host_fifo_drains_before_liveness_probe ();
     verify_logical_multicast_continues_after_one_target_failure ();
     verify_local_application_enqueue_wakes_dispatch_wait ();
+    verify_relocation_finalize_write_lowers_published_bound ();
     verify_pending_relocation_management_bounds_dispatch_wait ();
     verify_failed_relay_persistence_rearms_dispatch_wait ();
     verify_root_location_session_seal_timeout_is_startup_snapshot ();

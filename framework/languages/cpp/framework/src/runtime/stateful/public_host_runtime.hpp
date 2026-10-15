@@ -59,6 +59,8 @@ class spot_node_runtime_t;
 
 namespace zlink::framework::runtime::host
 {
+// Test-only access to the relocation terminal state (defined by unit tests).
+struct public_host_runtime_test_access_t;
 
 namespace relocation_detail
 {
@@ -869,6 +871,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     friend class spot_handle_t;
     friend class actor_handle_t;
     friend class actor_transfer_token_t;
+    friend struct public_host_runtime_test_access_t;
     friend class ::zlink::framework::detail::spot_node_runtime_t;
 
     task_t<spot_close_commit_t> begin_user_spot_close (protocol::user_spot_close_fence_t target);
@@ -1175,6 +1178,27 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     mutable std::atomic<std::chrono::steady_clock::rep> _relocation_next_due{relocation_due_now};
     bool relocation_management_due (std::chrono::steady_clock::time_point now) const noexcept;
     void publish_relocation_next_due_on_lane () const;
+    // Every write on the terminal lane that adds work or sets a deadline
+    // lowers the bound through this one rule; the scan raises it again.
+    void lower_relocation_next_due_on_lane (std::chrono::steady_clock::rep due) const noexcept
+    {
+        if (due < _relocation_next_due.load (std::memory_order_relaxed))
+            _relocation_next_due.store (due, std::memory_order_release);
+    }
+    void
+    lower_relocation_next_due_on_lane (std::chrono::steady_clock::time_point due) const noexcept
+    {
+        lower_relocation_next_due_on_lane (due.time_since_epoch ().count ());
+    }
+    // The one writer of a target attempt's next finalize instant: it lowers
+    // the published bound in the same terminal lane turn.
+    void
+    set_relocation_finalize_at_on_lane (relocation_target_attempt_t &attempt,
+                                        std::chrono::steady_clock::time_point at) const noexcept
+    {
+        attempt.next_finalize_at = at;
+        lower_relocation_next_due_on_lane (at);
+    }
     runtime::offload_executor_t _user_spot_terminal_lane_executor;
     mutable runtime::state_lane_t _user_spot_terminal_lane{_user_spot_terminal_lane_executor};
     mutable std::mutex _mutex;

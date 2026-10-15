@@ -1893,7 +1893,7 @@ public_host_runtime_t::admit_session_relocation_seal (
               record.local_completions.push_back (local_completion);
           const auto [stored, was_inserted] =
             _session_seal_terminals.emplace (relocation_key, std::move (record));
-          _relocation_next_due.store (relocation_due_now, std::memory_order_release);
+          lower_relocation_next_due_on_lane (relocation_due_now);
           inserted = was_inserted;
           if (inserted)
               _transport->signal_activity ();
@@ -2969,7 +2969,7 @@ task_t<void> public_host_runtime_t::seal_relocation_targets ()
       _relocation_session_terminal_lane
         .run ([this] {
             _options.mesh.shutdown_admission_seal->store (true, std::memory_order_release);
-            _relocation_next_due.store (relocation_due_now, std::memory_order_release);
+            lower_relocation_next_due_on_lane (relocation_due_now);
             std::vector<task_t<void>> result;
             for (const auto &[key, attempt] : _relocation_target_attempts)
                 if (attempt.terminal)
@@ -3113,7 +3113,8 @@ void public_host_runtime_t::poll_relocation_target_attempts ()
                   attempt.cutover_warned = true;
                   ++cutover_warnings;
               }
-              attempt.next_finalize_at = now + dispatch_limits::management_retry_interval;
+              set_relocation_finalize_at_on_lane (attempt,
+                                                  now + dispatch_limits::management_retry_interval);
               unverified.emplace_back (key, relocation_target_fence (attempt));
           }
       })
@@ -3560,7 +3561,8 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
                     || now < found->second.next_finalize_at)
                     return false;
                 attempt = found->second;
-                found->second.next_finalize_at = now + dispatch_limits::management_retry_interval;
+                set_relocation_finalize_at_on_lane (
+                  found->second, now + dispatch_limits::management_retry_interval);
             }
             return true;
         })
@@ -3839,7 +3841,7 @@ void public_host_runtime_t::activate_relocation_assembly (
         .run ([&] {
             if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
                 return false;
-            _relocation_next_due.store (relocation_due_now, std::memory_order_release);
+            lower_relocation_next_due_on_lane (relocation_due_now);
             return _relocation_target_attempts.try_emplace (key, std::move (attempt)).second;
         })
         .get ();
@@ -3863,8 +3865,8 @@ void public_host_runtime_t::activate_relocation_assembly (
           .run ([&] {
               const auto found = _relocation_target_attempts.find (key);
               if (found != _relocation_target_attempts.end ())
-                  found->second.next_finalize_at =
-                    std::chrono::steady_clock::now () + _relocation_cutover_wait;
+                  set_relocation_finalize_at_on_lane (
+                    found->second, std::chrono::steady_clock::now () + _relocation_cutover_wait);
           })
           .get ();
         return;
@@ -5145,9 +5147,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         .run ([&] {
                             const auto found = _relocation_assemblies.find (key);
                             if (found != _relocation_assemblies.end ()) {
-                                if (found->second.prepare == *prepare)
+                                if (found->second.prepare == *prepare) {
                                     found->second.expires_at = std::chrono::steady_clock::now ()
                                                                + relocation_assembly_retention;
+                                    lower_relocation_next_due_on_lane (found->second.expires_at);
+                                }
                                 return true;
                             }
                             const auto current_state = status ().state;
@@ -5155,8 +5159,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 || current_state == node_status_t::state_t::stopped
                                 || current_state == node_status_t::state_t::error)
                                 return false;
-                            _relocation_next_due.store (relocation_due_now,
-                                                        std::memory_order_release);
+                            lower_relocation_next_due_on_lane (relocation_due_now);
                             _relocation_assemblies.emplace (
                               key,
                               pending_relocation_assembly_t{
@@ -5292,8 +5295,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           }
                           if (matches) {
                               found->second.cutover_received = true;
-                              _relocation_next_due.store (relocation_due_now,
-                                                          std::memory_order_release);
+                              lower_relocation_next_due_on_lane (relocation_due_now);
                               verified.emplace (
                                 std::make_move_iterator (batch.end ()
                                                          - static_cast<std::ptrdiff_t> (count)),
@@ -5319,8 +5321,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               if (found == _relocation_target_attempts.end ())
                                   return;
                               if (staged) {
-                                  found->second.next_finalize_at =
-                                    std::chrono::steady_clock::now ();
+                                  set_relocation_finalize_at_on_lane (
+                                    found->second, std::chrono::steady_clock::now ());
                                   return;
                               }
                               mismatched = take_relocation_target_discard (found->second);
