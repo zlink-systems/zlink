@@ -275,7 +275,7 @@ capture하여 target Actor에 복원한다. `RecreateOnRelocation`은 target에�
 만들지만 application state를 복원하지 않는다. 대신 Framework가 소유한 실행 전
 queue와 timer 정보는 이동 후에도 유지한다. 두 policy 모두 같은 logical Actor의
 이동이므로 `ObjectGeneration`을 바꾸지 않는다. Cross-node 이동에서 owner가 바뀌면,
-같은 object incarnation에서 authority owner가 바뀐 순서를 나타내는 provider 발급
+같은 object incarnation에서 authority owner가 바뀐 순서를 나타내는
 값인 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.ko.md#authorityownergeneration)만
 증가한다.
 

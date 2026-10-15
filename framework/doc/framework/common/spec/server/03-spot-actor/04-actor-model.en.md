@@ -324,7 +324,7 @@ and timer information are kept after the move. Neither policy changes
 `ObjectGeneration`, since it's the same logical Actor moving. On a cross-node
 move where the owner changes, only
 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.en.md#authorityownergeneration) —
-a provider-issued value marking the order in which the authority owner
+a value marking the order in which the authority owner
 changed for the same object incarnation — increases.
 
 When an Actor bound to a Session moves,
