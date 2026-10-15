@@ -3535,6 +3535,22 @@ bool raw_mesh_node_owner_t::route_current_locked (const std::vector<std::uint8_t
     return route != _routes.end () && route->second == route_generation;
 }
 
+std::optional<zlink::submit_result_t> raw_mesh_node_owner_t::classify_node_target (
+  const std::vector<std::uint8_t> &target_routing_id) const
+{
+    // An Object Client is never a Node direct application target, even when
+    // a channel connection admitted it (02-channel-messaging.ko.md section 8).
+    if (const auto peer = _topology.peer (target_routing_id))
+        return peer->descriptor.object_role == service_object_role_t::client
+                 ? std::optional (zlink::submit_result_t::not_found)
+                 : std::nullopt;
+    for (const auto &descriptor : _topology.not_required_peers ()) {
+        if (descriptor.node_routing_id == target_routing_id)
+            return zlink::submit_result_t::not_found;
+    }
+    return std::nullopt;
+}
+
 std::size_t raw_mesh_node_owner_t::observe_routes ()
 {
     // Core applies route changes while the socket is polled; poll through the

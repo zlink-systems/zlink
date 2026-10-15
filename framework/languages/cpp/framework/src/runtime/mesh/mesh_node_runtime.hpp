@@ -615,8 +615,6 @@ class mesh_node_runtime_t
                                       const std::vector<zlink::message_t> &parts,
                                       const actor_ref_t &actor,
                                       const std::shared_ptr<mesh_node_builder_state_t> &state);
-    task_t<std::optional<zlink::submit_result_t>>
-    classify_node_direct_target (const zlink::routing_id_t &target) const;
     std::shared_ptr<mesh_node_builder_state_t> _state;
     serializer_registry_t *_serializers = nullptr;
     std::shared_ptr<location_repository_t> _user_spot_store;
