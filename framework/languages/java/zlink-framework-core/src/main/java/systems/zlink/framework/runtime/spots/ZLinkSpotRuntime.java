@@ -724,8 +724,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                     message, received);
                                                 }
                                             }));
-            if (!nodeRegistration.entrySpots().isEmpty()
-                    || !nodeRegistration.actorFactories().isEmpty()) {
+            if (nodeRegistration.objectServer()) {
                 ZLinkBackendSpot entryBackendSpot = node.entrySpot();
                 entryBackendSpot.setRoutingId(nodeRegistration.entrySpotId());
                 entrySpotInitializations.add(
@@ -805,7 +804,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         activationFactory,
                         actorSessions::hasActorsInSpot);
         for (EntrySpotInitialization initialization : entrySpotInitializations) {
-            for (Class<? extends ZLinkEntrySpot<?>> entrySpotType : initialization.entrySpots()) {
+            var entrySpotTypes = initialization.entrySpots();
+            if (entrySpotTypes.isEmpty()) {
+                entrySpotTypes = java.util.Collections.singletonList(null);
+            }
+            for (Class<? extends ZLinkEntrySpot<?>> entrySpotType : entrySpotTypes) {
                 spotLifecycle.addEntrySpot(
                         systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls.submit(
                                 () ->
