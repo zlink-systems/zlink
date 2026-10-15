@@ -164,8 +164,8 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                 return CompletableFuture.failedFuture(
                         new CancellationException("Application Job Queue is closed"));
             }
-            if (waiters.isEmpty() && permitsInUse < effectiveLimit) {
-                permit = reserveUnderLock();
+            if (reserveFreeUnderLock()) {
+                permit = new Permit(this);
                 transition = evaluatePressureUnderLock();
             } else {
                 Waiter waiter = new Waiter(this, null, nanoTime.getAsLong(), metricsEpoch, origin);
@@ -229,7 +229,7 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                 waiter.future.cancelFromQueue();
                 return result;
             }
-            boolean waiting = !waiters.isEmpty() || permitsInUse >= effectiveLimit;
+            boolean waiting = !admitsNowUnderLock();
             waiters.addLast(waiter);
             if (waiting) {
                 capacityWaitCount = saturatingIncrement(capacityWaitCount);
@@ -301,10 +301,10 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         Permit permit;
         PressureSnapshot transition;
         synchronized (lock) {
-            if (closed || !waiters.isEmpty() || permitsInUse >= effectiveLimit) {
+            if (!reserveFreeUnderLock()) {
                 return null;
             }
-            permit = reserveUnderLock();
+            permit = new Permit(this);
             transition = evaluatePressureUnderLock();
         }
         notifyPressureTransition(transition);
@@ -321,16 +321,10 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         int reserved = 0;
         PressureSnapshot transition = null;
         synchronized (lock) {
-            while (!closed
-                    && waiters.isEmpty()
-                    && reserved < maximum
-                    && permitsInUse < effectiveLimit) {
-                reservedSupplyPermits++;
-                permitsInUse++;
+            while (reserved < maximum && reserveFreeUnderLock()) {
                 reserved++;
             }
             if (reserved > 0) {
-                peakPermitsInUse = Math.max(peakPermitsInUse, permitsInUse);
                 transition = evaluatePressureUnderLock();
             }
         }
@@ -421,11 +415,8 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         permits.add(acquireBlocking(origin));
         PressureSnapshot transition = null;
         synchronized (lock) {
-            while (!closed
-                    && waiters.isEmpty()
-                    && permits.size() < maximum
-                    && permitsInUse < effectiveLimit) {
-                permits.add(reserveUnderLock());
+            while (permits.size() < maximum && reserveFreeUnderLock()) {
+                permits.add(new Permit(this));
             }
             if (permits.size() > 1) {
                 transition = evaluatePressureUnderLock();
@@ -675,14 +666,37 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         return Math.multiplyExact(value, percent) / PERCENT_SCALE;
     }
 
+    /**
+     * The one admission decision for a caller that does not wait: the queue is open, no older
+     * waiter exists and capacity is free now. Every immediate path (acquire, receive reservation,
+     * rotation budget, batch claim) and the FIFO join's wait decision use it.
+     */
+    private boolean admitsNowUnderLock() {
+        return !closed && waiters.isEmpty() && permitsInUse < effectiveLimit;
+    }
+
+    /** Counts one reservation when {@link #admitsNowUnderLock()} admits it. */
+    private boolean reserveFreeUnderLock() {
+        if (!admitsNowUnderLock()) {
+            return false;
+        }
+        countReservationUnderLock();
+        return true;
+    }
+
+    /** Reserves one permit for a waiter the FIFO already chose. */
     private Permit reserveUnderLock() {
         if (permitsInUse >= effectiveLimit) {
             throw new IllegalStateException("Application Job Queue oversubscribed");
         }
+        countReservationUnderLock();
+        return new Permit(this);
+    }
+
+    private void countReservationUnderLock() {
         reservedSupplyPermits++;
         permitsInUse++;
         peakPermitsInUse = Math.max(peakPermitsInUse, permitsInUse);
-        return new Permit(this);
     }
 
     private void queued(Permit permit) {
