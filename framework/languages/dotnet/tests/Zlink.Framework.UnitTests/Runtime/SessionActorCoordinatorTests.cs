@@ -1592,9 +1592,14 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Canonical_Seal_Routes_Command_44_Without_Store_Reread(bool pushBeforeRoute)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Canonical_Seal_Routes_Command_44_Without_Store_Reread(
+        bool pushBeforeRoute,
+        bool foreignMetadata
+    )
     {
         var loggerFactory = new SessionRouteLoggerFactory();
         var locationStore = new BlockingReadLocationStore(new ZLinkInMemoryProviderLocationStore());
@@ -1693,6 +1698,14 @@ public sealed class SessionActorCoordinatorTests
                 identity.BindingGeneration
             )
         );
+        if (foreignMetadata)
+            seal = seal with
+            {
+                Actor = seal.Actor with
+                {
+                    AuthorityOwnerGeneration = identity.AuthorityOwnerGeneration + 100,
+                },
+            };
         _ = await runtime.SealCanonicalSessionActorRouteAsync(seal, CancellationToken.None);
 
         var targetAuthority = targetAuthoritySnapshot.AuthorityOwnerGeneration;
@@ -1723,7 +1736,12 @@ public sealed class SessionActorCoordinatorTests
 
         var command44 = new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
             relocationId,
-            seal.Coordinator,
+            foreignMetadata
+                ? seal.Coordinator with
+                {
+                    OwnerId = "different-coordinator",
+                }
+                : seal.Coordinator,
             2,
             seal.Actor.Actor,
             seal.Session,
@@ -1770,16 +1788,24 @@ public sealed class SessionActorCoordinatorTests
         Assert.Single(stream.Writes);
         Assert.Equal(new byte[] { 7, 8, 9 }, stream.Writes[0].Payload);
 
-        await runtime.RouteCanonicalSessionActorAsync(
-            command44,
-            new ZLinkSessionRelocationAuthenticatedRoute(
-                targetNode,
-                targetNodeGeneration,
-                identity.MeshName,
-                targetAuthority,
-                OwnerLeaseGeneration: 0
-            ),
-            CancellationToken.None
+        Assert.True(
+            runtime.RouteCanonicalSessionActor(
+                command44 with
+                {
+                    Coordinator = command44.Coordinator with { OwnerId = "duplicate-coordinator" },
+                    Route = command44.Route with
+                    {
+                        TargetAuthorityOwnerGeneration = targetAuthority + 1,
+                    },
+                },
+                new ZLinkSessionRelocationAuthenticatedRoute(
+                    targetNode,
+                    targetNodeGeneration,
+                    identity.MeshName,
+                    targetAuthority,
+                    OwnerLeaseGeneration: 0
+                )
+            )
         );
         await runtime.RouteCanonicalSessionActorAsync(
             command44 with

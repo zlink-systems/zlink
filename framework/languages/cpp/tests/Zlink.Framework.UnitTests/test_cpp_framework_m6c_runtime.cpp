@@ -3250,6 +3250,14 @@ void test_public_authority_store_adapter (test_context_t &test)
                     && read->target.node_id == "node-b" && read->target_owner.lease_generation == 5,
                   "public authority adapter must decode its canonical actor authority row");
 
+    store.snapshot.reset ();
+    test.require (adapter.observe_relocation (captured_fence)
+                    == relocation_authority_t::source_lease_expired,
+                  "target commit then authority removal must end the source as expired owner");
+    test.require (adapter.preserve_relocation (captured_fence)
+                    == relocation_authority_t::source_lease_expired,
+                  "Missing must never attempt source Preserve");
+
     const std::vector<std::byte> application_payload{std::byte{0x31}, std::byte{0x32}};
     store.snapshot = zlink::framework::authority_snapshot_t{
       "10", application_payload, 7, 12, {"owner-b", 5}, std::chrono::system_clock::now ()};
@@ -3363,14 +3371,11 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
     };
     const auto admitted = pump_until (
       [&] {
-          return source.topology ().peer (target_descriptor.node_routing_id).has_value ()
-                 && target.transport ()
-                      .topology ()
-                      .peer (source_descriptor.node_routing_id)
-                      .has_value ();
+          return source.peer_route (target_descriptor.node_routing_id).second
+                 && target.transport ().peer_route (source_descriptor.node_routing_id).second;
       },
       5s);
-    test.require (admitted, "the raw relocation source must be admitted by the target");
+    test.require (admitted, "both relocation peers must be ready before PREPARE and STATE_CHUNK");
 
     const protocol::relocation_coordinator_fence_t coordinator{
       "source-owner", 1, source_descriptor.node_routing_id, source_descriptor.lifecycle_generation,
@@ -3594,12 +3599,14 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     };
     const auto admitted = pump_until (
       [&] {
-          return source.topology ().peer (target_descriptor.node_routing_id).has_value ()
-                 && target.has_admitted_peer (zlink::routing_id_t::from ("settlement-source"),
-                                              source_descriptor.lifecycle_generation);
+          return source.peer_route (target_descriptor.node_routing_id).second
+                 && target.native_node ()
+                      .transport ()
+                      .peer_route (source_descriptor.node_routing_id)
+                      .second;
       },
       5s);
-    test.require (admitted, "the raw relocation source must be admitted by the target");
+    test.require (admitted, "both relocation peers must be ready before PREPARE and STATE_CHUNK");
 
     const protocol::relocation_coordinator_fence_t coordinator{
       "source-owner", 1, source_descriptor.node_routing_id, source_descriptor.lifecycle_generation,
@@ -3830,11 +3837,8 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
                                   const relocation_ingress_batch_t &) -> framework::task_t<bool> {
           co_return true;
       },
-      .send_cutover = [] (const protocol::relocation_cutover_t &)
-        -> framework::task_t<
-          eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t> {
-          co_return eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::
-            enqueued;
+      .send_cutover = [] (const protocol::relocation_cutover_t &) -> framework::task_t<bool> {
+          co_return true;
       },
       .abort_target_before_cutover = [] { return true; }};
 
@@ -4168,13 +4172,184 @@ void test_boundary_preserve_restores_acceptance_order (test_context_t &test)
                   "Preserve drain must release all retained accounting");
 }
 
+void test_cutover_replays_over_selected_network_route (test_context_t &test)
+{
+    using namespace std::chrono_literals;
+    namespace framework = zlink::framework;
+    namespace mesh = framework::runtime::mesh;
+    namespace protocol = framework::runtime::protocol;
+    const auto descriptor = [] (std::string rid) {
+        return mesh::service_node_descriptor_t{
+          "mesh", {rid.begin (), rid.end ()},           1, 1, "tcp://127.0.0.1:0",
+          {},     mesh::service_node_state_t::preparing};
+    };
+    mesh::raw_mesh_node_owner_t source (framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("Z-network-source")}));
+    mesh::raw_mesh_node_owner_t target (framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("A-network-target")}));
+    source.start ();
+    target.start ();
+    const auto local = source.topology ().local_descriptor ();
+    const auto remote = target.topology ().local_descriptor ();
+    assert (source.connect_peer (target.endpoint (), remote));
+    const auto ready = [&] {
+        return source.peer_route (remote.node_routing_id).second
+               && target.peer_route (local.node_routing_id).second;
+    };
+    const auto pump = [&] {
+        const auto now = std::chrono::steady_clock::now ();
+        (void) await_task (source.pump_one (now));
+        (void) await_task (target.pump_one (now));
+        (void) await_task (source.tick_liveness (now));
+        (void) await_task (target.tick_liveness (now));
+    };
+    const auto admission_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!ready () && std::chrono::steady_clock::now () < admission_deadline)
+        pump ();
+    assert (ready ());
+    const auto original_source_route = source.peer_route (remote.node_routing_id).first;
+    const auto original_target_route = target.peer_route (local.node_routing_id).first;
+
+    stateful_object_runtime_t objects;
+    objects.configure_relocation_state (
+      [] (const object_ref_t &, const std::string &, std::stop_token) {
+          return std::vector<std::uint8_t>{0x41};
+      },
+      [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
+    const auto actor = create_actor (objects, "network-actor", "Z-network-source");
+    auto roots = std::make_shared<memory_relocation_repository_t> ();
+    auto authority = std::make_shared<settlement_authority_t> ();
+    authority->preserved_authority = relocation_authority_t::source_preserved;
+    maintenance_runtime_t relocation (objects, authority, roots);
+    int data_sends = 0;
+    int cutover_sends = 0;
+    std::atomic<bool> stop{false};
+    std::optional<std::thread> receiver;
+    std::vector<std::vector<std::uint8_t>> received_batch;
+    int verified_cutovers = 0;
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    eligible_relocation_unit_t::canonical_wire_context_t wire{
+      .relocation = {0x1761, 0x41},
+      .target_attempt_generation = 7,
+      .coordinator = {"source-owner", 1, local.node_routing_id, local.lifecycle_generation,
+                      "authority-v1"},
+      .target_node_routing_id = remote.node_routing_id,
+      .target_node_generation = remote.lifecycle_generation,
+      .application_version = 1,
+      .prepare_target =
+        [&] (const std::vector<frozen_object_state_t> &,
+             const relocation_payload_manifest_t &) -> framework::task_t<relocation_reason_t> {
+          protocol::frozen_application_record_t held;
+          held.kind = protocol::frozen_record_kind_t::actor_send;
+          held.source_kind = protocol::frozen_source_kind_t::node;
+          held.source = {"source-owner", 1, local.node_routing_id, local.lifecycle_generation};
+          held.operation = {0x1761, 1};
+          held.body = protocol::frozen_actor_application_body_t{
+            {actor.key, actor.object_generation, remote.node_routing_id,
+             remote.lifecycle_generation, actor.authority_owner_generation, 9},
+            {"NetworkBoundary", "application/json", {0x42}}};
+          assert (objects.enqueue (actor, turn_domain_t::application, {1, {}, 1, std::move (held)})
+                  == stateful_error_t::none);
+          co_return relocation_reason_t::none;
+      },
+      .send_state_chunk = [] (const protocol::relocation_state_t &) -> framework::task_t<bool> {
+          co_return true;
+      },
+      .send_relocation_data = [&] (const std::vector<protocol::relocation_data_t> &records,
+                                   const relocation_ingress_batch_t &) -> framework::task_t<bool> {
+          ++data_sends;
+          assert (records.size () == 1);
+          for (const auto &record : records)
+              if (!co_await source.send_relocation_control (remote.node_routing_id, record))
+                  co_return false;
+          co_return true;
+      },
+      .send_application =
+        [] (const object_ref_t &, const turn_record_t &) {
+            assert (false && "network fixture submits no post-boundary application record");
+        },
+      .send_cutover =
+        [&] (const protocol::relocation_cutover_t &cutover) -> framework::task_t<bool> {
+          ++cutover_sends;
+          const bool submitted =
+            co_await source.send_relocation_control (remote.node_routing_id, cutover);
+          assert (submitted);
+          if (cutover_sends == 1) {
+              // Leave the original batch at Core, then replace its selected pipe.
+              assert (target.connect_peer (source.endpoint (), local));
+              while ((source.peer_route (remote.node_routing_id).first == original_source_route
+                      || target.peer_route (local.node_routing_id).first == original_target_route)
+                     && std::chrono::steady_clock::now () < deadline) {
+                  (void) source.observe_routes ();
+                  (void) target.observe_routes ();
+              }
+              assert (source.peer_route (remote.node_routing_id).first != original_source_route);
+              assert (target.peer_route (local.node_routing_id).first != original_target_route);
+              while (!ready () && std::chrono::steady_clock::now () < deadline)
+                  pump ();
+              assert (ready ());
+              assert (!target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure,
+                                                    1, 4096));
+              // Settlement first observes the replacement already ready. A
+              // connected boolean therefore never has a false-to-true edge.
+              receiver.emplace ([&] {
+                  while (!stop.load (std::memory_order_acquire)) {
+                      pump ();
+                      auto claim = target.mailbox ().try_claim (
+                        mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+                      if (!claim) {
+                          std::this_thread::yield ();
+                          continue;
+                      }
+                      const auto control = protocol::decode_relocation_control (
+                        protocol::message_bytes (claim->records.front ().parts.front ()));
+                      if (const auto *data = std::get_if<protocol::relocation_data_t> (&control)) {
+                          received_batch.push_back (protocol::encode_relocation_control (*data));
+                      } else {
+                          const auto &boundary = std::get<protocol::relocation_cutover_t> (control);
+                          relocation_crc32c_accumulator_t checksum;
+                          for (const auto &record : received_batch)
+                              checksum.update (record);
+                          assert (boundary.boundary_record_count == received_batch.size ());
+                          assert (boundary.boundary_checksum_crc32c == checksum.value ());
+                          ++verified_cutovers;
+                          std::lock_guard lock (authority->mutex);
+                          authority->observed_authority = relocation_authority_t::target_committed;
+                      }
+                      assert (target.mailbox ().release (*claim));
+                  }
+              });
+          }
+          co_return submitted;
+      },
+      .restore_deadline = deadline,
+      .target_route = [&] { return source.peer_route (remote.node_routing_id); },
+      .abort_target_before_cutover = [] { return true; }};
+    const auto result = await_task (relocation.relocate (
+      actor, "A-network-target", {"target-owner", 9}, 1024 * 1024, digest_with (0x41), wire));
+    stop.store (true, std::memory_order_release);
+    if (receiver)
+        receiver->join ();
+    if (result.terminal != relocation_terminal_t::completed || data_sends != 2 || cutover_sends != 2
+        || received_batch.size () != 1 || verified_cutovers != 1)
+        std::cerr << "network cutover terminal=" << static_cast<int> (result.terminal)
+                  << " reason=" << static_cast<int> (result.reason) << " batchSends=" << data_sends
+                  << " cutoverSends=" << cutover_sends << " records=" << received_batch.size ()
+                  << " verified=" << verified_cutovers << '\n';
+    test.require (result.terminal == relocation_terminal_t::completed && data_sends == 2
+                    && cutover_sends == 2 && received_batch.size () == 1 && verified_cutovers == 1
+                    && std::chrono::steady_clock::now () < deadline,
+                  "the original relocation terminal must follow a verified complete batch on the "
+                  "new ready Core route");
+    source.close ();
+    target.close ();
+}
+
 void test_source_relocation_settles_by_authority (test_context_t &test)
 {
     using namespace std::chrono_literals;
     namespace framework = zlink::framework;
     namespace protocol = zlink::framework::runtime::protocol;
-    using cutover_enqueue_t =
-      eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t;
 
     struct outcome_t
     {
@@ -4192,7 +4367,8 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
      * scripts the Store after that submit terminal. */
     const auto run = [] (std::chrono::milliseconds restore_after,
                          const std::function<void (settlement_authority_t &)> &settle,
-                         bool stop_source = false, bool inject_late = false) {
+                         bool stop_source = false, bool inject_late = false,
+                         bool submitted_ok = false, bool change_route = false) {
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token) {
@@ -4239,8 +4415,7 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
                     && record.application_record->reply_route_id == 77)
                     outcome.late_relayed = true;
             },
-          .send_cutover =
-            [&] (const protocol::relocation_cutover_t &) -> framework::task_t<cutover_enqueue_t> {
+          .send_cutover = [&] (const protocol::relocation_cutover_t &) -> framework::task_t<bool> {
               if (++outcome.cutover_sends == 1) {
                   if (inject_late) {
                       protocol::frozen_application_record_t late;
@@ -4264,12 +4439,19 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
                   }
                   if (stop_source)
                       source_stopped.store (true, std::memory_order_release);
-                  co_return cutover_enqueue_t::not_enqueued;
+                  co_return submitted_ok;
               }
-              co_return cutover_enqueue_t::enqueued;
+              co_return true;
           },
           .restore_deadline = std::chrono::steady_clock::now () + restore_after,
           .source_stopped = [&] { return source_stopped.load (std::memory_order_acquire); },
+          .target_route =
+            [&] {
+                const auto changed =
+                  outcome.cutover_sends != 0
+                  && (!submitted_ok || (change_route && authority->observe_calls != 0));
+                return std::pair{std::uint64_t{changed ? 2u : 1u}, true};
+            },
           .abort_target_before_cutover = [] { return true; }};
         outcome.result = await_task (relocation.relocate (actor, "target-node", {"target-owner", 9},
                                                           1024 * 1024, digest_with (0x41), wire));
@@ -4302,6 +4484,27 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
         && committed.late_relayed && !committed.dispatch_reopened && committed.unavailable.empty (),
       "a relocation unit completes only once the Store shows the target commit; a "
       "cutover that missed the connection is resent after the whole batch");
+
+    const auto replaced = run (
+      10s,
+      [] (settlement_authority_t &authority) {
+          authority.observed_authority = relocation_authority_t::target_committed;
+          authority.settle_after_observes = 4;
+      },
+      false, false, true, true);
+    test.require (replaced.cutover_sends == 2 && replaced.data_sends == 2
+                    && replaced.result.terminal == relocation_terminal_t::completed,
+                  "selected route replacement resends the whole batch and cutover once without a "
+                  "disconnected edge");
+    const auto unchanged = run (
+      10s,
+      [] (settlement_authority_t &authority) {
+          authority.observed_authority = relocation_authority_t::target_committed;
+          authority.settle_after_observes = 4;
+      },
+      false, false, true, false);
+    test.require (unchanged.cutover_sends == 1 && unchanged.data_sends == 1,
+                  "the same selected route must not cause periodic cutover submissions");
 
     // Restore deadline without a target commit: the Preserve fence wins.
     const auto preserved = run (0ms, [] (settlement_authority_t &authority) {
@@ -6751,6 +6954,34 @@ int main (int argc, char **argv)
         }
     } executor_shutdown;
     test_context_t test;
+    if (argc == 3 && std::string_view (argv[1]) == "--route-network") {
+        const int repetitions = std::stoi (argv[2]);
+        if (repetitions <= 0)
+            return EXIT_FAILURE;
+        for (int i = 0; i < repetitions; ++i) {
+            test_cutover_replays_over_selected_network_route (test);
+            if (test.failures != 0)
+                return EXIT_FAILURE;
+            std::cerr << "network-cutover " << i + 1 << '/' << repetitions << " passed\n";
+        }
+        return EXIT_SUCCESS;
+    }
+    if (argc == 3 && std::string_view (argv[1]) == "--route-settlement") {
+        const int repetitions = std::stoi (argv[2]);
+        if (repetitions <= 0)
+            return EXIT_FAILURE;
+        for (int i = 0; i < repetitions; ++i) {
+            test_source_relocation_settles_by_authority (test);
+            if (test.failures != 0)
+                return EXIT_FAILURE;
+            std::cerr << "settlement " << i + 1 << '/' << repetitions << " passed\n";
+        }
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--missing-settlement") {
+        test_public_authority_store_adapter (test);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--relocation-shutdown") {
         for (int mode = 0; mode != 3; ++mode)
             test_relocation_target_shutdown (test, mode);
@@ -6784,6 +7015,7 @@ int main (int argc, char **argv)
     test_source_relocation_failure_stops_state_chunks_and_unseals (test);
     test_boundary_application_preserves_original_reply (test);
     test_boundary_preserve_restores_acceptance_order (test);
+    test_cutover_replays_over_selected_network_route (test);
     test_source_relocation_settles_by_authority (test);
     test_relocation_target_cutover_and_authority_settlement (test);
     test_application_relocation_remote_production_path (test);

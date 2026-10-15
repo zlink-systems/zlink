@@ -484,72 +484,82 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSecurityIdentity);
-        return RunState(() =>
+        Action? notify = null;
+        try
         {
-            ThrowIfDisposed();
-            // Repeated configuration of the same target owns one intent and
-            // one endpoint registration throughout admission and reconnect.
-            var existingIntent = _peersByIntent.Values.FirstOrDefault(intent =>
-                intent.ExpectedRid == expectedRid
-                && string.Equals(intent.Endpoint, endpoint, StringComparison.Ordinal)
-                && string.Equals(
-                    intent.ExpectedSecurityIdentity,
-                    expectedSecurityIdentity,
-                    StringComparison.Ordinal
-                )
-            );
-            if (existingIntent is not null)
-                return existingIntent.Id;
-
-            // Binding has one registration per endpoint. Release the old
-            // registration before a different RID or security expectation
-            // uses the endpoint.
-            var replaced = _peersByIntent
-                .Values.Where(intent =>
-                    string.Equals(intent.Endpoint, endpoint, StringComparison.Ordinal)
-                )
-                .ToArray();
-            foreach (var previous in replaced)
-                _peersByIntent.Remove(previous.Id);
-            if (replaced.Length != 0)
-                DisconnectTransport(replaced[0]);
-            var id = checked(++_nextIntent);
-            var intent = new ZLinkMeshConnectionIntent(
-                id,
-                endpoint,
-                expectedRid,
-                expectedSecurityIdentity
-            );
-            var admitted = expectedRid is { } rid
-                ? _peersByRid.GetValueOrDefault(rid)
-                : _peersByRid.Values.FirstOrDefault(peer =>
-                    peer.Admitted
+            return RunState(() =>
+            {
+                ThrowIfDisposed();
+                // Repeated configuration of the same target owns one intent and
+                // one endpoint registration throughout admission and reconnect.
+                var existingIntent = _peersByIntent.Values.FirstOrDefault(intent =>
+                    intent.ExpectedRid == expectedRid
+                    && string.Equals(intent.Endpoint, endpoint, StringComparison.Ordinal)
                     && string.Equals(
-                        peer.Admission?.AdvertisedEndpoint,
-                        endpoint,
+                        intent.ExpectedSecurityIdentity,
+                        expectedSecurityIdentity,
                         StringComparison.Ordinal
                     )
                 );
-            if (
-                admitted is { Admission: { } currentAdmission }
-                && ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
+                if (existingIntent is not null)
+                    return existingIntent.Id;
+
+                // Binding has one registration per endpoint. Release the old
+                // registration before a different RID or security expectation
+                // uses the endpoint.
+                var replaced = _peersByIntent
+                    .Values.Where(intent =>
+                        string.Equals(intent.Endpoint, endpoint, StringComparison.Ordinal)
+                    )
+                    .ToArray();
+                foreach (var previous in replaced)
+                    _peersByIntent.Remove(previous.Id);
+                if (replaced.Length != 0)
+                    DisconnectTransport(replaced[0]);
+                var id = checked(++_nextIntent);
+                var intent = new ZLinkMeshConnectionIntent(
+                    id,
                     endpoint,
-                    expectedSecurityIdentity,
-                    ZLinkServiceSecurityIdentity.Plaintext,
-                    _peerExpectations.TryGetValue(admitted.RoutingId, out var expectation)
-                        ? expectation.LifecycleGeneration
-                        : 0,
-                    currentAdmission
+                    expectedRid,
+                    expectedSecurityIdentity
+                );
+                var admitted = expectedRid is { } rid
+                    ? _peersByRid.GetValueOrDefault(rid)
+                    : _peersByRid.Values.FirstOrDefault(peer =>
+                        peer.Admitted
+                        && string.Equals(
+                            peer.Admission?.AdvertisedEndpoint,
+                            endpoint,
+                            StringComparison.Ordinal
+                        )
+                    );
+                if (
+                    admitted is { Admission: { } currentAdmission }
+                    && ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
+                        endpoint,
+                        expectedSecurityIdentity,
+                        ZLinkServiceSecurityIdentity.Plaintext,
+                        _peerExpectations.TryGetValue(admitted.RoutingId, out var expectation)
+                            ? expectation.LifecycleGeneration
+                            : 0,
+                        currentAdmission
+                    )
                 )
-            )
-                intent.ResolvedRid = admitted.RoutingId;
-            _peersByIntent.Add(id, intent);
-            foreach (var previous in replaced)
-                NotifyPeerConnectionIntentRemoved(previous.ExpectedRid ?? previous.ResolvedRid);
-            if (_state != MeshNodeState.Created)
-                ConnectPeerCore(intent);
-            return id;
-        });
+                    intent.ResolvedRid = admitted.RoutingId;
+                _peersByIntent.Add(id, intent);
+                foreach (var previous in replaced)
+                    notify += RetirePeerConnectionIntent(
+                        previous.ExpectedRid ?? previous.ResolvedRid
+                    );
+                if (_state != MeshNodeState.Created)
+                    ConnectPeerCore(intent);
+                return id;
+            });
+        }
+        finally
+        {
+            notify?.Invoke();
+        }
     }
 
     public void SetPeerExpectation(
@@ -574,6 +584,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     public void RemovePeerExpectation(RoutingId peerRid, string endpoint)
     {
+        Action? notify = null;
         RunState(() =>
         {
             if (
@@ -582,22 +593,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
                 return;
             if (_peerExpectations.Remove(peerRid))
-                NotifyPeerConnectionIntentRemoved(peerRid);
+                notify = RetirePeerConnectionIntent(peerRid);
         });
+        notify?.Invoke();
     }
 
     public void RemovePeerConnection(ulong connectionIntentId)
     {
+        Action? notify = null;
         RunState(() =>
         {
             if (!_peersByIntent.Remove(connectionIntentId, out var intent))
                 return;
             DisconnectTransport(intent);
-            NotifyPeerConnectionIntentRemoved(intent.ExpectedRid ?? intent.ResolvedRid);
+            notify = RetirePeerConnectionIntent(intent.ExpectedRid ?? intent.ResolvedRid);
         });
+        notify?.Invoke();
     }
 
-    private void NotifyPeerConnectionIntentRemoved(RoutingId target)
+    private Action? RetirePeerConnectionIntent(RoutingId target)
     {
         var targets = RunInboundOperationState(() =>
             _controlSends
@@ -620,7 +634,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 intent.ResolvedRid == target || intent.ExpectedRid == target
             );
         if (hasOwner || target.IsEmpty)
-            return;
+            return null;
         // The logical owner retires the admitted route in the same decision
         // as its last intent. Physical route loss never calls this method.
         if (_peersByRid.TryGetValue(target, out var disconnected))
@@ -629,12 +643,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 DisconnectTransport(disconnected, disconnected.PhysicalRoutingId);
             RemovePeer(disconnected);
         }
-        PeerConnectionIntentRemoved?.Invoke(target);
+        // Capture the listeners with the retirement decision, then invoke them
+        // outside the lane: cancellation can run request cleanup inline.
+        var listeners = PeerConnectionIntentRemoved;
+        return listeners is null ? null : () => listeners(target);
     }
 
     public bool RemovePeerConnectionIfNotAdmitted(ulong connectionIntentId)
     {
-        return RunState(() =>
+        Action? notify = null;
+        var removed = RunState(() =>
         {
             if (!_peersByIntent.TryGetValue(connectionIntentId, out var intent))
                 return true;
@@ -645,9 +663,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 return false;
             _peersByIntent.Remove(connectionIntentId);
             DisconnectTransport(intent);
-            NotifyPeerConnectionIntentRemoved(target);
+            notify = RetirePeerConnectionIntent(target);
             return true;
         });
+        notify?.Invoke();
+        return removed;
     }
 
     public void DisconnectPeer(
@@ -656,6 +676,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string? endpoint = null
     )
     {
+        Action? notify = null;
         RunState(() =>
         {
             // An owner-wide disconnect removes its outbound registration.
@@ -685,8 +706,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 DisconnectTransport(peer, peer.PhysicalRoutingId);
             if (peer is not null)
                 RemovePeer(peer);
-            NotifyPeerConnectionIntentRemoved(peerRid);
+            notify = RetirePeerConnectionIntent(peerRid);
         });
+        notify?.Invoke();
     }
 
     public void AddChannel(string channelName)
@@ -10379,7 +10401,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         public void Dispose()
         {
             _node.RunState(() => _node.PeerConnectionIntentRemoved -= _onIntentRemoved);
-            _lifecycle.Dispose();
+            // A retirement turn may already have captured this listener. The
+            // source has no timer or wait handle; let that capture release it
+            // after notification instead of racing Cancel with Dispose.
         }
     }
 

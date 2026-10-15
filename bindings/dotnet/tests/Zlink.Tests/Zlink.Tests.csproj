@@ -2,6 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>Systems.Zlink.Tests</AssemblyName>
     <RootNamespace>Systems.Zlink.Tests</RootNamespace>
     <Nullable>enable</Nullable>

@@ -1075,28 +1075,35 @@ void public_host_runtime_t::close () noexcept
 bool public_host_runtime_t::connect_peer (const std::string &endpoint,
                                           std::optional<zlink::routing_id_t> expected,
                                           std::uint64_t expected_lifecycle_generation,
-                                          std::string security_identity)
+                                          std::string security_identity,
+                                          bool automatic)
 {
-    bool connected = false;
-    if (expected) {
-        auto descriptor = _options.mesh.descriptor;
-        descriptor.node_routing_id = expected->to_bytes ();
-        descriptor.advertised_endpoint = endpoint;
-        descriptor.lifecycle_generation = expected_lifecycle_generation;
-        descriptor.security_identity = std::move (security_identity);
-        connected = _transport->connect_peer (endpoint, std::move (descriptor));
-    } else {
-        connected = _transport->connect_peer (endpoint);
-    }
-    if (connected) {
-        _peer_endpoint_lane
-          .run ([&] {
-              _peer_endpoints.insert_or_assign (endpoint,
-                                                expected ? expected->to_string () : std::string{});
-          })
-          .get ();
-    }
-    return connected;
+    return _peer_endpoint_lane
+      .run ([&] {
+          auto expected_key = expected ? expected->to_string () : std::string{};
+          if (automatic && expected
+              && (_transport->peer_route (expected->to_bytes ()).first != 0
+                  || std::any_of (
+                    _peer_endpoints.begin (), _peer_endpoints.end (), [&] (const auto &intent) {
+                        return intent.first == endpoint || intent.second == expected_key;
+                    })))
+              return false;
+          bool connected = false;
+          if (expected) {
+              auto descriptor = _options.mesh.descriptor;
+              descriptor.node_routing_id = expected->to_bytes ();
+              descriptor.advertised_endpoint = endpoint;
+              descriptor.lifecycle_generation = expected_lifecycle_generation;
+              descriptor.security_identity = std::move (security_identity);
+              connected = _transport->connect_peer (endpoint, std::move (descriptor));
+          } else {
+              connected = _transport->connect_peer (endpoint);
+          }
+          if (connected)
+              _peer_endpoints.insert_or_assign (endpoint, std::move (expected_key));
+          return connected;
+      })
+      .get ();
 }
 
 void public_host_runtime_t::expect_peer (const std::string &endpoint,
@@ -5374,7 +5381,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     }
 
                     const auto relocation_key = session_relocation_key (route);
-                    std::uint64_t sealed_authority = 0;
                     bool late_session_route_update = false;
                     const auto route_matches_seal =
                       _relocation_session_terminal_lane
@@ -5387,7 +5393,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             }
                             if (!sealed->second.ready
                                 || sealed->second.seal.relocation != route.relocation
-                                || sealed->second.seal.coordinator != route.coordinator
                                 || sealed->second.seal.actor.actor_id != route.actor.actor_id
                                 || sealed->second.seal.actor.object_generation
                                      != route.actor.object_generation
@@ -5403,15 +5408,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 || sealed->second.seal.binding_generation
                                      != route.binding_generation)
                                 return false;
-                            sealed_authority = sealed->second.seal.actor.authority_owner_generation;
-                            return !((route.route.action
-                                        == protocol::session_relocation_route_action_t::commit
-                                      && route.route.previous_authority_owner_generation
-                                           != sealed_authority)
-                                     || (route.route.action
-                                           == protocol::session_relocation_route_action_t::abort
-                                         && route.route.current_authority_owner_generation
-                                              != sealed_authority));
+                            return true;
                         })
                         .get ();
                     if (!route_matches_seal)
@@ -5454,15 +5451,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         }
                         admission = _sessions.commit_remote_route (
                           session_id, route.binding_generation, route.actor.actor_id,
-                          route.actor.object_generation,
-                          route.route.previous_authority_owner_generation, std::move (target),
+                          route.actor.object_generation, std::move (target),
                           route.route.target_node_generation,
                           route.route.target_owner_lease_generation, std::move (commit_projection));
                     } else {
                         admission = _sessions.acknowledge_remote_abort (
                           session_id, route.binding_generation, route.actor.actor_id,
-                          route.actor.object_generation,
-                          route.route.current_authority_owner_generation);
+                          route.actor.object_generation);
                     }
                     if (admission.error != stateful::stateful_error_t::none || !admission.binding) {
                         continue;
@@ -6824,7 +6819,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
           record.source_node_rid = status ().routing_id ();
           record.actor_control = actor_control_t{lifecycle_kind_t::joined, actor};
           record.reply_token.local_actor_join =
-            [weak, operation, actor_type, membership] (actor_join_result_t result,
+            [weak, operation, actor_type, membership] (const actor_join_operation_result_t &result,
                                                        const std::vector<zlink::message_t> &reply) {
                 const auto host = weak.lock ();
                 return host
@@ -6854,7 +6849,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
 bool public_host_runtime_t::complete_local_actor_join (pending_operation_t operation,
                                                        std::string actor_type,
                                                        stateful::membership_token_t membership,
-                                                       actor_join_result_t result,
+                                                       const actor_join_operation_result_t &result,
                                                        const std::vector<zlink::message_t> &parts)
 {
     return _transport->complete_local_operation (
@@ -6868,15 +6863,21 @@ bool public_host_runtime_t::complete_local_actor_join (pending_operation_t opera
           completion.source_node_rid =
             zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
 
-          if (result == actor_join_result_t::accepted) {
+          if (result.terminal_result != 0) {
+              (void) _objects.abort_membership_move (membership);
+              completion.terminal_result = result.terminal_result;
+              completion.failure_errno = result.failure_code;
+          } else if (result.join_result == protocol::actor_join_result_t::accepted) {
               auto [error, current] = _objects.commit_membership_move (membership);
               if (error != stateful::stateful_error_t::none) {
                   //  Spec 32-framework-error-model:119-120 — a Framework execution
                   //  failure after the application ACCEPTED the join is not an
                   //  application rejection; carry a classified terminal
                   //  (internalError) instead of synthesizing typed Rejected.
-                  completion.terminal_result = 105;
-                  completion.failure_errno = 0;
+                  const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+                    framework_error_kind_t::internal_failure);
+                  completion.terminal_result = failure->terminal_result;
+                  completion.failure_errno = failure->failure_code;
               } else {
                   const auto actor = framework_actor_ref (current, actor_type);
                   _spot_actor_index_lane
@@ -7289,27 +7290,42 @@ zlink::submit_result_t reply (const reply_token_t &token,
 }
 
 bool actor_join_reply (const reply_token_t &token,
-                       actor_join_result_t result,
+                       result_t<actor_join_result_t> result,
                        const std::vector<zlink::message_t> &parts)
 {
-    if (token.local_actor_join) {
-        return token.local_actor_join (result, parts);
+    actor_join_operation_result_t completion;
+    if (result) {
+        completion.join_result = result.value () == actor_join_result_t::accepted
+                                   ? protocol::actor_join_result_t::accepted
+                                   : protocol::actor_join_result_t::rejected;
+    } else {
+        const messaging::request_failure_mapper_t mapper;
+        const auto failure =
+          result.error () ? mapper.target_failure_reply (*result.error ())
+                          : mapper.target_failure_reply (framework_error_kind_t::internal_failure);
+        completion.terminal_result = failure->terminal_result;
+        completion.failure_code = failure->failure_code;
     }
-    if (result != actor_join_result_t::accepted) {
-        const auto host = token.host.lock ();
-        if (!host || !token.request) {
-            return false;
-        }
-        try {
-            return host->transport ().reply_failure (
-              *token.request, 106,
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestRejected));
-        }
-        catch (const zlink::submit_error_t &) {
-            return false;
-        }
+    if (token.local_actor_join)
+        return token.local_actor_join (completion, parts);
+    const auto host = token.host.lock ();
+    if (!host || !token.request)
+        return false;
+    try {
+        if (completion.terminal_result != 0)
+            return host->transport ().reply_failure (*token.request, completion.terminal_result,
+                                                     completion.failure_code);
+        if (completion.join_result == protocol::actor_join_result_t::rejected)
+            return host->transport ().reply_actor_join (
+              *token.request, completion.join_result, std::nullopt, 0, 0, 0, 0,
+              parts.empty ()
+                ? std::nullopt
+                : std::make_optional (protocol::application_payload_t::from_parts (parts)));
+        return reply (token, parts) == zlink::submit_result_t::ok;
     }
-    return reply (token, parts) == zlink::submit_result_t::ok;
+    catch (const zlink::submit_error_t &) {
+        return false;
+    }
 }
 
 } // namespace zlink::framework::runtime::host

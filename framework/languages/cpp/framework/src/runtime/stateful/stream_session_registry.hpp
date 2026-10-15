@@ -152,7 +152,6 @@ class stream_session_registry_t
                                                   std::uint64_t binding_generation,
                                                   const std::string &actor_id,
                                                   std::uint64_t object_generation,
-                                                  std::uint64_t previous_authority_owner_generation,
                                                   object_ref_t target,
                                                   std::uint64_t target_node_generation,
                                                   std::uint64_t target_owner_lease_generation,
@@ -162,7 +161,6 @@ class stream_session_registry_t
                               std::uint64_t binding_generation,
                               const std::string &actor_id,
                               std::uint64_t object_generation,
-                              std::uint64_t current_authority_owner_generation,
                               route_terminal_commit_t commit_terminal = {});
     bool try_seal_all ();
     void release_all () noexcept;

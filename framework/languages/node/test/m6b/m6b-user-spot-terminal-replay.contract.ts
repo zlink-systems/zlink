@@ -23,6 +23,8 @@ test('command 48 replays a lost reply with the same operation ID inside the orig
   const deadlineMs = performance.now() + 500;
   const deadlineUnixMs = BigInt(Date.now() + 500);
   const raw = {
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -90,6 +92,8 @@ test('command 48 gives a healthy first attempt the whole remaining deadline', as
   const healthyDurationMs = 180;
   const operationTimeoutMs = 300;
   const raw = {
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -151,6 +155,8 @@ test('command 48 gives a healthy first attempt the whole remaining deadline', as
 test('command 48 exhaustion is Unavailable when no attempt was admitted', async () => {
   let attempts = 0;
   const raw = {
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -195,6 +201,8 @@ test('command 48 exhaustion is Unavailable when no attempt was admitted', async 
 test('command 48 exhaustion is DeadlineExceeded after an admitted reply is withheld', async () => {
   let attempts = 0;
   const raw = {
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
       return () => {};
     },
@@ -202,9 +210,11 @@ test('command 48 exhaustion is DeadlineExceeded after an admitted reply is withh
     async requestService(
       _targetNodeRid: string,
       _parts: readonly Uint8Array[],
-      timeoutMs: number
+      timeoutMs: number,
+      onAdmitted: () => void
     ): Promise<readonly Buffer[]> {
       attempts += 1;
+      onAdmitted();
       await new Promise((resolve) => setTimeout(resolve, timeoutMs));
       throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
     }
@@ -250,6 +260,8 @@ for (const wallJumpMs of [60_000, -60_000]) {
     const requests: Buffer[] = [];
     const budgets: number[] = [];
     const raw = {
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
       observePeerConnectionIntentRemoved() {
         return () => {};
       },
