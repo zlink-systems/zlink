@@ -1285,7 +1285,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Stopping);
                 var operationsDrained = await StopAcceptingOperationsAsync().ConfigureAwait(false);
                 await operationsDrained.ConfigureAwait(false);
-                var failures = await CleanupRuntimeGenerationAsync(_state).ConfigureAwait(false);
+                var failures = await CleanupRuntimeGenerationAsync(
+                        _state,
+                        DateTimeOffset.UtcNow + ZLinkFrameworkMaintenanceRuntime.DefaultDeadline
+                    )
+                    .ConfigureAwait(false);
                 _state = null;
                 Interlocked.Exchange(ref _executionScope, null);
                 Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Stopped);
@@ -1298,7 +1302,15 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         }
     }
 
-    public async ValueTask StopAsync(CancellationToken cancellationToken)
+    public ValueTask StopAsync(CancellationToken cancellationToken) =>
+        StopAsync(
+            DateTimeOffset.UtcNow + ZLinkFrameworkMaintenanceRuntime.DefaultDeadline,
+            cancellationToken
+        );
+
+    // The deadline bounds the replies the ClientServer listeners still send after they
+    // close (client-server channel section 6, step 4).
+    internal async ValueTask StopAsync(DateTimeOffset deadline, CancellationToken cancellationToken)
     {
         ThrowIfStopRequestedFromOwnedWork();
         if (Services.GetService<ZLinkClientServerRuntimeService>() is { } clientServerRuntime)
@@ -1320,7 +1332,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 var operationsDrained = await StopAcceptingOperationsAsync().ConfigureAwait(false);
                 stateToDispose?.CancelActiveSpotOperations();
                 await operationsDrained.ConfigureAwait(false);
-                var failures = await CleanupRuntimeGenerationAsync(stateToDispose)
+                var failures = await CleanupRuntimeGenerationAsync(stateToDispose, deadline)
                     .ConfigureAwait(false);
                 ThrowCleanupFailures(failures);
             }
@@ -1380,7 +1392,12 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 using var forceStop = CancellationTokenSource.CreateLinkedTokenSource(
                     cancellationToken
                 );
-                var failures = await CleanupRuntimeGenerationAsync(stateToDispose, forceStop.Token)
+                // The drain deadline has already expired: listeners close without linger.
+                var failures = await CleanupRuntimeGenerationAsync(
+                        stateToDispose,
+                        DateTimeOffset.UtcNow,
+                        forceStop.Token
+                    )
                     .ConfigureAwait(false);
                 if (cancellationToken.IsCancellationRequested && failures.Count > 0)
                     throw new OperationCanceledException(
@@ -1423,6 +1440,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     private async ValueTask<List<Exception>> CleanupRuntimeGenerationAsync(
         ZLinkFrameworkComponentState? state,
+        DateTimeOffset listenerCloseDeadline,
         CancellationToken forceStopToken = default
     )
     {
@@ -1470,8 +1488,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         if (state is not null)
             await CaptureAsync(
                     forceStopToken.CanBeCanceled
-                        ? () => state.ForceStopAsync(forceStopToken)
-                        : state.DisposeAsync
+                        ? () => state.ForceStopAsync(forceStopToken, listenerCloseDeadline)
+                        : () => state.DisposeAsync(listenerCloseDeadline)
                 )
                 .ConfigureAwait(false);
         if (forceStopToken.CanBeCanceled)
