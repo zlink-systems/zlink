@@ -1,3 +1,4 @@
+import { requestDurableService } from '../../foundation/durable-service-request';
 import {
   decodeStreamWireFrame,
   decodeStreamWireHeader,
@@ -680,12 +681,20 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   async requestInfrastructureControlFrames(
     targetRid: unknown,
     frames: readonly Uint8Array[],
-    options?: { readonly timeoutMs?: number }
+    options?: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+      readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
+    }
   ): Promise<readonly Uint8Array[]> {
-    return await this.requireRuntime().requestService(
+    return requestDurableService(
+      this.requireRuntime(),
       String(targetRid),
-      frames.map((frame) => Buffer.from(frame)),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      frames,
+      performance.now() + (options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+      'relocation control',
+      options?.signal,
+      options?.onSubmitted
     );
   }
 

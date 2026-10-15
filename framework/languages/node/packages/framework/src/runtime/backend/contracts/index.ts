@@ -211,7 +211,11 @@ export interface ZLinkBackendMeshNode {
   requestInfrastructureControlFrames?(
     targetRid: unknown,
     frames: readonly Uint8Array[],
-    options?: { readonly timeoutMs?: number }
+    options?: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+      readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
+    }
   ): Promise<readonly Uint8Array[]>;
   requestToNode(
     targetRid: unknown,

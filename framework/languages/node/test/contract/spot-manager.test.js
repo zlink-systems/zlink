@@ -1019,6 +1019,8 @@ test('Host Instance Close without Reincarnate releases the closed generation thr
   const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
   const node = new ServiceStatefulRuntime({
     topology: { peer: () => undefined },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved: () => () => {},
     setServiceIngress() {},
     sendService: () => true

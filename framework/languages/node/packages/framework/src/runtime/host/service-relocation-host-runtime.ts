@@ -44,7 +44,7 @@ import {
   type ZLinkRemoteBoundSessionTarget
 } from '../actors/actor-runtime-state';
 import type { ZLinkBackendMeshNode, ZLinkMeshCompletionTable } from '../backend';
-import { RequestResult, SubmitResult } from '../backend/runtime-values';
+import { RequestResult, SubmitResult, ZLinkBackendResultError } from '../backend/runtime-values';
 import type { ZLinkFrameworkRegistration } from '../configuration';
 import {
   type ZLinkRuntimeEventPublisher,
@@ -191,7 +191,6 @@ import {
   type ZLinkServiceRelocationControlRequest,
   type ZLinkServiceRelocationControlResponse
 } from './service-relocation-control';
-const RELOCATION_ATTEMPT_TIMEOUT_MS = 250;
 
 const RELOCATION_AUTHORITY_RETRY_DELAY_MS = 25;
 
@@ -503,7 +502,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         },
         input.relocationId,
         true,
-        input.advertisedReceiveChunkLimitBytes
+        input.advertisedReceiveChunkLimitBytes,
+        input.deadlineAtMs
       );
       resolveReady();
     } catch (error) {
@@ -1848,7 +1848,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     aggregateIdOverride?: string,
     retainSourceForActorJoin = false,
     /** Target's advertised relocation state chunk cap (Actor Join only; spec 15 §4.2). */
-    advertisedReceiveChunkLimitBytes?: number
+    advertisedReceiveChunkLimitBytes?: number,
+    deadlineAtMs?: number
   ): Promise<void> {
     if (isRelocationDebugEnabled()) {
       relocationDebug('standalone_actor.begin', { actorId: state.actorId });
@@ -1937,7 +1938,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         new Map([[measuredUnit.authorityKey, authority]]),
         signal,
         sessions,
-        advertisedReceiveChunkLimitBytes
+        advertisedReceiveChunkLimitBytes,
+        deadlineAtMs
       );
     } catch (error) {
       outcome = 'failed';
@@ -2267,7 +2269,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     signal?: AbortSignal,
     sessions: readonly SourceActorSession[] = [],
     /** Target's advertised relocation state chunk cap (Actor Join only; spec 15 §4.2). */
-    advertisedReceiveChunkLimitBytes?: number
+    advertisedReceiveChunkLimitBytes?: number,
+    controlDeadlineAtMs = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS
   ): Promise<void> {
     if (isRelocationDebugEnabled()) {
       relocationDebug('coordinator.begin', {
@@ -2276,10 +2279,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       });
     }
     const localStatus = this.requireMeshNode(meshName).status();
-    const controlDeadlineAtMs =
-      signal === undefined
-        ? performance.now() + RELOCATION_OPERATION_TIMEOUT_MS
-        : Number.MAX_SAFE_INTEGER;
     const coordinator = {
       ownerId: primary.ownerId,
       leaseGeneration: primary.ownerLeaseGeneration,
@@ -2364,28 +2363,31 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // queue and the assembly on the target), then stream the payload chunks
       // on the same ordered connection. The Ready reply arrives only after
       // the target assembled, verified, and restored the payload.
-      const readyOperation = this.sendControl(
+      const ready = await this.sendControl(
         meshName,
         target.rid,
         prepare,
         signal,
-        controlDeadlineAtMs
-      );
-      try {
-        if (isRelocationDebugEnabled()) {
-          relocationDebug('coordinator.state_transfer_begin', {
-            aggregateId: captured.envelope.aggregateId
-          });
+        controlDeadlineAtMs,
+        async (attemptSignal) => {
+          if (isRelocationDebugEnabled())
+            relocationDebug('coordinator.state_transfer_begin', {
+              aggregateId: captured.envelope.aggregateId
+            });
+          await this.sendRelocationStateChunks(
+            meshName,
+            target,
+            prepare,
+            encoded,
+            plan,
+            attemptSignal
+          );
+          if (isRelocationDebugEnabled())
+            relocationDebug('coordinator.await_ready', {
+              aggregateId: captured.envelope.aggregateId
+            });
         }
-        await this.sendRelocationStateChunks(meshName, target, prepare, encoded, plan, signal);
-      } catch (chunkError) {
-        readyOperation.catch(() => undefined);
-        throw chunkError;
-      }
-      if (isRelocationDebugEnabled()) {
-        relocationDebug('coordinator.await_ready', { aggregateId: captured.envelope.aggregateId });
-      }
-      const ready = await readyOperation;
+      );
       if (isRelocationDebugEnabled()) {
         relocationDebug('coordinator.ready_received', {
           aggregateId: captured.envelope.aggregateId
@@ -2555,6 +2557,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         signal
       );
       try {
+        signal?.throwIfAborted();
         await this.sendControlOneWay(meshName, target.rid, {
           kind: 'state',
           relocation: identity.relocation,
@@ -3334,7 +3337,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): Promise<void> {
     const submitted = await this.sendInfrastructureControl(meshName, targetNodeRid, frame);
     if (submitted !== SubmitResult.Ok) {
-      throw new Error(`Relocation ${kind} was not accepted by RouteMesh.`);
+      throw new ZLinkBackendResultError('submit', submitted, undefined, {
+        cause: new Error(`Relocation ${kind} was not accepted by RouteMesh.`)
+      });
     }
   }
 
@@ -3651,67 +3656,40 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetNodeRid: RoutingId,
     request: ZLinkServiceRelocationControlRequest,
     signal?: AbortSignal,
-    deadlineAtMs: number = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS
+    deadlineAtMs: number = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS,
+    onSubmitted?: (signal: AbortSignal) => Promise<void>
   ): Promise<ReturnType<typeof decodeServiceRelocationControlResponse>> {
     const key = controlAckKey(request);
     const frames = [encodeServiceRelocationControlRequest(request)];
-    let lastRequestError: unknown;
-    for (;;) {
-      signal?.throwIfAborted();
-      const remainingMs = deadlineAtMs - performance.now();
-      if (remainingMs <= 0) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-          `Relocation control ACK '${key}' timed out.`,
-          true,
-          lastRequestError
-        );
-      }
-      const attemptTimeoutMs = Math.max(
-        1,
-        Math.min(RELOCATION_ATTEMPT_TIMEOUT_MS, Math.ceil(remainingMs))
+    signal?.throwIfAborted();
+    const remainingMs = Math.ceil(deadlineAtMs - performance.now());
+    if (remainingMs <= 0) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+        `Relocation control ACK '${key}' timed out.`,
+        true
       );
-      const startedAtMs = performance.now();
-      try {
-        const replyFrames = await this.requestInfrastructureControl(
-          meshName,
-          targetNodeRid,
-          frames,
-          attemptTimeoutMs
-        );
-        if (replyFrames.length !== 1) {
-          throw new ServiceWireProtocolError(
-            `Relocation control '${key}' reply must contain exactly one frame.`
-          );
-        }
-        const response = decodeServiceRelocationControlResponse(Buffer.from(replyFrames[0]!));
-        if (response.kind === 'failed') {
-          validateControlFailureResponse(request, response);
-          throw relocationFailureException(response);
-        }
-        validateControlResponse(request, response);
-        return response;
-      } catch (error) {
-        if (error instanceof ServiceWireProtocolError || error instanceof ZLinkFrameworkException) {
-          throw error;
-        }
-        lastRequestError = error;
-        if (isRelocationDebugEnabled()) {
-          relocationDebug('control.request_retry', {
-            key,
-            kind: request.kind,
-            targetRid: String(targetNodeRid)
-          });
-        }
-        const retryDelayMs = Math.min(
-          Math.max(0, attemptTimeoutMs - (performance.now() - startedAtMs)),
-          Math.max(0, deadlineAtMs - performance.now())
-        );
-        if (retryDelayMs > 0) {
-          await waitForRelocationRetry(retryDelayMs, signal);
-        }
-      }
     }
+    const replyFrames = await this.requestInfrastructureControl(
+      meshName,
+      targetNodeRid,
+      frames,
+      remainingMs,
+      signal,
+      onSubmitted
+    );
+    if (replyFrames.length !== 1) {
+      throw new ServiceWireProtocolError(
+        `Relocation control '${key}' reply must contain exactly one frame.`
+      );
+    }
+    const response = decodeServiceRelocationControlResponse(Buffer.from(replyFrames[0]!));
+    if (response.kind === 'failed') {
+      validateControlFailureResponse(request, response);
+      throw relocationFailureException(response);
+    }
+    validateControlResponse(request, response);
+    return response;
   }
 
   private async selectTarget(
@@ -4524,14 +4502,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     meshName: string,
     targetNodeRid: RoutingId,
     frames: readonly Uint8Array[],
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal,
+    onSubmitted?: (signal: AbortSignal) => Promise<void>
   ): Promise<readonly Uint8Array[]> {
     const node = this.requireMeshNode(meshName);
     const request = node.requestInfrastructureControlFrames;
     if (request === undefined) {
       throw new Error('RouteMesh backend cannot submit bare infrastructure requests.');
     }
-    return await request.call(node, targetNodeRid, frames, { timeoutMs });
+    return await request.call(node, targetNodeRid, frames, { timeoutMs, signal, onSubmitted });
   }
 }
 

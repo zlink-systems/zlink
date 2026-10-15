@@ -166,6 +166,7 @@ export class RawServiceMeshRuntime {
   >();
   private readonly endpointOnlyPeers = new Set<string>();
   private readonly peerConnectionIntentRemoved = new Set<(nodeRoutingId: string) => void>();
+  private readonly peerRouteChanged = new Set<(nodeRoutingId: string) => void>();
   /**
    * The last observed Core selected route of each RID (Core ROUTER §10.1):
    * RID -> route generation. Only `observeSelectedRoutes` replaces it.
@@ -385,6 +386,32 @@ export class RawServiceMeshRuntime {
     return () => {
       this.peerConnectionIntentRemoved.delete(listener);
     };
+  }
+
+  observePeerRoute(
+    nodeRoutingId: string
+  ): import('./durable-service-request').PeerRouteObservation {
+    const selected = this.selectedRoutes.get(nodeRoutingId);
+    const admitted = this.topology.admittedPeer(nodeRoutingId)?.liveness?.connectionId;
+    return {
+      generation: selected ?? (typeof admitted === 'bigint' ? admitted : undefined),
+      ready: admitted !== undefined && (selected === undefined || admitted === selected)
+    };
+  }
+
+  get requestStopSignal(): AbortSignal {
+    return this.applicationJobStop.signal;
+  }
+
+  observePeerRouteChanged(listener: (nodeRoutingId: string) => void): () => void {
+    this.peerRouteChanged.add(listener);
+    return () => {
+      this.peerRouteChanged.delete(listener);
+    };
+  }
+
+  private notifyPeerRouteChanged(nodeRoutingId: string): void {
+    for (const listener of this.peerRouteChanged) listener(nodeRoutingId);
   }
 
   private notifyPeerConnectionIntentRemoved(nodeRoutingId: string): void {
@@ -878,7 +905,8 @@ export class RawServiceMeshRuntime {
       ]).then((sent) => (sent ? 'infrastructure' : 'dropped'));
     }
     const peer = this.topology.admittedPeer(received.sourceRid);
-    const currentSource = peer?.liveness !== undefined && peer.liveness.connectionId === received.routeGeneration;
+    const currentSource =
+      peer?.liveness !== undefined && peer.liveness.connectionId === received.routeGeneration;
     try {
       const header = decodeHeader(received.parts[0]!);
       if (header.command === M6aServiceWireCommand.hello && this.peerAdmissionSealed?.() === true) {
@@ -1195,6 +1223,7 @@ export class RawServiceMeshRuntime {
       selected.push(nodeRoutingId);
     }
     this.selectedRoutes = observed;
+    for (const nodeRoutingId of selected) this.notifyPeerRouteChanged(nodeRoutingId);
     // A new selected route admits only through a new handshake.
     for (const nodeRoutingId of selected) await this.announcePeer(nodeRoutingId);
     return changes;
@@ -1421,6 +1450,7 @@ export class RawServiceMeshRuntime {
         previous.liveness?.connectionId ?? previous.connectionId
       );
     }
+    if (result === 'admitted') this.notifyPeerRouteChanged(descriptor.nodeRoutingId);
     return result;
   }
 
