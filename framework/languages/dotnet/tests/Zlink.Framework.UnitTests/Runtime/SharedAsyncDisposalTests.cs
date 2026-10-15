@@ -40,27 +40,42 @@ public sealed class SharedAsyncDisposalTests
             new ZLinkListenerRecords()
         );
         var listenerFailure = new InvalidOperationException("receive loop failed");
-        state.ListenerTasks.Add(Task.FromException(listenerFailure));
+        var listenerEnded = false;
         var socket = new BlockingSocket();
+        using var nativeContext = Systems.Zlink.Zlink.CreateContext();
+        using var router = nativeContext.CreateRouterSocket();
+        var listener = DispatchProxy.Create<IRouterSocket, BlockingListenerSocketProxy>();
+        var listenerProxy = (BlockingListenerSocketProxy)(object)listener;
+        listenerProxy.Router = router;
+        listenerProxy.Close = socket;
+        var bundle = new ZLinkChannelRuntimeBundle(listener);
+        bundle.StartReceiveLoop(
+            state.TaskRunner,
+            "test-listener",
+            token =>
+            {
+                token.WaitHandle.WaitOne();
+                listenerEnded = true;
+                throw listenerFailure;
+            }
+        );
         state.ClientServerServerBundles.Add(
             ZLinkChannelName.FromBoundary("work", "channelName"),
-            new ZLinkChannelRuntimeBundle(socket)
+            bundle
         );
         var disposal = state.DisposeAsync().AsTask();
         bool listenerJoinedBeforeClose;
         try
         {
             await socket.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            listenerJoinedBeforeClose = reported.Contains(listenerFailure);
+            listenerJoinedBeforeClose = listenerEnded;
         }
         finally
         {
             socket.Release.TrySetResult();
         }
-        Assert.Same(
-            listenerFailure,
-            await Assert.ThrowsAsync<InvalidOperationException>(() => disposal)
-        );
+        await disposal;
+        Assert.Contains(listenerFailure, reported);
         Assert.True(
             listenerJoinedBeforeClose,
             "The listener must be joined before its socket closes."
@@ -545,6 +560,20 @@ public sealed class SharedAsyncDisposalTests
             ObservedUsableStore = store.DisposeCount == 0;
             return ValueTask.CompletedTask;
         }
+    }
+
+    public class BlockingListenerSocketProxy : DispatchProxy
+    {
+        internal IRouterSocket Router { get; set; } = null!;
+        internal IAsyncDisposable Close { get; set; } = null!;
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) =>
+            targetMethod?.Name switch
+            {
+                "get_Options" => Router.Options,
+                nameof(IAsyncDisposable.DisposeAsync) => Close.DisposeAsync(),
+                _ => throw new NotSupportedException(targetMethod?.Name),
+            };
     }
 
     private sealed class BlockingSocket : IAsyncDisposable
