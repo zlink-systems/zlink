@@ -24,7 +24,6 @@
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
-#include "runtime/locations/sha256.hpp"
 #include "runtime/locations/source_creation_cleanup.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 
@@ -38,10 +37,10 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <thread>
 #include <limits>
 #include <set>
 #include <string_view>
-#include <thread>
 #include <tuple>
 #include <utility>
 
@@ -1783,54 +1782,59 @@ struct mesh_node_host_service_t::node_receive_role_t final
       mesh_node_host_service_t &host,
       std::shared_ptr<detail::mesh_node_runtime_t> node,
       std::shared_ptr<detail::mesh_node_builder_state_t> registration,
-      std::shared_ptr<std::optional<application_job_queue_t::permit_t>> receive_permit) :
+      std::shared_ptr<std::optional<application_job_queue_t::permit_t>> receive_permit,
+      mesh::service_mailbox_t::application_ready_t submit_owner) :
         host (host),
         node (std::move (node)),
         registration (std::move (registration)),
         receive_permit (std::move (receive_permit)),
+        submit_owner (std::move (submit_owner)),
         supply (host._application_jobs, [node = this->node] { node->signal_dispatch_activity (); })
     {
-    }
-
-    void submit_owner (const std::string &owner) const
-    {
-        if (!host._application_dispatch->try_submit_internal (
-              [node = node, registration = registration, owner, services = host._services,
-               serializers = host._serializers, filters = host._filters,
-               options = host._dispatch_options] {
-                  drain_application_owner (node, registration, owner, false, services, serializers,
-                                           filters, options);
-              })) {
-            drain_application_owner (node, registration, owner, true, host._services,
-                                     host._serializers, host._filters, host._dispatch_options);
-        }
     }
 
     bool run_until_handoff () override
     {
         while (!host._stop.load (std::memory_order_acquire)) {
-            auto ready = rotate ();
-            if (!ready.empty ()
+            auto ready = [&] {
+                foundation::operation_completion_collector_t collector (collected);
+                return rotate ();
+            }();
+            auto completions = std::move (collected);
+            if ((!completions.empty () || ready)
                 && host._application_dispatch->try_assign_role (shared_from_this ())) {
-                auto first = std::move (ready.front ());
-                ready.erase (ready.begin ());
-                for (const auto &owner : ready)
-                    submit_owner (owner);
-                offload_executor_t::run_application_turn ([&] {
-                    drain_application_owner (node, registration, first, false, host._services,
-                                             host._serializers, host._filters,
-                                             host._dispatch_options);
-                });
+                auto first = completions.take_first ();
+                completions.publish ();
+                std::optional<std::string> first_owner;
+                if (first.empty ()) {
+                    first_owner.emplace (std::move (ready->front ()));
+                    ready->pop_front ();
+                }
+                if (ready)
+                    for (const auto &owner : *ready)
+                        submit_owner (owner);
+                if (!first.empty ()) {
+                    first.run_one ();
+                } else {
+                    offload_executor_t::run_application_turn ([&] {
+                        drain_application_owner (node, registration, *first_owner, false,
+                                                 host._services, host._serializers, host._filters,
+                                                 host._dispatch_options);
+                    });
+                }
                 return true;
             }
-            for (const auto &owner : ready)
-                submit_owner (owner);
+            completions.publish ();
+            if (ready)
+                for (const auto &owner : *ready)
+                    submit_owner (owner);
         }
+        collected.publish ();
         supply.close ();
         return false;
     }
 
-    std::vector<std::string> rotate ()
+    std::optional<std::deque<std::string>> rotate ()
     {
         auto &application_permit = *receive_permit;
         auto &mailbox = node->native_node ().transport ().mailbox ();
@@ -2032,7 +2036,8 @@ struct mesh_node_host_service_t::node_receive_role_t final
             }
             // A pump may consume the wake for supply delivered after
             // this turn's take. Recheck its owner state before waiting.
-            if (!host._stop.load (std::memory_order_acquire) && !supply.has_supply ()) {
+            if (!ready && collected.empty () && !host._stop.load (std::memory_order_acquire)
+                && !supply.has_supply ()) {
                 (void) node->native_node ().wait_for_dispatch_activity (
                   std::chrono::milliseconds (-1), accept_application_receive, next_activity);
             }
@@ -2051,6 +2056,8 @@ struct mesh_node_host_service_t::node_receive_role_t final
     const std::shared_ptr<detail::mesh_node_runtime_t> node;
     const std::shared_ptr<detail::mesh_node_builder_state_t> registration;
     const std::shared_ptr<std::optional<application_job_queue_t::permit_t>> receive_permit;
+    const mesh::service_mailbox_t::application_ready_t submit_owner;
+    foundation::operation_completion_chain_t collected;
     application_supply_slot_t supply;
     std::optional<pending_management_t> pending_management;
 };
@@ -2805,8 +2812,21 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             const auto registration = _registrations[index];
             auto receive_permit =
               std::make_shared<std::optional<application_job_queue_t::permit_t>> ();
-            auto role =
-              std::make_shared<node_receive_role_t> (*this, node, registration, receive_permit);
+            mesh::service_mailbox_t::application_ready_t submit_owner =
+              [executor = _application_dispatch, node, registration, services = _services,
+               serializers = _serializers, filters = _filters,
+               options = _dispatch_options] (const std::string &owner) {
+                  if (!executor->try_submit_internal (
+                        [node, registration, owner, services, serializers, filters, options] {
+                            drain_application_owner (node, registration, owner, false, services,
+                                                     serializers, filters, options);
+                        })) {
+                      drain_application_owner (node, registration, owner, true, services,
+                                               serializers, filters, options);
+                  }
+              };
+            auto role = std::make_shared<node_receive_role_t> (*this, node, registration,
+                                                               receive_permit, submit_owner);
             auto &mailbox = node->native_node ().transport ().mailbox ();
             mailbox.bind_application_dispatch (
               [this, node, receive_permit] (mesh::service_mailbox_record_t &record) {
@@ -2834,7 +2854,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   }
                   node->application_work_enqueued ();
               },
-              [role] (const std::string &owner) { role->submit_owner (owner); });
+              std::move (submit_owner));
             if (!_application_dispatch->start_role (std::move (role)))
                 throw std::logic_error ("MeshNode receive executor is stopped");
         }

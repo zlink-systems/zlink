@@ -4,6 +4,7 @@
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 
 #include <atomic>
+#include <cassert>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -68,35 +69,110 @@ struct operation_completion_item_t
     mesh_request_metric_t request_metric;
 };
 
-struct operation_completion_chain_t
-{
-    void append (std::unique_ptr<operation_completion_item_t> completion,
-                 operation_terminal_t terminal,
-                 zlink::message_t payload = {},
-                 std::optional<operation_terminal_t> request_terminal = {}) noexcept
-    {
-        completion->finish_metrics (request_terminal.value_or (terminal));
-        completion->terminal = terminal;
-        completion->payload = std::move (payload);
-        auto *next_tail = completion.get ();
-        if (tail)
-            tail->next = std::move (completion);
-        else
-            head = std::move (completion);
-        tail = next_tail;
-        ++size;
-    }
+operation_completion_chain_t::operation_completion_chain_t () noexcept = default;
 
-    std::unique_ptr<operation_completion_item_t> head;
-    operation_completion_item_t *tail = nullptr;
-    std::size_t size = 0;
-};
+operation_completion_chain_t::~operation_completion_chain_t ()
+{
+    while (head)
+        head = std::move (head->next);
+}
+
+operation_completion_chain_t::operation_completion_chain_t (
+  operation_completion_chain_t &&other) noexcept :
+    head (std::move (other.head)),
+    tail (std::exchange (other.tail, nullptr)),
+    _size (std::exchange (other._size, 0))
+{
+}
+
+void operation_completion_chain_t::append (
+  std::unique_ptr<operation_completion_item_t> completion,
+  operation_terminal_t terminal,
+  zlink::message_t payload,
+  std::optional<operation_terminal_t> request_terminal) noexcept
+{
+    completion->finish_metrics (request_terminal.value_or (terminal));
+    completion->terminal = terminal;
+    completion->payload = std::move (payload);
+    auto *next_tail = completion.get ();
+    if (tail)
+        tail->next = std::move (completion);
+    else
+        head = std::move (completion);
+    tail = next_tail;
+    ++_size;
+}
+
+void operation_completion_chain_t::append (operation_completion_chain_t completions) noexcept
+{
+    if (!completions.head)
+        return;
+    if (tail)
+        tail->next = std::move (completions.head);
+    else
+        head = std::move (completions.head);
+    tail = completions.tail;
+    _size += completions._size;
+}
+
+operation_completion_chain_t operation_completion_chain_t::take_first () noexcept
+{
+    operation_completion_chain_t first;
+    if (!head)
+        return first;
+    first.head = std::move (head);
+    head = std::move (first.head->next);
+    first.tail = first.head.get ();
+    first._size = 1;
+    if (--_size == 0)
+        tail = nullptr;
+    return first;
+}
+
+thread_local operation_completion_chain_t *completion_collector_current = nullptr;
+
+operation_completion_collector_t::operation_completion_collector_t (
+  operation_completion_chain_t &completions) noexcept :
+    _previous (std::exchange (completion_collector_current, &completions))
+{
+}
+
+operation_completion_collector_t::~operation_completion_collector_t ()
+{
+    completion_collector_current = _previous;
+}
 
 thread_local bool completion_dispatcher_current = false;
 
 bool is_on_completion_dispatcher () noexcept
 {
     return completion_dispatcher_current;
+}
+
+namespace
+{
+void run_completion (std::unique_ptr<operation_completion_item_t> completion) noexcept
+{
+    const auto previous = std::exchange (completion_dispatcher_current, true);
+    try {
+        completion->callback (completion->terminal, std::move (completion->payload));
+    }
+    catch (...) {
+        // One consumer must not prevent later terminal callbacks from running.
+    }
+    completion->release_owner ();
+    completion.reset ();
+    completion_dispatcher_current = previous;
+}
+} // namespace
+
+void operation_completion_chain_t::run_one () noexcept
+{
+    assert (_size == 1 && head && !head->next);
+    auto completion = std::move (head);
+    tail = nullptr;
+    _size = 0;
+    run_completion (std::move (completion));
 }
 
 class operation_completion_dispatcher_t
@@ -146,6 +222,10 @@ class operation_completion_dispatcher_t
     {
         if (!completions.head)
             return;
+        if (completion_collector_current) {
+            completion_collector_current->append (std::move (completions));
+            return;
+        }
         auto *tail = completions.head.get ();
         completions.head = reverse (std::move (completions.head));
         auto current = _state->pending.load (std::memory_order_relaxed);
@@ -225,14 +305,7 @@ class operation_completion_dispatcher_t
             while (ready) {
                 auto completion = std::move (ready);
                 ready = std::move (completion->next);
-                try {
-                    completion->callback (completion->terminal, std::move (completion->payload));
-                }
-                catch (...) {
-                    // One consumer must not prevent later terminal callbacks
-                    // from running on the process-shared dispatcher lane.
-                }
-                completion->release_owner ();
+                run_completion (std::move (completion));
             }
         }
     }
@@ -253,6 +326,12 @@ std::shared_ptr<operation_completion_dispatcher_t> shared_completion_dispatcher 
 }
 
 } // namespace
+
+void operation_completion_chain_t::publish () noexcept
+{
+    if (head)
+        shared_completion_dispatcher ()->post_chain (std::move (*this));
+}
 
 operation_registry_t::operation_registry_t () :
     _completion_dispatcher (shared_completion_dispatcher ()),
@@ -429,7 +508,7 @@ std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &
             entry = _pending.erase (entry);
         }
     }
-    const auto failed = completions.size;
+    const auto failed = completions.size ();
     _completion_dispatcher->post_chain (std::move (completions));
     return failed;
 }
@@ -449,7 +528,7 @@ std::size_t operation_registry_t::expire (clock_t::time_point now)
             entry = _pending.erase (entry);
         }
     }
-    const auto expired = completions.size;
+    const auto expired = completions.size ();
     _completion_dispatcher->post_chain (std::move (completions));
     return expired;
 }
@@ -479,7 +558,7 @@ std::size_t operation_registry_t::shutdown ()
                 completions.append (std::move (pending.completion), operation_terminal_t::shutdown);
             }
             _pending.clear ();
-            stopped = completions.size;
+            stopped = completions.size ();
         }
     }
     _completion_dispatcher->post_chain (std::move (completions));

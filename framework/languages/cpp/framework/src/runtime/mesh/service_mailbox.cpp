@@ -266,16 +266,14 @@ void service_mailbox_t::begin_application_receive_turn ()
     _application_receive_turn = true;
 }
 
-std::vector<std::string> service_mailbox_t::end_application_receive_turn ()
+std::optional<std::deque<std::string>> service_mailbox_t::end_application_receive_turn ()
 {
     std::lock_guard lock (_mutex);
     _application_receive_turn = false;
-    std::vector<std::string> ready;
-    ready.reserve (_application.ready.size ());
-    while (!_application.ready.empty ()) {
-        ready.push_back (std::move (_application.ready.front ()));
-        _application.ready.pop_front ();
-    }
+    if (!_application_ready || _application.ready.empty ())
+        return std::nullopt;
+    std::optional<std::deque<std::string>> ready (std::in_place);
+    ready->swap (_application.ready);
     return ready;
 }
 

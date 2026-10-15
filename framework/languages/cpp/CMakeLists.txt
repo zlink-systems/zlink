@@ -1848,6 +1848,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_actor_join_handoff_id PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_receive_role_completion
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_completion.cpp
+    "framework-unit;execution;operation;resource"
+    unit)
+  target_include_directories(test_cpp_framework_receive_role_completion PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_receive_role_completion)
+  add_zlink_framework_test(
     test_cpp_framework_execution
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
     "framework-unit;framework-contract;framework-regression;execution;spot;yield"

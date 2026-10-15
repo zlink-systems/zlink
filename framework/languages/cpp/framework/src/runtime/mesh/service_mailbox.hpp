@@ -73,7 +73,7 @@ class service_mailbox_t
     void bind_application_dispatch (application_prepare_t prepare, application_ready_t ready);
     bool has_application_dispatch () const;
     void begin_application_receive_turn ();
-    std::vector<std::string> end_application_receive_turn ();
+    std::optional<std::deque<std::string>> end_application_receive_turn ();
     bool begin_application_drain (const std::string &owner);
     void end_application_drain (const std::string &owner);
 
