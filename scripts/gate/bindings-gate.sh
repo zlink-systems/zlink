@@ -21,7 +21,9 @@ else
   run python-venv . python3 -m venv "$PYTHON_VENV"
   PYTHON_EXECUTABLE="$PYTHON_VENV/bin/python"
 fi
-run python-test-dependencies . "$PYTHON_EXECUTABLE" -m pip install --no-cache-dir pytest
+run python-test-dependencies . "$PYTHON_EXECUTABLE" -m pip install --no-cache-dir 'setuptools>=68' pytest
+run python-core-libs . env CORE_LIB_DIR="$LIB" bash scripts/local-package/native/sync-local-core-libs.sh python
+run python-native-build bindings/python env ZLINK_CORE_SOURCE=local ZLINK_CORE_INCLUDE_DIR="$INC" ZLINK_CORE_LIB_DIR="$LIB" ZLINK_LIBRARY_PATH="$LIB/libzlink.so" "$PYTHON_EXECUTABLE" setup.py build_ext --inplace --force
 run python   bindings/python env ZLINK_CORE_SOURCE=local ZLINK_LIBRARY_PATH="$LIB/libzlink.so" PYTHON_EXECUTABLE="$PYTHON_EXECUTABLE" bash tests/run_tests.sh
 run rust     bindings/rust   env LD_LIBRARY_PATH="$LIB" bash tests/run_tests.sh
 echo "BINDINGS_DONE $TAG"
