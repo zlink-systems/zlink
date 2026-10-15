@@ -58,7 +58,7 @@ For a structure-only check, run `build/bin/my-game-e2e --check-structure`. The c
 
 ## Known issues
 
-Version 0.30.1 is the required release version. A candidate feed has not yet been supplied. Windows and WSL builds against public 0.30.0 succeeded in isolated validation copies, but runtime acceptance is blocked: deferred Actor join / first TableView delivery can stop after Location commit or handoff replay. #1771 and #1775 are related existing defects; identical root cause has not been established. Node shutdown can also fail (#1740). Public 0.30.0 lacks the required SafeToShutdown observation (#1740); the template reports this missing API rather than inferring safety. Full Windows and WSL validation against 0.30.1 is required before deployment.
+Version 0.30.1 is the required release version. Windows and WSL builds against public 0.30.0 succeed, but runtime acceptance is blocked. After a deferred join to the Table completes, the first TableView pushed from `on_actor_joined` never reaches the client and no error is recorded ([#1786](https://github.com/zlink-systems/zlink/issues/1786)). Node shutdown reports TeardownFailed, and the C++ lifecycle status has no `SafeToShutdown` field ([#1740](https://github.com/zlink-systems/zlink/issues/1740)). A C++ Session cannot yet send a typed reply it creates, so `SessionInfoRequest` is answered with a push ([#1785](https://github.com/zlink-systems/zlink/issues/1785)). The template does not compensate for these Framework failures.
 
 ## Deployment sequence
 
