@@ -6103,6 +6103,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     hostApplicationJobQueue()
   );
   backend.setBind(endpoint);
+  backend.addChannelName('events');
   backend.start();
   const instanceRoute = {
     targetNodeRid: 'm6b-node',
