@@ -210,6 +210,9 @@ final class ZLinkJavaRawMeshNode
             pendingReceiveAcquire = new AtomicReference<>();
     // The pump executor alone reads and writes it; close reads it after the pump terminates.
     private RawMulticastFanout pendingRawMulticast;
+    // Pump-confined: the source connection whose receive this rotation already recorded.
+    private ZLinkServiceTopologyRegistry.Peer rotationReceivePeer;
+    private long rotationReceiveGeneration;
     private RouterSocketConfig routerSocketConfig = new RouterSocketConfig();
     private volatile Duration routerReceiveTimeout;
     private volatile int placementWeight = 100;
@@ -4605,6 +4608,7 @@ final class ZLinkJavaRawMeshNode
         var budgetQueue = applicationJobQueue;
         int budget = 0;
         boolean budgetReserved = false;
+        rotationReceivePeer = null;
         try {
             while (count < MAX_INGRESS_BATCH && !closed.get()) {
                 var queue = applicationJobQueue;
@@ -4681,6 +4685,23 @@ final class ZLinkJavaRawMeshNode
             if (budget > 0) {
                 budgetQueue.abandonRotationBudget(budget);
             }
+        }
+    }
+
+    /**
+     * Spec 08 §4.2: liveness receive is recorded once per receive rotation for each source
+     * connection, not for every record. Consecutive records of the same connection share the
+     * first one's record; the pump alone calls this.
+     */
+    private void recordRotationReceive(ZLinkServiceTopologyRegistry.Peer peer, long generation) {
+        if (peer == rotationReceivePeer && generation == rotationReceiveGeneration) {
+            return;
+        }
+        rotationReceivePeer = peer;
+        rotationReceiveGeneration = generation;
+        if (peer.liveness() != null
+                && Long.parseUnsignedLong(peer.connectionId(), 16) == generation) {
+            peer.liveness().recordReceived(System.nanoTime());
         }
     }
 
@@ -4797,10 +4818,7 @@ final class ZLinkJavaRawMeshNode
     private void dispatch(ZLinkJavaRawServicePort.Inbound inbound) {
         var source = topology.peerFromOwner(inbound.source());
         if (source.isPresent()) {
-            var peer = source.get();
-            if (peer.liveness() != null
-                    && Long.parseUnsignedLong(peer.connectionId(), 16) == inbound.routeGeneration())
-                peer.liveness().recordReceived(System.nanoTime());
+            recordRotationReceive(source.get(), inbound.routeGeneration());
         }
         boolean handedOff = false;
         try {
