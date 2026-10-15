@@ -3939,8 +3939,9 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
         return done ();
     };
     test.require (pump_until ([&] {
-                      return source.topology ().peer (dst.node_routing_id).has_value ()
-                             && target.topology ().peer (src.node_routing_id).has_value ();
+                      const auto source_peer = source.topology ().peer (dst.node_routing_id);
+                      const auto target_peer = target.topology ().peer (src.node_routing_id);
+                      return source_peer && source_peer->ready && target_peer && target_peer->ready;
                   }),
                   "late ingress peers must be admitted");
     stateful_object_runtime_t objects;
