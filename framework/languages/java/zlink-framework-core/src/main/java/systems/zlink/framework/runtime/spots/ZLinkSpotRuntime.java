@@ -47,6 +47,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
@@ -1910,7 +1911,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             return SpotActivationBase.finishCleanup(failure, closing);
                         })
                 .thenCompose(stage -> stage)
-                .handle(
+                .handleAsync(
                         (ignored, failure) -> {
                             RuntimeException firstFailure =
                                     failure == null
@@ -1954,7 +1955,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 throw firstFailure;
                             }
                             return null;
-                        });
+                        },
+                        ZLinkTeardownExecutor::execute);
     }
 
     public void beginClose() {
@@ -6512,15 +6514,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 pendingHeader ? headerPart : copyActorReceived(headerPart);
         Message payloadCopy =
                 bodyPart == null ? Message.from(new byte[0]) : Message.from(bodyPart.message());
-        AtomicBoolean released = new AtomicBoolean();
-        Runnable release =
-                () -> {
-                    if (!released.compareAndSet(false, true)) {
-                        return;
-                    }
-                    payloadCopy.close();
-                    headerCopy.close();
-                };
         CompletionStage<Void> queued =
                 enqueueLocalActorPacket(
                         dispatchLine,
@@ -6533,7 +6526,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         requestAdmission);
         queued.whenComplete(
                 (ignored, error) -> {
-                    release.run();
+                    payloadCopy.close();
+                    headerCopy.close();
                 });
         return queued;
     }

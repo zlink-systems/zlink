@@ -966,7 +966,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             return ZLinkSerialExecutionQueue.yieldCurrent(
                                             actorStaging.prepareDirectJoinBoundSession(
                                                     replay,
-                                                    target.requestWithSessionRoute(),
+                                                    target.request(),
                                                     targetOwnerGeneration))
                                     .thenCompose(
                                             prepared -> {
