@@ -130,7 +130,8 @@ function validateFrameworkJsonV1Value(
       }
       const bytes = decodeBase64(value as string);
       if (encodeBase64(bytes) !== value) schemaFailure(path, 'canonical padded RFC 4648 base64');
-      return decode ? Uint8Array.from(bytes) : value;
+      // decodeBase64 returns fresh storage owned by this value.
+      return decode ? bytes : value;
     }
     case 'enum':
       if (typeof value !== 'string' || !schema.names.includes(value)) {
@@ -342,7 +343,24 @@ class JsonPropertyScanner {
 
 const BASE64_STRING_CHUNK_BYTES = 8192;
 
+/**
+ * The host's native base64 codec when it has one (Node's Buffer); browsers
+ * keep the portable btoa/atob path. Either path accepts only canonical
+ * padded RFC 4648 text, because the caller compares the re-encoding.
+ */
+interface NativeBase64Buffer {
+  toString(encoding: 'base64'): string;
+  write(value: string, encoding: 'base64'): number;
+}
+interface NativeBase64 {
+  from(bytes: ArrayBufferLike, byteOffset: number, length: number): NativeBase64Buffer;
+  byteLength(value: string, encoding: 'base64'): number;
+}
+const nativeBase64 = (globalThis as { readonly Buffer?: NativeBase64 }).Buffer;
+
 function encodeBase64(bytes: Uint8Array): string {
+  if (nativeBase64 !== undefined)
+    return nativeBase64.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64');
   let binary = '';
   for (let offset = 0; offset < bytes.length; offset += BASE64_STRING_CHUNK_BYTES) {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + BASE64_STRING_CHUNK_BYTES));
@@ -351,6 +369,11 @@ function encodeBase64(bytes: Uint8Array): string {
 }
 
 function decodeBase64(value: string): Uint8Array {
+  if (nativeBase64 !== undefined) {
+    const bytes = new Uint8Array(nativeBase64.byteLength(value, 'base64'));
+    const written = nativeBase64.from(bytes.buffer, 0, bytes.byteLength).write(value, 'base64');
+    return written === bytes.byteLength ? bytes : bytes.subarray(0, written);
+  }
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
