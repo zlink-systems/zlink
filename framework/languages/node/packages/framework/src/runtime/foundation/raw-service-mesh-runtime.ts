@@ -999,6 +999,8 @@ export class RawServiceMeshRuntime {
       ]);
       return 'infrastructure';
     }
+    const helloKey = controlSendKey(received.sourceRid, M6aServiceWireCommand.hello);
+    const exchange = this.controlSends.get(helloKey);
     const result = this.admitPeer(
       descriptor,
       received.routeGeneration,
@@ -1028,9 +1030,6 @@ export class RawServiceMeshRuntime {
       // Hello supplies only the sender's descriptor. Even NotRequired
       // peers must receive ours before the intent owner closes transport;
       // submitting a response does not guarantee delivery before close.
-      const exchange = this.controlSends.get(
-        controlSendKey(received.sourceRid, M6aServiceWireCommand.hello)
-      );
       const local =
         exchange?.current?.() === true && exchange.hello !== undefined
           ? decodeRouteMeshAdmission(
@@ -1043,9 +1042,7 @@ export class RawServiceMeshRuntime {
         encodeRouteMeshAdmission(M6aServiceWireCommand.admit, local)
       ]);
     } else if (header.command === M6aServiceWireCommand.admit) {
-      const key = controlSendKey(received.sourceRid, M6aServiceWireCommand.hello);
-      const exchange = this.controlSends.get(key);
-      this.controlSends.delete(key);
+      this.controlSends.delete(helloKey);
       if (result === 'notRequired') {
         this.retireNotRequiredExpectedPeer(received.sourceRid, descriptor.advertisedEndpoint);
       } else if (

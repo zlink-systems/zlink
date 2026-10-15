@@ -163,7 +163,11 @@ for (const deferred of [false, true]) {
       );
       complete?.();
       await turn();
+      const unsubscribe = h.runtime.observePeerRouteChanged((rid) => {
+        void h.runtime.announcePeer(rid);
+      });
       await receive(wire.M6aServiceWireCommand.admit);
+      unsubscribe();
       const update = h.sent.find(
         ([, command]) => command === wire.M6aServiceWireCommand.update
       )?.[2];
