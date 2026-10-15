@@ -1979,6 +1979,30 @@ test('the 1000ms cutover wait records a Warning only; the source Preserve fence 
   }
 });
 
+test('target commit then Missing authority ends source through the expired-owner terminal', async () => {
+  const harness = createActorJoinHostHarness({ missingAfterTargetCommit: true });
+  harness.location.liveLeases.set('source-owner', 3n);
+  harness.location.liveLeases.set('target-owner', 14n);
+  harness.releaseAccepted();
+  try {
+    await assert.rejects(
+      harness.relocate(),
+      (error: unknown) =>
+        error instanceof Error &&
+        error.name === 'ServiceRelocationAuthorityError' &&
+        /Missing/.test(error.message)
+    );
+    assert.equal(harness.location.commits, 1);
+    assert.equal((await harness.location.readAuthority()).kind, 'missing');
+    assert.ok(harness.events.indexOf('target:closed') > harness.events.indexOf('dispatch:open'));
+    assert.ok(harness.events.indexOf('source:discarded') > harness.events.indexOf('target:closed'));
+    assert.equal(harness.events.filter((event) => event === 'source:discarded').length, 1);
+    assert.equal(harness.events.includes('source:rolled-back'), false);
+  } finally {
+    await harness.dispose();
+  }
+});
+
 test('an expired source owner lease at the Restore deadline ends the unit as an authority error', async () => {
   const harness = createActorJoinHostHarness({ dropCutover: true });
   harness.location.liveLeases.set('target-owner', 14n);
@@ -2325,6 +2349,7 @@ test('post-commit source cleanup failure preserves Accepted and reports all fail
 });
 
 interface ActorJoinHarnessOptions {
+  readonly missingAfterTargetCommit?: boolean;
   readonly sourceLeaveFailure?: Error;
   readonly sourceRetirementFailure?: Error;
   readonly commitSource?: () => Promise<void>;
@@ -2512,6 +2537,10 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         membershipEpoch: bigint;
       }
     | undefined;
+  let releaseTargetPublication!: () => void;
+  const targetPublication = new Promise<void>((resolve) => {
+    releaseTargetPublication = resolve;
+  });
   const targetActor = { context: { actorId, meshName: 'mesh-a' } };
   const targetActorManager = {
     published: 0,
@@ -2570,6 +2599,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     publishRelocationActor() {
       this.published += 1;
       events.push('dispatch:open');
+      releaseTargetPublication();
     },
     async abortRelocationActor() {
       this.aborted += 1;
@@ -2946,6 +2976,34 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   };
   sourceRuntime = new ZLinkHostServiceRelocationRuntime({
     ...common,
+    locationStore: () =>
+      options.missingAfterTargetCommit
+        ? {
+            ...location,
+            async compareExchangeAuthority() {
+              assert.fail('Missing must not attempt source Preserve');
+            },
+            async readAuthority() {
+              const current = await location.readAuthority();
+              if (current.kind === 'snapshot' && current.ownerId === 'target-owner') {
+                await targetPublication;
+                await targetRuntime.dispose();
+                events.push('target:closed');
+                const closedAuthority = await location.readAuthority();
+                assert.ok(closedAuthority.kind === 'snapshot');
+                assert.equal(closedAuthority.ownerId, 'target-owner');
+                const deleted = await location.compareExchangeAuthority(
+                  encodeAuthorityKey('actor', actorId),
+                  closedAuthority.storeVersion,
+                  { kind: 'delete' }
+                );
+                assert.equal(deleted.kind, 'deleted');
+                return location.readAuthority();
+              }
+              return current;
+            }
+          }
+        : location,
     reconcileStatefulAuthorityRoutes: options.reconcileStatefulAuthorityRoutes,
     currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 3n }),
     localDescriptor: () => ({ rid: 'source', lifecycleGeneration: 2n }),
@@ -3132,6 +3190,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       deliveryErrors.length = 0;
     },
     async dispose() {
+      releaseTargetPublication();
       sourceSignal.abort(new Error('ActorJoin harness disposed.'));
       taskShutdown.abort();
       releaseAccepted();
@@ -3149,6 +3208,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
 
 function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[]) {
   let current = initial;
+  let removed = false;
   let prepared: any;
   let commits = 0;
   let aborts = 0;
@@ -3164,7 +3224,7 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
       return preserves;
     },
     async readAuthority() {
-      return current;
+      return removed ? { kind: 'missing' as const, storeNow: new Date() } : current;
     },
     async prepareAggregate(request: any) {
       prepared = request;
@@ -3203,7 +3263,12 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
       return { kind: 'aborted' };
     },
     async compareExchangeAuthority(_key: unknown, expected: any, mutation: any) {
-      if (expected.value !== current.storeVersion.value) return { kind: 'conflict', current };
+      if (removed || expected.value !== current.storeVersion.value)
+        return { kind: 'conflict', current: await this.readAuthority() };
+      if (mutation.kind === 'delete') {
+        removed = true;
+        return { kind: 'deleted', storeNow: new Date() };
+      }
       if (mutation.generationTransition === 'preserve') preserves += 1;
       current = {
         ...current,

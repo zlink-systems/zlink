@@ -2498,7 +2498,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         // pending request without a terminal gets one Unavailable.
         const unavailable = createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-          `Relocation '${relayAuthorityId}' source owner lease ended before its authority settled.`,
+          `Relocation '${relayAuthorityId}' source authority ended (source owner lease expired, authority Missing, or owner changed).`,
           true
         );
         await captured.discardSource(unavailable);
@@ -2724,8 +2724,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
    * excludes a late target commit. `target`: the
    * target committed. `source`: Preserve fenced the target out while the
    * source owner lease was valid. `lost`: the source owner lease ended first
-   * or another authority owns the object. An uncertain Store or lease result
-   * keeps the work retained and repeats the same decision.
+   * or authority is Missing or another authority owns the object. An uncertain
+   * Store or lease result keeps the work retained and repeats the same decision.
    */
   private async settleSourceAuthority(
     envelope: ServiceRelocationEnvelope,
