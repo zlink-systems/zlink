@@ -24,6 +24,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ZLinkSpotRuntimeCloseTest {
+    private static final int COMPLETION_OWNER_TIMEOUT_SECONDS = 1;
+
     @Test
     void runtimeReportsSocketCloseFailureThroughItsExistingReporter() throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
@@ -72,7 +74,7 @@ final class ZLinkSpotRuntimeCloseTest {
     }
 
     @Test
-    void closeWaitsForAcceptedInstanceActivationTerminalsBeforeClosingNodes() throws Exception {
+    void closeWaitsForActivationTerminalsWithoutBlockingTheirCompletionOwner() throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(
                 new systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore());
@@ -88,6 +90,7 @@ final class ZLinkSpotRuntimeCloseTest {
             var nodes = (List<ZLinkInternalSpotNode>) nodesField.get(host);
             var original = nodes.getFirst();
             var terminal = new CompletableFuture<Void>();
+            var completionReturned = new CompletableFuture<Void>();
             var nodeClosed = new AtomicBoolean();
             nodes.set(
                     0,
@@ -98,14 +101,26 @@ final class ZLinkSpotRuntimeCloseTest {
                                     (proxy, method, args) -> {
                                         if (method.getName().equals("instanceActivationTerminals"))
                                             return terminal;
-                                        if (method.getName().equals("close")) nodeClosed.set(true);
+                                        if (method.getName().equals("close")) {
+                                            // Host relocation §14: accepted transport callbacks
+                                            // finish before the transport resource is destroyed.
+                                            completionReturned.get(
+                                                    COMPLETION_OWNER_TIMEOUT_SECONDS,
+                                                    TimeUnit.SECONDS);
+                                            nodeClosed.set(true);
+                                        }
                                         return method.invoke(original, args);
                                     }));
-            try {
+            try (var completionOwner = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+                host.spotLifecycle().closeAllAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 var closing = host.closeAsync().toCompletableFuture();
                 assertFalse(closing.isDone(), "Spot close finished before activation terminals");
                 assertFalse(nodeClosed.get(), "node closed before activation terminals");
-                terminal.complete(null);
+                completionOwner.submit(
+                        () -> {
+                            terminal.complete(null);
+                            completionReturned.complete(null);
+                        });
                 closing.get(5, TimeUnit.SECONDS);
                 assertTrue(nodeClosed.get());
             } finally {

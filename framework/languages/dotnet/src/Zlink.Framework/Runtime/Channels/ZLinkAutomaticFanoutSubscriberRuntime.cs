@@ -28,6 +28,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
     private readonly bool _ownsApplicationJobQueue;
     private readonly IZLinkRuntimeFailureReporter _errorSink;
+    private readonly ZLinkRuntimeTaskRunner _taskRunner;
     private readonly CancellationToken _runtimeStopToken;
     private readonly TimeProvider _time;
     private readonly ZLinkStateLane _lane = new();
@@ -56,6 +57,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         ZLinkChannelReceiveLoop receiveLoop,
         ZLinkFanoutRuntimeService monitoring,
         IZLinkRuntimeFailureReporter errorSink,
+        ZLinkRuntimeTaskRunner taskRunner,
         CancellationToken runtimeStopToken,
         CancellationToken forceStopToken = default,
         TimeProvider? timeProvider = null,
@@ -79,6 +81,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                 )
             );
         _errorSink = errorSink;
+        _taskRunner = taskRunner;
         _runtimeStopToken = runtimeStopToken;
         _time = timeProvider ?? TimeProvider.System;
         _applicationDispatch = receiveLoop.CreateFanoutDispatchQueue(
@@ -305,7 +308,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
         private string? _lastFailure;
         private bool _ready;
         private Task? _loop;
-        private ISubSocket? _socket;
+        private ZLinkReceiveSocketOwner? _socketOwner;
         private Task? _disposeTask;
 
         internal string Endpoint
@@ -384,7 +387,8 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
             using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             try
             {
-                var socket = _socket = owner._context.CreateSubscriberSocket();
+                var socket = owner._context.CreateSubscriberSocket();
+                var socketOwner = _socketOwner = new ZLinkReceiveSocketOwner(socket.DisposeAsync);
                 Interlocked.Increment(ref owner._socketCreationCount);
                 ZLinkChannelBundleFactory.ApplySocketConfig(socket.Options, owner._socketConfig);
                 ZLinkFanoutSubscriptionPolicy.Apply(socket, owner._applicationTopics);
@@ -399,19 +403,15 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                     })
                     .ConfigureAwait(false);
 
-                var receive = owner._receiveLoop.RunFanoutConnectionLoopAsync(
-                    owner._channelName.Value,
-                    socket,
-                    OnActivity,
-                    () => SetFailure("invalid fanout liveness beacon"),
-                    owner._applicationJobQueue,
-                    owner._applicationDispatch,
-                    attempt.Token
-                );
+                using (ExecutionContext.SuppressFlow())
+                    socketOwner.Start(
+                        owner._taskRunner,
+                        $"fanout-subscriber:{owner._channelName}",
+                        _ => Receive(socket, attempt.Token)
+                    );
                 var watchdog = WatchInboundAsync(attempt);
-                _ = await Task.WhenAny(receive, watchdog).ConfigureAwait(false);
+                _ = await Task.WhenAny(socketOwner.ReceiveEnded, watchdog).ConfigureAwait(false);
                 await attempt.CancelAsync().ConfigureAwait(false);
-                await AwaitAttemptTaskAsync(receive).ConfigureAwait(false);
                 await AwaitAttemptTaskAsync(watchdog).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -421,11 +421,12 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
             }
             finally
             {
-                if (_socket is not null)
+                if (_socketOwner is { } socketOwner)
                     try
                     {
-                        await _socket.DisposeAsync().ConfigureAwait(false);
-                        _socket = null;
+                        await attempt.CancelAsync().ConfigureAwait(false);
+                        await socketOwner.CloseAsync().ConfigureAwait(false);
+                        _socketOwner = null;
                     }
                     catch (Exception exception)
                     {
@@ -438,6 +439,29 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                         );
                         throw;
                     }
+            }
+        }
+
+        // The attempt's failure record keeps the receive loop's failure, as it keeps the
+        // attempt's own.
+        private void Receive(ISubSocket socket, CancellationToken cancellationToken)
+        {
+            try
+            {
+                owner._receiveLoop.RunFanoutConnectionLoop(
+                    owner._channelName.Value,
+                    socket,
+                    OnActivity,
+                    () => SetFailure("invalid fanout liveness beacon"),
+                    owner._applicationJobQueue,
+                    owner._applicationDispatch,
+                    cancellationToken
+                );
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception exception)
+            {
+                SetFailure(exception.Message);
             }
         }
 
@@ -514,10 +538,10 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
                 {
                     _loop = null;
                 }
-            if (_socket is not null)
+            if (_socketOwner is not null)
             {
-                await _socket.DisposeAsync().ConfigureAwait(false);
-                _socket = null;
+                await _socketOwner.CloseAsync().ConfigureAwait(false);
+                _socketOwner = null;
             }
             _stop.Dispose();
             await _lane.DisposeAsync().ConfigureAwait(false);

@@ -215,6 +215,7 @@ export interface ZLinkSpotManagerOptions {
     operation: () => Promise<T>
   ) => Promise<T>;
   readonly actorCountProvider?: (spotId: RoutingId) => number;
+  readonly releaseActorMembers?: (meshName: string, spotId: RoutingId) => Promise<void>;
   readonly userSpotExecutionMode?: (
     meshName: string,
     spotType: Type<ZLinkSpot>
@@ -408,6 +409,7 @@ export class DefaultZLinkSpotManager {
       nodeRid: options.nodeRid,
       nodeRidProvider: options.nodeRidProvider,
       actorCountProvider: options.actorCountProvider,
+      releaseActorMembers: options.releaseActorMembers,
       userSpotExecutionMode: options.userSpotExecutionMode,
       userSpotRelocationCoordinationMode: options.userSpotRelocationCoordinationMode,
       channelClient: options.channelClient,

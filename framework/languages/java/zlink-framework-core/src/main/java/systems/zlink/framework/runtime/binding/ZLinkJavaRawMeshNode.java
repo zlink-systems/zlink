@@ -472,9 +472,9 @@ final class ZLinkJavaRawMeshNode
         if (local == null
                 || descriptor == null
                 || sourceNodeRid == null
-                || sourceSessionRid == null
-                || sourceBindingGeneration <= 0
-                || sourceSessionSequence <= 0
+                || sourceSessionRid == null && !routingId.equals(sourceNodeRid)
+                || sourceSessionRid != null
+                        && (sourceBindingGeneration <= 0 || sourceSessionSequence <= 0)
                 || ownerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
             return new byte[0];
@@ -496,8 +496,12 @@ final class ZLinkJavaRawMeshNode
                                 descriptor.lifecycleGeneration(),
                                 ownerGeneration,
                                 ownerLeaseGeneration),
-                        new ZLinkServiceM6BWireCodec.BoundSessionTail(
-                                sourceSessionRid, sourceBindingGeneration, sourceSessionSequence));
+                        sourceSessionRid == null
+                                ? null
+                                : new ZLinkServiceM6BWireCodec.BoundSessionTail(
+                                        sourceSessionRid,
+                                        sourceBindingGeneration,
+                                        sourceSessionSequence));
         return ZLinkServiceFrozenRecordCodec.encodeActor(
                 local,
                 local,
@@ -4286,7 +4290,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     CompletionStage<Void> sendBoundSession(
-            ZLinkJavaRawSpotNode.RemoteStreamBinding binding, List<Message> parts) {
+            ZLinkJavaRawSpotNode.ActorSessionBinding binding, List<Message> parts) {
         BoundSessionRouteStateSnapshot route = boundSessionRouteStateSnapshot(binding);
         boolean ready = route.readyFor(binding);
         if (!ready) {
@@ -4309,7 +4313,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     private BoundSessionRouteStateSnapshot boundSessionRouteStateSnapshot(
-            ZLinkJavaRawSpotNode.RemoteStreamBinding binding) {
+            ZLinkJavaRawSpotNode.ActorSessionBinding binding) {
         RoutingId target = binding.sessionOwnerNodeRid();
         ZLinkServiceTopologyRegistry currentTopology = topology;
         ZLinkServiceTopologyRegistry.Peer peer =
@@ -6811,7 +6815,7 @@ final class ZLinkJavaRawMeshNode
                                 return null;
                             }
                             ((ZLinkJavaRawSpotNode) spotNode())
-                                    .acceptRemoteStreamBinding(
+                                    .applyRemoteStreamBinding(
                                             inbound.source(),
                                             sourceGeneration,
                                             ownerId,
@@ -7560,7 +7564,7 @@ final class ZLinkJavaRawMeshNode
             return peer != null && peer.connectionId().equals(admissionConnectionId);
         }
 
-        boolean readyFor(ZLinkJavaRawSpotNode.RemoteStreamBinding binding) {
+        boolean readyFor(ZLinkJavaRawSpotNode.ActorSessionBinding binding) {
             return peer != null
                     && peer.descriptor().lifecycleGeneration()
                             == binding.sessionOwnerNodeGeneration()

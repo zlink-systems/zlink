@@ -154,7 +154,9 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             // deadline; the shared heartbeat path will claim it after recovery.
             // The claim attempt observes caller cancellation and cleans up
             // the claim it started (spec 01-location-runtime §5, startup).
+            var leaseOperationStartedAt = _time.GetTimestamp();
             _ = await RenewOwnerLeaseOnceAsync(
+                    leaseOperationStartedAt,
                     cancellationToken,
                     ownerLeaseDeadline.Token,
                     cancellationCleanupToken
@@ -165,7 +167,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 .RunAsync(() =>
                 {
                     _started = true;
-                    return StartHeartbeatOnLane();
+                    return StartHeartbeatOnLane(leaseOperationStartedAt);
                 })
                 .ConfigureAwait(false);
             heartbeatStarted.TrySetResult();
@@ -388,7 +390,9 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             {
                 if (!_started || _heartbeatCts is not null)
                     return (TaskCompletionSource?)null;
-                return StartHeartbeatOnLane();
+                return StartHeartbeatOnLane(
+                    _ownerAdmissionDeadline?.LeaseOperationStartedAt ?? _time.GetTimestamp()
+                );
             })
         );
         heartbeatStarted?.TrySetResult();
@@ -516,17 +520,21 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
     )
     {
         using var deadline = new CancellationTokenSource(_options.OwnerLeaseRenewTimeout, _time);
-        return await RenewOwnerLeaseOnceAsync(cancellationToken, deadline.Token)
+        return await RenewOwnerLeaseOnceAsync(
+                _time.GetTimestamp(),
+                cancellationToken,
+                deadline.Token
+            )
             .ConfigureAwait(false);
     }
 
     private async ValueTask<bool> RenewOwnerLeaseOnceAsync(
+        long leaseOperationStartedAt,
         CancellationToken cancellationToken,
         CancellationToken deadlineToken,
         CancellationToken? cancellationCleanupToken = null
     )
     {
-        var leaseOperationStartedAt = _time.GetTimestamp();
         OwnerLeaseState owner = default;
         var claimStarted = false;
         Exception? claimFailure = null;
@@ -816,14 +824,17 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         }
     }
 
-    private async Task HeartbeatLoopAsync(CancellationToken cancellationToken)
+    private async Task HeartbeatLoopAsync(
+        CancellationToken cancellationToken,
+        long leaseOperationStartedAt
+    )
     {
         var intervalTicks = (long)(
             _options.OwnerLeaseRenewInterval.TotalSeconds * _time.TimestampFrequency
         );
-        var scheduledRenew = _time.GetTimestamp() + intervalTicks;
         while (!cancellationToken.IsCancellationRequested)
         {
+            var scheduledRenew = leaseOperationStartedAt + intervalTicks;
             var remainingTicks = scheduledRenew - _time.GetTimestamp();
             try
             {
@@ -847,7 +858,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                     scope.Key,
                     scope.Value
                 );
-            scheduledRenew = _time.GetTimestamp() + intervalTicks;
+            leaseOperationStartedAt = _time.GetTimestamp();
             try
             {
                 await RenewOwnerLeaseOnceAsync(cancellationToken).ConfigureAwait(false);
@@ -860,37 +871,28 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         }
     }
 
-    private TaskCompletionSource StartHeartbeatOnLane()
+    private TaskCompletionSource StartHeartbeatOnLane(long leaseOperationStartedAt)
     {
         var heartbeat = new CancellationTokenSource();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _heartbeatCts = heartbeat;
-        _heartbeatLoop = StartHeartbeatLoop(heartbeat.Token, started.Task);
+        // Location section 5 anchors the next renewal to the preceding Store operation,
+        // including the initial claim; starting this continuation must not extend it.
+        _heartbeatLoop = StartHeartbeatLoop(heartbeat.Token, started.Task, leaseOperationStartedAt);
         return started;
     }
 
-    private Task StartHeartbeatLoop(CancellationToken cancellationToken, Task started)
-    {
-        if (ExecutionContext.IsFlowSuppressed())
-            return Task.Run(
-                async () =>
-                {
-                    await started.ConfigureAwait(false);
-                    await HeartbeatLoopAsync(cancellationToken).ConfigureAwait(false);
-                },
-                CancellationToken.None
-            );
-
-        using (ExecutionContext.SuppressFlow())
-            return Task.Run(
-                async () =>
-                {
-                    await started.ConfigureAwait(false);
-                    await HeartbeatLoopAsync(cancellationToken).ConfigureAwait(false);
-                },
-                CancellationToken.None
-            );
-    }
+    private Task StartHeartbeatLoop(
+        CancellationToken cancellationToken,
+        Task started,
+        long leaseOperationStartedAt
+    ) =>
+        ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(async () =>
+        {
+            await started.ConfigureAwait(false);
+            await HeartbeatLoopAsync(cancellationToken, leaseOperationStartedAt)
+                .ConfigureAwait(false);
+        });
 
     private bool IsOwnerAdmissionOpenOnLane()
     {

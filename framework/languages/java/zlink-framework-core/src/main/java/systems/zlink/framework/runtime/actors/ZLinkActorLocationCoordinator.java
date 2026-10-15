@@ -111,7 +111,7 @@ final class ZLinkActorLocationCoordinator {
                                         : Optional.of(
                                                 new SpotRef(
                                                         row.spotId(),
-                                                        row.authorityOwnerGeneration(),
+                                                        row.spotGeneration(),
                                                         row.meshName(),
                                                         row.nodeRid())));
     }
