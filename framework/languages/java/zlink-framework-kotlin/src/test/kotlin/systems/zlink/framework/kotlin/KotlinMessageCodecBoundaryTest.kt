@@ -94,7 +94,12 @@ data class KotlinAcronymPayload(val xActorId: String)
 
 data class KotlinProfileReportReq(val reasonId: ProfileReportReason)
 
-enum class ProfileReportReason { nickname, profile, harassment, other }
+enum class ProfileReportReason {
+    nickname,
+    profile,
+    harassment,
+    other,
+}
 
 private open class KotlinBoundaryBase
 

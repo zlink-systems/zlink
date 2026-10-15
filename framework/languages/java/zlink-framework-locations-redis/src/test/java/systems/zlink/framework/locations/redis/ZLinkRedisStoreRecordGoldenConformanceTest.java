@@ -12,7 +12,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import io.lettuce.core.RedisURI;
 import io.lettuce.core.ScriptOutputType;
 
 import org.junit.jupiter.api.Test;
@@ -897,7 +896,9 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
         var key = new ZLinkStoreKey("mesh-node\0main\0" + "01020304");
         String redisKey = keys.opaqueRecordKey(key.value());
 
-        var connection = ZLinkRedisLocationConnection.forBytes(RedisURI.create(endpoint));
+        var connection =
+                ZLinkRedisLocationConnection.forBytes(
+                        new ZLinkRedisLocationOptions().setConnectionString(endpoint).redisUri());
         try {
             byte[] corrupted = new byte[] {0x02, (byte) 0x90};
             connection
@@ -935,7 +936,9 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
     }
 
     private static byte[] readRawZsetMember(String endpoint, String redisKey) {
-        var connection = ZLinkRedisLocationConnection.<byte[]>forBytes(RedisURI.create(endpoint));
+        var connection =
+                ZLinkRedisLocationConnection.<byte[]>forBytes(
+                        new ZLinkRedisLocationOptions().setConnectionString(endpoint).redisUri());
         try {
             List<Object> members =
                     connection
