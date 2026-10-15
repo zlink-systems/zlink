@@ -425,7 +425,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
     if (!is_control && received->parts.size () == 2) {
         application_header.emplace (messaging::envelope_codec_t{}.decode_header (
           received->parts.front (),
-          dispatch_options && detail::message_flow_tracer_t (*dispatch_options).capture_enabled (),
+          dispatch_options && detail::message_flow_tracer_t (*dispatch_options).flow_tracing (),
           &rejection_context));
         if (*application_header) {
             const auto &envelope = application_header->value ();

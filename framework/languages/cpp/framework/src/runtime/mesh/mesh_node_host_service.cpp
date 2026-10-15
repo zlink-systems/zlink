@@ -2038,7 +2038,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                     original_command->application_payload.packet_name,
                                     "application/octet-stream", reply.value ().to_bytes ()};
                                   if (detail::message_flow_tracer_t (_dispatch_options)
-                                        .capture_enabled ()) {
+                                        .flow_tracing ()) {
                                       response->flow_id =
                                         original_command->application_payload.flow_id;
                                       response->flow_origin =
@@ -2680,7 +2680,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                           const auto header = decode_mesh_record_header (
                                             record, parts,
                                             detail::message_flow_tracer_t (_dispatch_options)
-                                              .capture_enabled (),
+                                              .flow_tracing (),
                                             _dispatch_options);
                                           if (!header) {
                                               return;
@@ -2731,7 +2731,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   auto decoded_header = decode_mesh_record_header (
                                     record, parts,
                                     detail::message_flow_tracer_t (_dispatch_options)
-                                      .capture_enabled (),
+                                      .flow_tracing (),
                                     _dispatch_options);
                                   if (!decoded_header)
                                       return;
@@ -3060,7 +3060,7 @@ void mesh_node_host_service_t::dispatch_application (
         detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
         bool terminal_deferred = false;
         auto decoded_header = decode_mesh_record_header (
-          record, parts, detail::message_flow_tracer_t (dispatch_options).capture_enabled (),
+          record, parts, detail::message_flow_tracer_t (dispatch_options).flow_tracing (),
           dispatch_options);
         if (!decoded_header) {
             deferred_terminal->settle ();

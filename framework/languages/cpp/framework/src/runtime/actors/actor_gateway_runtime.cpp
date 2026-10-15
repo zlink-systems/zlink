@@ -1158,7 +1158,7 @@ task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
             relay_header.with_correlation_id (std::string (*correlation));
         /* flow-correlation §5: an intermediate runtime forwards the flow pair
          * only while tracing is on; at Off the inbound pair is not copied. */
-        if (detail::message_flow_tracer_t (_state->dispatch).capture_enabled ()) {
+        if (detail::message_flow_tracer_t (_state->dispatch).flow_tracing ()) {
             if (const auto flow_id = header.flow_id ())
                 relay_header.with_flow (std::string (*flow_id), *header.flow_origin ());
         }
@@ -1326,7 +1326,7 @@ session_actor_t::relay_request_internal (detail::stream_header_t header,
             relay_header.with_correlation_id (std::string (*correlation));
         /* flow-correlation §5: an intermediate runtime forwards the flow pair
          * only while tracing is on; at Off the inbound pair is not copied. */
-        if (detail::message_flow_tracer_t (_state->dispatch).capture_enabled ()) {
+        if (detail::message_flow_tracer_t (_state->dispatch).flow_tracing ()) {
             if (const auto flow_id = header.flow_id ())
                 relay_header.with_flow (std::string (*flow_id), *header.flow_origin ());
         }

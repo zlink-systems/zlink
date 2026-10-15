@@ -805,7 +805,7 @@ void mesh_node_runtime_t::start ()
     /* flow-correlation §4: thread the flow-capture provider so the host's
      * cold decode paths skip flow validation/materialization at level Off. */
     node->set_flow_capture_provider (
-      [spot_state] { return message_flow_tracer_t (spot_state->dispatch).capture_enabled (); });
+      [spot_state] { return message_flow_tracer_t (spot_state->dispatch).flow_tracing (); });
     if (_spot_route_fence_resolver)
         node->configure_spot_route_fence_resolver (_spot_route_fence_resolver);
     if (_user_spot_store && _user_spot_materializer) {

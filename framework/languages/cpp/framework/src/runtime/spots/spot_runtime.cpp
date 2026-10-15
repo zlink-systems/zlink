@@ -14647,7 +14647,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         const auto flow_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
         auto flow_scope = runtime::flow_context_t::enter (
           header.flow_id, header.flow_origin, flow_mode, flow_origin_t::inbound,
-          flow_mode != message_flow_log_mode_t::off && record.source_session_rid
+          runtime::flow_context_t::tracing (flow_mode) && record.source_session_rid
             ? std::optional<std::string> (record.source_session_rid->to_hex ())
             : std::nullopt);
 
@@ -15615,7 +15615,7 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
     const runtime::messaging::envelope_codec_t codec;
     /* flow-correlation §4: at Off the publisher's flow pair is neither
      * validated nor materialized from the fan-out envelope. */
-    const bool capture_flow = detail::message_flow_tracer_t (_state->dispatch).capture_enabled ();
+    const bool capture_flow = detail::message_flow_tracer_t (_state->dispatch).flow_tracing ();
     zlink::message_t body = parts.front ();
     std::optional<std::string> flow_id;
     std::optional<flow_origin_t> flow_origin;
