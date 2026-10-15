@@ -1513,8 +1513,7 @@ export class RawServiceMeshRuntime {
 
   private submitControl(
     target: string,
-    parts: readonly Uint8Array[],
-    accepted?: () => void
+    parts: readonly Uint8Array[]
   ): boolean | Promise<boolean> {
     let submission;
     try {
@@ -1522,15 +1521,9 @@ export class RawServiceMeshRuntime {
     } catch (error) {
       return this.sendFailure(error);
     }
-    if (submission.result === SubmitResult.Ok) {
-      accepted?.();
-      return true;
-    }
+    if (submission.result === SubmitResult.Ok) return true;
     return submission.admitted.then(
-      () => {
-        accepted?.();
-        return true;
-      },
+      () => true,
       (error) => this.sendFailure(error)
     );
   }
