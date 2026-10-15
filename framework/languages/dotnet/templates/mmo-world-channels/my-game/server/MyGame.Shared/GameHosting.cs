@@ -1,7 +1,7 @@
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.AspNetCore.Builder;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
@@ -18,31 +18,38 @@ public static class GameHosting
     )
     {
         builder.Services.AddSingleton(settings);
-        ConfigureCore(builder.Services, builder.Logging, options =>
-        {
-            options.AddLocationStore(
-                new ZLinkRedisLocationStore(redis =>
-                {
-                    redis.ConnectionString = settings.RedisEndpoint;
-                    redis.KeyPrefix = settings.KeyPrefix;
-                })
-            );
-            options.AddRelocationStore(
-                new ZLinkRedisRelocationStore(redis =>
-                {
-                    redis.ConnectionString = settings.RedisEndpoint;
-                    redis.KeyPrefix = settings.KeyPrefix + GameNames.RelocationKeyPrefix;
-                })
-            );
-            configure(options);
-        });
+        ConfigureCore(
+            builder.Services,
+            builder.Logging,
+            options =>
+            {
+                options.AddLocationStore(
+                    new ZLinkRedisLocationStore(redis =>
+                    {
+                        redis.ConnectionString = settings.RedisEndpoint;
+                        redis.KeyPrefix = settings.KeyPrefix;
+                    })
+                );
+                options.AddRelocationStore(
+                    new ZLinkRedisRelocationStore(redis =>
+                    {
+                        redis.ConnectionString = settings.RedisEndpoint;
+                        redis.KeyPrefix = settings.KeyPrefix + GameNames.RelocationKeyPrefix;
+                    })
+                );
+                configure(options);
+            }
+        );
     }
 
     public static void ConfigureAccounts(WebApplicationBuilder builder) =>
         ConfigureCore(builder.Services, builder.Logging, _ => { });
 
-    private static void ConfigureCore(IServiceCollection services, ILoggingBuilder logging,
-        Action<IZLinkFrameworkOptions> configure)
+    private static void ConfigureCore(
+        IServiceCollection services,
+        ILoggingBuilder logging,
+        Action<IZLinkFrameworkOptions> configure
+    )
     {
         logging.ClearProviders();
         logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);

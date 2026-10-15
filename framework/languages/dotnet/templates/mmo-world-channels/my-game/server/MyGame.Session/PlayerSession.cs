@@ -5,8 +5,11 @@ using Zlink.Framework.Contracts.Streams;
 
 namespace MyGame.Session;
 
-public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManager actors, NodeSettings settings)
-    : IZLinkSession
+public sealed class PlayerSession(
+    IZLinkSessionContext context,
+    IZLinkActorManager actors,
+    NodeSettings settings
+) : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 

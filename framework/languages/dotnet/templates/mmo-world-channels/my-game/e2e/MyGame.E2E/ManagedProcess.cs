@@ -11,7 +11,8 @@ internal sealed class ManagedProcess : IAsyncDisposable
     private readonly Process process;
     private readonly Task stdout;
     private readonly Task stderr;
-    private readonly Channel<string> lines = System.Threading.Channels.Channel.CreateUnbounded<string>();
+    private readonly Channel<string> lines =
+        System.Threading.Channels.Channel.CreateUnbounded<string>();
     private bool stopped;
 
     public ManagedProcess(
@@ -163,6 +164,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
 internal static class Commands
 {
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(60);
+
     public static async Task<string> RunAsync(
         string file,
         IEnumerable<string> arguments,

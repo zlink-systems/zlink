@@ -9,23 +9,42 @@ public static class GameNames
     public const string RelocationKeyPrefix = "relocation:";
     private const string ZonePrefix = "field@";
     public const int FirstChannel = 1;
+
     public static string Mesh(string worldId) => "my-game-world-" + worldId.ToLowerInvariant();
+
     public static string ZoneId(int channel)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(channel, FirstChannel);
         return ZonePrefix + channel.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
-    public static int Channel(string spotId) => int.Parse(spotId[ZonePrefix.Length..], System.Globalization.CultureInfo.InvariantCulture);
+
+    public static int Channel(string spotId) =>
+        int.Parse(spotId[ZonePrefix.Length..], System.Globalization.CultureInfo.InvariantCulture);
 }
+
 public sealed record EnterWorldRequest(string PlayerId);
+
 public sealed record ChangeChannelRequest(int Channel);
+
 public sealed record EarnRequest(long Amount);
+
 public sealed record ViewRequest;
+
 public sealed record PlayerView(string WorldId, int Channel, string NodeId, long Gold);
+
 public sealed record SessionInfoRequest;
+
 public sealed record SessionInfo(string SessionId, string ActorId, ulong ObjectGeneration);
+
 public sealed record WorldInfo(string WorldId, string Name, string SessionEndpoint);
-public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEndpoint = null, string? HttpEndpoint = null);
+
+public sealed record NodeReady(
+    string Id,
+    string MeshEndpoint,
+    string? StreamEndpoint = null,
+    string? HttpEndpoint = null
+);
+
 public static class NodeProtocol
 {
     public const string ReadyPrefix = "READY ";

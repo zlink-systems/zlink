@@ -56,25 +56,43 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
 
     public async Task<T> ReceiveAsync<T>(Func<T, bool> predicate, CancellationToken ct)
     {
-        var result = await Connector.WaitFor<T>().Where(message => predicate(message.Payload))
-            .Timeout(MessageTimeout).Async(ct);
+        var result = await Connector
+            .WaitFor<T>()
+            .Where(message => predicate(message.Payload))
+            .Timeout(MessageTimeout)
+            .Async(ct);
         return result.Payload;
     }
-    public async Task<T> SendAsync<T, TRequest>(TRequest request, Func<T, bool> predicate, CancellationToken ct)
+
+    public async Task<T> SendAsync<T, TRequest>(
+        TRequest request,
+        Func<T, bool> predicate,
+        CancellationToken ct
+    )
     {
         var response = ReceiveAsync(predicate, ct);
         await Connector.Send(request).Async(ct);
         return await response;
     }
+
     public Task<PlayerView> EnterAsync(CancellationToken ct) =>
         SendAsync<PlayerView, EnterWorldRequest>(new(PlayerId), _ => true, ct);
+
     public Task<PlayerView> ViewAsync(CancellationToken ct) =>
         SendAsync<PlayerView, ViewRequest>(new(), _ => true, ct);
+
     public Task<PlayerView> EarnAsync(long amount, CancellationToken ct) =>
         SendAsync<PlayerView, EarnRequest>(new(amount), _ => true, ct);
+
     public Task<PlayerView> ChangeAsync(int channel, CancellationToken ct) =>
-        SendAsync<PlayerView, ChangeChannelRequest>(new(channel), view => view.Channel == channel, ct);
+        SendAsync<PlayerView, ChangeChannelRequest>(
+            new(channel),
+            view => view.Channel == channel,
+            ct
+        );
+
     public Task<SessionInfo> SessionAsync(CancellationToken ct) =>
         Connector.Request(new SessionInfoRequest()).Async<SessionInfo>(ct).AsTask();
+
     public ValueTask DisposeAsync() => Connector.DisposeAsync();
 }
