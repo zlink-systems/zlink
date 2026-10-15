@@ -6,7 +6,6 @@ import { isUtf8 } from 'node:buffer';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
-  ZLinkEncodedPayload,
   type ZLinkMessageSerializer,
   type ZLinkFlowOrigin
 } from '../../contracts';
@@ -18,7 +17,10 @@ import {
   createInternalFrameworkException
 } from '../framework-errors-internal';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
-import { selectSerializerWithContentType } from '../messaging/payload-codec';
+import {
+  encodedPayloadFromOwned,
+  selectSerializerWithContentType
+} from '../messaging/payload-codec';
 import { isCanonicalCodecContentType } from '../../contracts/Configuration/CodecContentType';
 import { parseFrameworkJsonV1, stringifyFrameworkJsonV1 } from '../messaging/framework-json-v1';
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
@@ -370,7 +372,7 @@ export function decodeChannelReply<TReply>(
   }
   if (serializer !== undefined) {
     return serializer.deserialize<TReply>(
-      ZLinkEncodedPayload.from(parts[1].data()),
+      encodedPayloadFromOwned(parts[1].data()),
       Object as never
     );
   }
@@ -444,7 +446,7 @@ export function decodeChannelPayload(
     }
     const serializer = codecs?.serializers.get(envelope.header.contentType);
     if (serializer !== undefined) {
-      return serializer.deserialize(ZLinkEncodedPayload.from(envelope.payload), Object as never);
+      return serializer.deserialize(encodedPayloadFromOwned(envelope.payload), Object as never);
     }
     if (envelope.header.contentType === BINARY_CONTENT_TYPE) {
       // The receive loop owns the Message for the duration of dispatch, so
