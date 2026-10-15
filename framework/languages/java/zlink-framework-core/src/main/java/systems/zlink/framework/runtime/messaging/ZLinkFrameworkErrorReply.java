@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.messaging;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import java.util.List;
 import java.util.Map;
@@ -44,6 +45,26 @@ public final class ZLinkFrameworkErrorReply {
         return ZLinkChannelEnvelope.encode(
                 ZLinkChannelEnvelope.error(request, kind, message, metadata),
                 Message.from(new byte[0]));
+    }
+
+    /**
+     * The failure an error reply carries, decoded from one header read; {@code null} when the parts
+     * are not an error envelope.
+     */
+    public static ZLinkFrameworkException failure(List<Message> parts) {
+        return failure(ZLinkChannelEnvelope.tryDecodeHeader(parts, false));
+    }
+
+    /** The failure an already decoded reply header carries; {@code null} unless it is an error. */
+    public static ZLinkFrameworkException failure(ZLinkChannelEnvelope.Header header) {
+        if (header == null || !header.isError()) {
+            return null;
+        }
+        return new ZLinkFrameworkException(
+                ZLinkChannelEnvelope.errorKindFromCode(header.errorCode()),
+                header.errorMessage() == null ? "" : header.errorMessage(),
+                null,
+                header.metadata());
     }
 
     public static boolean isReply(List<Message> parts) {

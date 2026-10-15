@@ -86,20 +86,13 @@ final class ZLinkSpotRouteBridgeDispatcher {
                                     return;
                                 }
                                 try {
-                                    if (ZLinkChannelRuntime.isFrameworkErrorReply(reply)) {
-                                        //  Keep the reply metadata: the framework-origin
-                                        //  marker distinguishes a framework NotFound
-                                        //  (stale route) from an application NotFound.
-                                        result.completeExceptionally(
-                                                new ZLinkFrameworkException(
-                                                        ZLinkChannelRuntime.frameworkErrorReplyKind(
-                                                                reply),
-                                                        ZLinkChannelRuntime
-                                                                .frameworkErrorReplyMessage(reply),
-                                                        null,
-                                                        ZLinkChannelRuntime
-                                                                .frameworkErrorReplyMetadata(
-                                                                        reply)));
+                                    //  Keep the reply metadata: the framework-origin
+                                    //  marker distinguishes a framework NotFound
+                                    //  (stale route) from an application NotFound.
+                                    ZLinkFrameworkException errorReply =
+                                            ZLinkChannelRuntime.frameworkErrorReplyFailure(reply);
+                                    if (errorReply != null) {
+                                        result.completeExceptionally(errorReply);
                                         return;
                                     }
                                     List<Message> normalizedReply = copyReplyMessages(reply);
