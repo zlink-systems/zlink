@@ -9,6 +9,76 @@ public sealed class MeshNodeHelloSubmissionTests
     private const string MeshName = "hello-submission";
     private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(2);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CrossedHello_AdmitUsesOriginalHelloDescriptor(bool changeDescriptor)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var peer = context.CreateRouterSocket();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        var suffix = Guid.NewGuid().ToString("N");
+        var peerRid = RoutingId.From($"crossed-peer-{suffix}");
+        var localRid = RoutingId.From($"crossed-local-{suffix}");
+        var endpoint = $"inproc://crossed-peer-{suffix}";
+        peer.SetRoutingId(peerRid);
+        peer.Bind(endpoint);
+        poller.Add(peer, PollEventFlags.PollIn, 1);
+        node.SetRoutingId(localRid);
+        node.Start();
+        node.ConnectPeer(endpoint, peerRid);
+        var hello = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Hello, hello.Command);
+        Assert.Equal(1UL, hello.Record.DescriptorRevision);
+        await CompleteSubmissions(node);
+        if (changeDescriptor)
+            node.PublishDraining();
+
+        using (
+            var message = Message.From(
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Hello,
+                    MeshName,
+                    endpoint,
+                    17,
+                    1,
+                    new Dictionary<string, uint> { [MeshName] = 100 }
+                )
+            )
+        )
+            await peer.Send(localRid).Message(message).Async().EnsureAcceptedAsync();
+        var response = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Admit, response.Command);
+        Assert.Equal(hello.Record.DescriptorRevision, response.Record.DescriptorRevision);
+        Assert.Equal(hello.Record.DescriptorBytes, response.Record.DescriptorBytes);
+        Assert.Equal(
+            ZLinkServiceAdmissionDecision.Idempotent,
+            ZLinkServiceAdmissionGuard.Evaluate(hello.Record, response.Command, response.Record)
+        );
+
+        using (
+            var message = Message.From(
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Admit,
+                    MeshName,
+                    endpoint,
+                    17,
+                    1,
+                    new Dictionary<string, uint> { [MeshName] = 100 }
+                )
+            )
+        )
+            await peer.Send(localRid).Message(message).Async().EnsureAcceptedAsync();
+        if (changeDescriptor)
+        {
+            var update = ReceiveAdmission(peer, poller);
+            Assert.Equal(ServiceWireConstants.Command.Update, update.Command);
+            Assert.Equal(2UL, update.Record.DescriptorRevision);
+            Assert.Equal((byte)2, update.Record.RuntimeState);
+        }
+    }
+
     [Fact]
     public async Task DescriptorChangedBeforeAdmit_KeepsOriginalHelloAndPublishesUpdateAfterAdmit()
     {
