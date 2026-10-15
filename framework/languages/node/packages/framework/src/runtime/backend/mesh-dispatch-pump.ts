@@ -167,12 +167,40 @@ export class ZLinkMeshDispatchPump {
     try {
       for (;;) {
         await this.waitForApplicationReady();
-        if (this.disposed) return;
+        this.beginDrain();
         try {
-          await this.drainDomain(ReadyDomain.Application, readyBatch, receiveBatch);
+          while (!this.disposed) {
+            readyBatch.reset();
+            const drained = this.node.drainReady(
+              ReadyDomain.Application,
+              readyBatch,
+              ZLINK_BACKEND_RECV_DONT_WAIT
+            );
+            if (!drained.ok || drained.records.length === 0) break;
+            if (drained.hasResidue) this.markReady(ReadyDomain.Application);
+            for (let index = 0; index < drained.records.length; index += 1) {
+              const claim = readyBatch.takeClaim(index);
+              // Raw ingress already attached one host permit to each record.
+              // A claim reserving admission may receive only that permit's record.
+              await this.drainClaim(
+                ReadyDomain.Application,
+                drained.records[index]!,
+                claim,
+                receiveBatch
+              );
+            }
+            // Empty ready claims count toward the shared pump budget too.
+            this.recordsSinceYield += 1;
+            const yieldTurn = this.yieldIfNeeded();
+            if (yieldTurn !== undefined) await yieldTurn;
+          }
         } catch (error) {
           this.reportDispatchError(error);
+        } finally {
+          readyBatch.reset();
+          this.draining -= 1;
         }
+        if (this.disposed) return;
       }
     } finally {
       receiveBatch.close();
@@ -296,12 +324,7 @@ export class ZLinkMeshDispatchPump {
         if ((this.pendingDomains & ReadyDomain.Application) !== 0) {
           setImmediate(() => this.wakeApplicationWorker());
         }
-        const lifecycleBudgetExhausted = await this.drainDomain(
-          ReadyDomain.Infrastructure,
-          readyBatch,
-          undefined,
-          MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET
-        );
+        const lifecycleBudgetExhausted = await this.drainDomain(readyBatch);
         if (lifecycleBudgetExhausted) {
           this.pendingDomains |= ReadyDomain.Infrastructure;
           await yieldToEventLoop();
@@ -312,50 +335,40 @@ export class ZLinkMeshDispatchPump {
     }
   }
 
-  private async drainDomain(
-    domain: number,
-    readyBatch: ReadyBatch,
-    receiveBatch: ReceiveBatch | undefined,
-    claimBudget?: number
-  ): Promise<boolean> {
+  private async drainDomain(readyBatch: ReadyBatch): Promise<boolean> {
     let claimsDrained = 0;
     this.beginDrain();
     try {
       while (!this.disposed) {
-        if (claimBudget !== undefined && claimsDrained >= claimBudget) {
+        if (claimsDrained >= MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET) {
           // Lifecycle work has priority, but a bounded turn lets application
           // work make progress when lifecycle records keep arriving.
           return true;
         }
         readyBatch.reset();
-        const drained = this.node.drainReady(domain, readyBatch, ZLINK_BACKEND_RECV_DONT_WAIT);
+        const drained = this.node.drainReady(
+          ReadyDomain.Infrastructure,
+          readyBatch,
+          ZLINK_BACKEND_RECV_DONT_WAIT
+        );
         if (!drained.ok || drained.records.length === 0) {
           return false;
-        }
-        if (domain === ReadyDomain.Application && drained.hasResidue) {
-          this.markReady(ReadyDomain.Application);
         }
         for (let index = 0; index < drained.records.length; index += 1) {
           const claim = readyBatch.takeClaim(index);
           claimsDrained += 1;
           const owner = drained.records[index]!;
-          // Raw ingress already attached one host permit to each record.
-          // A claim that reserves admission here may receive only that permit's record.
-          if (receiveBatch !== undefined) {
-            await this.drainClaim(domain, owner, claim, receiveBatch);
-          } else {
-            this.beginDrain();
-            const drain = this.drainClaim(domain, owner, claim, undefined).catch((error) =>
-              this.reportDispatchError(error)
-            );
-            this.activeDrains.add(drain);
-            void drain.finally(() => {
-              this.draining -= 1;
-              this.activeDrains.delete(drain);
-            });
-          }
+          this.beginDrain();
+          const drain = this.drainClaim(ReadyDomain.Infrastructure, owner, claim, undefined).catch(
+            (error) => this.reportDispatchError(error)
+          );
+          this.activeDrains.add(drain);
+          void drain.finally(() => {
+            this.draining -= 1;
+            this.activeDrains.delete(drain);
+          });
         }
-        if (claimBudget !== undefined && claimsDrained >= claimBudget) {
+        if (claimsDrained >= MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET) {
           this.wakeApplicationWorker();
           return true;
         }
