@@ -474,11 +474,17 @@ start the connection at the same time. The two MeshNodes compare their RIDs usin
 same canonical byte order, and only the MeshNode with the smaller RID starts the connection
 to the other endpoint.
 
-Automatic discovery first checks the local and remote descriptors. Only when both sides
-are Object Client and neither has a RouteMesh Channel Server membership (weight `0`
-included) is no connection intent created ([§13 Peer connection](#13-verification-requirements)
+Automatic discovery first checks the local and remote descriptors. By the Object role, a connection is
+judged unnecessary only when both sides are Object Client and neither has a RouteMesh
+Channel Server membership (weight `0` included) ([§13 Peer connection](#13-verification-requirements)
 owns this judgment). For every other pair, the RID-order rule applies, so there's one
 connect initiator.
+
+Automatic discovery creates no connection intent for a peer that already has a selected route
+for its RID (whichever side connected) or that a manual connection intent targets. This doesn't
+change the direction of a manual connection; it only keeps automatic discovery from adding an
+opposite-direction pipe to the same peer. When that route is gone and no manual intent remains,
+an intent is created by the RID-order rule above.
 
 In manual topology, the application can register only one endpoint or both endpoints.
 If both sides start the connection at the same time and two pipes exist for the same RID,
@@ -487,7 +493,8 @@ handshake received on the route that Core selected ([Core ROUTER §10.1](../../.
 logical peer ready, and does not choose a physical pipe.
 
 With only a manual endpoint, the remote Object role may be unknown before connect.
-Once the framework confirms at handshake that both sides' Object role is `Client`, it
+Once the framework confirms at handshake that both sides are Object Client and neither has
+RouteMesh Channel Server membership, it
 records a terminal admission result that no connection is needed and closes the
 socket before ready. It doesn't repeat background reconnect for the same endpoint and
 configuration generation. If endpoint, expected RID, or configuration generation

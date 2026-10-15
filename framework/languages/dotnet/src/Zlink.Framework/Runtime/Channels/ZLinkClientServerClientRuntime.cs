@@ -30,6 +30,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private Task? _disposeTask;
     private readonly ZLinkMessageFlowTracer? _flow;
     private readonly IZLinkRuntimeFailureReporter _errorSink;
+    private readonly ZLinkRuntimeTaskRunner _taskRunner;
 
     // Monitoring subscribers use this edge notification to request a fresh
     // snapshot. The callback only signals a bounded channel; it never reads
@@ -43,6 +44,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         IZLinkSocketConfig socketConfig,
         CancellationToken stopToken,
         IZLinkRuntimeFailureReporter errorSink,
+        ZLinkRuntimeTaskRunner taskRunner,
         ZLinkMessageFlowTracer? flow = null,
         TimeProvider? timeProvider = null
     )
@@ -53,6 +55,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         _socketConfig = socketConfig;
         _stopToken = stopToken;
         _errorSink = errorSink;
+        _taskRunner = taskRunner;
         _flow = flow;
         _time = timeProvider ?? TimeProvider.System;
     }
@@ -518,7 +521,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 OnAdmitted,
                 ScheduleStateChanged,
                 _time,
-                _errorSink
+                _errorSink,
+                _taskRunner
             );
             inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _retired.RemoveAll(static candidate => candidate.Task.IsCompletedSuccessfully);
@@ -833,9 +837,15 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private ZLinkClientServerControlProtocol.Admission? _admittedDescriptor;
         private CancellationTokenSource _admissionStop = null!;
         private readonly List<Task> _requestTasks = [];
-        private Task? _controlTask;
         private Task? _livenessTask;
-        private Task? _monitorTask;
+
+        // The monitor loop and the control receive loop each close the handle they receive on
+        // when they return. Disposal stops them through _receiveStop only after the request
+        // and liveness work that also uses the DEALER has ended.
+        private readonly ZLinkReceiveSocketOwner _monitorOwner;
+        private readonly ZLinkReceiveSocketOwner _socketOwner;
+        private readonly CancellationTokenSource _receiveStop = new();
+        private readonly ZLinkRuntimeTaskRunner _taskRunner;
         private readonly Action<Connection, string> _onAdmitted;
         private readonly Action<bool> _onStateChanged;
         private ReadyTarget? _readyTarget;
@@ -857,7 +867,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             Action<Connection, string> onAdmitted,
             Action<bool> onStateChanged,
             TimeProvider timeProvider,
-            IZLinkRuntimeFailureReporter errorSink
+            IZLinkRuntimeFailureReporter errorSink,
+            ZLinkRuntimeTaskRunner taskRunner
         )
         {
             _channelName = channelName;
@@ -868,7 +879,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _onStateChanged = onStateChanged;
             _time = timeProvider;
             _errorSink = errorSink;
+            _taskRunner = taskRunner;
             Socket = socket;
+            _monitorOwner = new ZLinkReceiveSocketOwner(CloseMonitorAsync);
+            _socketOwner = new ZLinkReceiveSocketOwner(CloseSocketAsync);
         }
 
         internal IDealerSocket Socket { get; }
@@ -1048,29 +1062,18 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             RunState(() =>
             {
                 ObjectDisposedException.ThrowIf(IsDisposing, this);
-                if (_monitorTask is null)
+                using (ExecutionContext.SuppressFlow())
                 {
-                    using (ExecutionContext.SuppressFlow())
-                    {
-                        _monitorTask = Task
-                            .Factory.StartNew(
-                                static state => ((Connection)state!).RunMonitorLoopAsync(),
-                                this,
-                                CancellationToken.None,
-                                TaskCreationOptions.LongRunning,
-                                TaskScheduler.Default
-                            )
-                            .Unwrap();
-                        _controlTask = Task
-                            .Factory.StartNew(
-                                static state => ((Connection)state!).RunControlLoopAsync(),
-                                this,
-                                CancellationToken.None,
-                                TaskCreationOptions.LongRunning,
-                                TaskScheduler.Default
-                            )
-                            .Unwrap();
-                    }
+                    _monitorOwner.Start(
+                        _taskRunner,
+                        $"client-server-monitor:{_channelName}",
+                        _ => RunMonitorLoop()
+                    );
+                    _socketOwner.Start(
+                        _taskRunner,
+                        $"client-server-control:{_channelName}",
+                        _ => RunControlLoop()
+                    );
                 }
             });
             lock (_socketLifecycleGate)
@@ -1104,39 +1107,40 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 await failures
                     .CaptureAsync(() => new ValueTask(_admissionStop.CancelAsync()))
                     .ConfigureAwait(false);
-            var (requestTasks, controlTask, livenessTask, monitorTask) = RunState(() =>
-                (_requestTasks.ToArray(), _controlTask, _livenessTask, _monitorTask)
+            var (requestTasks, livenessTask) = RunState(() =>
+                (_requestTasks.ToArray(), _livenessTask)
             );
             foreach (var requestTask in requestTasks)
                 await failures
                     .CaptureAsync(() => new ValueTask(IgnoreCancellationAsync(requestTask)))
                     .ConfigureAwait(false);
-            if (controlTask is not null)
-                await failures
-                    .CaptureAsync(() => new ValueTask(IgnoreCancellationAsync(controlTask)))
-                    .ConfigureAwait(false);
             if (livenessTask is not null)
                 await failures
                     .CaptureAsync(() => new ValueTask(IgnoreCancellationAsync(livenessTask)))
                     .ConfigureAwait(false);
-            if (monitorTask is not null)
-                await failures
-                    .CaptureAsync(() => new ValueTask(IgnoreCancellationAsync(monitorTask)))
-                    .ConfigureAwait(false);
-            if (_monitor is not null)
-                await failures.CaptureAsync(_monitor.DisposeAsync).ConfigureAwait(false);
-            if (_receivePoller is not null)
-                failures.Capture(_receivePoller.Dispose);
+            // No request or liveness work uses the DEALER any more. The receive loops stop
+            // and each closes the handle it receives on.
+            await failures
+                .CaptureAsync(() => new ValueTask(_receiveStop.CancelAsync()))
+                .ConfigureAwait(false);
+            await failures.CaptureAsync(_monitorOwner.CloseAsync).ConfigureAwait(false);
             failures.ThrowIfAny();
-            await failures.CaptureAsync(DisposeSocketAsync).ConfigureAwait(false);
+            await failures.CaptureAsync(_socketOwner.CloseAsync).ConfigureAwait(false);
             failures.ThrowIfAny();
             if (_admissionStop is not null)
                 _admissionStop.Dispose();
+            _receiveStop.Dispose();
             await _lane.DisposeAsync().ConfigureAwait(false);
         }
 
-        private ValueTask DisposeSocketAsync()
+        private ValueTask CloseMonitorAsync() =>
+            _monitor is { } monitor ? monitor.DisposeAsync() : ValueTask.CompletedTask;
+
+        // The control loop's poller leaves before the DEALER closes. The lifecycle gate keeps
+        // the close from overlapping Start's Connect.
+        private ValueTask CloseSocketAsync()
         {
+            _receivePoller?.Dispose();
             lock (_socketLifecycleGate)
                 return Socket.DisposeAsync();
         }
@@ -1201,9 +1205,11 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
         }
 
-        private async Task RunMonitorLoopAsync()
+        // Runs on the monitor owner's dedicated thread until disposal stops it; that thread
+        // then closes the monitor.
+        private void RunMonitorLoop()
         {
-            var cancellationToken = _admissionStop.Token;
+            var cancellationToken = _receiveStop.Token;
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
@@ -1221,7 +1227,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 {
                     return;
                 }
-                await Task.Yield();
             }
         }
 
@@ -1451,20 +1456,19 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             return true;
         }
 
-        private async Task RunControlLoopAsync()
+        // Runs on the socket owner's dedicated thread until disposal stops it; that thread then
+        // closes the DEALER.
+        private void RunControlLoop()
         {
-            var cancellationToken = _admissionStop.Token;
+            var cancellationToken = _receiveStop.Token;
             using var received = Received.Create();
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
+                    // ClientServer section 5: receive pushed DATA even before admission,
+                    // so the Admit reply behind it can reach the binding completion owner.
                     var readiness = _receivePoller.Wait(ControlReceivePollInterval);
-                    var admissionEstablished = RunState(() =>
-                        !IsDisposing && CurrentAdmission is not null
-                    );
-                    if (!admissionEstablished)
-                        continue;
                     if (
                         (
                             readiness
@@ -1491,7 +1495,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         if (received.ReplyToken is not null)
                             ReplyOwned(received, ack);
                         else
-                            await SendOwnedAsync(ack, cancellationToken).ConfigureAwait(false);
+                            SendOwnedAsync(ack, cancellationToken)
+                                .AsTask()
+                                .GetAwaiter()
+                                .GetResult();
                         continue;
                     }
                     if (

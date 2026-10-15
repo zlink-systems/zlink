@@ -27,6 +27,7 @@
 #include <chrono>
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <future>
 #include <filesystem>
 #include <fstream>
@@ -303,6 +304,110 @@ bound_session_request (mesh::raw_mesh_node_owner_t &source,
       },
       admitted)));
     return result;
+}
+
+// Opt-in Core boundary repro: send the first new handshake record after local
+// promotion, with or without waiting for the peer to observe its promotion.
+void verify_standby_promotion_public_send (bool observe_remote_first)
+{
+    zlink::context_t context;
+    zlink::router_socket_t lower (context), higher (context);
+    const auto setup = [] (auto &socket, const char *rid) {
+        socket.set_routing_id (zlink::routing_id_t::from (rid));
+        socket.options ().handover (true);
+        socket.options ().mandatory (true);
+        socket.options ().linger (0ms);
+        socket.options ().reconnect_interval (0ms);
+        socket.bind ("tcp://127.0.0.1:*");
+    };
+    setup (lower, "A-promotion");
+    setup (higher, "Z-promotion");
+    const auto wait_route = [] (auto &socket, const char *peer, std::uint64_t previous = 0) {
+        zlink::poller_t poller;
+        poller.add (socket, zlink::poll_event_flag_t::pollroute, 0);
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (std::chrono::steady_clock::now () < deadline) {
+            for (const auto &route : socket.routes_snapshot ()) {
+                if (route.routing_id == zlink::routing_id_t::from (peer)
+                    && route.route_generation != previous)
+                    return route.route_generation;
+            }
+            zlink::poll_event_t event;
+            (void) poller.wait (&event, 1, 10ms);
+        }
+        std::fprintf (stderr, "selected route did not change: peer=%s previous=%llu\n", peer,
+                      static_cast<unsigned long long> (previous));
+        assert (false && "selected route did not change");
+        return std::uint64_t{0};
+    };
+    const auto connect = [] (auto &socket, const char *peer, const auto &endpoint) {
+        socket.options ().connect_routing_id (zlink::routing_id_t::from (peer));
+        socket.connect (endpoint);
+    };
+    const auto higher_endpoint = higher.options ().last_endpoint ();
+    connect (higher, "A-promotion", lower.options ().last_endpoint ());
+    const auto lower_initial = wait_route (lower, "Z-promotion");
+    const auto higher_initial = wait_route (higher, "A-promotion");
+    connect (lower, "Z-promotion", higher_endpoint);
+    const auto lower_selected = wait_route (lower, "Z-promotion", lower_initial);
+    const auto higher_selected = wait_route (higher, "A-promotion", higher_initial);
+    lower.disconnect (higher_endpoint);
+    (void) wait_route (lower, "Z-promotion", lower_selected);
+    if (observe_remote_first)
+        (void) wait_route (higher, "A-promotion", higher_selected);
+    lower.send (zlink::routing_id_t::from ("Z-promotion"))
+      .message (zlink::message_t::from ("new-route-hello"))
+      .submit ();
+    (void) wait_route (higher, "A-promotion", higher_selected);
+    higher.options ().recv_timeout (2s);
+    zlink::received_t received;
+    assert (higher.recv (received) == 0);
+    assert (received.parts ().size () == 1);
+    const auto &part = received.parts ().front ();
+    assert (std::string_view (reinterpret_cast<const char *> (part.data ()), part.size ())
+            == "new-route-hello");
+}
+
+void verify_standby_promotion_readmits_both_peers ()
+{
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("Z-standby-source")}));
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("A-standby-target")}));
+    source.start ();
+    target.start ();
+    const auto local = source.topology ().local_descriptor ();
+    const auto remote = target.topology ().local_descriptor ();
+    admit_pair (source, target, remote);
+    const auto pump = [&] {
+        (void) source.observe_routes ();
+        (void) target.observe_routes ();
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        (void) await_task (source.pump_one (now));
+        (void) await_task (target.pump_one (now));
+    };
+    const auto await_replacement = [&] (const auto &source_previous, const auto &target_previous) {
+        const auto ready = [&] {
+            const auto a = source.topology ().peer (remote.node_routing_id);
+            const auto b = target.topology ().peer (local.node_routing_id);
+            return a && a->ready && b && b->ready && a->connection_id != source_previous
+                   && b->connection_id != target_previous;
+        };
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (!ready () && std::chrono::steady_clock::now () < deadline)
+            pump ();
+        assert (ready ());
+    };
+    auto source_previous = source.topology ().peer (remote.node_routing_id)->connection_id;
+    auto target_previous = target.topology ().peer (local.node_routing_id)->connection_id;
+    assert (target.connect_peer (source.endpoint (), local));
+    await_replacement (source_previous, target_previous);
+    source_previous = source.topology ().peer (remote.node_routing_id)->connection_id;
+    target_previous = target.topology ().peer (local.node_routing_id)->connection_id;
+    target.disconnect_peer (source.endpoint ());
+    await_replacement (source_previous, target_previous);
+    source.close ();
+    target.close ();
 }
 
 void verify_bound_session_bind_replay_preserves_first_admission ()
@@ -3738,6 +3843,12 @@ int main (int argc, char **argv)
                 verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
             else if (name == "retries")
                 verify_bound_session_bind_retries_until_route_is_admitted ();
+            else if (name == "native-standby")
+                verify_standby_promotion_public_send (false);
+            else if (name == "native-standby-ready")
+                verify_standby_promotion_public_send (true);
+            else if (name == "standby")
+                verify_standby_promotion_readmits_both_peers ();
             else if (name == "replay")
                 verify_bound_session_bind_replay_preserves_first_admission ();
             else if (name == "create")

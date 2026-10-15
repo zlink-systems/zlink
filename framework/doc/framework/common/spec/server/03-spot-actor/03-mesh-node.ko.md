@@ -271,6 +271,12 @@ Peer handshake에서는 다음 정보를 교환한다.
 하나를 선택하며([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)), Framework는 선택된 route에서 받은
 handshake만 admission한다.
 
+**선택 route에서 상대의 admission 수락(ADMIT)을 아직 받지 못한 node는 그 route로 HELLO를 기존 liveness
+관리 주기마다 다시 보낸다.** 선택이 바뀔 때 Core는 승격 직전 standby pipe의 대기 record를 버리므로
+([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)), 새 route로 먼저 보낸 HELLO가 상대에 도착하지
+않을 수 있다. HELLO는 같은 identity에 대해 멱등이다. 이를 위해 별도 timer를 두지 않으며, ADMIT을 받으면
+다시 보내지 않는다.
+
 **선택 route에서 handshake로 admission을 확인하기 전에 그 route로 받은 handshake 밖의 record는 처리하지
 않고 버리며, 응답을 보내지 않는다.** 선택 route가 바뀐 뒤 상대가 새 route의 handshake보다 먼저 보낸
 record도 같다. 이렇게 잃은 durable operation은 송신 측이 [Actor 모델 §8.1](04-actor-model.ko.md#81-실패)대로

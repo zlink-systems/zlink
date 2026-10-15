@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
+using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -9,7 +10,10 @@ internal sealed class ZLinkChannelReceiveLoop(
 {
     private static readonly TimeSpan ReceivePollInterval = TimeSpan.FromMilliseconds(100);
 
-    public async Task RunClientServerLoopAsync(
+    // Runs on the dedicated receive thread of the server bundle
+    // (ZLinkChannelRuntimeBundle.StartReceiveLoop), which closes the router after this
+    // method returns. The loop waits synchronously and never resumes on a ThreadPool worker.
+    public void RunClientServerLoop(
         string channelName,
         IRouterSocket router,
         ZLinkClientServerServerIdentity identity,
@@ -20,7 +24,7 @@ internal sealed class ZLinkChannelReceiveLoop(
     )
     {
         using var receivePoller = ZLinkBackendSocketPoller.Create(router);
-        await using var applicationDispatch =
+        var applicationDispatch =
             new ZLinkChannelApplicationDispatchQueue<ClientServerDispatchWork>(
                 $"client-server-application:{channelName}",
                 errorSink,
@@ -29,123 +33,130 @@ internal sealed class ZLinkChannelReceiveLoop(
                 DispatchClientServerAsync,
                 RejectClientServerDispatch
             );
-        var receiveStoragePool = new ZLinkReceivedStoragePool();
-        await identity.AttachRouterAsync(router).ConfigureAwait(false);
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
+            var receiveStoragePool = new ZLinkReceivedStoragePool();
+            AwaitStateLane(identity.AttachRouterAsync(router));
+            try
             {
-                Received? received = null;
-                ZLinkApplicationJobQueueLease? admission = null;
-                try
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    await identity
-                        .TickLivenessAsync(router, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (!IsReadable(receivePoller.Wait(ReceivePollInterval)))
-                        continue;
-                    admission = await applicationJobQueue
-                        .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
-                        .ConfigureAwait(false);
-                    received = receiveStoragePool.Rent();
-                    if (!router.Recv(received, RecvFlags.DontWait))
-                        continue;
+                    Received? received = null;
+                    ZLinkApplicationJobQueueLease? admission = null;
+                    try
+                    {
+                        identity
+                            .TickLivenessAsync(router, cancellationToken)
+                            .AsTask()
+                            .GetAwaiter()
+                            .GetResult();
+                        if (!IsReadable(receivePoller.Wait(ReceivePollInterval)))
+                            continue;
+                        admission = applicationJobQueue
+                            .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
+                            .GetAwaiter()
+                            .GetResult();
+                        received = receiveStoragePool.Rent();
+                        if (!router.Recv(received, RecvFlags.DontWait))
+                            continue;
 
-                    if (
-                        received.ReplyToken is null
-                        && received.Parts.Count == 1
-                        && received.Parts[0].Size == 0
-                    )
-                        continue;
-                    if (received.RoutingId is not { } applicationSource)
-                        continue;
-                    var admitted = await identity
-                        .ObserveReceivedRecordAsync(
-                            applicationSource,
-                            received.RouteGeneration,
-                            System.Diagnostics.Stopwatch.GetTimestamp()
+                        if (
+                            received.ReplyToken is null
+                            && received.Parts.Count == 1
+                            && received.Parts[0].Size == 0
                         )
-                        .ConfigureAwait(false);
-                    if (ZLinkClientServerControlProtocol.IsControl(received.Parts))
-                    {
-                        await ReplyClientServerControlAsync(
-                                router,
-                                received,
-                                identity,
-                                cancellationToken
+                            continue;
+                        if (received.RoutingId is not { } applicationSource)
+                            continue;
+                        var admitted = AwaitStateLane(
+                            identity.ObserveReceivedRecordAsync(
+                                applicationSource,
+                                received.RouteGeneration,
+                                System.Diagnostics.Stopwatch.GetTimestamp()
                             )
-                            .ConfigureAwait(false);
-                        continue;
-                    }
-                    if (!admitted.Found)
-                        continue;
-                    var admittedMaximumMessageBytes = admitted.MaximumMessageBytes;
-                    if (
-                        !ZLinkClientServerMessageBound.Fits(
-                            received.Parts,
-                            admittedMaximumMessageBytes
-                        )
-                    )
-                    {
-                        clientServerDispatcher.RejectMessageTooLarge(
-                            channelName,
-                            router,
-                            received,
-                            applicationDispatch.ReplyGate,
-                            admittedMaximumMessageBytes
                         );
-                        continue;
-                    }
-                    var owned = received;
-                    if (IsClientServerApplicationRecord(channelName, received.Parts))
-                        admission.MarkQueued();
-                    _ = await applicationDispatch
-                        .PostAsync(
-                            new ClientServerDispatchWork(
+                        if (ZLinkClientServerControlProtocol.IsControl(received.Parts))
+                        {
+                            ReplyClientServerControl(router, received, identity, cancellationToken);
+                            continue;
+                        }
+                        if (!admitted.Found)
+                            continue;
+                        var admittedMaximumMessageBytes = admitted.MaximumMessageBytes;
+                        if (
+                            !ZLinkClientServerMessageBound.Fits(
+                                received.Parts,
+                                admittedMaximumMessageBytes
+                            )
+                        )
+                        {
+                            clientServerDispatcher.RejectMessageTooLarge(
                                 channelName,
                                 router,
-                                owned,
-                                receiveStoragePool,
+                                received,
                                 applicationDispatch.ReplyGate,
-                                admittedMaximumMessageBytes,
-                                admission
-                            ),
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    // PostAsync either handed ownership to the queue or ran
-                    // the rejection callback. Keep the storage local until that
-                    // result is known so a pre-handoff exception is returned by
-                    // this loop's finally block.
-                    received = null;
-                    admission = null;
+                                admittedMaximumMessageBytes
+                            );
+                            continue;
+                        }
+                        var owned = received;
+                        if (IsClientServerApplicationRecord(channelName, received.Parts))
+                            admission.MarkQueued();
+                        _ = applicationDispatch
+                            .PostAsync(
+                                new ClientServerDispatchWork(
+                                    channelName,
+                                    router,
+                                    owned,
+                                    receiveStoragePool,
+                                    applicationDispatch.ReplyGate,
+                                    admittedMaximumMessageBytes,
+                                    admission
+                                ),
+                                cancellationToken
+                            )
+                            .GetAwaiter()
+                            .GetResult();
+                        // PostAsync either handed ownership to the queue or ran the
+                        // rejection callback. Keep the storage local until that result is
+                        // known so a pre-handoff exception is returned by this loop's
+                        // finally block.
+                        received = null;
+                        admission = null;
+                    }
+                    catch (Exception) when (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        break;
+                    }
+                    catch (Exception exception)
+                    {
+                        errorSink.ReportRuntimeTaskException(
+                            $"client-server-dispatch:{channelName}",
+                            exception
+                        );
+                    }
+                    finally
+                    {
+                        if (received is { } storage)
+                            receiveStoragePool.Return(storage);
+                        admission?.Dispose();
+                    }
                 }
-                catch (Exception) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (ObjectDisposedException)
-                {
-                    break;
-                }
-                catch (Exception exception)
-                {
-                    errorSink.ReportRuntimeTaskException(
-                        $"client-server-dispatch:{channelName}",
-                        exception
-                    );
-                }
-                finally
-                {
-                    if (received is { } storage)
-                        receiveStoragePool.Return(storage);
-                    admission?.Dispose();
-                }
+            }
+            finally
+            {
+                AwaitStateLane(identity.DetachRouterAsync(router));
             }
         }
         finally
         {
-            await identity.DetachRouterAsync(router).ConfigureAwait(false);
+            // Accepted handlers and their replies finish before the router closes
+            // (client-server channel section 6, step 4).
+            applicationDispatch.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 
@@ -186,7 +197,7 @@ internal sealed class ZLinkChannelReceiveLoop(
         }
     }
 
-    private static async ValueTask ReplyClientServerControlAsync(
+    private static void ReplyClientServerControl(
         IRouterSocket router,
         Received received,
         ZLinkClientServerServerIdentity identity,
@@ -197,9 +208,9 @@ internal sealed class ZLinkChannelReceiveLoop(
             return;
         if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(received.Parts, out var ackId))
         {
-            await identity
-                .AcceptLivenessAckAsync(sourceRid, received.RouteGeneration, ackId)
-                .ConfigureAwait(false);
+            AwaitStateLane(
+                identity.AcceptLivenessAckAsync(sourceRid, received.RouteGeneration, ackId)
+            );
             return;
         }
         if (
@@ -211,11 +222,13 @@ internal sealed class ZLinkChannelReceiveLoop(
             if (received.ReplyToken is not null)
                 ReplyOwned(router, sourceRid, received.ReplyToken, ack);
             else
-                await SendOwnedAsync(router, sourceRid, ack, cancellationToken)
-                    .ConfigureAwait(false);
+                SendOwnedAsync(router, sourceRid, ack, cancellationToken)
+                    .AsTask()
+                    .GetAwaiter()
+                    .GetResult();
             return;
         }
-        var snapshot = await identity.ReadAsync().ConfigureAwait(false);
+        var snapshot = AwaitStateLane(identity.ReadAsync());
         var valid = ZLinkClientServerControlProtocol.TryDecodeHello(received.Parts, out var hello);
         var accepted =
             valid
@@ -240,9 +253,13 @@ internal sealed class ZLinkChannelReceiveLoop(
             )
             : ZLinkClientServerControlProtocol.EncodeReject(reason: 1);
         if (ReplyOwned(router, sourceRid, received.ReplyToken, reply) && accepted)
-            await identity
-                .AdmitPeerAsync(sourceRid, negotiatedMaximumMessageBytes, received.RouteGeneration)
-                .ConfigureAwait(false);
+            AwaitStateLane(
+                identity.AdmitPeerAsync(
+                    sourceRid,
+                    negotiatedMaximumMessageBytes,
+                    received.RouteGeneration
+                )
+            );
     }
 
     private static bool ReplyOwned(
@@ -291,7 +308,9 @@ internal sealed class ZLinkChannelReceiveLoop(
         }
     }
 
-    public async Task RunSubscriberLoopAsync(
+    // Runs on the dedicated receive thread of the subscriber bundle, which closes the SUB
+    // socket after this method returns.
+    public void RunSubscriberLoop(
         string channelName,
         ISubSocket subscriber,
         ZLinkApplicationJobQueue applicationJobQueue,
@@ -300,102 +319,66 @@ internal sealed class ZLinkChannelReceiveLoop(
         CancellationToken forceStopToken
     )
     {
-        using var receivePoller = ZLinkBackendSocketPoller.Create(subscriber);
-        await using var applicationDispatch =
-            new ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork>(
-                $"fanout-application:{channelName}",
-                errorSink,
-                cancellationToken,
-                forceStopToken,
-                DispatchFanoutAsync,
-                RejectFanoutDispatch
-            );
-        var topicMessagePool = new ZLinkTopicMessageStoragePool();
-        TopicMessage? topicMessage = topicMessagePool.Rent();
+        var applicationDispatch = new ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork>(
+            $"fanout-application:{channelName}",
+            errorSink,
+            cancellationToken,
+            forceStopToken,
+            DispatchFanoutAsync,
+            RejectFanoutDispatch
+        );
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                ZLinkApplicationJobQueueLease? admission = null;
-                try
-                {
-                    if (!IsReadable(receivePoller.Wait(ReceivePollInterval)))
-                        continue;
-                    admission = await applicationJobQueue
-                        .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
-                        .ConfigureAwait(false);
-                    if (!subscriber.Subscribe(topicMessage!, RecvFlags.DontWait))
-                        continue;
-
-                    // The beacon shares the publisher's PUB socket, so a manual
-                    // subscriber receives it alongside application records. It is
-                    // not an application event: it never reaches the queue, a
-                    // handler or a message trace.
-                    if (ZLinkFanoutLivenessProtocol.IsReservedTopic(topicMessage!.Topic))
-                    {
-                        if (ZLinkFanoutLivenessProtocol.IsValidBeacon(topicMessage))
-                        {
-                            var completed = topicMessage;
-                            topicMessage = null;
-                            topicMessagePool.Return(completed);
-                            topicMessage = topicMessagePool.Rent();
-                            continue;
-                        }
-
-                        // A reserved topic carrying anything else is a protocol
-                        // error. Leaving the loop closes this publisher's socket,
-                        // which is the only connection it governs.
-                        errorSink.ReportRuntimeTaskException(
-                            $"channel-subscriber:{channelName}",
-                            new InvalidOperationException(
-                                "Fanout publisher sent a malformed liveness beacon."
-                            )
-                        );
-                        return;
-                    }
-
-                    var owned = topicMessage!;
-                    if (IsFanoutApplicationRecord(topicMessage.Parts))
-                        admission.MarkQueued();
-                    _ = await applicationDispatch
-                        .PostAsync(
-                            new FanoutDispatchWork(channelName, owned, topicMessagePool, admission),
-                            cancellationToken
+            RunFanoutReceive(
+                channelName,
+                subscriber,
+                onActivity: null,
+                onProtocolError: () =>
+                    // A reserved topic carrying anything else is a protocol error. Leaving
+                    // the loop closes this publisher's socket, which is the only connection
+                    // it governs.
+                    errorSink.ReportRuntimeTaskException(
+                        $"channel-subscriber:{channelName}",
+                        new InvalidOperationException(
+                            "Fanout publisher sent a malformed liveness beacon."
                         )
-                        .ConfigureAwait(false);
-                    // The queue or its rejection callback owns the storage as
-                    // soon as PostAsync returns. Clear the local owner before
-                    // renting the next storage so a rent failure cannot return
-                    // the handed-off envelope a second time.
-                    topicMessage = null;
-                    admission = null;
-                    topicMessage = topicMessagePool.Rent();
-                }
-                catch (Exception) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (ObjectDisposedException)
-                {
-                    break;
-                }
-                finally
-                {
-                    admission?.Dispose();
-                }
-            }
+                    ),
+                applicationJobQueue,
+                applicationDispatch,
+                cancellationToken
+            );
         }
         finally
         {
-            if (topicMessage is { } storage)
-                topicMessagePool.Return(storage);
+            applicationDispatch.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 
-    public async Task RunFanoutConnectionLoopAsync(
+    // Runs on the dedicated receive thread of one automatic subscriber connection, which closes
+    // the SUB socket after this method returns.
+    public void RunFanoutConnectionLoop(
         string channelName,
         ISubSocket subscriber,
         Action onActivity,
+        Action onProtocolError,
+        ZLinkApplicationJobQueue applicationJobQueue,
+        ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork> applicationDispatch,
+        CancellationToken cancellationToken
+    ) =>
+        RunFanoutReceive(
+            channelName,
+            subscriber,
+            onActivity,
+            onProtocolError,
+            applicationJobQueue,
+            applicationDispatch,
+            cancellationToken
+        );
+
+    private void RunFanoutReceive(
+        string channelName,
+        ISubSocket subscriber,
+        Action? onActivity,
         Action onProtocolError,
         ZLinkApplicationJobQueue applicationJobQueue,
         ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork> applicationDispatch,
@@ -414,17 +397,21 @@ internal sealed class ZLinkChannelReceiveLoop(
                 {
                     if (!IsReadable(receivePoller.Wait(ReceivePollInterval)))
                         continue;
-                    admission = await applicationJobQueue
+                    admission = applicationJobQueue
                         .AcquireAsync(cancellationToken, ZLinkApplicationJobOrigin.Remote)
-                        .ConfigureAwait(false);
+                        .GetAwaiter()
+                        .GetResult();
                     if (!subscriber.Subscribe(topicMessage!, RecvFlags.DontWait))
                         continue;
 
+                    // The beacon shares the publisher's PUB socket, so a subscriber receives
+                    // it alongside application records. It is not an application event: it
+                    // never reaches the queue, a handler or a message trace.
                     if (ZLinkFanoutLivenessProtocol.IsReservedTopic(topicMessage!.Topic))
                     {
                         if (ZLinkFanoutLivenessProtocol.IsValidBeacon(topicMessage))
                         {
-                            onActivity();
+                            onActivity?.Invoke();
                             var completed = topicMessage;
                             topicMessage = null;
                             topicMessagePool.Return(completed);
@@ -436,16 +423,20 @@ internal sealed class ZLinkChannelReceiveLoop(
                         return;
                     }
 
-                    onActivity();
+                    onActivity?.Invoke();
                     var owned = topicMessage!;
                     if (IsFanoutApplicationRecord(topicMessage.Parts))
                         admission.MarkQueued();
-                    _ = await applicationDispatch
+                    _ = applicationDispatch
                         .PostAsync(
                             new FanoutDispatchWork(channelName, owned, topicMessagePool, admission),
                             cancellationToken
                         )
-                        .ConfigureAwait(false);
+                        .GetAwaiter()
+                        .GetResult();
+                    // The queue or its rejection callback owns the storage as soon as
+                    // PostAsync returns. Clear the local owner before renting the next storage
+                    // so a rent failure cannot return the handed-off envelope a second time.
                     topicMessage = null;
                     admission = null;
                     topicMessage = topicMessagePool.Rent();

@@ -6679,11 +6679,19 @@ bool public_host_runtime_t::reply (const reply_token_t &token,
 std::optional<stateful::object_ref_t>
 public_host_runtime_t::resolve_actor (const actor_ref_t &actor) const
 {
+    auto current = resolve_actor (actor.actor_id ().value ());
+    if (current && current->object_generation != actor.object_generation ())
+        return std::nullopt;
+    return current;
+}
+
+std::optional<stateful::object_ref_t>
+public_host_runtime_t::resolve_actor (std::string_view actor_id) const
+{
     return _spot_actor_index_lane
       .run ([&] () -> std::optional<stateful::object_ref_t> {
-          const auto found = _actors.find (std::string (actor.actor_id ().value ()));
-          if (found == _actors.end ()
-              || found->second.second.object_generation != actor.object_generation ()) {
+          const auto found = _actors.find (std::string (actor_id));
+          if (found == _actors.end ()) {
               return std::nullopt;
           }
           return found->second.second;
@@ -7025,8 +7033,9 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_actor_message (
     if (kind != record_kind_t::actor_send && kind != record_kind_t::actor_request) {
         return zlink::submit_result_t::invalid_argument;
     }
-    const auto current =
-      _objects.find (stateful::object_kind_t::actor, std::string (target.actor_id ().value ()));
+    // The Actor execution gate holds payloads during recovery and completion.
+    // Resolve identity here without a second Ready-only admission decision.
+    const auto current = resolve_actor (target.actor_id ().value ());
     if (!current) {
         return zlink::submit_result_t::not_found;
     }
