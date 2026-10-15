@@ -186,8 +186,9 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
 
     public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ZLinkRequestAdmission.Run<TReply>(admission =>
-            ExecuteAsync<TReply>(cancellationToken, admission)
+        return ZLinkRequestAdmission.Run(
+            (Call: this, Token: cancellationToken),
+            static (state, admission) => state.Call.ExecuteAsync<TReply>(state.Token, admission)
         );
     }
 
@@ -388,8 +389,9 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
 
     public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ZLinkRequestAdmission.Run<TReply>(admission =>
-            ExecuteAsync<TReply>(cancellationToken, admission)
+        return ZLinkRequestAdmission.Run(
+            (Call: this, Token: cancellationToken),
+            static (state, admission) => state.Call.ExecuteAsync<TReply>(state.Token, admission)
         );
     }
 
@@ -592,12 +594,14 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
 
     public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ZLinkRequestAdmission.Run<TReply>(admission =>
-            ExecuteAfterTerminatorAsync<TReply>(
-                ZLinkNestedRequestTerminator.Async,
-                cancellationToken,
-                admission
-            )
+        return ZLinkRequestAdmission.Run(
+            (Call: this, Token: cancellationToken),
+            static (state, admission) =>
+                state.Call.ExecuteAfterTerminatorAsync<TReply>(
+                    ZLinkNestedRequestTerminator.Async,
+                    state.Token,
+                    admission
+                )
         );
     }
 
