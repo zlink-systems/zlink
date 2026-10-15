@@ -395,35 +395,86 @@ final class ZLinkActorDispatchSerials {
     }
 
     CompletionStage<Void> beginTeardown(String actorId, Supplier<CompletionStage<Void>> cleanup) {
+        return beginTeardown(actorId, null, cleanup);
+    }
+
+    CompletionStage<Void> beginTeardown(
+            String actorId,
+            ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurn,
+            Supplier<CompletionStage<Void>> cleanup) {
         boolean current = isCurrent(actorId);
         return trackedTurnAsync(actorId)
                 .thenCompose(
-                        resolved ->
-                                onRegistry(
-                                        () -> {
-                                            CompletionStage<Void> existing = teardowns.get(actorId);
-                                            if (existing != null)
-                                                return new TeardownSetup(
-                                                        existing, null, null, false, null, null);
-                                            CompletableFuture<Void> terminal =
-                                                    new CompletableFuture<>();
-                                            teardowns.put(actorId, terminal);
-                                            QueuedTurn tracked =
-                                                    actorTargets.computeIfAbsent(
-                                                            actorId, ignored -> resolved);
+                        resolved -> {
+                            var lane = resolved.activation().relocationLane();
+                            Supplier<TeardownSetup> claim =
+                                    () -> {
+                                        CompletionStage<Void> existing = teardowns.get(actorId);
+                                        if (existing != null)
                                             return new TeardownSetup(
-                                                    terminal,
-                                                    tracked.target(),
-                                                    terminal,
-                                                    true,
-                                                    lifecycleBarriers.remove(actorId),
-                                                    tracked.activation());
-                                        }))
-                .thenCompose(
-                        setup -> {
-                            if (setup.barrier() != null) setup.barrier().complete(null);
-                            if (setup.created()) startTeardown(actorId, setup, cleanup);
-                            return current ? COMPLETED : setup.teardown();
+                                                    existing, null, null, false, null, null);
+                                        CompletableFuture<Void> terminal =
+                                                new CompletableFuture<>();
+                                        teardowns.put(actorId, terminal);
+                                        QueuedTurn tracked =
+                                                actorTargets.computeIfAbsent(
+                                                        actorId, ignored -> resolved);
+                                        return new TeardownSetup(
+                                                terminal,
+                                                tracked.target(),
+                                                terminal,
+                                                true,
+                                                lifecycleBarriers.remove(actorId),
+                                                tracked.activation());
+                                    };
+                            Supplier<CompletionStage<Void>> inTurnCleanup =
+                                    () -> {
+                                        lane.sealClosingAdmission();
+                                        return lane.awaitQuiescence(
+                                                        ZLinkSerialExecutionQueue.Quiescence
+                                                                .APPLICATION)
+                                                .thenCompose(
+                                                        ignored ->
+                                                                lane.runInActiveTurn(
+                                                                        activeTurn, cleanup));
+                                    };
+                            Supplier<CompletionStage<Void>> begin =
+                                    () ->
+                                            onRegistry(claim)
+                                                    .thenCompose(
+                                                            setup -> {
+                                                                // Settlement cleanup belongs to the
+                                                                // Join turn. Host close and
+                                                                // queue retirement retain their
+                                                                // position behind that turn.
+                                                                CompletionStage<Void> ownedCleanup =
+                                                                        activeTurn == null
+                                                                                ? null
+                                                                                : lane
+                                                                                        .runInActiveTurn(
+                                                                                                activeTurn,
+                                                                                                inTurnCleanup);
+                                                                if (setup.created())
+                                                                    startTeardown(
+                                                                            actorId,
+                                                                            setup,
+                                                                            ownedCleanup == null
+                                                                                    ? cleanup
+                                                                                    : () ->
+                                                                                            ownedCleanup);
+                                                                if (setup.barrier() != null)
+                                                                    setup.barrier().complete(null);
+                                                                return ownedCleanup != null
+                                                                        ? ownedCleanup
+                                                                        : current
+                                                                                ? COMPLETED
+                                                                                : setup.teardown();
+                                                            });
+                            // Reject a stale or foreign handle before claiming teardown or sealing
+                            // admission.
+                            return activeTurn == null
+                                    ? begin.get()
+                                    : lane.runInActiveTurn(activeTurn, begin);
                         });
     }
 

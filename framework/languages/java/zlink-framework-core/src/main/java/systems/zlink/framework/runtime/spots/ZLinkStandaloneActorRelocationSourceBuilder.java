@@ -1386,6 +1386,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         }
 
         CompletionStage<Void> cleanupLocal() {
+            return cleanupLocal(null);
+        }
+
+        private CompletionStage<Void> cleanupLocal(
+                ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurn) {
             try {
                 inStateLane(
                         () -> {
@@ -1406,7 +1411,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                     relocationReplies
                                                             .closeActorTimersAfterRelocation(
                                                                     owned.actorId())),
-                            () -> actors.completeRelocationSource(List.of(owned.actorId()))));
+                            () ->
+                                    actors.completeRelocationSource(
+                                            List.of(owned.actorId()), activeTurn)));
         }
 
         /**
@@ -1415,6 +1422,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
          * Message Follow and discards its retained work.
          */
         CompletionStage<Void> discardAfterSourceLeaseExpiry() {
+            return discardAfterSourceLeaseExpiry(null);
+        }
+
+        CompletionStage<Void> discardAfterSourceLeaseExpiry(
+                ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurn) {
             try {
                 return stateLane
                         .runNowOrQueue(
@@ -1445,7 +1457,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                                                             .objectGeneration())
                                                                                             .thenCompose(
                                                                                                     repliesFailed ->
-                                                                                                            cleanupLocal())
+                                                                                                            cleanupLocal(
+                                                                                                                    activeTurn))
                                                                                             .thenCompose(
                                                                                                     cleaned ->
                                                                                                             discardInitialAfterCommit()));

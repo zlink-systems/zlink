@@ -4676,6 +4676,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
      * already belongs to the target owner.
      */
     public CompletionStage<Void> completeRelocationSource(String actorId) {
+        return completeRelocationSource(actorId, null);
+    }
+
+    public CompletionStage<Void> completeRelocationSource(
+            String actorId, ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurn) {
         Objects.requireNonNull(actorId, "actorId");
         RelocationSourceCheck check =
                 inStateLane(
@@ -4703,47 +4708,28 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         ZLinkActor actor = check.actor();
         DefaultActorContext context = check.context();
-        CompletableFuture<Throwable> cleanupFailure = new CompletableFuture<>();
-        CompletionStage<Void> teardown =
-                dispatches.beginTeardown(
-                        actorId,
-                        () ->
-                                ZLinkHandlerStages.completeAll(
-                                                List.of(
+        return dispatches.beginTeardown(
+                actorId,
+                activeTurn,
+                () ->
+                        ZLinkHandlerStages.completeAll(
+                                List.of(
+                                        () ->
+                                                ZLinkHandlerStages.fromRunnable(
                                                         () ->
-                                                                ZLinkHandlerStages.fromRunnable(
-                                                                        () ->
-                                                                                inStateLane(
-                                                                                        () -> {
-                                                                                            actorRegistry
-                                                                                                    .remove(
-                                                                                                            actorId,
-                                                                                                            actor);
-                                                                                            return null;
-                                                                                        })),
-                                                        () ->
-                                                                removeActorSessionRouteForContext(
-                                                                        context),
-                                                        () ->
-                                                                ZLinkHandlerStages.fromRunnable(
-                                                                        context
-                                                                                ::closeHandlerInstances),
-                                                        () ->
-                                                                ZLinkHandlerStages.fromRunnable(
-                                                                        context.state
-                                                                                ::clearAfterDestroy)))
-                                        .handle(
-                                                (ignored, failure) -> {
-                                                    cleanupFailure.complete(failure);
-                                                    return null;
-                                                }));
-        return teardown.thenCompose(
-                ignored ->
-                        cleanupFailure.thenCompose(
-                                failure ->
-                                        failure == null
-                                                ? CompletableFuture.completedFuture(null)
-                                                : CompletableFuture.failedFuture(unwrap(failure))));
+                                                                inStateLane(
+                                                                        () -> {
+                                                                            actorRegistry.remove(
+                                                                                    actorId, actor);
+                                                                            return null;
+                                                                        })),
+                                        () -> removeActorSessionRouteForContext(context),
+                                        () ->
+                                                ZLinkHandlerStages.fromRunnable(
+                                                        context::closeHandlerInstances),
+                                        () ->
+                                                ZLinkHandlerStages.fromRunnable(
+                                                        context.state::clearAfterDestroy))));
     }
 
     private CompletionStage<Void> closeActorEntry(ActorEntry entry) {
