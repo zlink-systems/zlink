@@ -53,9 +53,11 @@ The runner checks the structure. Each selected scenario starts Redis under a uni
 
 ## Known issues
 
-Public Framework 0.30.0 may block cross-node Actor placement (#1772), bound-session delivery (#1775), relocation handoff (#1771), or public SafeToShutdown observation (#1740). Do not infer successful shutdown or compensate in application code. The committed version is 0.30.1; validation against 0.30.0 uses an isolated copy.
+The committed version is 0.30.1; validation against public 0.30.0 uses an isolated copy and does not pass. The template does not compensate for these Framework defects.
 
-C++ `stream_t` exposes `reply_packet(message_t)` without a typed reply overload. SessionInfo therefore uses a typed send response after SessionInfoRequest rather than correlated request/reply. Actor identity and generation are still read from the binding. The template does not manually serialize a reply payload.
+- The first `JoinLobbyRequest` fails in the Session handler. Instance nodes register the Player factory for relocation but have no Entry Spot, and the C++ Actor GetOrCreate can be rejected for that placement ([#1772](https://github.com/zlink-systems/zlink/issues/1772)).
+- The C++ lifecycle status has no `SafeToShutdown` field, so drain completion cannot be observed ([#1740](https://github.com/zlink-systems/zlink/issues/1740)).
+- A C++ Session cannot yet send a typed reply it creates, so `SessionInfo` is a typed push after `SessionInfoRequest` rather than a correlated reply ([#1785](https://github.com/zlink-systems/zlink/issues/1785)). Actor identity and generation are still read from the binding.
 
 ## Deployment sequence
 
