@@ -23,7 +23,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     internal static Message AdoptNativeFromPool(ref ZlinkMsg source)
     {
         var result = RentFromPool();
-        result._msg = source;
+        result.NativeMsg = source;
         result.IsValid = true;
         result._knownSize = -1;
         source = default;
@@ -49,27 +49,36 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         return new Message(false) { _pooled = true };
     }
 
+    // Deterministic cleanup ends here. A released pooled wrapper keeps its
+    // native block for the next rent; every other wrapper releases the block
+    // now, so the finalizer has nothing left to do.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void TryReturnToPool()
+    private void ReturnToPoolOrRelease()
     {
-        if (!_pooled)
-            return;
-        // Defensive: only return when fully released with no native handle
-        // pending close.
+        // Defensive: a wrapper with a live native handle is neither pooled nor
+        // released here; its owner closes it first.
         if (IsValid)
             return;
-        _pooled = false;
-        var pool = t_pool;
-        if (pool == null)
+        if (_pooled)
         {
-            pool = new Message[PoolCapacity];
-            t_pool = pool;
+            _pooled = false;
+            var pool = t_pool;
+            if (pool == null)
+            {
+                pool = new Message[PoolCapacity];
+                t_pool = pool;
+            }
+
+            var count = t_poolCount;
+            if (count < PoolCapacity)
+            {
+                pool[count] = this;
+                t_poolCount = count + 1;
+                return;
+            }
         }
 
-        var count = t_poolCount;
-        if (count >= PoolCapacity)
-            return;
-        pool[count] = this;
-        t_poolCount = count + 1;
+        ReleaseNativeStorage();
+        GC.SuppressFinalize(this);
     }
 }

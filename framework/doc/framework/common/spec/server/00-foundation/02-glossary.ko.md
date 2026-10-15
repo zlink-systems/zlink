@@ -1419,8 +1419,8 @@ payload도 chunk가 순서대로 흘러가며 시작하고 완료할 수 있다.
 ### 재전송 창 (Cutover retransmission window)
 
 Source가 boundary 전 relay batch와 cutover 사본을 보관하고, connection 장애 뒤 같은
-batch를 재전송할 수 있는 기간이다. Source는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의
-target commit, source `Preserve` fence 또는 source lease 만료 terminal까지 사본을 유지한다. Cutover 대기
+batch를 재전송할 수 있는 기간이다. Source는 [Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이
+source 작업의 결과를 확정할 때까지 사본을 유지한다. Cutover 대기
 Warning과 Restore deadline만으로 이 기간을 끝내지 않는다.
 
 <a id="safe-to-shutdown"></a>

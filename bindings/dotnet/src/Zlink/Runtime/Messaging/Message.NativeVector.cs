@@ -99,7 +99,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
                     // message into it; do not copy payload bytes here.
                     var msg = RentFromPool();
                     msg.Init();
-                    var rc = NativeMethods.zlink_msg_move(ref msg._msg,
+                    var rc = NativeMethods.zlink_msg_move(ref msg.NativeMsg,
                         ref src[i]);
                     if (rc != 0)
                     {
@@ -138,7 +138,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         try
         {
             var src = (ZlinkMsg*)message;
-            var rc = NativeMethods.zlink_msg_move(ref result._msg, ref *src);
+            var rc = NativeMethods.zlink_msg_move(ref result.NativeMsg, ref *src);
             if (rc != 0)
                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
             result._knownSize = -1;
@@ -157,7 +157,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         result.Init();
         try
         {
-            var rc = NativeMethods.zlink_msg_move(ref result._msg, ref source);
+            var rc = NativeMethods.zlink_msg_move(ref result.NativeMsg, ref source);
             if (rc != 0)
                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
             result._knownSize = -1;
