@@ -5388,6 +5388,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             part.Dispose();
     }
 
+    // The receive loop is the single consumer of the router's data records,
+    // the monitor's events and the selected-route snapshot (Core socket README
+    // §3, ROUTER §10.1, monitoring §4). DisposeCoreAsync closes the router,
+    // monitor and poller only after this loop has returned, so those calls
+    // need no gate. The wake timer is the exception: other threads start it,
+    // and Core forbids concurrent operations on one timer, so its Recv stays
+    // under _socketGate with SignalReceiveOwner.
     private void ReceiveLoop(CancellationToken cancellationToken)
     {
         var events = new PollEvent[ReceivePollSourceCount];
@@ -5561,10 +5568,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Received? received = Received.Create();
             try
             {
-                bool available;
-                lock (_socketGate)
-                    available = _socket!.Recv(received, RecvFlags.DontWait);
-                if (!available)
+                if (!_socket!.Recv(received, RecvFlags.DontWait))
                     return;
                 bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
                 using var ownership = new RawIngressOwnership(received, admission);
@@ -9486,17 +9490,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void DrainSocketMonitorEvents()
     {
-        ISocketMonitor? monitor;
-        lock (_socketGate)
-            monitor = _socketMonitor;
+        var monitor = _socketMonitor;
         if (monitor is null)
             return;
 
         for (var index = 0; index < ReceiveBatchSize; index++)
         {
-            MonitorEvent? value;
-            lock (_socketGate)
-                value = monitor.Recv(RecvFlags.DontWait);
+            var value = monitor.Recv(RecvFlags.DontWait);
             if (value is null)
                 return;
             OnSocketMonitorEvent(value);
@@ -9508,14 +9508,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     // receive loop calls this, so the socket has one route observer.
     private void ObserveSelectedRoutes()
     {
-        IReadOnlyList<RouterRoute> routes;
-        lock (_socketGate)
-        {
-            var socket = _socket;
-            if (socket is null)
-                return;
-            routes = socket.RoutesSnapshot();
-        }
+        var socket = _socket;
+        if (socket is null)
+            return;
+        var routes = socket.RoutesSnapshot();
 
         var closed = RunState(() =>
         {
