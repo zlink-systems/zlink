@@ -2172,7 +2172,9 @@ std::size_t mesh_node_runtime_t::admitted_peer_count () const
     if (!_node) {
         return 0;
     }
-    return _node->transport ().topology ().peers ().size ();
+    const auto peers = _node->transport ().topology ().peers ();
+    return std::count_if (peers.begin (), peers.end (),
+                          [] (const auto &peer) { return peer.ready; });
 }
 
 bool mesh_node_runtime_t::has_admitted_peer (const zlink::routing_id_t &peer_rid,
@@ -2181,7 +2183,7 @@ bool mesh_node_runtime_t::has_admitted_peer (const zlink::routing_id_t &peer_rid
     if (!_node || lifecycle_generation == 0)
         return false;
     const auto peer = _node->transport ().topology ().peer (peer_rid.to_bytes ());
-    return peer && peer->descriptor.lifecycle_generation == lifecycle_generation
+    return peer && peer->ready && peer->descriptor.lifecycle_generation == lifecycle_generation
            && peer->descriptor.state == runtime::mesh::service_node_state_t::serving;
 }
 
@@ -2190,7 +2192,8 @@ bool mesh_node_runtime_t::has_admitted_peer (const zlink::routing_id_t &peer_rid
     if (!_node)
         return false;
     const auto peer = _node->transport ().topology ().peer (peer_rid.to_bytes ());
-    return peer && peer->descriptor.state == runtime::mesh::service_node_state_t::serving;
+    return peer && peer->ready
+           && peer->descriptor.state == runtime::mesh::service_node_state_t::serving;
 }
 
 std::optional<std::uint64_t>
@@ -2200,7 +2203,7 @@ mesh_node_runtime_t::admitted_peer_epoch (const zlink::routing_id_t &peer_rid,
     if (!_node || lifecycle_generation == 0)
         return std::nullopt;
     const auto peer = _node->transport ().topology ().peer (peer_rid.to_bytes ());
-    if (!peer || peer->descriptor.lifecycle_generation != lifecycle_generation
+    if (!peer || !peer->ready || peer->descriptor.lifecycle_generation != lifecycle_generation
         || peer->descriptor.state != runtime::mesh::service_node_state_t::serving)
         return std::nullopt;
     return peer->admission_epoch;

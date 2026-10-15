@@ -4810,7 +4810,11 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
         source.expect_peer (target_descriptor);
         const bool connected = source.connect_peer (target_owner.endpoint (), target_descriptor);
         const auto connect_deadline = std::chrono::steady_clock::now () + 2s;
-        while (connected && !source.topology ().peer (target_descriptor.node_routing_id)
+        const auto peer_ready = [&] {
+            const auto peer = source.topology ().peer (target_descriptor.node_routing_id);
+            return peer && peer->ready;
+        };
+        while (connected && !peer_ready ()
                && std::chrono::steady_clock::now () < connect_deadline) {
             const auto now = runtime::mesh::service_liveness_registry_t::clock_t::now ();
             (void) source.observe_routes ();
@@ -4819,7 +4823,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
             (void) target_owner.pump_one (now).result ();
             std::this_thread::sleep_for (1ms);
         }
-        if (!connected || !source.topology ().peer (target_descriptor.node_routing_id)) {
+        if (!connected || !peer_ready ()) {
             source.close ();
             target_owner.close ();
             return false;
