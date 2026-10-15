@@ -1959,7 +1959,6 @@ public sealed class SerialExecutorTests
 
         var first = state
             .ExecuteDispatchAsync(
-                CreateHeader("first"),
                 async _ =>
                 {
                     firstStarted.SetResult();
@@ -1973,7 +1972,6 @@ public sealed class SerialExecutorTests
         using var secondCancellation = new CancellationTokenSource();
         var second = state
             .ExecuteDispatchAsync(
-                CreateHeader("second"),
                 _ =>
                 {
                     secondRan = true;
@@ -1994,7 +1992,6 @@ public sealed class SerialExecutorTests
 
         await state
             .ExecuteDispatchAsync(
-                CreateHeader("third"),
                 _ =>
                 {
                     thirdRan = true;
@@ -2021,7 +2018,6 @@ public sealed class SerialExecutorTests
 
         var first = state
             .ExecuteDispatchAsync(
-                CreateHeader("first"),
                 async _ =>
                 {
                     order.Add("first");
@@ -2035,7 +2031,6 @@ public sealed class SerialExecutorTests
 
         var second = state
             .ExecuteDispatchAsync(
-                CreateHeader("second"),
                 _ =>
                 {
                     order.Add("second");
@@ -2046,7 +2041,6 @@ public sealed class SerialExecutorTests
             .AsTask();
         var third = state
             .ExecuteDispatchAsync(
-                CreateHeader("third"),
                 _ =>
                 {
                     order.Add("third");

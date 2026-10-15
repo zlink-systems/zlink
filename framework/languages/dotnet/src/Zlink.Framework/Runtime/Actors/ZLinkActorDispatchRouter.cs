@@ -109,7 +109,6 @@ internal sealed class ZLinkActorDispatchRouter(
         {
             shouldPrune = await state
                 .ExecuteDispatchAsync(
-                    header,
                     ct =>
                         SubmitByCurrentLocationAsync(
                             actor,
@@ -185,7 +184,6 @@ internal sealed class ZLinkActorDispatchRouter(
         var replayAdmission = relocationReplay ? ZLinkSpotRelocationReplayScope.Current : null;
         return await state
             .ExecuteDispatchAsync(
-                header,
                 ct =>
                     SubmitByCurrentLocationForReplyAsync(
                         actor,

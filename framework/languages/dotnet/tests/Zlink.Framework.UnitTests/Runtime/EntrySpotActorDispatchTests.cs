@@ -1029,11 +1029,7 @@ public sealed partial class EntrySpotActorDispatchTests
             state.BindSession(node.RoutingId, RoutingId.From("session"), "binding")
         );
         await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await state.ExecuteDispatchAsync(
-                CreateHeader("blocked"),
-                _ => ValueTask.CompletedTask,
-                CancellationToken.None
-            )
+            await state.ExecuteDispatchAsync(_ => ValueTask.CompletedTask, CancellationToken.None)
         );
 
         node.DestroyFailure = null;
@@ -1283,7 +1279,6 @@ public sealed partial class EntrySpotActorDispatchTests
 
         var first = state
             .ExecuteDispatchAsync(
-                CreateHeader("destroy-from-turn"),
                 async _ =>
                 {
                     await sessions.DestroyActorAsync(node.RoutingId, actor);
@@ -5617,17 +5612,8 @@ public sealed partial class EntrySpotActorDispatchTests
             )
             .AsTask();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var header = new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "ingress",
-            ZlinkStreamMetadata.Empty
-        );
         var ingress = member
             .ExecuteDispatchAsync(
-                header,
                 _ =>
                 {
                     ingressClaimed.TrySetResult();
@@ -10629,7 +10615,6 @@ public sealed partial class EntrySpotActorDispatchTests
         using var body = Message.From(Encoding.UTF8.GetBytes(name));
         await state
             .ExecuteDispatchAsync(
-                header,
                 ct => activation.InvokeActorPacketAsync(descriptor, actor, header, body, ct),
                 CancellationToken.None
             )
