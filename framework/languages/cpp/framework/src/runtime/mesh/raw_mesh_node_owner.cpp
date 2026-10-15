@@ -3491,7 +3491,6 @@ std::size_t raw_mesh_node_owner_t::apply_route_snapshot ()
     return _lane
       .run ([this] {
           std::size_t changes = 0;
-          std::vector<std::vector<std::uint8_t>> new_routes;
           {
               std::lock_guard lifecycle_lock (_lifecycle_mutex);
               if (!_router)
@@ -3526,28 +3525,32 @@ std::size_t raw_mesh_node_owner_t::apply_route_snapshot ()
                       ++changes;
                   trace_mesh ("route-selected routing=" + owner_key (node_routing_id)
                               + " connection=" + owner_key (route_connection_id (generation)));
-                  new_routes.push_back (node_routing_id);
               }
               _routes = std::move (observed);
           }
-          if (new_routes.empty ()
-              || (_options.shutdown_admission_seal
-                  && _options.shutdown_admission_seal->load (std::memory_order_acquire)))
-              return changes;
-          // The HELLO carries the local descriptor read in this owner turn,
-          // ordered with every descriptor publication.
-          const auto hello = protocol::encode_route_mesh_admission (protocol::command::hello,
-                                                                    _topology.local_descriptor ());
-          for (const auto &node_routing_id : new_routes) {
-              try {
-                  (void) submit_header_only_on_lane (node_routing_id, hello);
-              }
-              catch (const zlink::submit_error_t &) {
-              }
-          }
+          if (changes != 0)
+              submit_pending_hellos_on_lane ();
           return changes;
       })
       .get ();
+}
+
+void raw_mesh_node_owner_t::submit_pending_hellos_on_lane ()
+{
+    std::optional<std::vector<std::uint8_t>> hello;
+    if (!_options.shutdown_admission_seal
+        || !_options.shutdown_admission_seal->load (std::memory_order_acquire)) {
+        for (const auto &[rid, generation] : _routes) {
+            const auto peer = _topology.peer (rid);
+            if (peer && peer->ready
+                && detail::backend::is_route_connection (peer->connection_id, generation))
+                continue;
+            if (!hello)
+                hello = protocol::encode_route_mesh_admission (protocol::command::hello,
+                                                               _topology.local_descriptor ());
+            (void) submit_header_only_on_lane (rid, *hello);
+        }
+    }
 }
 
 task_t<service_liveness_tick_t>
@@ -3556,31 +3559,36 @@ raw_mesh_node_owner_t::tick_liveness (service_liveness_registry_t::clock_t::time
     const auto [result, port] =
       _lane
         .run ([this, now] {
-            std::lock_guard lifecycle_lock (_lifecycle_mutex);
             auto tick = _liveness.tick (now);
-            if (!_router)
-                return std::pair{std::move (tick), _port};
-            for (const auto &timed_out : tick.timed_out_nodes) {
-                const auto peer = _topology.peer (timed_out);
-                if (!peer)
-                    continue;
-                const auto removed = _topology.disconnect (timed_out, peer->connection_id);
-                if (removed) {
-                    {
-                        std::lock_guard socket_lock (*_socket_mutex);
-                        try {
-                            _router->disconnect_rid (zlink::routing_id_t::from (timed_out));
+            std::shared_ptr<detail::backend::raw_route_port_t> port;
+            {
+                std::lock_guard lifecycle_lock (_lifecycle_mutex);
+                port = _port;
+                if (!_router)
+                    return std::pair{std::move (tick), port};
+                for (const auto &timed_out : tick.timed_out_nodes) {
+                    const auto peer = _topology.peer (timed_out);
+                    if (!peer)
+                        continue;
+                    const auto removed = _topology.disconnect (timed_out, peer->connection_id);
+                    if (removed) {
+                        {
+                            std::lock_guard socket_lock (*_socket_mutex);
+                            try {
+                                _router->disconnect_rid (zlink::routing_id_t::from (timed_out));
+                            }
+                            catch (const zlink::connect_error_t &error) {
+                                // Core may already have removed the selected route.
+                                if (error.result () != zlink::connect_result_t::not_found)
+                                    throw;
+                            }
                         }
-                        catch (const zlink::connect_error_t &error) {
-                            // Core may already have removed the selected route.
-                            if (error.result () != zlink::connect_result_t::not_found)
-                                throw;
-                        }
+                        end_peer_operations_if_disconnected_locked (timed_out);
                     }
-                    end_peer_operations_if_disconnected_locked (timed_out);
                 }
             }
-            return std::pair{std::move (tick), _port};
+            submit_pending_hellos_on_lane ();
+            return std::pair{std::move (tick), port};
         })
         .get ();
     if (!port)

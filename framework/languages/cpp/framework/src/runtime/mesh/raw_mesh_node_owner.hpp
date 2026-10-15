@@ -449,6 +449,7 @@ class raw_mesh_node_owner_t
     // selected-route snapshot, ends admission of every route that ended or
     // was replaced and starts the handshake on every new route.
     std::size_t apply_route_snapshot ();
+    void submit_pending_hellos_on_lane ();
     bool route_current_locked (const std::vector<std::uint8_t> &node_routing_id,
                                std::uint64_t route_generation) const;
     void
