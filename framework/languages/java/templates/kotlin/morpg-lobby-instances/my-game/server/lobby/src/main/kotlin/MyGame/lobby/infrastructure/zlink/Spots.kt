@@ -43,7 +43,7 @@ class Party(
             Names.PARTY_PREFIX + join.partyId == context.spotId() && state.join(actorId, join)
         )
             ZLinkSpotActorJoinResult.accept()
-        else ZLinkSpotActorJoinResult.reject(ActionRejected(Rules.INVALID_PARTY))
+        else ZLinkSpotActorJoinResult.reject()
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) = broadcast()

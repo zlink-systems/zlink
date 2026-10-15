@@ -31,7 +31,7 @@ public final class Party implements ZLinkSpot<Player> {
                 (Names.PARTY_PREFIX + join.partyId()).equals(context.spotId())
                                 && state.join(id, join)
                         ? ZLinkSpotActorJoinResult.accept()
-                        : ZLinkSpotActorJoinResult.reject(new ActionRejected(Rules.INVALID_PARTY)));
+                        : ZLinkSpotActorJoinResult.reject());
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {

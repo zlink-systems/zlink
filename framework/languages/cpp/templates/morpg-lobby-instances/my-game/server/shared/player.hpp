@@ -14,13 +14,11 @@ class Player final : public fx::actor_t
     const fx::actor_context_t &context () const noexcept override { return context_; }
     fx::task_t<void> on_join_completed (const fx::actor_join_completion_t &completion) override
     {
-        if (const auto *rejected = std::get_if<fx::actor_join_rejected_t> (&completion)) {
-            if (!rejected->reply)
-                throw std::runtime_error ("Join rejection omitted application reply");
+        if (std::holds_alternative<fx::actor_join_rejected_t> (completion))
             co_await context_.bound_session ()
-              .send (rejected->reply->decode<ActionRejected> ())
+              .send (ActionRejected{Rejection::join_rejected})
               .async ();
-        } else if (const auto *failed = std::get_if<fx::actor_join_failed_t> (&completion))
+        else if (const auto *failed = std::get_if<fx::actor_join_failed_t> (&completion))
             throw std::runtime_error ("Actor join failed: "
                                       + std::to_string (static_cast<int> (failed->error_kind)));
         co_return;

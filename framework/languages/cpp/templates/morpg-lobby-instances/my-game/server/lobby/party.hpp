@@ -40,7 +40,7 @@ class Party final : public fx::spot_t<Player>
         co_return Names::party_prefix + request.partyId == context_.spot_id ()
             && state.join (std::string (id), request)
           ? fx::spot_actor_join_result_t::accept ()
-          : fx::spot_actor_join_result_t::reject (ActionRejected{Rejection::invalid_party});
+          : fx::spot_actor_join_result_t::reject ();
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_await broadcast (); }
     fx::task_t<void> on_leave_actor (Player &actor) override

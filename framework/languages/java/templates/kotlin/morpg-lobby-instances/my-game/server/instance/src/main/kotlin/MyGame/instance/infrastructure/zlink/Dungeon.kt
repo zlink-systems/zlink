@@ -44,7 +44,7 @@ class Dungeon(
                 actorId in state.members
         )
             ZLinkSpotActorJoinResult.accept()
-        else ZLinkSpotActorJoinResult.reject(ActionRejected(Rules.INVALID_PARTY))
+        else ZLinkSpotActorJoinResult.reject()
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {

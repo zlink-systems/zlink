@@ -40,6 +40,7 @@ object Rules {
     const val NOT_READY = "not-ready"
     const val NOT_LEADER = "not-leader"
     const val INVALID_PARTY = "invalid-party"
+    const val JOIN_REJECTED = "join-rejected"
 }
 
 @JsonSerialize class SessionInfoRequest

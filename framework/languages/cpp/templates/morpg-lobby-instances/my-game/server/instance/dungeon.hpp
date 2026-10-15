@@ -42,7 +42,7 @@ class Dungeon final : public fx::spot_t<Player>
         const auto request = payload.decode<JoinDungeon> ();
         co_return state.admits (id, request, context_.spot_id ())
           ? fx::spot_actor_join_result_t::accept ()
-          : fx::spot_actor_join_result_t::reject (ActionRejected{Rejection::join_rejected});
+          : fx::spot_actor_join_result_t::reject ();
     }
     fx::task_t<void> on_actor_joined (Player &actor) override
     {
