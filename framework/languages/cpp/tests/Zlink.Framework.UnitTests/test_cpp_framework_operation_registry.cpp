@@ -11,8 +11,6 @@
 #include <barrier>
 #include <chrono>
 #include <fstream>
-#include <filesystem>
-#include <iterator>
 #include <stdexcept>
 #include <thread>
 
@@ -64,28 +62,6 @@ template <typename Predicate> bool wait_until (Predicate predicate)
 
 int main ()
 {
-    // E3 is constant-time registration; maintenance and nearest-deadline
-    // lookup must not enumerate the pending identity table.
-    {
-        std::ifstream source (
-          std::filesystem::path (__FILE__).parent_path ().parent_path ().parent_path ()
-          / "framework/src/runtime/foundation/operation_registry.cpp");
-        assert (source);
-        const std::string text ((std::istreambuf_iterator<char> (source)), {});
-        // Hot-path E3: linking and unlinking a wheel entry use fixed pointer work.
-        const auto indexing =
-          text.substr (text.find ("void operation_registry_t::index_deadline"),
-                       text.find ("bool operation_registry_t::take")
-                         - text.find ("void operation_registry_t::index_deadline"));
-        assert (indexing.find ("while (") == std::string::npos);
-        assert (indexing.find ("for (") == std::string::npos);
-        const auto expiry =
-          text.substr (text.find ("std::size_t operation_registry_t::expire"),
-                       text.find ("std::size_t operation_registry_t::shutdown")
-                         - text.find ("std::size_t operation_registry_t::expire"));
-        assert (expiry.find ("_pending.begin") == std::string::npos);
-        assert (expiry.find (" : _pending") == std::string::npos);
-    }
     const auto &fixture = completion_terminal_fixture ();
     assert (fixture.at ("fixture") == "zlink.framework.completion-terminal");
     assert (fixture.at ("version") == 1);

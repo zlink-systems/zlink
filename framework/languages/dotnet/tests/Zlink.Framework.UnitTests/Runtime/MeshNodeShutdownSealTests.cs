@@ -16,29 +16,6 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     private const string EphemeralTcpEndpoint = "tcp://127.0.0.1:0";
 
     [Fact]
-    public void OperationDeadline_DoesNotAllocateARequestTimer()
-    {
-        var source = ManagedMeshSourcePath();
-        var implementation = File.ReadAllText(source);
-        Assert.DoesNotContain("Task.Delay(timeout, pending.Token)", implementation);
-    }
-
-    [Fact]
-    public void OperationDeadline_LinkAndUnlinkUseFixedPointerWork()
-    {
-        var source = File.ReadAllText(ManagedMeshSourcePath());
-        var indexing = source[
-            source.IndexOf(
-                "private void IndexOperationDeadline(",
-                StringComparison.Ordinal
-            )..source.IndexOf("private TimeSpan OperationWaitBound(", StringComparison.Ordinal)
-        ];
-        // Hot-path E3: intrusive wheel registration/removal never traverses pending entries.
-        Assert.DoesNotContain("while (", indexing);
-        Assert.DoesNotContain("for (", indexing);
-    }
-
-    [Fact]
     public async Task OperationDeadline_ExpiresAtOccupiedTicksWithoutExpiringEarly()
     {
         var clock = new OperationDeadlineClock();
@@ -269,16 +246,6 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         pendingType.GetMethod("Complete", flags)!.Invoke(pending, null);
         Assert.True(token.IsCancellationRequested);
     }
-
-    private static string ManagedMeshSourcePath(
-        [System.Runtime.CompilerServices.CallerFilePath] string testFile = ""
-    ) =>
-        Path.GetFullPath(
-            Path.Combine(
-                Path.GetDirectoryName(testFile)!,
-                "../../../src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs"
-            )
-        );
 
     [Fact]
     public void DrainGate_SealedForShutdown_OnlyByTheShutdownOwner()

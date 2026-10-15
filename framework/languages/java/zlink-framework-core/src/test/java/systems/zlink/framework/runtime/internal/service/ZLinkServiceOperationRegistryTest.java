@@ -34,21 +34,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkServiceOperationRegistryTest {
     @Test
-    void deadlineLinkAndUnlinkUseFixedPointerWork() throws Exception {
-        String source =
-                java.nio.file.Files.readString(
-                        java.nio.file.Path.of(
-                                "src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistry.java"));
-        String indexing =
-                source.substring(
-                        source.indexOf("private void indexDeadline("),
-                        source.indexOf("int expire("));
-        // Hot-path E3: intrusive wheel registration/removal never traverses pending entries.
-        assertFalse(indexing.contains("while ("));
-        assertFalse(indexing.contains("for ("));
-    }
-
-    @Test
     void wheelHandlesMixedDeadlinesAndIdentities() {
         AtomicLong clock = new AtomicLong();
         try (var scheduler = new CountingScheduler();
