@@ -9245,6 +9245,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         if (command == ServiceWireConstants.Command.Hello)
             SubmitAdmissionResponseUnderLock(peer, admissionResponse);
+        if (admissionCompleted && command == ServiceWireConstants.Command.Admit)
+        {
+            var helloRevision = RunInboundOperationState(() =>
+                _controlSends.TryGetValue(
+                    new ControlSendKey(
+                        peer.PhysicalRoutingId,
+                        peer.RouteGeneration,
+                        ServiceWireConstants.Command.Hello
+                    ),
+                    out var hello
+                )
+                    ? hello.HelloDescriptor?.DescriptorRevision ?? 0
+                    : 0
+            );
+            if (helloRevision != 0 && _descriptorRevision > helloRevision)
+                SendAdmissionCore(peer, ServiceWireConstants.Command.Update);
+        }
         if (admissionCompleted)
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"mesh_peer_admission_accepted local={_routingId} peer={sourceRid} command={command} endpoint={admission.AdvertisedEndpoint} lifecycle={admission.LifecycleGeneration} revision={admission.DescriptorRevision}"
@@ -12004,14 +12021,29 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         if (response is null || _socket is null)
             return;
+        var hello = RunInboundOperationState(() =>
+            _controlSends
+                .GetValueOrDefault(
+                    new ControlSendKey(
+                        peer.PhysicalRoutingId,
+                        peer.RouteGeneration,
+                        ServiceWireConstants.Command.Hello
+                    )
+                )
+                ?.HelloDescriptor
+        );
+        // Crossed HELLOs describe the same admission exchange. A newer local
+        // descriptor is published by the existing UPDATE path after ADMIT.
+        var descriptor = hello is { } snapshot
+            ? ZLinkServiceWireCodec.EncodeRouteAdmission(
+                ServiceWireConstants.Command.Admit,
+                snapshot
+            )
+            : EncodeLocalAdmission(ServiceWireConstants.Command.Admit);
         ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} command={ServiceWireConstants.Command.Admit} endpoint={_advertisedEndpoint} lifecycle={_lifecycleGeneration} revision={_descriptorRevision}"
+            $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} command={ServiceWireConstants.Command.Admit} endpoint={_advertisedEndpoint} lifecycle={_lifecycleGeneration} revision={hello?.DescriptorRevision ?? _descriptorRevision}"
         );
-        _ = TrySendExactControlAsync(
-            response,
-            EncodeLocalAdmission(ServiceWireConstants.Command.Admit),
-            _stop?.Token ?? CancellationToken.None
-        );
+        _ = TrySendExactControlAsync(response, descriptor, _stop?.Token ?? CancellationToken.None);
     }
 
     private void SendAdmissionCore(Peer peer, ServiceWireConstants.Command command)
@@ -12148,7 +12180,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             if (head is null)
             {
-                head = RunState(() => EncodeLocalAdmission(command));
+                head = RunState(() =>
+                {
+                    // The exchange owns the descriptor encoded in its first HELLO.
+                    var hello = EncodeLocalAdmission(command);
+                    if (
+                        !ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                            hello,
+                            out _,
+                            out var descriptor,
+                            out _
+                        )
+                    )
+                        throw new InvalidOperationException(
+                            "The local HELLO descriptor is invalid."
+                        );
+                    state.HelloDescriptor = descriptor;
+                    return hello;
+                });
                 if (!IsValidControlHead(command, head))
                     return false;
             }
@@ -12360,6 +12409,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private sealed class ControlSendState
     {
+        internal ZLinkServiceWireCodec.AdmissionRecord? HelloDescriptor { get; set; }
         internal byte[]? Pending { get; set; }
     }
 
