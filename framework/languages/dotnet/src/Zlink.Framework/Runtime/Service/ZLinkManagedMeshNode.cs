@@ -30,6 +30,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private static readonly TimeSpan DefaultInboundOperationShutdownTimeout = TimeSpan.FromSeconds(
         2
     );
+    private static readonly TimeSpan RelocationStateAssemblyTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DefaultRemoteUserSpotTerminalRetention = TimeSpan.FromMinutes(
         5
     );
@@ -166,10 +167,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly Dictionary<ControlSendKey, ControlSendState> _controlSends = [];
     private readonly ulong _lifecycleGeneration = NewNonZeroToken();
 
-    // Observation-only diagnostics gate (spec 27 §4). Wired by the framework
+    // Observation-only tracer (spec 26/27). Wired by the framework
     // host through the backend seam; a gate-less standalone node keeps the
     // historical always-on behavior.
-    private volatile Func<bool>? _flowCaptureEnabled;
+    private volatile ZLinkMessageFlowTracer? _flow;
 
     private volatile ZLinkDispatchErrorReporter? _logicalMulticastDispatchErrors;
     private string? _logicalMulticastMeshName;
@@ -315,10 +316,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _routingId = routingId;
     }
 
-    internal void SetFlowCaptureGate(Func<bool> flowCaptureEnabled)
+    internal void SetFlowTracer(ZLinkMessageFlowTracer flow)
     {
-        ArgumentNullException.ThrowIfNull(flowCaptureEnabled);
-        _flowCaptureEnabled = flowCaptureEnabled;
+        ArgumentNullException.ThrowIfNull(flow);
+        _flow = flow;
     }
 
     internal void SetLogicalMulticastDispatchErrors(
@@ -1122,7 +1123,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             cancellationToken,
             _stop?.Token ?? CancellationToken.None
         );
-        deadline.CancelAfter(timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(30));
+        var effectiveTimeout = timeout > TimeSpan.Zero ? timeout : DefaultServiceRequestTimeout;
+        deadline.CancelAfter(effectiveTimeout);
         try
         {
             // Spec 30 §5-5.1 selects an admitted-and-ready target by its
@@ -1130,28 +1132,34 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // A drain descriptor update may overlap a real connection
             // handover; wait for the current admitted epoch before emitting
             // command 40 rather than failing that transient replacement.
+            TraceRelocationStage(prepare, ZLinkMessageFlowOutcome.Dispatched, "prepare_submit");
             var peer = await WaitForCanonicalRelocationPeerAsync(
                     targetNodeRid,
                     prepare.Target.NodeGeneration,
                     deadline.Token
                 )
                 .ConfigureAwait(false);
+            TraceRelocationStage(prepare, ZLinkMessageFlowOutcome.Admitted, "prepare_peer_ready");
             using var prepareRequestCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 deadline.Token
             );
             var prepareReply = RequestDirectWireAsync(
                     peer.PhysicalRoutingId,
-                    [ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare)],
-                    timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(30),
+                    [Message.From(ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare))],
+                    effectiveTimeout,
+                    out var prepareAdmission,
                     prepareRequestCancellation.Token
                 )
                 .AsTask();
+            await prepareAdmission.WaitAsync(deadline.Token).ConfigureAwait(false);
+            TraceRelocationStage(prepare, ZLinkMessageFlowOutcome.Sent, "prepare_submitted");
             //  Spec 28 §4.2: the payload chunks follow command 40 on the same
             //  ordered connection and must all be submitted before the target
             //  can assemble, verify, and reply on command 40's native request
             //  leg.
             await SendRelocationStateChunksAsync(peer, prepare, payload, deadline.Token)
                 .ConfigureAwait(false);
+            TraceRelocationStage(prepare, ZLinkMessageFlowOutcome.Sent, "chunks_sent");
             var completed = await Task.WhenAny(prepareReply, pending.Ready.Task)
                 .WaitAsync(deadline.Token)
                 .ConfigureAwait(false);
@@ -1169,28 +1177,43 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 }
                 catch (OperationCanceledException) { }
                 catch (ZlinkRequestException) { }
-                return await pending.Ready.Task.WaitAsync(deadline.Token).ConfigureAwait(false);
             }
-
-            var reply = await prepareReply.ConfigureAwait(false);
-            var ready = DecodeCanonicalRelocationPrepareReply(targetNodeRid, prepare, reply);
-            if (
-                !pending.Ready.TrySetResult(ready)
-                && (
-                    !pending.Ready.Task.IsCompletedSuccessfully
-                    || pending.Ready.Task.Result != ready
+            else
+            {
+                var reply = await prepareReply.ConfigureAwait(false);
+                var ready = DecodeCanonicalRelocationPrepareReply(targetNodeRid, prepare, reply);
+                if (
+                    !pending.Ready.TrySetResult(ready)
+                    && (
+                        !pending.Ready.Task.IsCompletedSuccessfully
+                        || pending.Ready.Task.Result != ready
+                    )
                 )
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.ProtocolError,
-                    "The canonical relocation prepare received conflicting replies.",
-                    ZLinkRetryAdvice.DoNotRetry
-                );
-            return await pending.Ready.Task.WaitAsync(deadline.Token).ConfigureAwait(false);
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.ProtocolError,
+                        "The canonical relocation prepare received conflicting replies.",
+                        ZLinkRetryAdvice.DoNotRetry
+                    );
+            }
+            var relayReady = await pending
+                .Ready.Task.WaitAsync(deadline.Token)
+                .ConfigureAwait(false);
+            TraceRelocationStage(
+                prepare,
+                ZLinkMessageFlowOutcome.ReplyReceived,
+                "relay_ready_received"
+            );
+            return relayReady;
         }
         catch (ZlinkRequestException exception)
             when (exception.Result == ZlinkRequestException.ErrorCode.TimedOut)
         {
+            TraceRelocationStage(
+                prepare,
+                ZLinkMessageFlowOutcome.Completed,
+                "prepare_failed",
+                exception
+            );
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 "The canonical relocation target did not become ready.",
@@ -1200,6 +1223,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         catch (ZlinkRequestException exception)
         {
+            TraceRelocationStage(
+                prepare,
+                ZLinkMessageFlowOutcome.Completed,
+                "prepare_failed",
+                exception
+            );
             throw new ZLinkFrameworkException(
                 exception.Result == ZlinkRequestException.ErrorCode.ProtocolError
                     ? ZLinkFrameworkErrorKind.ProtocolError
@@ -1211,8 +1240,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 exception
             );
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException exception)
+            when (!cancellationToken.IsCancellationRequested)
         {
+            TraceRelocationStage(
+                prepare,
+                ZLinkMessageFlowOutcome.Completed,
+                "prepare_failed",
+                exception
+            );
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 "The canonical relocation target did not become ready.",
@@ -1229,6 +1265,47 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                 );
         }
+    }
+
+    private void TraceRelocationStage(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        ZLinkMessageFlowOutcome outcome,
+        string detail,
+        Exception? error = null
+    )
+    {
+        var result = error is null
+            ? ZLinkMessageFlowResult.Succeeded
+            : ZLinkMessageFlowResult.Failed;
+        // Spec 26 Cost Rule: formatting, error normalization and the event
+        // allocation belong behind the existing live diagnostics gate.
+        if (_flow is not { } flow || !flow.Enabled(outcome, result))
+            return;
+        var errorDetails = ZLinkTraceFormat.DispatchErrorDetails(error);
+        flow.Trace(
+            new ZLinkMessageFlowEvent(
+                outcome,
+                ZLinkDispatchErrorSurface.ActorRelocation,
+                ZLinkDispatchMessageKind.Control,
+                PacketName: nameof(ServiceWireConstants.Command.RelocationPrepare),
+                CorrelationId: $"{prepare.RelocationId.High:x16}{prepare.RelocationId.Low:x16}:{prepare.TargetAttemptGeneration}",
+                SourceRid: prepare.SourceNodeRid.ToHex(),
+                TargetRid: prepare.Target.NodeRid.ToHex(),
+                ServerRid: _routingId.ToHex(),
+                SpotId: prepare.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.Actor
+                    ? null
+                    : prepare.Object.ObjectId,
+                ActorId: prepare.Object.Kind == (byte)ServiceWireCodec.StatefulObjectKind.Actor
+                    ? prepare.Object.ObjectId
+                    : null,
+                Result: result
+            )
+            {
+                Detail = detail,
+                ErrorType = errorDetails.Type,
+                ErrorMessage = errorDetails.Message,
+            }
+        );
     }
 
     private async ValueTask<Peer> WaitForCanonicalRelocationPeerAsync(
@@ -1423,7 +1500,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 cancellationToken,
                 _stop?.Token ?? CancellationToken.None
             );
-            deadline.CancelAfter(timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(30));
+            deadline.CancelAfter(timeout > TimeSpan.Zero ? timeout : DefaultServiceRequestTimeout);
             while (true)
             {
                 await SendCanonicalRelocationRecordAsync(peer, encoded, deadline.Token)
@@ -6779,6 +6856,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare
     )
     {
+        TraceRelocationStage(prepare, ZLinkMessageFlowOutcome.Received, "prepare_received");
         var current = RunState(() =>
         {
             var target = _canonicalRelocationTarget;
@@ -6851,6 +6929,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         catch (ZLinkRelocationDataLostException exception)
         {
             ZLinkFrameworkDebugLog.TaskFailure("canonical-relocation-prepare-manifest", exception);
+            TraceRelocationStage(
+                prepare,
+                ZLinkMessageFlowOutcome.Completed,
+                "prepare_manifest_failed",
+                exception
+            );
             RunInboundOperation(() =>
                 SendRelocationPrepareFailureAsync(nativeReply, prepare, exception)
             );
@@ -6859,6 +6943,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         // Same-identity requests share assembly and target preparation (spec
         // 28 §4.3), but each native request retains its own READY reply leg.
+        TraceRelocationStage(prepare, ZLinkMessageFlowOutcome.Admitted, "prepare_accepted");
         RunInboundOperation(() =>
             ProcessRelocationPrepareAsync(
                 target,
@@ -6887,10 +6972,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         using var assemblyDeadline = CancellationTokenSource.CreateLinkedTokenSource(
             _stop?.Token ?? CancellationToken.None
         );
-        assemblyDeadline.CancelAfter(TimeSpan.FromSeconds(30));
+        assemblyDeadline.CancelAfter(RelocationStateAssemblyTimeout);
         await assembler.Completed.WaitAsync(assemblyDeadline.Token).ConfigureAwait(false);
         var envelope = assembler.VerifyAndDecode();
-        return await target
+        TraceRelocationStage(prepare, ZLinkMessageFlowOutcome.Received, "chunks_assembled");
+        TraceRelocationStage(prepare, ZLinkMessageFlowOutcome.Dispatched, "target_restore_begin");
+        var ready = await target
             .PrepareAsync(
                 prepare,
                 envelope,
@@ -6899,6 +6986,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 _stop?.Token ?? CancellationToken.None
             )
             .ConfigureAwait(false);
+        TraceRelocationStage(prepare, ZLinkMessageFlowOutcome.Admitted, "target_restore_end");
+        return ready;
     }
 
     private async Task ProcessRelocationPrepareAsync(
@@ -6926,9 +7015,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         CancellationToken.None
                     )
                     .ConfigureAwait(false);
+                TraceRelocationStage(
+                    prepare,
+                    ZLinkMessageFlowOutcome.Replied,
+                    "relay_ready_submitted"
+                );
             }
             catch (Exception submitFailure)
             {
+                TraceRelocationStage(
+                    prepare,
+                    ZLinkMessageFlowOutcome.Completed,
+                    "relay_ready_submit_failed",
+                    submitFailure
+                );
                 // The command-40 terminal submission failed.  That does not
                 // invalidate the verified target stage: a same-identity
                 // Prepare retries its reply leg (or the legacy notification),
@@ -6961,6 +7061,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         catch (Exception readySubmissionFailure) when (lease.IsPrepared)
         {
+            TraceRelocationStage(
+                prepare,
+                ZLinkMessageFlowOutcome.Completed,
+                "relay_ready_submit_failed",
+                readySubmissionFailure
+            );
             // A prepared lease proves that restore/staging completed. Any
             // subsequent READY handoff failure is retryable submission state,
             // not a relocation failure: keep the exact stage and let a
@@ -6987,6 +7093,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             );
             await SendRelocationPrepareFailureAsync(nativeReply, prepare, exception)
                 .ConfigureAwait(false);
+            TraceRelocationStage(
+                prepare,
+                ZLinkMessageFlowOutcome.Completed,
+                "target_prepare_failed",
+                exception
+            );
             ZLinkFrameworkDebugLog.TaskFailure("canonical-relocation-prepare", exception);
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
         }
@@ -8307,7 +8419,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var replyParts = ReencodeActorCreateReply(
                 terminal.ReplyParts,
                 correlation,
-                _flowCaptureEnabled?.Invoke() ?? true
+                _flow?.CaptureEnabled ?? true
             );
             var wire = new List<ReadOnlyMemory<byte>>(replyParts.Count == 0 ? 1 : 2) { head };
             if (replyParts.Count != 0)
@@ -10023,6 +10135,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken,
         ZLinkServiceLiveness? admission = null,
         ZLinkRequestAdmission? requestAdmission = null
+    ) =>
+        await RequestDirectWireAsync(
+                target,
+                messages,
+                timeout,
+                out _,
+                cancellationToken,
+                admission,
+                requestAdmission
+            )
+            .ConfigureAwait(false);
+
+    private ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
+        RoutingId target,
+        IReadOnlyList<Message> messages,
+        TimeSpan timeout,
+        out Task nativeAdmission,
+        CancellationToken cancellationToken,
+        ZLinkServiceLiveness? admission = null,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         var ownershipTransferred = false;
@@ -10040,21 +10172,32 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
                     socket.Request(target).Messages(messages).Timeout(timeout),
                     timeout,
+                    out nativeAdmission,
                     cancellationToken,
                     admission,
                     requestAdmission: requestAdmission
                 );
                 ownershipTransferred = true;
             }
-            var reply = await request.ConfigureAwait(false);
-            admission?.RecordReceived(Stopwatch.GetTimestamp());
-            return reply;
+            return new ValueTask<IReadOnlyList<Message>>(
+                ObserveDirectWireReplyAsync(request, admission)
+            );
         }
         finally
         {
             if (!ownershipTransferred)
                 DisposeParts(messages);
         }
+    }
+
+    private static async Task<IReadOnlyList<Message>> ObserveDirectWireReplyAsync(
+        Task<IReadOnlyList<Message>> request,
+        ZLinkServiceLiveness? admission
+    )
+    {
+        var reply = await request.ConfigureAwait(false);
+        admission?.RecordReceived(Stopwatch.GetTimestamp());
+        return reply;
     }
 
     private static ZLinkServiceWireCodec.RelocationReadyRecord DecodeCanonicalRelocationPrepareReply(
@@ -11761,7 +11904,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         var startedAt = Stopwatch.GetTimestamp();
-        var effectiveTimeout = timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(30);
+        var effectiveTimeout = timeout > TimeSpan.Zero ? timeout : DefaultServiceRequestTimeout;
         ValueTask<(
             bool Selected,
             RoutingId TargetRid,

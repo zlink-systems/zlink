@@ -819,11 +819,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       if (record.kind !== ReceiveKind.NodeSend) return false;
       const sourceLeave = decodeRemoteActorSourceLeaveTerminal(payload);
       if (sourceLeave === undefined) return false;
-      if (
-        record.parts.length > 1 &&
-        decodePrepareSideband(record.parts.slice(1).map((part) => part.data())) === undefined
-      )
-        return false;
+      if (record.parts.length !== 1) return false;
       return this.acceptActorJoinSourceLeave(sourceLeave);
     }
     return this.handleControl(meshName, record, payload, command, signal);
@@ -845,11 +841,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       );
       return true;
     }
-    const sideband =
-      record.parts.length === 1
-        ? undefined
-        : decodePrepareSideband(record.parts.slice(1).map((part) => part.data()));
-    if (record.parts.length > 1 && sideband === undefined) return false;
+    if (record.parts.length !== 1) return false;
     if (record.kind === ReceiveKind.NodeSend) {
       const sourceLeave = decodeRemoteActorSourceLeaveTerminal(payload);
       if (sourceLeave !== undefined) {
@@ -894,10 +886,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     let request = decodeServiceRelocationControlRequest(payload);
     if (request === undefined) return false;
-    if (sideband !== undefined) {
-      if (request.kind !== 'prepare') return false;
-      request = { ...request, nodeInternalBoundSessions: sideband };
-    }
     // Ready(30) and Failed(53) are replies to Prepare(40), never independent
     // inbound controls. The source consumes them on Core's request reply leg.
     if (request.kind === 'ready' || request.kind === 'failed') return false;
@@ -2151,14 +2139,37 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         }
         const prepared = standalone ? ownSession : sessions.find((value) => value.state === state);
         return {
-          boundSessionState: encodeActorSession(prepared?.prepared.target),
+          boundSessionState: Buffer.alloc(0),
+          ...(prepared?.prepared.target?.serviceWireRelocation === undefined
+            ? {}
+            : {
+                sessionBinding: {
+                  participantId: 1n,
+                  sessionOwnerNodeRid: Buffer.from(
+                    encodeRoutingIdStorageHex(prepared.prepared.target.sessionNodeRid!),
+                    'hex'
+                  ),
+                  sessionOwnerNodeGeneration:
+                    prepared.prepared.target.serviceWireRelocation.session
+                      .sessionOwnerNodeGeneration,
+                  sessionOwnerId:
+                    prepared.prepared.target.serviceWireRelocation.session.sessionOwnerId,
+                  sessionOwnerLeaseGeneration:
+                    prepared.prepared.target.serviceWireRelocation.session
+                      .sessionOwnerLeaseGeneration,
+                  sessionRid: Buffer.from(
+                    encodeRoutingIdStorageHex(prepared.prepared.target.sessionRid!),
+                    'hex'
+                  ),
+                  bindingGeneration:
+                    prepared.prepared.target.serviceWireRelocation.session.bindingGeneration
+                }
+              }),
           queuedMessages: encodeHandoffQueuedMessages(prepared?.prepared.handoffBacklog ?? []),
           timers: []
         };
       },
-      // The canonical participant body (discriminator 1) is raw application
-      // state. The sealed bound-session target remains in sealed work and is
-      // transported only by Prepare's NODE-INTERNAL sideband frames.
+      // The sealed Session identity is part of the canonical participant vector.
       captureApplicationState: (signal) =>
         this.captureApplication(registration.relocation, state.actor!, signal),
       commitSeal: async () => {
@@ -2354,8 +2365,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         target.rid,
         prepare,
         signal,
-        controlDeadlineAtMs,
-        encodePrepareSideband(captured.envelope)
+        controlDeadlineAtMs
       );
       try {
         if (isRelocationDebugEnabled()) {
@@ -2894,9 +2904,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       throw new ServiceRelocationDataLostError(String(message));
     }
     const envelope = decodeServiceRelocationEnvelope(payload, request.targetAttemptGeneration);
-    const inventoryEnvelope = attachPrepareBoundSessions(
+    const inventoryEnvelope = attachCanonicalBoundSessions(
       await this.resolveTargetParticipantInventory(request, envelope, signal),
-      request.nodeInternalBoundSessions
+      request,
+      meshName
     );
     validatePrepareEnvelope(request, inventoryEnvelope);
     const releaseActivation =
@@ -3177,7 +3188,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       target.generation !== request.object.objectGeneration ||
       target.targetNodeRid !== preparedTarget.nodeRid ||
       target.targetNodeGeneration !== preparedTarget.nodeGeneration ||
-      target.authorityOwnerGeneration !== request.object.expectedAuthorityOwnerGeneration + 1n ||
+      target.authorityOwnerGeneration !== request.object.expectedAuthorityOwnerGeneration ||
       target.ownerLeaseGeneration !== preparedTarget.ownerLeaseGeneration
     ) {
       throw new Error('Relocation data does not target the exact temporary Actor queue.');
@@ -3633,14 +3644,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetNodeRid: RoutingId,
     request: ZLinkServiceRelocationControlRequest,
     signal?: AbortSignal,
-    deadlineAtMs: number = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS,
-    sideband: readonly Uint8Array[] = []
+    deadlineAtMs: number = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS
   ): Promise<ReturnType<typeof decodeServiceRelocationControlResponse>> {
     const key = controlAckKey(request);
-    const frames =
-      sideband.length === 0
-        ? [encodeServiceRelocationControlRequest(request)]
-        : [encodeServiceRelocationControlRequest(request), ...sideband];
+    const frames = [encodeServiceRelocationControlRequest(request)];
     let lastRequestError: unknown;
     for (;;) {
       signal?.throwIfAborted();
@@ -4605,7 +4612,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         identity,
         participant.stableType,
         participant.objectGeneration,
-        participant.authorityOwnerGeneration + 1n,
+        participant.authorityOwnerGeneration,
         nativeEntrySpot ? undefined : (spotIdentity as RoutingId),
         membership.spotObjectGeneration,
         membership.membershipEpoch,
@@ -4629,7 +4636,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       registration.implementation as Type<ZLinkSpot | ZLinkInstanceSpot>,
       identity as RoutingId,
       participant.objectGeneration,
-      participant.authorityOwnerGeneration + 1n,
+      participant.authorityOwnerGeneration,
       signal
     );
     return {
@@ -5731,7 +5738,7 @@ function canonicalQueuedFrozenRecord(
       objectGeneration: participant.objectGeneration,
       nodeRid: target.nodeRid,
       nodeGeneration: target.nodeGeneration,
-      authorityOwnerGeneration: participant.authorityOwnerGeneration + 1n,
+      authorityOwnerGeneration: participant.authorityOwnerGeneration,
       ownerLeaseGeneration: target.ownerLeaseGeneration
     },
     operationId,
@@ -6016,97 +6023,58 @@ function toServiceTimer(
   };
 }
 
-const PREPARE_SIDEBAND_MAGIC = 'ZLNI';
-const PREPARE_SIDEBAND_VERSION = 1;
-const PREPARE_SIDEBAND_HEADER_BYTES = 11;
-const PREPARE_SIDEBAND_VERSION_OFFSET = 4;
-const PREPARE_SIDEBAND_KEY_LENGTH_OFFSET = 5;
-const PREPARE_SIDEBAND_PAYLOAD_LENGTH_OFFSET = 7;
 const ACTOR_SESSION_JOURNAL_VERSION = 1;
 const SERVICE_RELOCATION_REPLY_PACKET_NAME = 'zlink.relocation.reply';
 
-/**
- * NODE-INTERNAL Prepare sideband. Frame zero remains the exact canonical
- * command-40 schema record; each following ZLNI frame carries one sealed
- * actor-session journal keyed by its canonical participant authority key.
- * Sessionless relocation remains a single-frame, wire-identical Prepare.
- */
-function encodePrepareSideband(envelope: ServiceRelocationEnvelope): readonly Buffer[] {
-  return envelope.participants
-    .filter((participant) => participant.boundSessionState.byteLength !== 0)
-    .map((participant) => {
-      const key = Buffer.from(participant.key, 'utf8');
-      const payload = Buffer.from(participant.boundSessionState);
-      if (key.byteLength === 0 || key.byteLength > 0xffff || payload.byteLength > 0xffff_ffff) {
-        throw new TypeError('Bound-session relocation sideband is out of bounds.');
-      }
-      const header = Buffer.allocUnsafe(PREPARE_SIDEBAND_HEADER_BYTES);
-      header.write(PREPARE_SIDEBAND_MAGIC, 0, 'ascii');
-      header[PREPARE_SIDEBAND_VERSION_OFFSET] = PREPARE_SIDEBAND_VERSION;
-      header.writeUInt16BE(key.byteLength, PREPARE_SIDEBAND_KEY_LENGTH_OFFSET);
-      header.writeUInt32BE(payload.byteLength, PREPARE_SIDEBAND_PAYLOAD_LENGTH_OFFSET);
-      return Buffer.concat([header, key, payload]);
-    });
-}
-
-function decodePrepareSideband(frames: readonly Uint8Array[]):
-  | readonly {
-      readonly participantKey: string;
-      readonly payload: Buffer;
-    }[]
-  | undefined {
-  const result: Array<{ readonly participantKey: string; readonly payload: Buffer }> = [];
-  const keys = new Set<string>();
-  for (const frame of frames) {
-    const bytes = Buffer.from(frame);
-    if (
-      bytes.byteLength < PREPARE_SIDEBAND_HEADER_BYTES ||
-      bytes.subarray(0, PREPARE_SIDEBAND_VERSION_OFFSET).toString('ascii') !==
-        PREPARE_SIDEBAND_MAGIC ||
-      bytes[PREPARE_SIDEBAND_VERSION_OFFSET] !== PREPARE_SIDEBAND_VERSION
-    ) {
-      return undefined;
-    }
-    const keyLength = bytes.readUInt16BE(PREPARE_SIDEBAND_KEY_LENGTH_OFFSET);
-    const payloadLength = bytes.readUInt32BE(PREPARE_SIDEBAND_PAYLOAD_LENGTH_OFFSET);
-    if (
-      PREPARE_SIDEBAND_HEADER_BYTES + keyLength + payloadLength !== bytes.byteLength ||
-      keyLength === 0
-    )
-      return undefined;
-    const participantKey = bytes
-      .subarray(PREPARE_SIDEBAND_HEADER_BYTES, PREPARE_SIDEBAND_HEADER_BYTES + keyLength)
-      .toString('utf8');
-    if (keys.has(participantKey)) return undefined;
-    keys.add(participantKey);
-    result.push({
-      participantKey,
-      payload: Buffer.from(bytes.subarray(PREPARE_SIDEBAND_HEADER_BYTES + keyLength))
-    });
-  }
-  return result;
-}
-
-function attachPrepareBoundSessions(
+function attachCanonicalBoundSessions(
   envelope: ServiceRelocationEnvelope,
-  sideband: ServiceMaintenanceRelocationPrepare['nodeInternalBoundSessions']
+  request: ServiceMaintenanceRelocationPrepare,
+  meshName: string
 ): ServiceRelocationEnvelope {
-  if (sideband === undefined || sideband.length === 0) return envelope;
-  const byKey = new Map(
-    sideband.map((value) => [value.participantKey, Buffer.from(value.payload)])
-  );
-  const participants = envelope.participants.map((participant) => {
-    const payload = byKey.get(participant.key);
-    if (payload === undefined) return participant;
-    if (participant.objectKind !== 'actor') {
-      throw new TypeError('Bound-session relocation sideband names a non-Actor participant.');
-    }
-    byKey.delete(participant.key);
-    return { ...participant, boundSessionState: payload };
-  });
-  if (byKey.size !== 0)
-    throw new TypeError('Bound-session relocation sideband names an unknown participant.');
-  return { ...envelope, participants };
+  return {
+    ...envelope,
+    participants: envelope.participants.map((participant) => {
+      const binding = participant.sessionBinding;
+      if (binding === undefined) return participant;
+      if (participant.objectKind !== 'actor')
+        throw new TypeError('Session binding names a non-Actor participant.');
+      const sessionNodeRid = decodeRoutingId(
+        '',
+        Buffer.from(binding.sessionOwnerNodeRid).toString('hex')
+      );
+      const sessionRid = decodeRoutingId('', Buffer.from(binding.sessionRid).toString('hex'));
+      const session = {
+        sessionOwnerNodeRid: sessionNodeRid as string,
+        sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
+        sessionOwnerId: binding.sessionOwnerId,
+        sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
+        sessionRid: sessionRid as string,
+        bindingGeneration: binding.bindingGeneration
+      };
+      const target: ZLinkRemoteBoundSessionTarget = {
+        routerChannelId: meshName,
+        targetNodeRid: request.sourceNodeRid as RoutingId,
+        spotId:
+          request.object.kind === 'actor'
+            ? ((participant.rootSpotId ?? '') as RoutingId)
+            : (request.object.spotId as RoutingId),
+        sessionNodeRid,
+        sessionRid,
+        sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
+        sessionOwnerId: binding.sessionOwnerId,
+        sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
+        bindingGeneration: binding.bindingGeneration,
+        previousAuthorityOwnerGeneration: participant.authorityOwnerGeneration,
+        relocationSealId: envelope.aggregateId,
+        serviceWireRelocation: {
+          relocation: request.relocation,
+          coordinator: request.coordinator,
+          session
+        }
+      };
+      return { ...participant, boundSessionState: encodeActorSession(target) };
+    })
+  };
 }
 
 function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): Buffer {
@@ -6119,7 +6087,13 @@ function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): 
       spotId: String(target.spotId),
       sessionNodeRid:
         target.sessionNodeRid === undefined ? undefined : String(target.sessionNodeRid),
+      sessionNodeRidHex:
+        target.sessionNodeRid === undefined
+          ? undefined
+          : encodeRoutingIdStorageHex(target.sessionNodeRid),
       sessionRid: target.sessionRid === undefined ? undefined : String(target.sessionRid),
+      sessionRidHex:
+        target.sessionRid === undefined ? undefined : encodeRoutingIdStorageHex(target.sessionRid),
       sessionOwnerNodeGeneration: target.sessionOwnerNodeGeneration?.toString(),
       sessionOwnerId: target.sessionOwnerId,
       sessionOwnerLeaseGeneration: target.sessionOwnerLeaseGeneration?.toString(),
@@ -6142,12 +6116,18 @@ function encodeActorSession(target: ZLinkRemoteBoundSessionTarget | undefined): 
               expectedAuthorityStoreVersion:
                 target.serviceWireRelocation.coordinator.expectedAuthorityStoreVersion,
               sessionOwnerNodeRid: target.serviceWireRelocation.session.sessionOwnerNodeRid,
+              sessionOwnerNodeRidHex: encodeRoutingIdStorageHex(
+                target.serviceWireRelocation.session.sessionOwnerNodeRid as RoutingId
+              ),
               sessionOwnerNodeGeneration:
                 target.serviceWireRelocation.session.sessionOwnerNodeGeneration.toString(),
               sessionOwnerId: target.serviceWireRelocation.session.sessionOwnerId,
               sessionOwnerLeaseGeneration:
                 target.serviceWireRelocation.session.sessionOwnerLeaseGeneration.toString(),
               sessionRid: target.serviceWireRelocation.session.sessionRid,
+              sessionRidHex: encodeRoutingIdStorageHex(
+                target.serviceWireRelocation.session.sessionRid as RoutingId
+              ),
               bindingGeneration: target.serviceWireRelocation.session.bindingGeneration.toString()
             }
     }),
@@ -6174,9 +6154,11 @@ function decodeActorSession(payload: Uint8Array): ZLinkRemoteBoundSessionTarget 
     targetNodeRid: value.targetNodeRid as RoutingId,
     spotId: value.spotId as RoutingId,
     ...(typeof value.sessionNodeRid === 'string'
-      ? { sessionNodeRid: value.sessionNodeRid as RoutingId }
+      ? { sessionNodeRid: decodeRoutingId(value.sessionNodeRid, value.sessionNodeRidHex) }
       : {}),
-    ...(typeof value.sessionRid === 'string' ? { sessionRid: value.sessionRid as RoutingId } : {}),
+    ...(typeof value.sessionRid === 'string'
+      ? { sessionRid: decodeRoutingId(value.sessionRid, value.sessionRidHex) }
+      : {}),
     ...(optionalBigInt('sessionOwnerNodeGeneration') === undefined
       ? {}
       : { sessionOwnerNodeGeneration: optionalBigInt('sessionOwnerNodeGeneration') }),
@@ -6245,11 +6227,17 @@ function decodeActorSessionServiceWireFence(
       expectedAuthorityStoreVersion: text('expectedAuthorityStoreVersion')
     },
     session: {
-      sessionOwnerNodeRid: text('sessionOwnerNodeRid'),
+      sessionOwnerNodeRid: decodeRoutingId(
+        typeof value.sessionOwnerNodeRid === 'string' ? value.sessionOwnerNodeRid : '',
+        value.sessionOwnerNodeRidHex
+      ) as string,
       sessionOwnerNodeGeneration: positive('sessionOwnerNodeGeneration'),
       sessionOwnerId: text('sessionOwnerId'),
       sessionOwnerLeaseGeneration: positive('sessionOwnerLeaseGeneration'),
-      sessionRid: text('sessionRid'),
+      sessionRid: decodeRoutingId(
+        typeof value.sessionRid === 'string' ? value.sessionRid : '',
+        value.sessionRidHex
+      ) as string,
       bindingGeneration: positive('bindingGeneration')
     }
   };

@@ -4,19 +4,121 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.monitoring.ZLinkTopologyState;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 
 final class ZLinkTopologyStatusSourceTest {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void snapshotCanQueryAnOwnerThatAlsoReadsTheSource(boolean alreadyPublished) throws Exception {
+        var ownerThread = new AtomicReference<Thread>();
+        try (var owner =
+                Executors.newSingleThreadExecutor(
+                        task -> {
+                            Thread thread = new Thread(task);
+                            ownerThread.set(thread);
+                            return thread;
+                        })) {
+            var sourceRef = new AtomicReference<ZLinkTopologyStatusSource<Status>>();
+            var source =
+                    new ZLinkTopologyStatusSource<Status>(
+                            (key, previous) -> {
+                                if (Thread.currentThread() == ownerThread.get()) {
+                                    return new Status(key, ZLinkTopologyState.READY, 0);
+                                }
+                                try {
+                                    return owner.submit(() -> sourceRef.get().snapshot(key))
+                                            .get(1, TimeUnit.SECONDS);
+                                } catch (InterruptedException interrupted) {
+                                    Thread.currentThread().interrupt();
+                                    throw new CompletionException(interrupted);
+                                } catch (ExecutionException | TimeoutException failure) {
+                                    throw new CompletionException(failure);
+                                }
+                            },
+                            Status::state,
+                            (status, sequence) ->
+                                    new Status(status.key(), status.state(), sequence),
+                            Status::sequence,
+                            status -> status.state() == ZLinkTopologyState.STOPPED,
+                            status -> status.state() == ZLinkTopologyState.STOPPING);
+            sourceRef.set(source);
+            if (alreadyPublished) {
+                assertEquals(
+                        1,
+                        owner.submit(() -> source.snapshot("mesh"))
+                                .get(1, TimeUnit.SECONDS)
+                                .sequence());
+            }
+            assertEquals(1, source.snapshot("mesh").sequence());
+        }
+    }
+
+    @Test
+    void staleProjectionCannotReplaceAnAlreadyPublishedStatus() throws Exception {
+        var state = new AtomicReference<>(ZLinkTopologyState.READY);
+        var pausedReader = new AtomicReference<Thread>();
+        var captured = new CountDownLatch(1);
+        var release = new CompletableFuture<Void>();
+        var source =
+                new ZLinkTopologyStatusSource<Status>(
+                        (key, previous) -> {
+                            var projected = new Status(key, state.get(), 0);
+                            if (Thread.currentThread() == pausedReader.get()) {
+                                captured.countDown();
+                                try {
+                                    release.get(1, TimeUnit.SECONDS);
+                                } catch (InterruptedException interrupted) {
+                                    Thread.currentThread().interrupt();
+                                    throw new CompletionException(interrupted);
+                                } catch (ExecutionException | TimeoutException failure) {
+                                    throw new CompletionException(failure);
+                                }
+                            }
+                            return projected;
+                        },
+                        Status::state,
+                        (status, sequence) -> new Status(status.key(), status.state(), sequence),
+                        Status::sequence,
+                        status -> status.state() == ZLinkTopologyState.STOPPED,
+                        status -> status.state() == ZLinkTopologyState.STOPPING);
+        source.snapshot("mesh");
+        try (var reader = Executors.newSingleThreadExecutor()) {
+            var stale =
+                    reader.submit(
+                            () -> {
+                                pausedReader.set(Thread.currentThread());
+                                return source.snapshot("mesh");
+                            });
+            try {
+                org.junit.jupiter.api.Assertions.assertTrue(captured.await(1, TimeUnit.SECONDS));
+                state.set(ZLinkTopologyState.STOPPING);
+                var current = source.snapshot("mesh");
+                assertEquals(2, current.sequence());
+                release.complete(null);
+                assertEquals(current, stale.get(1, TimeUnit.SECONDS));
+                assertEquals(current, source.snapshot("mesh"));
+            } finally {
+                release.complete(null);
+            }
+        }
+    }
+
     @Test
     void firstQueryPublishesSequenceOneWithoutObservers() {
         var state = new AtomicReference<>(ZLinkTopologyState.READY);

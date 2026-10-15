@@ -1507,7 +1507,7 @@ stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
                     || frozen.owner.key != target.key
                     || frozen.owner.object_generation != target.object_generation
                     || frozen.owner.mesh_name != target.mesh_name
-                    || target.authority_owner_generation <= frozen.owner.authority_owner_generation
+                    || target.authority_owner_generation < frozen.owner.authority_owner_generation
                     || !valid_text (target.mesh_name) || !valid_text (target.node_id)
                     || identity.reference.empty ()
                     || frozen.application_state.size () > max_application_state_bytes
@@ -1946,7 +1946,7 @@ stateful_object_runtime_t::restore_relocation_aggregate (std::vector<frozen_obje
                         || source.owner.object_generation != target.object_generation
                         || source.owner.mesh_name != target.mesh_name
                         || target.authority_owner_generation
-                             <= source.owner.authority_owner_generation
+                             < source.owner.authority_owner_generation
                         || !valid_text (target.mesh_name) || !valid_text (target.node_id)
                         || source.application_state.size () > max_application_state_bytes
                         || source.timers.size () > max_restored_timers

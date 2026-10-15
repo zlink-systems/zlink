@@ -21,19 +21,18 @@ final class ZLinkFrameworkShutdown {
 
     private final ArrayDeque<Supplier<CompletionStage<Void>>> actions = new ArrayDeque<>();
 
+    /**
+     * Registers a stage that closes a runtime resource. The next stage starts only after this one
+     * returned, also after the host deadline expired: a later stage closes what an earlier one
+     * still uses (the Core context under a mesh pump), and the expired deadline only stops stages
+     * that wait for application progress.
+     */
     void defer(String stage, Runnable action) {
-        deferCloseStage(stage, () -> ZLinkTeardownExecutor.submit(action));
+        actions.push(() -> atStage(stage, () -> ZLinkTeardownExecutor.submit(action)));
     }
 
     void deferCloseStage(String stage, Supplier<CompletionStage<Void>> action) {
-        actions.push(
-                () ->
-                        atStage(
-                                stage,
-                                () -> {
-                                    CompletionStage<Void> closing = action.get();
-                                    return withinDeadline(() -> closing);
-                                }));
+        actions.push(() -> atStage(stage, action));
     }
 
     void deferStage(String stage, Supplier<CompletionStage<Void>> action) {

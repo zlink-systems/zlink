@@ -403,6 +403,27 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                                         .toList());
                                                 List<ZLinkSpotRetireControl.ParticipantFence>
                                                         inventory = participantFences(exact);
+                                                var bindings =
+                                                        new java.util.ArrayList<
+                                                                systems.zlink.framework.runtime
+                                                                        .protocol
+                                                                        .ServiceWirePilotCodec
+                                                                        .RelocationSessionBinding>();
+                                                for (int index = 0;
+                                                        index < inventory.size();
+                                                        index++) {
+                                                    var participant = inventory.get(index);
+                                                    for (var route : exact.sessionRoutes()) {
+                                                        if (participant.objectKind()
+                                                                        == ZLinkPlacementObjectKind
+                                                                                .ACTOR
+                                                                                .value()
+                                                                && participant
+                                                                        .objectId()
+                                                                        .equals(route.actorId()))
+                                                            bindings.add(route.binding(index + 1L));
+                                                    }
+                                                }
                                                 byte[] root =
                                                         ZLinkCanonicalUserSpotRelocationEnvelope
                                                                 .encode(
@@ -412,7 +433,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                                                 .spot()
                                                                                 .snapshot()
                                                                                 .authorityOwnerGeneration(),
-                                                                        inventory);
+                                                                        inventory,
+                                                                        bindings);
                                                 //  The aggregate payload lives only in source
                                                 //  memory and travels directly with the stage
                                                 //  request (spec 28 §4.2).
@@ -1131,6 +1153,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             byte[] relocationPayload,
             ZLinkMeshNodeDescriptor target) {
         ZLinkAuthoritySnapshot source = captured.inventory().spot().snapshot();
+        var inventory = participantFences(captured);
         return new ZLinkSpotRetireControl.StageRequest(
                 new ZLinkSpotRetireControl.Fence(aggregateId, 1),
                 localNodeRid,
@@ -1347,8 +1370,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
             for (var participant : stageRequest.participants()) {
                 targetOwnerGenerations.put(
-                        participant.authorityKey(),
-                        Math.addExact(participant.sourceAuthorityOwnerGeneration(), 1));
+                        participant.authorityKey(), participant.sourceAuthorityOwnerGeneration());
             }
             installRelocationForwards(targetOwnerGenerations);
             bindCommittedReplies(targetOwnerGenerations);
@@ -1440,23 +1462,19 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             "source relocation barrier is not durably committed");
                                 }
                                 sourceCommitted = true;
-                                Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
-                                for (var participant : stageRequest.participants()) {
-                                    targetOwnerGenerations.put(
-                                            participant.authorityKey(),
-                                            Math.addExact(
-                                                    participant.sourceAuthorityOwnerGeneration(),
-                                                    1));
-                                }
-                                for (Owned actor : captured.inventory().actors()) {
-                                    actors.commitRelocationMessageFollow(
-                                            actorRoute(actor, false, targetOwnerGenerations));
-                                }
                                 return relocationCommit;
                             });
             // CompletableFuture dependents may run inline, so complete only
             // after the lane turn has released its ownership marker.
-            return retained.complete();
+            CompletionStage<Void> confirmed = CompletableFuture.completedFuture(null);
+            for (Owned actor : captured.inventory().actors()) {
+                confirmed =
+                        confirmed.thenCompose(
+                                ignored ->
+                                        actors.confirmRelocationMessageFollow(
+                                                actorRoute(actor, false, Map.of())));
+            }
+            return confirmed.thenCompose(ignored -> retained.complete());
         }
 
         boolean relayBoundaryCommitted() {
@@ -1494,14 +1512,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             })
                     .thenCompose(
                             ignored -> {
-                                Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
-                                for (var participant : stageRequest.participants()) {
-                                    targetOwnerGenerations.put(
-                                            participant.authorityKey(),
-                                            Math.addExact(
-                                                    participant.sourceAuthorityOwnerGeneration(),
-                                                    1));
-                                }
+                                Map<String, Long> targetOwnerGenerations = Map.of();
                                 for (Owned actor : captured.inventory().actors()) {
                                     actors.abortRelocationMessageFollow(
                                             actorRoute(actor, false, targetOwnerGenerations));
@@ -1605,8 +1616,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Map<String, Long> targetOwnerGenerations = new LinkedHashMap<>();
             for (var participant : stageRequest.participants()) {
                 targetOwnerGenerations.put(
-                        participant.authorityKey(),
-                        Math.addExact(participant.sourceAuthorityOwnerGeneration(), 1));
+                        participant.authorityKey(), participant.sourceAuthorityOwnerGeneration());
             }
             for (Owned actor : captured.inventory().actors()) {
                 actors.abortRelocationMessageFollow(

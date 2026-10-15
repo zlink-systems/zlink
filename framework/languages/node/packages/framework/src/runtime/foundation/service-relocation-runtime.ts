@@ -39,6 +39,7 @@ export interface ServiceRelocationParticipant {
   readonly applicationStatePresent?: boolean;
   readonly applicationState: Uint8Array;
   readonly boundSessionState: Uint8Array;
+  readonly sessionBinding?: GeneratedRelocationEnvelopeV1['sessionBindings'][number];
   readonly queuedMessages: readonly ServiceRelocationQueuedMessage[];
   readonly timers: readonly ServiceRelocationTimer[];
 }
@@ -726,6 +727,11 @@ export function encodeServiceRelocationEnvelope(
           'timer due time'
         )
       })),
+      sessionBindings: participants.flatMap((participant, index) =>
+        participant.sessionBinding === undefined
+          ? []
+          : [{ ...participant.sessionBinding, participantId: BigInt(index + 1) }]
+      ),
       pendingTimerTicks: pending.map((value) => ({
         participantId: value.participantId,
         order: value.order,
@@ -765,11 +771,22 @@ export function decodeServiceRelocationEnvelope(
   const aggregateId = uuid(generated.relocationHigh, generated.relocationLow);
   if (aggregateId === undefined) throw new TypeError('Invalid relocation identity.');
   positiveBigInt(aggregateGeneration, 'aggregate generation');
+  const bindings = new Map(
+    generated.sessionBindings.map((binding) => [binding.participantId, binding])
+  );
+  for (const id of bindings.keys()) {
+    if (id > BigInt(generated.applicationStates.length))
+      throw new TypeError('Session binding participant is outside its inventory.');
+  }
   const participants = generated.applicationStates.map((state, index) => {
     if (state.participantId !== BigInt(index + 1)) {
       throw new TypeError('Application state participant order is invalid.');
     }
-    return wireParticipant(state.participantId, state.hasState, Buffer.from(state.payload));
+    const binding = bindings.get(state.participantId);
+    return {
+      ...wireParticipant(state.participantId, state.hasState, Buffer.from(state.payload)),
+      ...(binding === undefined ? {} : { sessionBinding: binding })
+    };
   });
   const byId = new Map(participants.map((value) => [value.participantId!, value]));
   for (const work of generated.savedWork) {

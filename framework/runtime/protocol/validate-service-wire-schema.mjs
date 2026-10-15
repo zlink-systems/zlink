@@ -2576,6 +2576,15 @@ function decodeGoldenBody(formatName, bytes) {
       savedWork: decodeSavedWork(reader),
       timerRegistrations: decodeTimerRegistrations(reader),
       pendingTimerTicks: decodePendingTimerTicks(reader),
+      sessionBindings: Array.from({ length: reader.u32() }, () => ({
+        participantId: reader.u64(),
+        sessionOwnerNodeRidUtf8Fixture: reader.text8(),
+        sessionOwnerNodeGeneration: reader.u64(),
+        sessionOwnerId: reader.text8(),
+        sessionOwnerLeaseGeneration: reader.u64(),
+        sessionRidUtf8Fixture: reader.text8(),
+        bindingGeneration: reader.u64(),
+      })),
     };
   } else {
     throw new Error(`no golden decoder for ${formatName}`);
@@ -2878,6 +2887,16 @@ function encodeGoldenBody(formatName, decoded) {
     encodeSavedWork(writer, decoded.savedWork);
     encodeTimerRegistrations(writer, decoded.timerRegistrations);
     encodePendingTimerTicks(writer, decoded.pendingTimerTicks);
+    writer.u32(decoded.sessionBindings.length);
+    for (const binding of decoded.sessionBindings) {
+      writer.u64(binding.participantId)
+        .text8(binding.sessionOwnerNodeRidUtf8Fixture)
+        .u64(binding.sessionOwnerNodeGeneration)
+        .text8(binding.sessionOwnerId)
+        .u64(binding.sessionOwnerLeaseGeneration)
+        .text8(binding.sessionRidUtf8Fixture)
+        .u64(binding.bindingGeneration);
+    }
     return writer.finish();
   }
   if (formatName === "relocation-data-chunk-v1") {
@@ -2972,6 +2991,7 @@ function validateParticipantAuthorityKeyInventory(inventory, decoded, location, 
     decoded.savedWork,
     decoded.timerRegistrations,
     decoded.pendingTimerTicks,
+    decoded.sessionBindings,
   ]) {
     if (vector.some((entry) => !validParticipantIds.has(String(entry.participantId)))) {
       fail(`${location}.decoded`, "participant vectors must reference only IDs derived from the authority-key inventory");
@@ -3061,6 +3081,12 @@ function validateGoldenFixtureSemantics(formatName, decoded, location, fail) {
     decoded.pendingTimerTicks,
     (entry) => [entry.participantId, entry.order],
     `${location}.pendingTimerTicks`,
+    fail,
+  );
+  validateGoldenOrder(
+    decoded.sessionBindings,
+    (entry) => [entry.participantId],
+    `${location}.sessionBindings`,
     fail,
   );
   if (!decoded.applicationStates.some(
@@ -4077,6 +4103,17 @@ function runRelocationLogicalFixtureSelfTests(schema, schemaPath) {
     }],
     ["participant authority-key inventory violates derived ID", (candidate) => {
       candidate.participantAuthorityKeyInventory[1].participantId = "7";
+    }],
+    ["Session binding participant duplicated", (candidate) => {
+      candidate.decoded.sessionBindings.push(clone(candidate.decoded.sessionBindings[0]));
+    }],
+    ["Session binding participants out of order", (candidate) => {
+      const binding = clone(candidate.decoded.sessionBindings[0]);
+      binding.participantId = "2";
+      candidate.decoded.sessionBindings.unshift(binding);
+    }],
+    ["Session binding participant outside inventory", (candidate) => {
+      candidate.decoded.sessionBindings[0].participantId = "4";
     }],
   ];
   for (const [label, mutate] of tests) {
@@ -5920,6 +5957,7 @@ function validateServiceInvariants(schema, types, fail) {
     "saved-work-vector",
     "relocation-timer-registration-vector",
     "relocation-pending-timer-tick-vector",
+    "relocation-session-binding-vector",
   ]) {
     if (JSON.stringify(types.get(name)?.participantIdDerivation)
         !== JSON.stringify(participantIdDerivation)) {
@@ -5937,6 +5975,7 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "savedWork", $ref: "saved-work-vector" },
     { name: "timerRegistrations", $ref: "relocation-timer-registration-vector" },
     { name: "pendingTimerTicks", $ref: "relocation-pending-timer-tick-vector" },
+    { name: "sessionBindings", $ref: "relocation-session-binding-vector" },
   ], "$.types", "Relocation envelope must carry deterministic queue and timer state");
   requireFields(types.get("relocation-manifest-v1")?.fields, [
     { name: "logicalFormatVersion", $ref: "u8", constant: 1 },
@@ -7566,6 +7605,10 @@ function runSelfTests(schema) {
     ["relocation timer registration omitted", (candidate) => {
       const envelope = candidate.types.find((type) => type.name === "relocation-envelope-v1");
       envelope.fields = envelope.fields.filter((field) => field.name !== "timerRegistrations");
+    }],
+    ["relocation Session bindings omitted", (candidate) => {
+      const envelope = candidate.types.find((type) => type.name === "relocation-envelope-v1");
+      envelope.fields = envelope.fields.filter((field) => field.name !== "sessionBindings");
     }],
     ["relocation timer leaks native handle", (candidate) => {
       const registration = candidate.types.find(

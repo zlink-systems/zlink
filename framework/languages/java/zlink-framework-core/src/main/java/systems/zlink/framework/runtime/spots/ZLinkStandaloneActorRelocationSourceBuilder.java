@@ -351,12 +351,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                                             .targetNodeGeneration(),
                                                                                     directJoin
                                                                                             .targetSpotGeneration(),
-                                                                                    Math.addExact(
-                                                                                            admission
-                                                                                                    .owned()
-                                                                                                    .snapshot()
-                                                                                                    .authorityOwnerGeneration(),
-                                                                                            1L),
+                                                                                    admission
+                                                                                            .owned()
+                                                                                            .snapshot()
+                                                                                            .authorityOwnerGeneration(),
                                                                                     directJoin
                                                                                             .targetSpotAuthorityOwnerGeneration(),
                                                                                     new ZLinkActorJoinRecoveryCodec
@@ -382,29 +380,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                                     directJoin
                                                                                             .rawReply()));
                                                 }
-                                                byte[] initialRoot =
-                                                        ZLinkCanonicalActorRelocationEnvelope
-                                                                .encode(
-                                                                        relocationId,
-                                                                        admission.owned().actorId(),
-                                                                        admission
-                                                                                .owned()
-                                                                                .snapshot()
-                                                                                .objectGeneration(),
-                                                                        admission
-                                                                                .owned()
-                                                                                .snapshot()
-                                                                                .authorityOwnerGeneration(),
-                                                                        admission
-                                                                                .target()
-                                                                                .applicationVersion(),
-                                                                        admission
-                                                                                .owned()
-                                                                                .snapshotPolicy(),
-                                                                        applicationState,
-                                                                        seal.captured(),
-                                                                        timerEnvelope,
-                                                                        actorJoinRecovery);
+                                                final byte[] capturedActorJoinRecovery =
+                                                        actorJoinRecovery;
                                                 Optional<ZLinkSpotRetireControl.SessionRouteFence>
                                                         capturedRoute =
                                                                 admission
@@ -447,7 +424,41 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                                 stageRequest(
                                                                                         admission,
                                                                                         relocationId,
-                                                                                        initialRoot,
+                                                                                        ZLinkCanonicalActorRelocationEnvelope
+                                                                                                .encode(
+                                                                                                        relocationId,
+                                                                                                        admission
+                                                                                                                .owned()
+                                                                                                                .actorId(),
+                                                                                                        admission
+                                                                                                                .owned()
+                                                                                                                .snapshot()
+                                                                                                                .objectGeneration(),
+                                                                                                        admission
+                                                                                                                .owned()
+                                                                                                                .snapshot()
+                                                                                                                .authorityOwnerGeneration(),
+                                                                                                        admission
+                                                                                                                .target()
+                                                                                                                .applicationVersion(),
+                                                                                                        admission
+                                                                                                                .owned()
+                                                                                                                .snapshotPolicy(),
+                                                                                                        applicationState,
+                                                                                                        seal
+                                                                                                                .captured(),
+                                                                                                        timerEnvelope,
+                                                                                                        capturedActorJoinRecovery,
+                                                                                                        sessionRoute
+                                                                                                                .stream()
+                                                                                                                .map(
+                                                                                                                        sealedSession ->
+                                                                                                                                sealedSession
+                                                                                                                                        .route()
+                                                                                                                                        .binding(
+                                                                                                                                                ZLinkCanonicalActorRelocationEnvelope
+                                                                                                                                                        .PARTICIPANT_ID))
+                                                                                                                .toList()),
                                                                                         sessionRoute
                                                                                                 .map(
                                                                                                         SealedSessionRoute
@@ -858,12 +869,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 .sealRouteUntilAck(seal, sessionRelocationSealTimeout)
                 .<Optional<SealedSessionRoute>>thenApplyAsync(
                         sealedResult -> {
-                            return Optional.of(
-                                    new SealedSessionRoute(
-                                            route,
-                                            seal,
-                                            new ZLinkServiceM6BWireCodec()
-                                                    .encodeSessionRelocationSealed(sealedResult)));
+                            return Optional.of(new SealedSessionRoute(route, seal));
                         })
                 .exceptionallyCompose(
                         failure ->
@@ -1250,17 +1256,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 ZLinkRelocationTransitionClient client,
                 Duration timeout) {
             CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
-            if (sealedSessionRoute.isPresent()) {
-                byte[] sealedResult = sealedSessionRoute.orElseThrow().sealedAck();
-                chain =
-                        chain.thenCompose(
-                                ignored ->
-                                        client.relay(
-                                                stageRequest.targetNodeRid(),
-                                                stageRequest.fence(),
-                                                sealedResult,
-                                                timeout));
-            }
             for (ZLinkSerialExecutionQueue.QueuedRecord record : relayed) {
                 CompletableFuture<Void> obligation = null;
                 assert (obligation =
@@ -1289,8 +1284,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         }
 
         private CompletionStage<Void> installExpectedRelocationForward() {
-            long targetOwnerGeneration =
-                    Math.addExact(owned.snapshot().authorityOwnerGeneration(), 1);
+            long targetOwnerGeneration = owned.snapshot().authorityOwnerGeneration();
             return actors.stageRelocationMessageFollowAsync(
                             sourceRoute(), targetRoute(targetOwnerGeneration))
                     .thenCompose(ignored -> bindCommittedReplies());
@@ -1559,17 +1553,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
 
     private record SealedSessionRoute(
             ZLinkSpotRetireControl.SessionRouteFence route,
-            ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
-            byte[] sealedAck) {
+            ZLinkServiceM6BWireCodec.SessionRelocationSeal seal) {
         private SealedSessionRoute {
             Objects.requireNonNull(route, "route");
             Objects.requireNonNull(seal, "seal");
-            sealedAck = Objects.requireNonNull(sealedAck, "sealedAck").clone();
-        }
-
-        @Override
-        public byte[] sealedAck() {
-            return sealedAck.clone();
         }
     }
 

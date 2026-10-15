@@ -1230,7 +1230,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                 new ZLinkActorRelocationAuthorityPayload(
                     aggregateId,
                     ZLinkActorRelocationAuthorityPhase.Activated,
-                    boundRoute,
+                    default,
                     actor.Payload
                 )
             );
@@ -1275,7 +1275,10 @@ internal sealed class ZLinkSpotRetireScheduler(
                         CreateActorAcceptedJobs(actorCaptures[actorKey], actor.ObjectGeneration),
                         [],
                         RecoveryPayload: actorRecovery
-                    ),
+                    )
+                    {
+                        SessionBinding = ZLinkSessionRelocationWire.CaptureBinding(boundRoute),
+                    },
                     actor.StoreVersion,
                     ZLinkAuthorityGenerationTransition.NewOwner,
                     relocationAuthority,

@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
@@ -188,7 +189,27 @@ final class ZLinkSpotActivationFactory {
                 new DefaultEntrySpotContext(host, workerPool, handlerLoader, nodeRid, backendSpot);
         ZLinkEntrySpot<?> entrySpot;
         try {
-            entrySpot = createEntrySpot(entrySpotType, context);
+            // The node's Entry Spot owns Actor infrastructure even when the application
+            // registers no Entry Spot type (MeshNode spec §3.2).
+            entrySpot =
+                    entrySpotType == null
+                            ? new ZLinkEntrySpot<ZLinkActor>() {
+                                @Override
+                                public ZLinkEntrySpotContext context() {
+                                    return context;
+                                }
+
+                                @Override
+                                public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+                                    return CompletableFuture.completedFuture(null);
+                                }
+
+                                @Override
+                                public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+                                    return CompletableFuture.completedFuture(null);
+                                }
+                            }
+                            : createEntrySpot(entrySpotType, context);
         } catch (RuntimeException failure) {
             return SpotActivationBase.finishCleanup(failure, context.closeResourcesAsync())
                     .thenApply(ignored -> null);
@@ -221,12 +242,12 @@ final class ZLinkSpotActivationFactory {
         }
         EntrySpotActivation activation =
                 new EntrySpotActivation(host, handlerInvoker, entrySpot, backendSpot, context);
-        context.enqueueDispatch(
+        return context.enqueueDispatch(
                         () ->
                                 host.runWithOutbound(
                                         context.dispatchOutbound(),
                                         () ->
-                                                ZLinkHandlerStages.fromRunnable(
+                                                ZLinkHandlerStages.fromStageSupplier(
                                                         entrySpot::onInitialize)))
                 .handle(
                         (ignored, failure) ->
@@ -234,14 +255,17 @@ final class ZLinkSpotActivationFactory {
                                         ? CompletableFuture.<Void>completedFuture(null)
                                         : SpotActivationBase.finishCleanup(
                                                 failure, context.closeResourcesAsync()))
-                .thenCompose(stage -> stage);
-        registerDispatchHandler(
-                backendSpot,
-                activation::handleDispatchEvent,
-                activation::admitRoute,
-                activation::admitTopic,
-                activation::admitActor);
-        return CompletableFuture.completedFuture(activation);
+                .thenCompose(stage -> stage)
+                .thenApply(
+                        ignored -> {
+                            registerDispatchHandler(
+                                    backendSpot,
+                                    activation::handleDispatchEvent,
+                                    activation::admitRoute,
+                                    activation::admitTopic,
+                                    activation::admitActor);
+                            return activation;
+                        });
     }
 
     /** Activates an Instance Spot on the MeshNode {@code nodeRid} of {@code meshName}. */
