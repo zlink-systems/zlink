@@ -104,6 +104,7 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
 
   private:
     struct actor_destroy_callback_gate_t;
+    struct node_receive_role_t;
 
     task_t<spot_create_result_t>
     create_user_spot (std::shared_ptr<detail::mesh_node_runtime_t> source,
@@ -191,7 +192,6 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::shared_ptr<actor_destroy_callback_gate_t> _actor_destroy_gate;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> _nodes;
-    std::vector<std::thread> _threads;
 
     std::optional<location_owner_token_t> current_location_owner () const;
 };

@@ -66,7 +66,7 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
         // Already-admitted owner queues keep draining through scheduler
         // continuations. Teardown closes this path only after quiescence;
         // public work submission remains sealed as soon as stopping begins.
-        if (_stopping && _active == 0 && _queue.empty ()) {
+        if (_stopping && _active == _role_active && _queue.empty ()) {
             return false;
         }
         _queue.push (work_item_t{[work = std::move (work)] (std::stop_token) mutable {
@@ -97,6 +97,43 @@ bool offload_executor_t::try_submit_cancellable (std::function<void (std::stop_t
     }
     _ready.notify_one ();
     return true;
+}
+
+bool offload_executor_t::start_role (std::shared_ptr<role_t> role)
+{
+    {
+        std::lock_guard lock (_mutex);
+        if (_stopping)
+            return false;
+        _roles.push (std::move (role));
+    }
+    _ready.notify_one ();
+    return true;
+}
+
+bool offload_executor_t::try_assign_role (std::shared_ptr<role_t> role)
+{
+    {
+        std::lock_guard lock (_mutex);
+        if (_stopping || _idle_workers <= _roles.size ())
+            return false;
+        _roles.push (std::move (role));
+        --_role_active;
+    }
+    _ready.notify_one ();
+    return true;
+}
+
+void offload_executor_t::drain_application ()
+{
+    {
+        std::lock_guard lock (_mutex);
+        _stopping = true;
+    }
+    request_stop ();
+    _ready.notify_all ();
+    std::unique_lock lock (_mutex);
+    _empty.wait (lock, [this] { return _queue.empty () && _active == _role_active; });
 }
 
 void offload_executor_t::request_stop () noexcept
@@ -138,8 +175,9 @@ bool offload_executor_t::drain_until (std::chrono::steady_clock::time_point dead
     _ready.notify_all ();
     {
         std::unique_lock lock (_mutex);
-        if (!_empty.wait_until (lock, deadline,
-                                [this] { return _queue.empty () && _active == 0; })) {
+        if (!_empty.wait_until (lock, deadline, [this] {
+                return _roles.empty () && _queue.empty () && _active == 0;
+            })) {
             if (trace_enabled) {
                 std::cerr << "zlink-cpp-host-stop stage=offload-drain-timeout name=" << _thread_name
                           << std::endl;
@@ -160,7 +198,7 @@ bool offload_executor_t::drain_until (std::chrono::steady_clock::time_point dead
 bool offload_executor_t::drained () const
 {
     std::lock_guard lock (_mutex);
-    return _queue.empty () && _active == 0;
+    return _roles.empty () && _queue.empty () && _active == 0;
 }
 
 std::size_t offload_executor_t::live_worker_count () const
@@ -220,19 +258,22 @@ void offload_executor_t::worker_loop ()
     };
     while (true) {
         work_item_t work;
+        std::shared_ptr<role_t> role;
         {
             std::unique_lock lock (_mutex);
             ++_idle_workers;
             bool ready = false;
             if (_idle_timeout.count () == 0) {
-                _ready.wait (lock, [this] { return _stopping || !_queue.empty (); });
+                _ready.wait (lock,
+                             [this] { return _stopping || !_roles.empty () || !_queue.empty (); });
                 ready = true;
             } else {
-                ready = _ready.wait_for (lock, _idle_timeout,
-                                         [this] { return _stopping || !_queue.empty (); });
+                ready = _ready.wait_for (lock, _idle_timeout, [this] {
+                    return _stopping || !_roles.empty () || !_queue.empty ();
+                });
             }
             --_idle_workers;
-            if (!ready && _queue.empty ()) {
+            if (!ready && _roles.empty () && _queue.empty ()) {
                 if (_live_workers > _min_worker_count) {
                     retire_current_worker_locked ();
                     trace_exit ();
@@ -240,28 +281,31 @@ void offload_executor_t::worker_loop ()
                 }
                 continue;
             }
-            if (_stopping && _queue.empty ()) {
+            if (_stopping && _roles.empty () && _queue.empty ()) {
                 retire_current_worker_locked ();
                 trace_exit ();
                 return;
             }
-            work = std::move (_queue.front ());
-            _queue.pop ();
+            if (!_roles.empty ()) {
+                role = std::move (_roles.front ());
+                _roles.pop ();
+                ++_role_active;
+            } else {
+                work = std::move (_queue.front ());
+                _queue.pop ();
+                if (work.cancellation)
+                    _active_cancellations.push_back (&*work.cancellation);
+            }
             ++_active;
-            if (work.cancellation)
-                _active_cancellations.push_back (&*work.cancellation);
         }
 
-        try {
+        // A receive role is deliberately outside the application exception boundary.
+        const bool handed_off = role && role->run_until_handoff ();
+        run_application_turn ([&] {
             if (work.work) {
                 work.work (work.cancellation ? work.cancellation->get_token () : std::stop_token{});
             }
-        }
-        catch (...) {
-            /* An offload job has no caller on this thread that could observe
-             * an exception. The job owner is responsible for converting its
-             * failure into a task completion before returning. */
-        }
+        });
 
         {
             std::lock_guard lock (_mutex);
@@ -272,8 +316,10 @@ void offload_executor_t::worker_loop ()
                     _active_cancellations.erase (active);
                 }
             }
+            if (role && !handed_off)
+                --_role_active;
             --_active;
-            if (_queue.empty () && _active == 0) {
+            if (_queue.empty () && _active == _role_active) {
                 _empty.notify_all ();
             }
         }

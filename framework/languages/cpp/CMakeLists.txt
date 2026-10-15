@@ -1146,6 +1146,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_receive_role
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role.cpp
+    framework/src/runtime/dispatch/offload_executor.cpp)
+  target_compile_features(test_cpp_framework_receive_role PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_receive_role PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_link_libraries(test_cpp_framework_receive_role PRIVATE Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_receive_role
+    COMMAND test_cpp_framework_receive_role
+    LABELS "framework-unit;execution;resource"
+    TIER unit
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_operation_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_operation_registry.cpp
     framework/src/runtime/foundation/operation_registry.cpp)
