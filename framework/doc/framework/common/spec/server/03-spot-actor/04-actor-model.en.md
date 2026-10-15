@@ -621,6 +621,9 @@ owned by
   with that failure at once — resending the same input wouldn't change the
   result. An operation whose terminal envelope (`Created`, `Existing`,
   `Rejected`, `Failed`, and so on) was received is not resent.
+- **A replay is resubmitted on the transition in which the target peer becomes
+  ready on the current route.** No separate retry timer or periodic check is
+  kept.
 - **Each attempt uses the entire remaining deadline and there is no attempt
   limit.** The cause decides the kind of exhaustion: exhausted without any
   attempt ever being admitted ends with `Unavailable` per the
