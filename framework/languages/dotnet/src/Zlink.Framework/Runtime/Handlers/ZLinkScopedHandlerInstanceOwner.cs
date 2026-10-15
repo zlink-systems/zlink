@@ -92,8 +92,10 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
         );
     }
 
-    internal static object CreateForDispatch(IServiceProvider services, Type handlerType) =>
-        GetFactory(GetActivationFactories(services), handlerType)(services);
+    internal static Func<IServiceProvider, object> GetDispatchFactory(
+        IServiceProvider services,
+        Type handlerType
+    ) => GetFactory(GetActivationFactories(services), handlerType);
 
     private Func<IServiceProvider, object> GetFactory(Type handlerType) =>
         GetFactory(_activation, handlerType);
