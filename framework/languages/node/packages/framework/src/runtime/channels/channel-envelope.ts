@@ -884,13 +884,18 @@ function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
 }
 
 function parseChannelHeaderBytes(payload: Buffer): unknown {
+  const reader = new CanonicalChannelHeaderReader(payload);
+  const canonical = tryParseCanonicalChannelHeader(reader);
+  // An all-ASCII canonical header is valid UTF-8 by construction; any other
+  // header is checked before it is decoded.
+  if (canonical !== undefined && !reader.sawNonAscii) return canonical;
   if (!isUtf8(payload)) {
     throw new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.ProtocolError,
       'Channel envelope header must contain valid UTF-8.'
     );
   }
-  return tryParseCanonicalChannelHeader(payload) ?? parseFrameworkJsonV1(payload.toString());
+  return canonical ?? parseFrameworkJsonV1(payload.toString());
 }
 
 /**
@@ -899,8 +904,9 @@ function parseChannelHeaderBytes(payload: Buffer): unknown {
  * framework-json-v1 parser, which remains the sole authority for JSON
  * failures and unknown properties. Header metadata accepts every valid string key.
  */
-function tryParseCanonicalChannelHeader(payload: Buffer): Record<string, unknown> | undefined {
-  const reader = new CanonicalChannelHeaderReader(payload);
+function tryParseCanonicalChannelHeader(
+  reader: CanonicalChannelHeaderReader
+): Record<string, unknown> | undefined {
   if (!reader.consume('{"formatMarker":242,"kind":')) return undefined;
   const kind = reader.readSingleDigit();
   if (kind === undefined || !reader.consume(',"channelName":')) return undefined;
@@ -927,20 +933,31 @@ function tryParseCanonicalChannelHeader(payload: Buffer): Record<string, unknown
     deadline: deadline === NULL_JSON_STRING ? null : deadline,
     topic: topic === NULL_JSON_STRING ? null : topic
   };
-  if (!reader.readOptionalNullableString('errorCode', header)) return undefined;
-  if (!reader.readOptionalNullableString('errorMessage', header)) return undefined;
-  if (!reader.readOptionalNullableString('source', header)) return undefined;
+  if (!reader.readOptionalNullableString(CANONICAL_ERROR_CODE, 'errorCode', header))
+    return undefined;
+  if (!reader.readOptionalNullableString(CANONICAL_ERROR_MESSAGE, 'errorMessage', header))
+    return undefined;
+  if (!reader.readOptionalNullableString(CANONICAL_SOURCE, 'source', header)) return undefined;
+  // Empty metadata validates to the shared empty record.
   if (!reader.consume(',"metadata":{}')) return undefined;
-  header.metadata = {};
-  if (!reader.readOptionalString('flowId', header)) return undefined;
-  if (!reader.readOptionalSingleDigit('flowOrigin', header)) return undefined;
+  if (!reader.readOptionalString(CANONICAL_FLOW_ID, 'flowId', header)) return undefined;
+  if (!reader.readOptionalSingleDigit(CANONICAL_FLOW_ORIGIN, 'flowOrigin', header))
+    return undefined;
   return reader.consume('}') && reader.atEnd() ? header : undefined;
 }
+
+const CANONICAL_ERROR_CODE = ',"errorCode":';
+const CANONICAL_ERROR_MESSAGE = ',"errorMessage":';
+const CANONICAL_SOURCE = ',"source":';
+const CANONICAL_FLOW_ID = ',"flowId":';
+const CANONICAL_FLOW_ORIGIN = ',"flowOrigin":';
 
 const NULL_JSON_STRING = Symbol('null JSON string');
 
 class CanonicalChannelHeaderReader {
   private index = 0;
+  /** A string held a byte outside ASCII, so the caller must still check UTF-8. */
+  sawNonAscii = false;
 
   constructor(private readonly bytes: Buffer) {}
 
@@ -969,13 +986,19 @@ class CanonicalChannelHeaderReader {
     if (this.bytes[this.index] !== 0x22) return undefined;
     const start = this.index;
     this.index += 1;
+    let hasEscape = false;
     while (this.index < this.bytes.length) {
       const value = this.bytes[this.index++]!;
       if (value === 0x22) {
-        return JSON.parse(this.bytes.toString('utf8', start, this.index)) as string;
+        // Without escapes the JSON string is its own bytes; decode them once.
+        return hasEscape
+          ? (JSON.parse(this.bytes.toString('utf8', start, this.index)) as string)
+          : this.bytes.toString(this.sawNonAscii ? 'utf8' : 'latin1', start + 1, this.index - 1);
       }
       if (value < 0x20) return undefined;
+      if (value >= 0x80) this.sawNonAscii = true;
       if (value !== 0x5c) continue;
+      hasEscape = true;
       if (this.index === this.bytes.length) return undefined;
       const escaped = this.bytes[this.index++]!;
       if (escaped === 0x75) {
@@ -1005,24 +1028,28 @@ class CanonicalChannelHeaderReader {
     return this.readString();
   }
 
-  readOptionalNullableString(name: string, target: Record<string, unknown>): boolean {
-    if (!this.consume(`,\"${name}\":`)) return true;
+  readOptionalNullableString(
+    token: string,
+    name: string,
+    target: Record<string, unknown>
+  ): boolean {
+    if (!this.consume(token)) return true;
     const value = this.readNullableString();
     if (value === undefined) return false;
     target[name] = value === NULL_JSON_STRING ? null : value;
     return true;
   }
 
-  readOptionalString(name: string, target: Record<string, unknown>): boolean {
-    if (!this.consume(`,\"${name}\":`)) return true;
+  readOptionalString(token: string, name: string, target: Record<string, unknown>): boolean {
+    if (!this.consume(token)) return true;
     const value = this.readString();
     if (value === undefined) return false;
     target[name] = value;
     return true;
   }
 
-  readOptionalSingleDigit(name: string, target: Record<string, unknown>): boolean {
-    if (!this.consume(`,\"${name}\":`)) return true;
+  readOptionalSingleDigit(token: string, name: string, target: Record<string, unknown>): boolean {
+    if (!this.consume(token)) return true;
     const value = this.readSingleDigit();
     if (value === undefined) return false;
     target[name] = value;
