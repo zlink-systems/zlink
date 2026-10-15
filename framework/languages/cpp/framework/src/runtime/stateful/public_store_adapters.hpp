@@ -105,7 +105,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
     {
         if (target.kind != source.kind || target.key != source.key
             || target.object_generation != source.object_generation
-            || target.authority_owner_generation != source.authority_owner_generation + 1
+            || target.authority_owner_generation != source.authority_owner_generation
             || target.mesh_name.empty () || target.node_id.empty ())
             return {authority_publish_status_t::failed, std::nullopt};
         const auto key = authority_key (source);
@@ -732,7 +732,6 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
                 return {aggregate_publish_status_t::conflict, {}, {}};
             auto target = source;
             target.node_id = target_node_id;
-            ++target.authority_owner_generation;
             authority_relocation_reference_t reference{
               source,           target,       relocation_reference, checksum_crc32c,
               inventory_digest, target_owner, snapshot->payload};

@@ -2,8 +2,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
-using Systems.Zlink.Stream.Connector.Contracts;
-using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Execution;
@@ -20,17 +18,8 @@ public sealed class ActorHandlerActivationTests
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var order = new ConcurrentQueue<string>();
-        var header = new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "lane-probe",
-            ZlinkStreamMetadata.Empty
-        );
         var active = state
             .ExecuteDispatchAsync(
-                header,
                 async _ =>
                 {
                     started.TrySetResult();
@@ -44,7 +33,6 @@ public sealed class ActorHandlerActivationTests
         {
             var application = state
                 .ExecuteDispatchAsync(
-                    header,
                     _ =>
                     {
                         order.Enqueue("application");
@@ -241,19 +229,11 @@ public sealed class ActorHandlerActivationTests
         );
         var firstHandler = firstState.HandlerInstances.Resolve<BlockingHandler>();
         var secondHandler = secondState.HandlerInstances.Resolve<BlockingHandler>();
-        var header = new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "force-stop-handler",
-            ZlinkStreamMetadata.Empty
-        );
         var firstDispatch = firstState
-            .ExecuteDispatchAsync(header, firstHandler.HandleAsync, CancellationToken.None)
+            .ExecuteDispatchAsync(firstHandler.HandleAsync, CancellationToken.None)
             .AsTask();
         var secondDispatch = secondState
-            .ExecuteDispatchAsync(header, secondHandler.HandleAsync, CancellationToken.None)
+            .ExecuteDispatchAsync(secondHandler.HandleAsync, CancellationToken.None)
             .AsTask();
         await Task.WhenAll(firstHandler.Started.Task, secondHandler.Started.Task)
             .WaitAsync(TimeSpan.FromSeconds(5));
@@ -291,16 +271,8 @@ public sealed class ActorHandlerActivationTests
             ZLinkActorId.FromBoundary("actor-force-failure", "actorId")
         );
         var handler = state.HandlerInstances.Resolve<FailingBlockingHandler>();
-        var header = new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "force-stop-failure",
-            ZlinkStreamMetadata.Empty
-        );
         var dispatch = state
-            .ExecuteDispatchAsync(header, handler.HandleAsync, CancellationToken.None)
+            .ExecuteDispatchAsync(handler.HandleAsync, CancellationToken.None)
             .AsTask();
         await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -348,17 +320,9 @@ public sealed class ActorHandlerActivationTests
             .BuildServiceProvider();
         var state = new ZLinkActorRuntimeState("actor-race", services: services);
         var handler = state.HandlerInstances.Resolve<BlockingHandler>();
-        var header = new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "blocking-handler",
-            ZlinkStreamMetadata.Empty
-        );
 
         var dispatch = state
-            .ExecuteDispatchAsync(header, handler.HandleAsync, CancellationToken.None)
+            .ExecuteDispatchAsync(handler.HandleAsync, CancellationToken.None)
             .AsTask();
         await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -405,17 +369,9 @@ public sealed class ActorHandlerActivationTests
             ZLinkActorId.FromBoundary("actor-reset-terminal", "actorId")
         );
         var handler = state.HandlerInstances.Resolve<BlockingHandler>();
-        var header = new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "reset-terminal",
-            ZlinkStreamMetadata.Empty
-        );
 
         var dispatch = state
-            .ExecuteDispatchAsync(header, handler.HandleAsync, CancellationToken.None)
+            .ExecuteDispatchAsync(handler.HandleAsync, CancellationToken.None)
             .AsTask();
         await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -468,18 +424,9 @@ public sealed class ActorHandlerActivationTests
             .BuildServiceProvider();
         var state = new ZLinkActorRuntimeState("actor-self", services: services);
         var handler = state.HandlerInstances.Resolve<ProbeHandler>();
-        var header = new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "self-teardown",
-            ZlinkStreamMetadata.Empty
-        );
         Task<bool>? terminalTask = null;
 
         await state.ExecuteDispatchAsync(
-            header,
             async _ =>
             {
                 state.BindNativeActorRef(

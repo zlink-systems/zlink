@@ -580,25 +580,20 @@ class mesh_node_runtime_t
       runtime::protocol::relocation_coordinator_fence_t coordinator,
       std::chrono::milliseconds timeout,
       std::chrono::steady_clock::time_point operation_deadline);
-    task_t<std::optional<std::vector<runtime::protocol::session_relocation_route_t>>>
-    capture_session_routes (
+    task_t<std::optional<std::vector<runtime::stateful::relocation_session_binding_t>>>
+    capture_session_bindings (
       std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
       runtime::protocol::relocation_id_t relocation,
       runtime::protocol::relocation_coordinator_fence_t coordinator,
-      mesh_node_descriptor_t target,
       std::shared_ptr<session_relocation_seal_outcome_t> outcome,
       std::shared_ptr<bool> attempted,
       std::chrono::steady_clock::time_point operation_deadline);
-    runtime::protocol::session_relocation_route_t make_session_relocation_route (
-      const session_relocation_checkpoint_t &checkpoint,
-      const zlink::routing_id_t &target_node,
-      std::uint64_t target_node_generation,
-      std::uint64_t target_owner_lease_generation,
-      runtime::protocol::session_relocation_route_action_t action) const;
+    static runtime::stateful::relocation_session_binding_t
+    make_session_binding (const session_relocation_checkpoint_t &checkpoint);
+    runtime::protocol::session_relocation_route_t
+    make_session_relocation_abort (const session_relocation_checkpoint_t &checkpoint) const;
     task_t<bool>
-    route_bound_sessions (const std::vector<session_relocation_checkpoint_t> &checkpoints,
-                          const mesh_node_descriptor_t &target,
-                          runtime::protocol::session_relocation_route_action_t action);
+    abort_bound_sessions (const std::vector<session_relocation_checkpoint_t> &checkpoints);
 
     struct peer_callback_gate_t
     {

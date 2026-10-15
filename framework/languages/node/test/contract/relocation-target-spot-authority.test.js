@@ -4,9 +4,9 @@ const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/
 const { encodeAuthorityKey } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 
 // The target materializes a relocated Spot before the target-only CAS, so it
-// can only predict the authority owner generation. A newOwner participant
+// keeps the source authority fence (relocation-flow §4.3). A newOwner participant
 // receives its generation from the Store's owner-generation block, which may
-// differ from that prediction. After the commit the native Spot must carry
+// advance by more than one. After the commit the native Spot must carry
 // the committed authority, as the Actor branch does with restoreActorAuthority;
 // otherwise every exact owner fence sent to the target is rejected as SpotMoving.
 for (const objectKind of ['instance_spot', 'user_spot']) {
@@ -61,7 +61,7 @@ for (const objectKind of ['instance_spot', 'user_spot']) {
       participants: [participant],
       memberships: []
     });
-    assert.equal(native.get(spotId).authorityOwnerGeneration, 14n);
+    assert.equal(native.get(spotId).authorityOwnerGeneration, 13n);
 
     const committed = {
       objectGeneration: 13n,

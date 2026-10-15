@@ -96,7 +96,7 @@ internal static class ZLinkActorBoundSessionRelay
             return false;
         }
 
-        bindingToken = decodedBindingToken;
+        bindingToken = current.BindingToken;
         return true;
     }
 

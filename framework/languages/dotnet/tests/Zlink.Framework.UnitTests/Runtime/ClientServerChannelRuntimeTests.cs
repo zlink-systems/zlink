@@ -298,11 +298,24 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [InlineData(5)]
     public async Task ClientRequestStartedBeforeServerUsesRequestBudgetForAdmission(int iteration)
     {
+        var flowPath = Path.Combine(
+            Zlink.Framework.Tests.Common.FrameworkTestEnvironment.CreateTestLogDirectory(
+                "client-admission-close"
+            ),
+            "messages.flow"
+        );
+        using var flow = new TestHostMessageFlowListener(flowPath);
         using var reservation = ReserveBoundTcpPort();
         var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
         var endpoint = $"tcp://{AdmissionTestServerHost}:{port}";
         await using var client = CreateClient(endpoint);
         await using var server = CreateServer(port, bindHost: AdmissionTestServerHost);
+        client
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        server
+            .GetRequiredService<ZLinkFrameworkRegistration>()
+            .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
         var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         await clientRuntime.StartAsync(CancellationToken.None);

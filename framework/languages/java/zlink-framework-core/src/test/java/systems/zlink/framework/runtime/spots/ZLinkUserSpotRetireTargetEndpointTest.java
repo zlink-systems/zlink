@@ -443,7 +443,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         1,
                         "source",
                         new ZLinkServiceM6BWireCodec.SpotRouteFence(
-                                spotId, 3, targetRid, targetNodeGeneration, 6, 23));
+                                spotId, 3, targetRid, targetNodeGeneration, 5, 23));
         Message wrongSourcePart = Message.from("wrong-source");
         assertFalse(
                 recoveredEndpoint.handleSpot(

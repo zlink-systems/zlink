@@ -6740,6 +6740,71 @@
       ]
     },
     {
+      "name": "relocation-session-binding",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "participantId",
+          "$ref": "nonzero-u64"
+        },
+        {
+          "name": "sessionOwnerNodeRid",
+          "$ref": "rid"
+        },
+        {
+          "name": "sessionOwnerNodeGeneration",
+          "$ref": "nonzero-u64"
+        },
+        {
+          "name": "sessionOwnerId",
+          "$ref": "text8"
+        },
+        {
+          "name": "sessionOwnerLeaseGeneration",
+          "$ref": "nonzero-u64"
+        },
+        {
+          "name": "sessionRid",
+          "$ref": "rid"
+        },
+        {
+          "name": "bindingGeneration",
+          "$ref": "nonzero-u64"
+        }
+      ]
+    },
+    {
+      "name": "relocation-session-binding-vector",
+      "kind": "vector",
+      "participantIdDerivation": {
+        "inventory": "location-authority-key-inventory",
+        "inventoryOrder": "canonical-authority-key-bytes",
+        "authorityKeyEncoding": "utf-8",
+        "indexBase": 0,
+        "participantIdFormula": "index-plus-one"
+      },
+      "countType": {
+        "$ref": "u32"
+      },
+      "maximumItems": {
+        "$bound": "maintenanceAggregateParticipants"
+      },
+      "item": {
+        "$ref": "relocation-session-binding"
+      },
+      "constraints": [
+        {
+          "kind": "sorted",
+          "field": "participantId",
+          "comparison": "unsigned-wire-value"
+        },
+        {
+          "kind": "unique",
+          "field": "participantId"
+        }
+      ]
+    },
+    {
       "name": "relocation-envelope-v1",
       "kind": "struct",
       "fields": [
@@ -6770,6 +6835,10 @@
         {
           "name": "pendingTimerTicks",
           "$ref": "relocation-pending-timer-tick-vector"
+        },
+        {
+          "name": "sessionBindings",
+          "$ref": "relocation-session-binding-vector"
         }
       ],
       "trailingBytes": "forbidden"
@@ -6926,6 +6995,9 @@
       },
       "pendingTimerTicks": {
         "$ref": "relocation-pending-timer-tick-vector"
+      },
+      "sessionBindings": {
+        "$ref": "relocation-session-binding-vector"
       }
     },
     "maximumBytes": {

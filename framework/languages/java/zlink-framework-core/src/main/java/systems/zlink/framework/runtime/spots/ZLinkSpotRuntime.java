@@ -552,15 +552,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             type,
                                             systems.zlink.framework.configuration
                                                     .ZLinkUserSpotExecutionMode.SPOT_WIDE));
-            nodeRegistration
-                    .spotFactories()
-                    .forEach(
-                            type ->
-                                    initializedSpotRelocationCoordinationModes.putIfAbsent(
-                                            type,
-                                            systems.zlink.framework.configuration
-                                                    .ZLinkSpotRelocationCoordinationMode
-                                                    .FRAMEWORK_MANAGED));
             if (nodeRegistration.pubSubEnabled()) {
                 publishers.register(nodeRegistration.meshName(), node);
             }
@@ -733,8 +724,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                     message, received);
                                                 }
                                             }));
-            if (!nodeRegistration.entrySpots().isEmpty()
-                    || !nodeRegistration.actorFactories().isEmpty()) {
+            if (nodeRegistration.objectServer()) {
                 ZLinkBackendSpot entryBackendSpot = node.entrySpot();
                 entryBackendSpot.setRoutingId(nodeRegistration.entrySpotId());
                 entrySpotInitializations.add(
@@ -744,23 +734,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             nodes.add(node);
             nodesByName.put(nodeRegistration.meshName(), node);
             initializedSpotTypes.addAll(nodeRegistration.spotFactories());
-            nodeRegistration
-                    .spotFactories()
-                    .forEach(
-                            type ->
-                                    initializedSpotExecutionModes.putIfAbsent(
-                                            type,
-                                            systems.zlink.framework.configuration
-                                                    .ZLinkUserSpotExecutionMode.SPOT_WIDE));
-            nodeRegistration
-                    .spotFactories()
-                    .forEach(
-                            type ->
-                                    initializedSpotRelocationCoordinationModes.putIfAbsent(
-                                            type,
-                                            systems.zlink.framework.configuration
-                                                    .ZLinkSpotRelocationCoordinationMode
-                                                    .FRAMEWORK_MANAGED));
             nodeRegistration
                     .relocatableSpotFactories()
                     .values()
@@ -831,7 +804,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         activationFactory,
                         actorSessions::hasActorsInSpot);
         for (EntrySpotInitialization initialization : entrySpotInitializations) {
-            for (Class<? extends ZLinkEntrySpot<?>> entrySpotType : initialization.entrySpots()) {
+            var entrySpotTypes = initialization.entrySpots();
+            if (entrySpotTypes.isEmpty()) {
+                entrySpotTypes = java.util.Collections.singletonList(null);
+            }
+            for (Class<? extends ZLinkEntrySpot<?>> entrySpotType : entrySpotTypes) {
                 spotLifecycle.addEntrySpot(
                         systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls.submit(
                                 () ->
@@ -6537,83 +6514,21 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     payloadCopy.close();
                     headerCopy.close();
                 };
-        CompletionStage<Optional<Message>> captured = null;
-        if (actorSessions.isMoving(actor)) {
-            ZLinkActorReplyRoute replyRoute =
-                    packetHeader.requestSeq().isPresent()
-                                    && headerCopy.sourceNodeRid() != null
-                                    && headerCopy.sourceSessionRid() != null
-                            ? new ZLinkActorReplyRoute(
-                                    headerCopy.actor(),
-                                    headerCopy.sourceNodeRid(),
-                                    headerCopy.sourceSessionRid(),
-                                    headerCopy.requestId() == 0
-                                            ? packetHeader.requestSeq().orElseThrow()
-                                            : headerCopy.requestId(),
-                                    headerCopy.flags())
-                            : null;
-            try {
-                captured =
-                        actorSessions.captureMoving(
-                                actor, packetHeader.toStreamHeader(), payloadCopy, replyRoute);
-            } catch (RuntimeException failure) {
-                release.run();
-                throw failure;
-            }
-        }
-        if (captured != null) {
-            CompletionStage<Void> replayed =
-                    yieldSharedSpotTurnForActorRelocation(dispatchLine, captured)
-                            .thenCompose(
-                                    reply ->
-                                            replyCapturedActorPacket(
-                                                    actor, packetHeader, headerCopy, reply))
-                            .whenComplete((ignored, error) -> release.run());
-            return replayed;
-        }
-        boolean waitingForMove = actorSessions.isMoving(actor);
         CompletionStage<Void> queued =
-                waitingForMove
-                        ? yieldSharedSpotTurnForActorRelocation(
-                                        dispatchLine, actorSessions.awaitMoveCompletion(actor))
-                                .thenCompose(
-                                        ignored ->
-                                                enqueueLocalActorPacket(
-                                                        dispatchLine,
-                                                        spotSurface,
-                                                        actor,
-                                                        packetHeader,
-                                                        handler,
-                                                        headerCopy,
-                                                        payloadCopy,
-                                                        requestAdmission))
-                        : enqueueLocalActorPacket(
-                                dispatchLine,
-                                spotSurface,
-                                actor,
-                                packetHeader,
-                                handler,
-                                headerCopy,
-                                payloadCopy,
-                                requestAdmission);
+                enqueueLocalActorPacket(
+                        dispatchLine,
+                        spotSurface,
+                        actor,
+                        packetHeader,
+                        handler,
+                        headerCopy,
+                        payloadCopy,
+                        requestAdmission);
         queued.whenComplete(
                 (ignored, error) -> {
                     release.run();
                 });
         return queued;
-    }
-
-    static <T> CompletionStage<T> yieldSharedSpotTurnForActorRelocation(
-            SpotDispatchLine dispatchLine, CompletionStage<T> stage) {
-        // Resume the relocation prerequisite on the shared Spot continuation
-        // lane before composing replay or Actor dispatch. Yielding the whole
-        // composed operation would submit the Actor turn from the relocation
-        // executor into the ordinary FIFO, where steady Spot ingress can starve
-        // it; not yielding would leave that Actor turn behind the turn awaiting
-        // it.
-        return dispatchLine.usesSharedExecutionGate()
-                ? ZLinkSerialExecutionQueue.yieldCurrent(stage)
-                : stage;
     }
 
     /**
@@ -6772,39 +6687,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     : CompletableFuture.<Void>failedFuture(cause);
                         })
                 .thenCompose(stage -> stage);
-    }
-
-    private CompletionStage<Void> replyCapturedActorPacket(
-            ZLinkActor actor,
-            ActorPacketFrames.Header packetHeader,
-            ZLinkBackendActorReceived headerPart,
-            Optional<Message> reply) {
-        if (reply.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        byte[] frameBytes;
-        try (Message payload = reply.get();
-                Message frame = ActorPacketFrames.encodeReply(packetHeader, payload)) {
-            frameBytes = frame.toByteArray();
-        }
-        if (isNoBindActorRequest(packetHeader, headerPart)) {
-            try (Message frame = Message.from(frameBytes)) {
-                primaryNode.replyActorNoBind(
-                        headerPart.actor(),
-                        headerPart.sourceNodeRid(),
-                        headerPart.sourceSessionRid(),
-                        headerPart.requestId(),
-                        headerPart.flags(),
-                        List.of(frame));
-            }
-            return CompletableFuture.completedFuture(null);
-        }
-        return sendActorBoundSessionWithRetry(
-                primaryNode,
-                actorSessions.messageFollowTargetActorRef(actor).orElse(headerPart.actor()),
-                actor.context().actorId(),
-                frameBytes,
-                "actor handoff reply failed");
     }
 
     static void closePendingActorHeader(

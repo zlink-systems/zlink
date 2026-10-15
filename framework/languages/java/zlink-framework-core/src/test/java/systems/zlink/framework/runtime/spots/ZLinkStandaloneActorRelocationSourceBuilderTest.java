@@ -526,7 +526,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                                     .ZLinkBackendActorRef(
                                                     TARGET_RID, "actor-b", objectGeneration),
                                             9,
-                                            sourceOwnerGeneration + 1,
+                                            sourceOwnerGeneration,
                                             targetOwner.leaseGeneration())),
                             () -> stagedTargetRecord,
                             List.of(Message.from("target-staged-payload")),

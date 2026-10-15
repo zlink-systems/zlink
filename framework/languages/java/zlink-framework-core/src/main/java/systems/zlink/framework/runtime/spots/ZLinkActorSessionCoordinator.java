@@ -8,7 +8,6 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
-import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
@@ -141,6 +140,13 @@ final class ZLinkActorSessionCoordinator {
         requireActors().refreshRelocationMessageFollow(source, target);
     }
 
+    CompletionStage<Void> confirmRelocationMessageFollow(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .ActorRouteFence
+                    source) {
+        return requireActors().confirmRelocationMessageFollow(source);
+    }
+
     void abortRelocationMessageFollow(
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .ActorRouteFence
@@ -260,30 +266,6 @@ final class ZLinkActorSessionCoordinator {
                 .flatMap(actors::spotId)
                 .filter(spotId::equals)
                 .isPresent();
-    }
-
-    CompletionStage<Void> dispatch(ZLinkActor actor, Supplier<CompletionStage<Void>> operation) {
-        return requireActors().submitActorDispatch(actor.context().actorId(), operation);
-    }
-
-    CompletionStage<Optional<Message>> captureMoving(
-            ZLinkActor actor,
-            ZLinkStreamHeader header,
-            Message payload,
-            ZLinkActorReplyRoute replyRoute) {
-        return requireActors().captureMovingPacket(actor, header, payload, replyRoute);
-    }
-
-    Optional<ZLinkBackendActorRef> messageFollowTargetActorRef(ZLinkActor actor) {
-        return requireActors().messageFollowTargetActorRef(actor);
-    }
-
-    boolean isMoving(ZLinkActor actor) {
-        return requireActors().isMoving(actor);
-    }
-
-    CompletionStage<Void> awaitMoveCompletion(ZLinkActor actor) {
-        return requireActors().awaitMoveCompletion(actor);
     }
 
     CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(

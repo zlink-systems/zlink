@@ -2444,7 +2444,13 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }
   };
   const sourceActorTransfer = {
-    async prepareMaintenanceSession() {
+    async prepareMaintenanceSession(
+      _actor: unknown,
+      _state: unknown,
+      _signal: unknown,
+      _retainSource: unknown,
+      relocation: { high: bigint; low: bigint }
+    ) {
       return {
         target: {
           routerChannelId: 'session.route',
@@ -2452,7 +2458,25 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           spotId: 'session-entry',
           sessionNodeRid: 'session-owner',
           sessionRid: 'session-1',
-          bindingGeneration: 5n
+          bindingGeneration: 5n,
+          serviceWireRelocation: {
+            relocation,
+            coordinator: {
+              ownerId: sourceAuthority.ownerId,
+              leaseGeneration: sourceAuthority.ownerLeaseGeneration,
+              nodeRid: 'source',
+              nodeGeneration: 2n,
+              expectedAuthorityStoreVersion: sourceAuthority.storeVersion.value
+            },
+            session: {
+              sessionOwnerNodeRid: 'session-owner',
+              sessionOwnerNodeGeneration: 7n,
+              sessionOwnerId: 'session-owner-id',
+              sessionOwnerLeaseGeneration: 8n,
+              sessionRid: 'session-1',
+              bindingGeneration: 5n
+            }
+          }
         },
         handoffBacklog: packets.slice(0, 2),
         takeRelocationRelay: () => packets.slice(2),
