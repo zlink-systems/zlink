@@ -196,6 +196,46 @@ export ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1
 
 ## Reporting ZLink defects
 
-Compare API usage with the public guides and samples linked above to distinguish application usage errors. If Framework behavior blocks a scenario, report a minimal public API reproduction and the expected observable result in [ZLink issues](https://github.com/zlink-systems/zlink/issues). Link an existing issue when it describes the same defect.
+### Identifying a defect
 
-Include package versions from `Directory.Packages.props`, OS and runtime details, the first failing node-log excerpt, and available `flow` and `corr` records. State when startup failed before flow recording. Retain scenario assertions and report the failing public operation without hiding the defect through an application workaround.
+A ZLink defect is a case where a public API called as documented produces a result that differs from the documentation. First compare your API usage with the public guides and samples linked above to rule out an application usage error. If the usage is correct, report an issue instead of adding a workaround, and keep the scenario assertions unchanged. A workaround hides the defect and stays in the code after you upgrade to a fixed package, where it changes behavior.
+
+### Checking existing issues
+
+Before filing, search both open and closed [ZLink issues](https://github.com/zlink-systems/zlink/issues?q=is%3Aissue) by error message, exception type, and API name. If the same defect is already reported, add your environment and logs to that issue instead of opening a new one. If it matches a closed issue, find the package version that contains the fix in that issue, raise the pinned version in this project, and run again.
+
+### Issue body
+
+The body follows the issue template of the ZLink repository. Copy the following form and fill it in.
+
+```markdown
+# Issue description
+<scenario and the public operation that fails>
+
+# Environment
+* zlink version: <package versions from Directory.Packages.props>
+* OS: <OS, .NET runtime version>
+
+# Minimal test code / Steps to reproduce the issue
+1. <commands or minimal code using public APIs only>
+
+# What's the actual result? (include assertion message & call stack if applicable)
+<first failing node-log excerpt, exception and stack, flow/corr records>
+
+# What's the expected result?
+<observable result the guide or reference documents>
+```
+
+Reduce the reproduction to the minimal code or commands that keep only the failing public call, not this whole project. Paste only the first failing log section and the step before it; attach the full log as a file when it is needed. State when startup failed before flow recording.
+
+> **Issues are public.** Remove license keys, tokens, internal host names, and personal data from logs and settings before filing.
+
+### Filing procedure
+
+A coding agent drafts the issue body and shows it to the developer, and the developer confirms it before it is filed. An issue is published in an external repository, so do not file one without the developer's confirmation. With the GitHub CLI, file the confirmed body file as follows.
+
+```bash
+gh issue create --repo zlink-systems/zlink --title "<area>: <observed failure>" --body-file issue.md
+```
+
+Put the language and the failing behavior in the title (for example, `framework(dotnet): Spot startup fails with empty SpotId`). Record the filed issue number in the README Known issues so the project keeps the place to re-verify when a fixed package is released.

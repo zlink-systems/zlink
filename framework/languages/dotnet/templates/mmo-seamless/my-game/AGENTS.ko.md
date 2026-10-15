@@ -196,6 +196,46 @@ export ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1
 
 ## ZLink 결함 보고
 
-사용한 API를 위의 공개 가이드·샘플과 먼저 대조하여 application 사용 오류를 구분한다. Framework 동작이 scenario를 차단하면 [ZLink issues](https://github.com/zlink-systems/zlink/issues)에 최소 공개 API 재현과 기대한 관찰 결과를 보고한다. 같은 결함의 기존 issue가 있으면 해당 issue를 연결한다.
+### 결함 판단
 
-보고에는 `Directory.Packages.props`의 package 버전, OS·runtime, 첫 node 실패 구간과 가능한 `flow`·`corr` 기록을 포함한다. startup이 flow 기록 전에 실패했으면 그 사실을 명시한다. scenario assertion을 유지하여 실패한 공개 operation을 보고하며, application 우회로 결함을 감추지 않는다.
+ZLink 결함은 공개 API를 문서대로 호출했는데 Framework가 문서와 다른 결과를 내는 경우다. 먼저 사용한 API를 위의 공개 가이드·샘플과 대조하여 application 사용 오류인지 확인한다. 사용 오류가 아니면 우회 코드를 추가하지 않고 issue로 보고하며, scenario assertion은 그대로 유지한다. 우회 코드는 결함을 감추고, 수정된 package로 올린 뒤에도 남아 동작을 바꾸기 때문이다.
+
+### 기존 issue 확인
+
+등록 전에 [ZLink issues](https://github.com/zlink-systems/zlink/issues?q=is%3Aissue)에서 오류 메시지·예외 타입·API 이름으로 열린 issue와 닫힌 issue를 함께 검색한다. 같은 결함이 있으면 새 issue를 만들지 않고 그 issue에 재현 환경과 로그를 덧붙인다. 닫힌 issue와 같은 결함이면 수정이 포함된 package 버전을 issue에서 확인하고, 이 프로젝트의 고정 버전을 올려 다시 실행한다.
+
+### issue 본문
+
+본문은 ZLink 저장소의 issue template 항목을 따른다. 다음 형식을 복사해 채운다.
+
+```markdown
+# Issue description
+<scenario and the public operation that fails>
+
+# Environment
+* zlink version: <package versions from Directory.Packages.props>
+* OS: <OS, .NET runtime version>
+
+# Minimal test code / Steps to reproduce the issue
+1. <commands or minimal code using public APIs only>
+
+# What's the actual result? (include assertion message & call stack if applicable)
+<first failing node-log excerpt, exception and stack, flow/corr records>
+
+# What's the expected result?
+<observable result the guide or reference documents>
+```
+
+재현은 이 프로젝트 전체가 아니라 실패한 공개 호출만 남긴 최소 코드나 명령으로 줄인다. 로그는 첫 실패 구간과 그 앞 단계만 붙이고, 전체 로그가 필요하면 파일로 첨부한다. startup이 flow 기록 전에 실패했으면 그 사실을 적는다.
+
+> **issue는 공개된다.** 등록 전에 로그와 설정에서 license key, token, 내부 host 이름, 개인 정보를 지운다.
+
+### 등록 절차
+
+코딩 에이전트는 issue 본문을 작성해 개발자에게 보여 주고, 개발자가 확인한 뒤에 등록한다. issue는 외부 저장소에 공개되는 글이므로 개발자의 확인 없이 등록하지 않는다. GitHub CLI를 쓰면 확인한 본문 파일로 다음과 같이 등록한다.
+
+```bash
+gh issue create --repo zlink-systems/zlink --title "<area>: <observed failure>" --body-file issue.md
+```
+
+제목에는 언어와 실패한 동작을 적는다(예: `framework(dotnet): Spot startup fails with empty SpotId`). 등록한 issue 번호는 README의 Known issues에 적어, 수정 package가 나오면 다시 검증할 위치를 남긴다.
