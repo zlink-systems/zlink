@@ -219,7 +219,7 @@ The application sets the diagnostics level to one of four values.
 | Level | Scope the framework records |
 |---|---|
 | `Off` | Doesn't record message flow or dispatch error. |
-| `Errors` | Only records dispatch error, backpressure, and drop. |
+| `Errors` | Only records dispatch error, backpressure, and drop. Message-flow tracing is off, so no `flow_id` is built or propagated ([04 "4"](04-flow-correlation.en.md#4-when-a-flow-is-created)). |
 | `Normal` | Records errors and §2.1's main stages. |
 | `Detailed` | Can add message byte size and terminal elapsed time to `Normal` records. |
 

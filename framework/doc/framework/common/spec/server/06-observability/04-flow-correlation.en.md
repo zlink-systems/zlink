@@ -102,10 +102,15 @@ running it changes is a
 - The first outbound operation started by application code outside a
   framework callback
 
-If the diagnostics level is `Off`, every observation-only flow-handling
+Message-flow tracing is on when the diagnostics level is `Normal` or
+`Detailed`. At `Off` and `Errors`, every observation-only flow-handling
 step is skipped. A new `flow_id` isn't built, and an inbound message's
 flow field isn't turned into flow context or copied to the next message.
-The two fields also aren't added to an outbound envelope. A client connector
+The two fields also aren't added to an outbound envelope. The dispatch
+errors, backpressure and drops that `Errors` records are identified by the
+`correlation_id` (for a request) and by the MeshNode generation and local
+sequence of [03 "4"](03-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope--level-and-sampling).
+A client connector
 creates no flow; the server starts a STREAM client's flow at STREAM ingress
 ([Stream connector §5.5](../../stream-connector/32-stream-connector.en.md#55-flow)).
 
@@ -116,12 +121,12 @@ tracing.
 
 The framework sets the current flow context when starting callback
 execution. It restores the pre-execution context at the callback's
-terminal completion. If tracing is `Off`, this context isn't built or
+terminal completion. If tracing is off, this context isn't built or
 put into async-local storage.
 
 The rule for changing diagnostics level at runtime follows
 [03. Message Flow Tracing "5. Changing The Record Level At Runtime And The Cost Rule"](03-message-flow-tracing.en.md#5-changing-the-record-level-at-runtime-and-the-cost-rule).
-Once each processing point confirms `Off`, it doesn't build a flow ID,
+Once each processing point confirms that tracing is off, it doesn't build a flow ID,
 validate, capture context, add an envelope field, or build an internal
 propagation message. A change isn't retroactively applied to an
 already-built outbound frame.
@@ -130,7 +135,7 @@ already-built outbound frame.
 
 While message-flow tracing is on, the framework delivers `flow_id` and
 `flow_origin` together for as long as cause and effect continue in one
-piece of work. When `Off`, the §4 omission rule applies.
+piece of work. When it is off, the §4 omission rule applies.
 
 The standard list of processing boundaries preserving the two flow
 fields is the same as the boundaries defined by

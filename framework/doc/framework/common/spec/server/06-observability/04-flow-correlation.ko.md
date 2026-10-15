@@ -88,10 +88,12 @@ message를 받는 논리 대상을 [Spot](../00-foundation/02-glossary.ko.md#spo
 - Timer callback과 lifecycle callback
 - Framework callback 밖의 application code가 시작한 첫 outbound operation
 
-Diagnostics level이 `Off`이면 관측 전용 flow 처리를 모두 생략한다. 새
-`flow_id`를 만들지 않고 inbound message의 flow field를 flow context로 만들거나
+Message-flow tracing은 diagnostics level이 `Normal`·`Detailed`일 때 켜져 있다. `Off`·`Errors`이면
+관측 전용 flow 처리를 모두 생략한다. 새 `flow_id`를 만들지 않고 inbound message의 flow field를 flow context로 만들거나
 다음 message에 복사하지 않는다. Outbound envelope에도 두 field를 추가하지 않는다.
-Client connector는 flow를 만들지 않으며, STREAM client의 흐름은 서버가 STREAM ingress에서 시작한다
+`Errors`가 기록하는 dispatch error·backpressure·drop은 `correlation_id`(request)와
+[03 「4」](03-message-flow-tracing.ko.md#4-기록-범위-설정--level과-sampling)의 MeshNode generation·local sequence로
+식별한다. Client connector는 flow를 만들지 않으며, STREAM client의 흐름은 서버가 STREAM ingress에서 시작한다
 ([Stream connector §5.5](../../stream-connector/32-stream-connector.ko.md#55-flow)).
 
 `correlation_id`는 request와 terminal reply를 연결하는 protocol 정보다. Diagnostics
@@ -100,18 +102,18 @@ level이 `Off`여도 request마다 만들고 reply까지 보존한다. 이 값�
 
 Framework는 callback 실행을 시작할 때 현재 flow context를 설정한다. Callback의
 terminal completion에서는 실행 전에 있던 context로 복원한다. Tracing이
-`Off`이면 이 context를 만들거나 async-local storage에 넣지 않는다.
+꺼져 있으면 이 context를 만들거나 async-local storage에 넣지 않는다.
 
 실행 중 diagnostics level을 바꾸는 규칙은
 [03. Message flow tracing 「5. 실행 중 기록 수준 변경과 비용 규칙」](03-message-flow-tracing.ko.md#5-실행-중-기록-수준-변경과-비용-규칙)을
-따른다. 각 처리 지점이 `Off`를 확인한 뒤에는 flow ID 생성, validation, context
+따른다. 각 처리 지점이 tracing이 꺼진 것을 확인한 뒤에는 flow ID 생성, validation, context
 capture, envelope field 추가와 전파용 내부 message 생성을 하지 않는다. 이미
 만들어진 outbound frame에는 지나간 처리 단계에 되돌려 적용하지 않는다.
 
 ## 5. 전파 규칙
 
 Message-flow tracing이 켜져 있으면 Framework는 한 작업에서 원인과 결과가 이어지는
-동안 `flow_id`와 `flow_origin`을 함께 전달한다. `Off`일 때는 §4의 생략 규칙을
+동안 `flow_id`와 `flow_origin`을 함께 전달한다. 꺼져 있을 때는 §4의 생략 규칙을
 적용한다.
 
 두 flow field를 보존하는 처리 경계의 표준 목록은

@@ -198,7 +198,7 @@ Application은 diagnostics level을 다음 네 값 중 하나로 설정한다.
 | Level | Framework가 기록하는 범위 |
 |---|---|
 | `Off` | Message flow와 dispatch error를 기록하지 않는다. |
-| `Errors` | Dispatch error, backpressure와 drop만 기록한다. |
+| `Errors` | Dispatch error, backpressure와 drop만 기록한다. Message-flow tracing은 꺼져 있어 `flow_id`를 만들거나 전파하지 않는다([04 「4」](04-flow-correlation.ko.md#4-flow를-만드는-시점)). |
 | `Normal` | Error와 §2.1의 주요 단계를 기록한다. |
 | `Detailed` | `Normal` 기록에 message byte 크기와 terminal 경과 시간을 추가할 수 있다. |
 
