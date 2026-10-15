@@ -1,13 +1,10 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkRequestException;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.sockets.RequestResult;
-import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.runtime.binding.ZLinkJavaDurableRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
@@ -49,6 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -266,13 +264,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                                 "duplicate canonical relocation prepare differs"));
                             }
                             attempt.activeWaiters().incrementAndGet();
-                            long readyDeadlineNanos =
-                                    monotonicNanos.getAsLong() + timeout.toNanos();
-                            return awaitReadyWithPrepareResend(
-                                            targetNodeRid,
-                                            attempt,
-                                            readyDeadlineNanos,
-                                            current == null || !attempt.ready().isDone())
+                            return awaitReady(targetNodeRid, attempt, timeout)
                                     .whenComplete(
                                             (ignored, failure) -> {
                                                 int remaining =
@@ -304,7 +296,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                 ZLinkCanonicalRelocationProtocol.SOURCE,
                                 prepare.object(),
                                 frozenRecord));
-        attempt.batch().append(frozenRecord, encoded);
+        attempt.batch().append(frozenRecord, encoded, node.observePeerRoute(targetNodeRid));
         return send(targetNodeRid, encoded);
     }
 
@@ -328,6 +320,7 @@ final class ZLinkCanonicalRelocationStateMachine
         //  Cutover submit terminal only: the source attempt, its payload and the whole
         //  boundary batch stay retained until settle() confirms authority (spec 28 §4.4).
         attempt.cutover(encodedCutover);
+        batch.observeSubmission(node.observePeerRoute(targetNodeRid));
         return send(targetNodeRid, encodedCutover);
     }
 
@@ -350,7 +343,7 @@ final class ZLinkCanonicalRelocationStateMachine
             sourceQuiescenceChanged.run();
         }
         CompletableFuture<Settlement> result = new CompletableFuture<>();
-        settleSource(attempt, preserveAt, true, result);
+        settleSource(attempt, preserveAt, result);
         return result.whenComplete(
                 (settlement, failure) -> {
                     inStateLane(() -> sources.remove(key, attempt));
@@ -379,10 +372,7 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private void settleSource(
-            SourceAttempt attempt,
-            Instant preserveAt,
-            boolean transportConnected,
-            CompletableFuture<Settlement> result) {
+            SourceAttempt attempt, Instant preserveAt, CompletableFuture<Settlement> result) {
         var prepare = attempt.prepare();
         String key = primary(attempt.request().participants()).authorityKey();
         String expected = prepare.coordinator().expectedAuthorityStoreVersion();
@@ -439,23 +429,26 @@ final class ZLinkCanonicalRelocationStateMachine
                         result.complete(settled.get());
                         return;
                     }
-                    //  Uncertain or not yet committed: keep every copy and ask again. A
-                    //  reconnect after a lost transport resends the whole batch and cutover.
-                    boolean connected = node.isPeerTransportConnected(attempt.targetNodeRid());
+                    // Relocation §4.4: compare against the route used by any retained
+                    // boundary record, including a cutover with no relay records.
+                    var route = node.observePeerRoute(attempt.targetNodeRid());
+                    boolean replace =
+                            route.ready()
+                                    && route.selectedGeneration()
+                                            != attempt.batch().submittedRoute()
+                                    && !fence;
                     CompletionStage<Void> resend =
-                            connected && !transportConnected && !fence
+                            replace
                                     ? retransmitBoundaryBatch(attempt)
                                     : CompletableFuture.completedFuture(null);
                     resend.whenComplete(
-                            (ignored, resendFailure) ->
-                                    delayScheduler.schedule(
-                                            STORE_RETRY_DELAY,
-                                            () ->
-                                                    settleSource(
-                                                            attempt,
-                                                            preserveAt,
-                                                            connected,
-                                                            result)));
+                            (ignored, resendFailure) -> {
+                                if (replace && resendFailure == null)
+                                    attempt.batch().resubmitted(route.selectedGeneration());
+                                delayScheduler.schedule(
+                                        STORE_RETRY_DELAY,
+                                        () -> settleSource(attempt, preserveAt, result));
+                            });
                 });
     }
 
@@ -1842,120 +1835,101 @@ final class ZLinkCanonicalRelocationStateMachine
         }
     }
 
-    /**
-     * Spec 15 §4.3 — the source's Actor Restore request is retried within the Join deadline while
-     * the same target process is running, and a duplicate PREPARE is idempotent on the target. The
-     * request reply can be lost while symmetric manual duplicate connections converge (spec 07
-     * §518), so waiting the whole deadline on one submission turns a lost reply into a silent Join
-     * stall. Resend the idempotent PREPARE each bounded slice until relay readiness or the
-     * remaining deadline is spent.
-     */
-    private CompletionStage<Void> awaitReadyWithPrepareResend(
-            RoutingId targetNodeRid,
-            SourceAttempt attempt,
-            long deadlineNanos,
-            boolean submitFirst) {
-        long remainingNanos = deadlineNanos - monotonicNanos.getAsLong();
-        if (remainingNanos <= 0) {
-            return failed(new TimeoutException("relocation relay readiness timed out"));
-        }
-        Duration slice = Duration.ofNanos(Math.min(remainingNanos, TimeUnit.SECONDS.toNanos(1)));
-        CompletionStage<Void> submitted = CompletableFuture.completedFuture(null);
-        CompletableFuture<Void> readyOrRetry = new CompletableFuture<>();
-        attempt.ready()
-                .whenComplete(
-                        (ignored, failure) -> {
-                            if (failure == null) {
-                                readyOrRetry.complete(null);
-                            } else {
-                                readyOrRetry.completeExceptionally(unwrap(failure));
-                            }
-                        });
-        if (submitFirst && !attempt.ready().isDone()) {
-            if (node
-                    instanceof
-                    ZLinkInternalMeshNode.CanonicalRelocationPrepareRequestReplySupport) {
-                CompletionStage<byte[]> requestReply =
-                        node.requestCanonicalRelocationPrepare(
-                                targetNodeRid,
-                                ZLinkCanonicalRelocationProtocol.encodePrepare(attempt.prepare()),
-                                slice);
-                CompletionStage<Void> reply =
-                        requestReply.thenCompose(
-                                encoded ->
-                                        apply(
+    /** Actor model §8.1 owns replay for PREPARE and its ordered state chunks. */
+    private CompletionStage<Void> awaitReady(
+            RoutingId targetNodeRid, SourceAttempt attempt, Duration timeout) {
+        if (attempt.ready().isDone()) return attempt.ready();
+        return ZLinkJavaDurableRequest.request(
+                        () ->
+                                List.of(
+                                        ZLinkCanonicalRelocationProtocol.encodePrepare(
+                                                attempt.prepare())),
+                        (frames, remaining, admission) -> {
+                            var result = new CompletableFuture<List<byte[]>>();
+                            attempt.ready()
+                                    .whenComplete(
+                                            (ignored, failure) -> {
+                                                if (failure == null) result.complete(List.of());
+                                                else result.completeExceptionally(unwrap(failure));
+                                            });
+                            CompletionStage<byte[]> nativeReply;
+                            CompletionStage<Void> submitted;
+                            if (node
+                                    instanceof
+                                    ZLinkInternalMeshNode
+                                            .CanonicalRelocationPrepareRequestReplySupport) {
+                                nativeReply =
+                                        node.requestCanonicalRelocationPrepare(
                                                 targetNodeRid,
-                                                Byte.toUnsignedInt(encoded[3]),
-                                                encoded));
-                reply.whenComplete(
-                        (ignored, failure) -> {
-                            if (failure == null) {
-                                return;
-                            }
-                            if (isRetryablePrepareRequestFailure(failure)) {
-                                readyOrRetry.complete(null);
+                                                frames.getFirst(),
+                                                remaining,
+                                                admission);
+                                nativeReply
+                                        .thenCompose(
+                                                encoded ->
+                                                        apply(
+                                                                targetNodeRid,
+                                                                Byte.toUnsignedInt(encoded[3]),
+                                                                encoded))
+                                        .whenComplete(
+                                                (ignored, failure) -> {
+                                                    if (failure != null)
+                                                        result.completeExceptionally(
+                                                                unwrap(failure));
+                                                });
+                                submitted = CompletableFuture.completedFuture(null);
                             } else {
-                                attempt.ready().completeExceptionally(unwrap(failure));
+                                nativeReply = null;
+                                submitted =
+                                        send(targetNodeRid, frames.getFirst())
+                                                .thenRun(() -> admission.complete(null));
                             }
+                            submitted
+                                    .thenCompose(ignored -> sendStateChunks(targetNodeRid, attempt))
+                                    .whenComplete(
+                                            (ignored, failure) -> {
+                                                if (failure != null)
+                                                    result.completeExceptionally(unwrap(failure));
+                                            });
+                            result.whenComplete(
+                                    (ignored, failure) -> {
+                                        if (result.isCancelled() && nativeReply != null)
+                                            nativeReply.toCompletableFuture().cancel(false);
+                                    });
+                            return result;
+                        },
+                        () -> node.targetLifecycleEnded(targetNodeRid),
+                        () -> node.observePeerRoute(targetNodeRid),
+                        node::onStateChanged,
+                        action -> {
+                            if (stateLane.isOnLane()) {
+                                action.run();
+                                return CompletableFuture.completedStage(null);
+                            }
+                            return stateLane.runAsync(
+                                    () -> {
+                                        action.run();
+                                        return null;
+                                    });
+                        },
+                        timeout,
+                        monotonicNanos)
+                .<Void>thenApply(ignored -> null)
+                .exceptionallyCompose(
+                        failure -> {
+                            Throwable cause = unwrap(failure);
+                            // Preserve the relocation stage boundary's timeout representation:
+                            // the host relocation owner consumes TimeoutException as
+                            // DeadlineExceeded.
+                            if (cause instanceof ZLinkFrameworkException framework
+                                    && framework.kind()
+                                            == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) {
+                                var timeoutFailure = new TimeoutException(framework.getMessage());
+                                timeoutFailure.initCause(framework);
+                                return failed(timeoutFailure);
+                            }
+                            return failed(cause);
                         });
-            } else {
-                submitted =
-                        send(
-                                targetNodeRid,
-                                ZLinkCanonicalRelocationProtocol.encodePrepare(attempt.prepare()));
-            }
-            // The request is now in flight; command 52 may follow before the
-            // target completes the reply leg.
-            submitted = submitted.thenCompose(ignored -> sendStateChunks(targetNodeRid, attempt));
-        }
-        return submitted
-                .exceptionallyCompose(failure -> failed(unwrap(failure)))
-                .thenCompose(
-                        ignored ->
-                                timed(readyOrRetry, slice, "relocation relay readiness")
-                                        .handle(
-                                                (ready, failure) -> {
-                                                    if (failure == null
-                                                            && attempt.ready().isDone()) {
-                                                        return attempt.ready();
-                                                    }
-                                                    if ((failure == null
-                                                                    || unwrap(failure)
-                                                                            instanceof
-                                                                            TimeoutException)
-                                                            && deadlineNanos
-                                                                            - monotonicNanos
-                                                                                    .getAsLong()
-                                                                    > 0) {
-                                                        return awaitReadyWithPrepareResend(
-                                                                        targetNodeRid,
-                                                                        attempt,
-                                                                        deadlineNanos,
-                                                                        true)
-                                                                .toCompletableFuture();
-                                                    }
-                                                    return CompletableFuture.<Void>failedFuture(
-                                                            failure == null
-                                                                    ? new TimeoutException(
-                                                                            "relocation relay"
-                                                                                    + " readiness timed"
-                                                                                    + " out")
-                                                                    : unwrap(failure));
-                                                })
-                                        .thenCompose(stage -> stage));
-    }
-
-    static boolean isRetryablePrepareRequestFailure(Throwable failure) {
-        Throwable cause = unwrap(failure);
-        // A disconnected exact PREPARE is either known-not-admitted
-        // (submit terminal) or acceptance-unknown (request terminal). The
-        // target owns duplicate suppression for this relocation identity, so
-        // both cases stay on the existing bounded PREPARE resend path.
-        return cause instanceof TimeoutException
-                || cause instanceof ZlinkRequestException requestFailure
-                        && requestFailure.getResult() == RequestResult.NOT_CONNECTED
-                || cause instanceof ZlinkSubmitException submitFailure
-                        && submitFailure.getResult() == SubmitResult.NOT_CONNECTED;
     }
 
     /**
@@ -2011,23 +1985,6 @@ final class ZLinkCanonicalRelocationStateMachine
         return chain;
     }
 
-    private CompletionStage<Void> timed(
-            CompletionStage<Void> stage, Duration timeout, String operation) {
-        CompletableFuture<Void> result = new CompletableFuture<>();
-        stage.whenComplete(
-                (ignored, failure) -> {
-                    if (failure == null) {
-                        result.complete(null);
-                    } else {
-                        result.completeExceptionally(unwrap(failure));
-                    }
-                });
-        delayScheduler.schedule(
-                timeout,
-                () -> result.completeExceptionally(new TimeoutException(operation + " timed out")));
-        return result;
-    }
-
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
         while (current instanceof CompletionException && current.getCause() != null) {
@@ -2042,6 +1999,7 @@ final class ZLinkCanonicalRelocationStateMachine
 
     private static <T> T awaitStateLane(
             ZLinkStateLane stateLane, java.util.function.Supplier<T> work) {
+        if (stateLane.isOnLane()) return work.get();
         try {
             return stateLane.runAsync(work).toCompletableFuture().join();
         } catch (CompletionException failure) {
@@ -2114,10 +2072,43 @@ final class ZLinkCanonicalRelocationStateMachine
         private final List<byte[]> encodedFrames = new ArrayList<>();
         private final java.util.zip.CRC32C checksum = new java.util.zip.CRC32C();
         private long recordCount;
+        private OptionalLong submittedRoute = OptionalLong.empty();
 
-        void append(byte[] frozenRecord, byte[] encodedFrame) {
+        void observeSubmission(ZLinkInternalMeshNode.PeerRouteObservation route) {
             inStateLane(
                     () -> {
+                        captureFirstRoute(route);
+                        return null;
+                    });
+        }
+
+        long submittedRoute() {
+            return inStateLane(() -> submittedRoute.orElse(0));
+        }
+
+        void resubmitted(long generation) {
+            inStateLane(
+                    () -> {
+                        submittedRoute = OptionalLong.of(generation);
+                        return null;
+                    });
+        }
+
+        private void captureFirstRoute(ZLinkInternalMeshNode.PeerRouteObservation route) {
+            if (submittedRoute.isEmpty()) {
+                // An attempted boundary with no ready route is distinct from no attempt.
+                // Cutover cannot overwrite that pending delivery with its later ready route.
+                submittedRoute = OptionalLong.of(route.ready() ? route.selectedGeneration() : 0);
+            }
+        }
+
+        void append(
+                byte[] frozenRecord,
+                byte[] encodedFrame,
+                ZLinkInternalMeshNode.PeerRouteObservation route) {
+            inStateLane(
+                    () -> {
+                        captureFirstRoute(route);
                         checksum.update(frozenRecord, 0, frozenRecord.length);
                         recordCount++;
                         encodedFrames.add(encodedFrame.clone());

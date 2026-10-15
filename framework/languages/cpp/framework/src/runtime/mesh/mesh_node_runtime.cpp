@@ -1399,18 +1399,17 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
               static_cast<std::uint64_t> (target.lease_generation),
               _state->default_request_timeout);
         },
-      .send_cutover = [this, target] (const runtime::protocol::relocation_cutover_t &cutover)
-        -> task_t<runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t::
-                    cutover_enqueue_t> {
-          using context_t = runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t;
-          co_return co_await _node->cutover_relocation_remote (target.rid, cutover)
-            ? context_t::cutover_enqueue_t::enqueued
-            : context_t::cutover_enqueue_t::not_enqueued;
+      .send_cutover =
+        [this, target] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
+          co_return co_await _node->cutover_relocation_remote (target.rid, cutover);
       },
       .restore_deadline = restore_deadline,
       .source_stopped = [this] { return relocation_source_stopped (); },
-      .target_connected =
-        [this, target] { return has_admitted_peer (target.rid, target.lifecycle_generation); },
+      .target_route =
+        [this, target] {
+            return _node->transport ().peer_route (target.rid.to_bytes (),
+                                                   target.lifecycle_generation);
+        },
       .abort_target_before_cutover = [] { return true; }};
 
     std::vector<std::byte> inventory_bytes;
@@ -1646,17 +1645,17 @@ mesh_node_runtime_t::relocate_application_unit (
               static_cast<std::uint64_t> (target.lease_generation),
               _state->default_request_timeout);
         },
-      .send_cutover = [this, target] (const runtime::protocol::relocation_cutover_t &cutover)
-        -> task_t<eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t> {
-          using context_t = eligible_relocation_unit_t::canonical_wire_context_t;
-          co_return co_await _node->cutover_relocation_remote (target.rid, cutover)
-            ? context_t::cutover_enqueue_t::enqueued
-            : context_t::cutover_enqueue_t::not_enqueued;
+      .send_cutover =
+        [this, target] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
+          co_return co_await _node->cutover_relocation_remote (target.rid, cutover);
       },
       .restore_deadline = restore_deadline,
       .source_stopped = [this] { return relocation_source_stopped (); },
-      .target_connected =
-        [this, target] { return has_admitted_peer (target.rid, target.lifecycle_generation); },
+      .target_route =
+        [this, target] {
+            return _node->transport ().peer_route (target.rid.to_bytes (),
+                                                   target.lifecycle_generation);
+        },
       .abort_target_before_cutover = [] { return true; }};
 
     std::vector<std::byte> inventory;
@@ -1935,7 +1934,8 @@ void mesh_node_runtime_t::stop ()
 void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_routing_id,
                                         const std::string &endpoint,
                                         std::uint64_t expected_lifecycle_generation,
-                                        std::string security_identity)
+                                        std::string security_identity,
+                                        bool automatic)
 {
     if (!_node || endpoint.empty ())
         return;
@@ -1946,7 +1946,7 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
               return;
           const auto submitted =
             _node->connect_peer (endpoint, expected_routing_id, expected_lifecycle_generation,
-                                 std::move (security_identity));
+                                 std::move (security_identity), automatic);
           if (submitted)
               _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
       })
@@ -2006,13 +2006,29 @@ void mesh_node_runtime_t::disconnect_peer (const std::string &endpoint) noexcept
 }
 
 void mesh_node_runtime_t::disconnect_peer (const zlink::routing_id_t &expected_routing_id,
-                                           const std::string &endpoint) noexcept
+                                           const std::string &endpoint,
+                                           bool automatic) noexcept
 {
     if (!_node || endpoint.empty ())
         return;
-    try {
+    (void) _state->spot_state->runtime_failures ()->capture ([&] {
+        const bool manual =
+          automatic
+          && _state->lane
+               .run ([&] {
+                   return std::any_of (_state->peer_connections.begin (),
+                                       _state->peer_connections.end (), [&] (const auto &manual) {
+                                           return manual.endpoint == endpoint
+                                                  || (manual.expected_routing_id
+                                                      && *manual.expected_routing_id
+                                                           == expected_routing_id);
+                                       });
+               })
+               .get ();
         _peer_connection_intent_lane
           .run ([&] {
+              if (automatic && (manual || !_peer_connection_intents.contains (endpoint)))
+                  return;
               const auto endpoint_retained =
                 _node->disconnect_peer (expected_routing_id.to_bytes (), endpoint);
               /* A replacement RID can already be admitted through the same
@@ -2024,9 +2040,7 @@ void mesh_node_runtime_t::disconnect_peer (const zlink::routing_id_t &expected_r
                   _peer_connection_intents.erase (endpoint);
           })
           .get ();
-    }
-    catch (...) {
-    }
+    });
 }
 
 bool mesh_node_runtime_t::wait_for_peer_ready (const zlink::routing_id_t &target,
@@ -3271,18 +3285,17 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
               static_cast<std::uint64_t> (target.owner.lease_generation),
               _state->default_request_timeout);
         },
-      .send_cutover = [this, s] (const runtime::protocol::relocation_cutover_t &cutover)
-        -> task_t<runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t::
-                    cutover_enqueue_t> {
-          using context_t = runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t;
-          co_return co_await _node->cutover_relocation_remote (s->target.node_rid, cutover)
-            ? context_t::cutover_enqueue_t::enqueued
-            : context_t::cutover_enqueue_t::not_enqueued;
+      .send_cutover = [this,
+                       s] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
+          co_return co_await _node->cutover_relocation_remote (s->target.node_rid, cutover);
       },
       .restore_deadline = s->deadline,
       .source_stopped = [this] { return relocation_source_stopped (); },
-      .target_connected =
-        [this, s] { return has_admitted_peer (s->target.node_rid, s->target.node_generation); },
+      .target_route =
+        [this, s] {
+            return _node->transport ().peer_route (s->target.node_rid.to_bytes (),
+                                                   s->target.node_generation);
+        },
       .abort_target_before_cutover = [] { return true; }};
     const auto inventory_digest =
       runtime::stateful::maintenance_runtime_t::compute_inventory_digest ({s->source_actor});

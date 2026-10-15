@@ -237,7 +237,7 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                         });
                 await(() -> selectedRouteObserved.getCount() == 0);
                 assertFalse(
-                        local.announcedRouteGenerations.containsKey(remoteRid),
+                        local.helloExchanges.containsKey(remoteRid),
                         "sealed selected route must not have an announcement");
                 assertEquals(MeshNodeState.DRAINING, local.status().state());
                 assertEquals(ZLinkServiceNodeDescriptor.State.DRAINING, descriptor(local).state());

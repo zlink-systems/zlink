@@ -363,6 +363,10 @@ class raw_mesh_node_owner_t
     // same whenever POLLROUTE is ready; returns the number of RIDs whose
     // selected route changed.
     std::size_t observe_routes ();
+    // Selected Core route generation and remote ADMIT readiness.
+    std::pair<std::uint64_t, bool>
+    peer_route (const std::vector<std::uint8_t> &rid,
+                std::optional<std::uint64_t> lifecycle_generation = std::nullopt) const;
 
   private:
     static std::string owner_key (const std::vector<std::uint8_t> &routing_id);
@@ -448,7 +452,8 @@ class raw_mesh_node_owner_t
     // The one route observer of this ROUTER (Core ROUTER §10.1): reads the
     // selected-route snapshot, ends admission of every route that ended or
     // was replaced and starts the handshake on every new route.
-    std::size_t apply_route_snapshot ();
+    std::size_t apply_route_snapshot (zlink::poll_event_flag_t readiness);
+    void submit_pending_hellos_on_lane ();
     bool route_current_locked (const std::vector<std::uint8_t> &node_routing_id,
                                std::uint64_t route_generation) const;
     void

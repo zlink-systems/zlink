@@ -187,10 +187,10 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                           mesh_node->expect_peer (target.node_rid, target.endpoint,
                                                   target.lifecycle_generation,
                                                   target.security_identity);
-                          if (target.initiates_connection && !manual_endpoint)
+                          if (target.initiates_connection)
                               mesh_node->connect_peer (target.node_rid, target.endpoint,
                                                        target.lifecycle_generation,
-                                                       target.security_identity);
+                                                       target.security_identity, true);
                       }
                   }
                   if (target.initiates_connection && !manual_endpoint)
@@ -205,7 +205,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                            * identity accepted while Core tears down its pipe. */
                           mesh_node->forget_peer (target.node_rid, target.endpoint);
                           if (target.initiates_connection && !manual_endpoint)
-                              mesh_node->disconnect_peer (target.node_rid, target.endpoint);
+                              mesh_node->disconnect_peer (target.node_rid, target.endpoint, true);
                       }
                   }
                   if (target.initiates_connection && !manual_endpoint)
@@ -225,12 +225,12 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                   if (target.initiates_connection)
                       mesh_node->connect_peer (target.node_rid, target.endpoint,
                                                target.lifecycle_generation,
-                                               target.security_identity);
+                                               target.security_identity, true);
               },
               [mesh_node] (const target_t &target) {
                   mesh_node->forget_peer (target.node_rid, target.endpoint);
                   if (target.initiates_connection)
-                      mesh_node->disconnect_peer (target.node_rid, target.endpoint);
+                      mesh_node->disconnect_peer (target.node_rid, target.endpoint, true);
               });
         }
 

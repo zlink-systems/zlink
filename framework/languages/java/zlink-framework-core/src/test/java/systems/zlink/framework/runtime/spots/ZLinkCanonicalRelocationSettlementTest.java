@@ -81,6 +81,63 @@ final class ZLinkCanonicalRelocationSettlementTest {
     private static final byte[] R1 = {11, 1};
     private static final byte[] R2 = {22, 2, 2};
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,0,true",
+        "false,1,true",
+        "false,2,true",
+        "true,1,true",
+        "true,2,true",
+        "false,2,false",
+        "false,3,true"
+    })
+    void selectedRouteReplacementResendsTheWholeBoundaryWithoutDisconnect(
+            boolean emptyBatch, int replaceAt, boolean readyAtObservation) throws Exception {
+        Fixture fixture = new Fixture(true);
+        fixture.silentlyDrop.set(true);
+        fixture.dropCutover.set(true);
+        fixture.stage();
+        if (replaceAt == 3) {
+            fixture.routeGeneration.set(2);
+            fixture.connected.set(false);
+        }
+        if (!emptyBatch) {
+            fixture.dropData.set(record -> true);
+            fixture.relay(R1, R2);
+        }
+        if (replaceAt == 0) fixture.routeGeneration.set(2);
+        if (replaceAt == 3) fixture.connected.set(true);
+        fixture.publish();
+        if (replaceAt == 1) fixture.routeGeneration.set(2);
+        fixture.management.clear();
+        fixture.dropData.set(record -> false);
+        fixture.dropCutover.set(false);
+        fixture.connected.set(readyAtObservation);
+        var settlement =
+                fixture.source
+                        .settle(
+                                fixture.targetRid,
+                                fixture.request.fence(),
+                                Instant.now().plusSeconds(30))
+                        .toCompletableFuture();
+        if (replaceAt == 2) fixture.routeGeneration.set(2);
+        if (!settlement.isDone()) fixture.nextManagementTurn();
+        if (!readyAtObservation) {
+            assertFalse(settlement.isDone(), "a selected but unready route cannot carry replay");
+            fixture.connected.set(true);
+            fixture.nextManagementTurn();
+        }
+        assertEquals(1, fixture.commits.get(), "the replay must deliver the verified boundary");
+        // Resubmission and the source's later Store confirmation are distinct observations
+        // (relocation §4.4). Advance that authority observation explicitly as well.
+        if (!settlement.isDone()) fixture.nextManagementTurn();
+        assertTrue(settlement.isDone(), "the source must observe the target's committed authority");
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED, settlement.join());
+        assertEquals(emptyBatch ? 0 : 2, fixture.endpoint.relayed().size());
+        assertEquals(1, fixture.commits.get());
+    }
+
     @Test
     void shutdownWaitsForStageInstallationBeforeAbort() throws Exception {
         Fixture fixture = new Fixture();
@@ -108,12 +165,14 @@ final class ZLinkCanonicalRelocationSettlementTest {
         Fixture fixture = new Fixture();
         fixture.endpoint.stageCompletion = new CompletableFuture<>();
         AtomicReference<CompletionStage<Void>> terminal = new AtomicReference<>();
-        fixture.endpoint.stageEntered.thenRun(
-                () -> terminal.set(fixture.target.sealAcceptedTargetRelocations()));
+        var shutdownEntered =
+                fixture.endpoint.stageEntered.thenRun(
+                        () -> terminal.set(fixture.target.sealAcceptedTargetRelocations()));
         var staging =
                 fixture.source
                         .stage(fixture.targetRid, fixture.request, Duration.ofSeconds(2))
                         .toCompletableFuture();
+        shutdownEntered.get(3, TimeUnit.SECONDS);
         assertNotNull(terminal.get());
         assertFalse(terminal.get().toCompletableFuture().isDone());
         assertEquals(0, fixture.endpoint.abortedBeforeInstalled.get());
@@ -460,6 +519,11 @@ final class ZLinkCanonicalRelocationSettlementTest {
         final ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
         final AtomicInteger commits = new AtomicInteger();
         final AtomicBoolean connected = new AtomicBoolean(true);
+        final java.util.concurrent.atomic.AtomicLong routeGeneration =
+                new java.util.concurrent.atomic.AtomicLong(1);
+        final AtomicBoolean silentlyDrop = new AtomicBoolean();
+        final java.util.concurrent.BlockingQueue<Runnable> management =
+                new java.util.concurrent.LinkedBlockingQueue<>();
         final AtomicBoolean dropCutover = new AtomicBoolean();
         final AtomicReference<java.util.function.Predicate<byte[]>> dropData =
                 new AtomicReference<>(record -> false);
@@ -484,6 +548,10 @@ final class ZLinkCanonicalRelocationSettlementTest {
         final CompletableFuture<Void> prepareEntered = new CompletableFuture<>();
 
         Fixture() {
+            this(false);
+        }
+
+        Fixture(boolean manualManagement) {
             String actorId = "actor-settlement";
             authorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
             sourceOwner = owner("source-owner");
@@ -652,7 +720,15 @@ final class ZLinkCanonicalRelocationSettlementTest {
                             coordinator,
                             new RecordingEndpoint(),
                             (deadline, cleanup) -> {},
-                            options);
+                            options,
+                            System::nanoTime,
+                            (delay, task) -> {
+                                if (manualManagement) management.add(task);
+                                else
+                                    CompletableFuture.delayedExecutor(
+                                                    delay.toMillis(), TimeUnit.MILLISECONDS)
+                                            .execute(task);
+                            });
             target =
                     new ZLinkCanonicalRelocationStateMachine(
                             node(targetRid, 12, sourceRef, false),
@@ -667,6 +743,8 @@ final class ZLinkCanonicalRelocationSettlementTest {
                             (delay, task) -> {
                                 if (delay.equals(options.cutoverWaitTimeout())) {
                                     cutoverWarning.set(task);
+                                } else if (manualManagement) {
+                                    management.add(task);
                                 } else {
                                     CompletableFuture.delayedExecutor(
                                                     delay.toMillis(), TimeUnit.MILLISECONDS)
@@ -675,6 +753,12 @@ final class ZLinkCanonicalRelocationSettlementTest {
                             });
             sourceRef.set(source);
             targetRef.set(target);
+        }
+
+        void nextManagementTurn() throws Exception {
+            var turn = management.poll(3, TimeUnit.SECONDS);
+            assertNotNull(turn, "source must schedule its authority observation");
+            turn.run();
         }
 
         void stage() {
@@ -778,6 +862,14 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                     switch (method.getName()) {
                                         case "status" -> status;
                                         case "isPeerTransportConnected" -> connected.get();
+                                        case "observePeerRoute" ->
+                                                new ZLinkInternalMeshNode.PeerRouteObservation(
+                                                        routeGeneration.get(), connected.get());
+                                        case "targetLifecycleEnded" -> false;
+                                        case "onStateChanged" -> {
+                                            ((Runnable) args[0]).run();
+                                            yield (AutoCloseable) () -> {};
+                                        }
                                         case "sendCanonicalRelocationControl" -> {
                                             byte[] encoded = ((byte[]) args[1]).clone();
                                             int command = Byte.toUnsignedInt(encoded[3]);
@@ -809,6 +901,9 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                                                         encoded)
                                                                 .frozenRecord();
                                                 if (dropData.get().test(record)) {
+                                                    if (silentlyDrop.get())
+                                                        yield CompletableFuture.completedFuture(
+                                                                null);
                                                     yield CompletableFuture.failedFuture(
                                                             new IllegalStateException(
                                                                     "DATA lost with the"
@@ -821,6 +916,9 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                                                     .COMMAND_RELOCATION_CUTOVER) {
                                                 cutover.set(encoded);
                                                 if (dropCutover.get()) {
+                                                    if (silentlyDrop.get())
+                                                        yield CompletableFuture.completedFuture(
+                                                                null);
                                                     yield CompletableFuture.failedFuture(
                                                             new IllegalStateException(
                                                                     "CUTOVER lost with the"
