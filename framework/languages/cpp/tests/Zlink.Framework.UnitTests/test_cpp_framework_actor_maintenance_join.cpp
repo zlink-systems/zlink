@@ -1,9 +1,13 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/framework.hpp>
+#include "../support/runtime_failure_fixture.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <condition_variable>
+#include <cstdio>
+#include <optional>
 #include <thread>
 
 namespace
@@ -35,6 +39,8 @@ struct observations_t
     int instances = 0;
     std::vector<int> destroyed;
     fw::task_completion_source_t<void> release_leave;
+    std::optional<std::size_t> completion_to_hold;
+    fw::task_completion_source_t<void> release_completion;
 } *observations;
 struct move_t
 {
@@ -69,13 +75,17 @@ class actor_t final : public fw::actor_t
     const fw::actor_context_t &context () const noexcept override { return _context; }
     fw::task_t<void> on_join_completed (const fw::actor_join_completion_t &completion) override
     {
+        bool hold = false;
         {
             std::lock_guard lock (observations->mutex);
             observations->completions.push_back (completion);
             observations->completion_owners.push_back (
               std::string (_context.actor_ref ().node_rid ().value ()));
+            hold = observations->completion_to_hold == observations->completions.size ();
         }
         observations->changed.notify_all ();
+        if (hold)
+            co_await observations->release_completion.task ();
         co_return;
     }
 
@@ -150,11 +160,15 @@ class room_t final : public fw::spot_t<actor_t>
   private:
     fw::spot_context_t _context;
 };
-// Release the application callback before host teardown, including assertion failure.
-struct release_leave_t
+// Release application callbacks before host teardown, including assertion failure.
+struct release_callbacks_t
 {
     observations_t &e;
-    ~release_leave_t () { e.release_leave.complete (fw::result_t<void>::success ()); }
+    ~release_callbacks_t ()
+    {
+        e.release_leave.complete (fw::result_t<void>::success ());
+        e.release_completion.complete (fw::result_t<void>::success ());
+    }
 };
 struct host_t
 {
@@ -224,8 +238,12 @@ bool move_to (fw::actor_client_t &sender,
 {
     auto sent =
       sender.send (fw::actor_id_t (actor_id), move_t{std::move (target)}).async ().result ();
-    if (!sent)
+    if (!sent) {
+        std::fprintf (stderr, "maintenance move send failed: kind=%d error=%s\n",
+                      static_cast<int> (sent.error_kind ()),
+                      sent.error () ? sent.error ()->what () : "no error");
         return false;
+    }
     std::unique_lock lock (evidence.mutex);
     return evidence.changed.wait_for (lock, wait_budget,
                                       [&] { return evidence.completions.size () >= count; });
@@ -238,6 +256,56 @@ bool peer_ready (fw::route_mesh_runtime_t &routes)
         std::this_thread::yield ();
     return routes.snapshot (mesh_name).ready_peer_count > 0;
 }
+
+TEST (ActorMaintenanceJoin, LocalDirectAdmissionUsesCurrentActorId)
+{
+    namespace host = fw::runtime::host;
+    namespace mesh = fw::runtime::mesh;
+    namespace stateful = fw::runtime::stateful;
+    constexpr std::uint64_t current_generation = 2;
+    constexpr std::uint64_t stale_generation = 1;
+    const auto rid = zlink::routing_id_t::from (first_rid);
+    auto node = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{fw::test::runtime_failure_options (
+        mesh::raw_mesh_node_options_t{.descriptor = {mesh_name,
+                                                     rid.to_bytes (),
+                                                     1,
+                                                     1,
+                                                     "tcp://127.0.0.1:0",
+                                                     {},
+                                                     mesh::service_node_state_t::preparing}})});
+    node->start ();
+    auto actor = node->create_reserved_actor (
+      actor_type,
+      stateful::object_ref_t{stateful::object_kind_t::actor, actor_id, current_generation,
+                             current_generation, mesh_name, rid.to_string ()});
+    const auto stale =
+      host::public_host_runtime_t::remote_actor_ref (rid, actor_id, stale_generation);
+    EXPECT_FALSE (node->resolve_actor (stale));
+    const std::vector<zlink::message_t> parts{zlink::message_t::from ("local-admission")};
+    const auto sent = node->send_to_actor (stale, parts).result ();
+    ASSERT_TRUE (sent);
+    ASSERT_EQ (sent.value (), zlink::submit_result_t::ok);
+    bool delivered = false;
+    ASSERT_TRUE (
+      node
+        ->dispatch_ready ([&] (const host::ready_record_t &owner, const host::receive_record_t &,
+                               std::vector<zlink::message_t> received) {
+            ASSERT_TRUE (owner.actor);
+            EXPECT_EQ (owner.actor->object_generation (), actor.ref ().object_generation ());
+            ASSERT_EQ (received.size (), 1);
+            EXPECT_EQ (received.front ().to_string (), "local-admission");
+            delivered = true;
+        })
+        .result ());
+    EXPECT_TRUE (delivered);
+    const auto absent =
+      host::public_host_runtime_t::remote_actor_ref (rid, "absent", stale_generation);
+    EXPECT_EQ (node->send_to_actor (absent, parts).result ().value (),
+               zlink::submit_result_t::not_found);
+    node->close ();
+}
+
 TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
 {
     observations_t evidence;
@@ -245,7 +313,7 @@ TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t first, second;
-    release_leave_t release{evidence};
+    release_callbacks_t release{evidence};
     configure (first, first_rid, store, relocations);
     first.start ();
     ASSERT_TRUE (ready (first));
@@ -317,11 +385,12 @@ TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
 TEST (ActorMaintenanceJoin, SameNodeMembershipPreservesReturnedActorUntilSourceCleanup)
 {
     observations_t evidence;
+    evidence.completion_to_hold = 3;
     observations = &evidence;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t first, second;
-    release_leave_t release{evidence};
+    release_callbacks_t release{evidence};
     configure (first, first_rid, store, relocations, source_follow_duration, 2);
     first.start ();
     ASSERT_TRUE (ready (first));
@@ -379,7 +448,17 @@ TEST (ActorMaintenanceJoin, SameNodeMembershipPreservesReturnedActorUntilSourceC
                 std::get<fw::actor_join_failed_t> (evidence.completions.at (2)).error_kind)
             : -1);
     sender = &client;
-    ASSERT_TRUE (move_to (*sender, evidence, source_spot, 4));
+    // Submit while the returning Actor's completion still owns its execution
+    // turn. Admission must park the payload until that callback has completed.
+    const auto submitted =
+      sender->send (fw::actor_id_t (actor_id), move_t{source_spot}).async ().result ();
+    evidence.release_completion.complete (fw::result_t<void>::success ());
+    ASSERT_TRUE (submitted) << (submitted.error () ? submitted.error ()->what () : "no error");
+    {
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget,
+                                                [&] { return evidence.completions.size () >= 4; }));
+    }
     ASSERT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.at (3)));
     auto initial = client.request (fw::actor_id_t (actor_id), probe_t{instance_probe})
                      .timeout (wait_budget)
