@@ -3910,7 +3910,7 @@ void verify_unadmitted_route (bool repeat_hello)
       mesh::raw_mesh_node_options_t{descriptor ("unadmitted-target")}));
     target.start ();
     // Publish never-due with no admitted peers before the selected route appears.
-    // HELLO retry must wake the next rotation without a probe/timeout deadline.
+    // HELLO retry must retain a management deadline without admitted peers.
     const auto now = mesh::service_liveness_registry_t::clock_t::time_point{} + 1s;
     (void) target.liveness ().tick (now);
     assert (!target.liveness ().due (now));
@@ -3942,12 +3942,34 @@ void verify_unadmitted_route (bool repeat_hello)
         };
         assert (receive_hello ());
         assert (target.liveness ().size () == 0);
+        const auto started = std::chrono::steady_clock::now ();
         const auto next_activity = target.liveness ().next_activity ();
-        assert (next_activity && *next_activity <= now);
-        (void) await_task (target.tick_liveness (now));
-        assert (receive_hello ());
-        (void) await_task (target.tick_liveness (now));
-        assert (receive_hello ());
+        constexpr auto probe_interval = 5s;
+        constexpr int periods = 4;
+        constexpr int rotations_per_period = 10;
+        constexpr auto rotation_interval =
+          std::chrono::duration_cast<std::chrono::milliseconds> (probe_interval)
+          / rotations_per_period;
+        int hello_count = 0;
+        bool deadlines_follow_probe_interval = true;
+        // Ten management rotations per probe period, with no ADMIT from the peer.
+        // Consume every due HELLO so the count observes submissions, not socket timing.
+        for (int rotation = 0; rotation <= periods * rotations_per_period; ++rotation) {
+            const auto virtual_now = started + rotation * rotation_interval;
+            const bool due = target.liveness ().due (virtual_now);
+            (void) await_task (target.tick_liveness (virtual_now));
+            if (due) {
+                assert (receive_hello ());
+                ++hello_count;
+                deadlines_follow_probe_interval &=
+                  target.liveness ().next_activity () == virtual_now + probe_interval
+                  && !target.liveness ().due (virtual_now);
+            }
+        }
+        assert (hello_count == periods);
+        assert (deadlines_follow_probe_interval);
+        assert (next_activity && *next_activity > started);
+        assert (*next_activity <= started + probe_interval);
         const auto remote = descriptor ("unadmitted-source");
         assert (await_task (
           port.send (bytes ("unadmitted-target"),
