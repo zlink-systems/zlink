@@ -32,10 +32,9 @@ export class Table implements ZLinkSpot<Player> {
     const join = request.decode(JoinTableRequest);
     if (join.playerId !== actorId || join.tableId !== String(this.context.spotId))
       throw new Error('Join identity mismatch');
-    return this.state.admission(actorId) ? { accepted: false } : { accepted: true };
+    return { accepted: this.state.admit(actorId) };
   }
-  async onJoinedActor(actor: Player): Promise<void> {
-    this.state.join(actor.context.actorId);
+  async onJoinedActor(_actor: Player): Promise<void> {
     await this.publish();
   }
   async onLeaveActor(_actor: Player): Promise<void> {}

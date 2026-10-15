@@ -5,15 +5,17 @@ import { Game, Reasons } from '../server/shared/constants';
 import { HandResult } from '../server/shared/messages';
 test('Rejections preserve state and repeated joins preserve seats', () => {
   const table = new TableState();
-  table.join('p1');
+  table.admit('p1');
   const before = structuredClone(table.snapshot);
   assert.equal(table.start('p1'), Reasons.players);
   assert.deepEqual(table.snapshot, before);
-  table.join('p1');
+  table.admit('p1');
   assert.deepEqual(table.snapshot, before);
-  for (const id of ['p2', 'p3', 'p4']) table.join(id);
-  assert.equal(table.admission('p5'), Reasons.full);
-  assert.equal(table.admission('p1'), undefined);
+  for (const id of ['p2', 'p3', 'p4']) table.admit(id);
+  const seated = structuredClone(table.snapshot.seats);
+  assert.equal(table.admit('p5'), false);
+  assert.equal(table.admit('p1'), true);
+  assert.deepEqual(table.snapshot.seats, seated);
   assert.equal(table.start('p1'), undefined);
   for (const [player, hand, amount, expected] of [
     ['unknown', 1, 0, Reasons.seated],
@@ -37,7 +39,7 @@ test('Rejections preserve state and repeated joins preserve seats', () => {
 });
 test('Tie splits the remainder to the lowest winning seat; snapshot restores a live hand', () => {
   const source = new TableState();
-  for (const player of ['p1', 'p2', 'p3']) source.join(player);
+  for (const player of ['p1', 'p2', 'p3']) source.admit(player);
   source.start('p1');
   source.snapshot.seats[0].cards = [0, 1];
   source.snapshot.seats[1].cards = [13, 14];
