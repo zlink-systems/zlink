@@ -27,4 +27,8 @@
         <None Include="../../README.md" Pack="true" PackagePath="/" />
         <None Include="$(ZLinkRepoRoot)/framework/languages/cpp/http-client/LICENSE" Link="LICENSE" Pack="true" PackagePath="" Visible="false" />
     </ItemGroup>
+    <ItemGroup>
+        <Compile Include="../Shared/ZLinkJsonSerializerOptions.cs" Link="Internal/ZLinkJsonSerializerOptions.cs"/>
+        <Compile Include="../Shared/ZLinkFrameworkJsonDocument.cs" Link="Internal/ZLinkFrameworkJsonDocument.cs"/>
+    </ItemGroup>
 </Project>

@@ -849,12 +849,17 @@ internal readonly record struct SourceResultSnapshot(
 
 internal sealed record ClientErrorSummary(string Type, string Message, long Count);
 
-internal readonly record struct ResourceSample(TimeSpan CpuStart, long AllocatedStart)
+internal readonly record struct ResourceSample(
+    TimeSpan CpuStart,
+    long AllocatedStart,
+    long ThreadPoolStart
+)
 {
     public static ResourceSample Start() =>
         new(
             Process.GetCurrentProcess().TotalProcessorTime,
-            GC.GetTotalAllocatedBytes(precise: true)
+            GC.GetTotalAllocatedBytes(precise: true),
+            ThreadPool.CompletedWorkItemCount
         );
 
     public ResourceResult Finish()
@@ -863,7 +868,8 @@ internal readonly record struct ResourceSample(TimeSpan CpuStart, long Allocated
         return new ResourceResult(
             Math.Max(0, (process.TotalProcessorTime - CpuStart).TotalSeconds),
             process.WorkingSet64 / 1024.0 / 1024.0,
-            GC.GetTotalAllocatedBytes(precise: true) - AllocatedStart
+            GC.GetTotalAllocatedBytes(precise: true) - AllocatedStart,
+            ThreadPool.CompletedWorkItemCount - ThreadPoolStart
         );
     }
 }
@@ -871,7 +877,8 @@ internal readonly record struct ResourceSample(TimeSpan CpuStart, long Allocated
 internal readonly record struct ResourceResult(
     double CpuSeconds,
     double WorkingSetMb,
-    long AllocatedBytes
+    long AllocatedBytes,
+    long ThreadPoolWorkItems
 );
 
 internal sealed record ActiveSnapshot(ResourceResult Source, BenchServerSnapshot Target);
@@ -947,7 +954,9 @@ internal sealed record BenchCell(
     long client_error_other_count,
     long warmup_abandoned,
     long client_allocated_bytes,
-    long server_allocated_bytes
+    long server_allocated_bytes,
+    long client_threadpool_work_items,
+    long server_threadpool_work_items
 )
 {
     public double active_elapsed_ms => trigger.durationMs;
@@ -990,7 +999,9 @@ internal sealed record BenchCell(
             result.OtherErrors,
             result.WarmupAbandoned,
             result.ClientAllocatedBytes,
-            result.ServerAllocatedBytes
+            result.ServerAllocatedBytes,
+            result.ClientThreadPoolWorkItems,
+            result.ServerThreadPoolWorkItems
         );
 }
 
@@ -1129,7 +1140,9 @@ internal sealed record BenchResult(
     IReadOnlyList<ClientErrorSummary> ErrorSummary,
     long OtherErrors,
     long ClientAllocatedBytes,
-    long ServerAllocatedBytes
+    long ServerAllocatedBytes,
+    long ClientThreadPoolWorkItems,
+    long ServerThreadPoolWorkItems
 )
 {
     public string Pattern => Scenario[(Implementation.Length + 1)..];

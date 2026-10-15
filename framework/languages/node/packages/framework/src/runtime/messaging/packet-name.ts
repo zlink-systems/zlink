@@ -1,3 +1,7 @@
+import {
+  readFrameworkPacketJsonContract,
+  normalizePacketName
+} from '@zlink-systems/stream-wire/internal/json';
 import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes';
 import type { ZLinkPacketJsonContract } from '../../contracts/Handlers/JsonContract';
 import { ZLinkConfigurationException } from '../configuration';
@@ -42,23 +46,7 @@ export function resolveFrameworkPacketJsonContract(
   return readFrameworkPacketJsonContract(constructor, explicitPacketName);
 }
 
-export function readFrameworkPacketJsonContract(
-  type: object,
-  explicitPacketName?: string
-): ZLinkPacketJsonContract | undefined {
-  const expectedPacketName = normalizePacketName(explicitPacketName);
-  for (const metadata of readZLinkDecoratorMetadata(type)) {
-    if (
-      metadata.kind === 'packet' &&
-      metadata.jsonContract !== undefined &&
-      (expectedPacketName === undefined ||
-        normalizePacketName(metadata.packetName) === expectedPacketName)
-    ) {
-      return metadata.jsonContract;
-    }
-  }
-  return undefined;
-}
+export { readFrameworkPacketJsonContract } from '@zlink-systems/stream-wire/internal/json';
 
 function tryDecoratorPacketName(payload: unknown): string | undefined {
   if (typeof payload !== 'object' || payload === null) {
@@ -85,12 +73,4 @@ function tryConstructorPacketName(payload: unknown): string | undefined {
     return undefined;
   }
   return normalizePacketName(name);
-}
-
-function normalizePacketName(value: unknown): string | undefined {
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }

@@ -1383,7 +1383,7 @@ test('location lifecycle already-owned claim does not activate a second instance
   assert.notEqual(await store.resolveActor({ meshName: 'play', actorId: 'actor-1' }), undefined);
 });
 
-test('location lifecycle rolls failed activation back and renews actor spot state', async () => {
+test('location lifecycle rolls failed activation back and renews the claimed Actor ref', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   await liveUserSpotAuthority(store, 'play', 'spot-1', 7n);
 
@@ -1421,35 +1421,12 @@ test('location lifecycle rolls failed activation back and renews actor spot stat
     },
     3n
   );
-  await node.lifecycle.notifyActorJoinedSpot('player', 'actor-1', 'play', 'spot-1', 7n, 11n, 3n);
-  const joined = await store.resolveActor({ meshName: 'play', actorId: 'actor-1' });
-  assert.deepEqual(joined.actorRef, {
-    nodeRid: rid('node-a'),
-    actorId: 'actor-1',
-    objectGeneration: 1n,
-    meshName: 'play'
+  const current = await store.resolveActor({ meshName: 'play', actorId: 'actor-1' });
+  assert.deepEqual(current.actorRef, {
+    nodeRid: rid('node-a'), actorId: 'actor-1', objectGeneration: 1n, meshName: 'play'
   });
-  assert.equal(joined.spotKind, framework.ZLinkSpotKind.User);
-  assert.equal(joined.meshName, 'play');
-  assert.equal(joined.spotId, 'spot-1');
-  assert.equal(joined.spotGeneration, 7n);
-  assert.equal(joined.membershipEpoch, 11n);
-
-  await node.lifecycle.notifyActorLeftSpot(
-    'player',
-    'actor-1',
-    'play-entry-00000000-0000-4000-8000-000000000001',
-    13n,
-    17n,
-    3n
-  );
-  const left = await store.resolveActor({ meshName: 'play', actorId: 'actor-1' });
-  assert.equal(left.spotKind, framework.ZLinkSpotKind.Entry);
-  assert.equal(left.spotId, 'play-entry-00000000-0000-4000-8000-000000000001');
-  assert.equal(left.spotGeneration, 13n);
-  assert.equal(left.membershipEpoch, 17n);
-  assert.equal(left.ownerNodeGeneration, 3n);
-  assert.equal('generation' in left, false);
+  assert.equal(current.ownerNodeGeneration, 3n);
+  assert.equal('generation' in current, false);
 });
 
 test('location lifecycle deactivates stale hosted actor and protects new owner row', async () => {
@@ -1469,7 +1446,7 @@ test('location lifecycle deactivates stale hosted actor and protects new owner r
   assert.equal(takeover.status, internal.ZLinkLocationWriteStatus.Stored);
 
   await assert.rejects(
-    () => nodeA.lifecycle.notifyActorJoinedSpot('player', 'actor-1', 'play', 'spot-1', 7n, 11n, 3n),
+    () => nodeA.lifecycle.setActorRef('player', 'actor-1', { nodeRid: rid('node-a'), actorId: 'actor-1', objectGeneration: 1n, meshName: 'play' }, 3n),
     /renewal.*rejected/i
   );
   await Promise.resolve();
@@ -1820,7 +1797,7 @@ test('store location resolvers seed reusable SpotHandle snapshots from live rows
     },
     3n
   );
-  await node.lifecycle.notifyActorJoinedSpot('player', 'actor-1', 'play', 'spot-1', 7n, 11n, 3n);
+  await node.lifecycle.takeoverActorJoinedSpot('player', 'actor-1', { nodeRid: rid('node-a'), actorId: 'actor-1', objectGeneration: 1n, meshName: 'play' }, 'play', 'spot-1', 7n, 11n, 3n);
   actorAddress = await resolvers.resolveActorSpotHandle('play', 'actor-1');
   assert.equal(actorAddress.spotId, 'spot-1');
   const actorTarget = await internal.resolveSpotHandle(actorAddress);
@@ -1869,9 +1846,10 @@ test('actor resolver keeps the current Actor route while its enclosing Spot proj
     objectGeneration: 5n,
     meshName: 'play'
   });
-  await firstOwner.lifecycle.notifyActorJoinedSpot(
+  await firstOwner.lifecycle.takeoverActorJoinedSpot(
     'player',
     actorId,
+    { nodeRid: rid('node-a'), actorId, objectGeneration: 5n, meshName: 'play' },
     'play',
     spotId,
     7n,

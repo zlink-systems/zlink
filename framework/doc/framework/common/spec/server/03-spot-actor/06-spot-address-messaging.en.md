@@ -272,7 +272,7 @@ includes the following values.
 The [reservation fence](../00-foundation/02-glossary.en.md#reservation-fence) includes the
 expected `StoreVersion`, `ObjectGeneration`,
 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.en.md#authority-owner-generation) — the
-provider-issued value that marks the order in which the authority owner changed for the same
+value that marks the order in which the authority owner changed for the same
 object incarnation — target node RID and
 [lifecycle generation](../00-foundation/02-glossary.en.md#lifecycle-generation), target
 owner lease, and pending capacity delta. Creation request bytes aren't

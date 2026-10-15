@@ -7,6 +7,39 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
 {
     [Fact]
+    public void Typed_reply_keeps_outer_profile_through_recovery()
+    {
+        var expected = CreateRecovery([1, 2, 3], [4, 5, 6]) with
+        {
+            ReplyContentType = Systems
+                .Zlink
+                .Framework
+                .Runtime
+                .Protocol
+                .ServiceWireConstants
+                .FrameworkMultipartContentType,
+        };
+        var restored = ZLinkActorRemoteJoinRecoveryCodec.Decode(
+            ZLinkActorRemoteJoinRecoveryCodec.Encode(expected)
+        );
+        Assert.Equal(expected.ReplyContentType, restored.ReplyContentType);
+        Assert.Equal(expected.Reply, restored.Reply);
+    }
+
+    [Fact]
+    public void Empty_reply_keeps_absent_metadata_with_completion_operation()
+    {
+        var expected = CreateRecovery([1, 2, 3], []) with { ReplyContentType = null };
+        var restored = ZLinkActorRemoteJoinRecoveryCodec.Decode(
+            ZLinkActorRemoteJoinRecoveryCodec.Encode(expected)
+        );
+        Assert.Null(restored.ReplyContentType);
+        Assert.Equal(expected.OperationIdHigh, restored.OperationIdHigh);
+        Assert.Equal(expected.OperationIdLow, restored.OperationIdLow);
+        Assert.Empty(restored.Reply);
+    }
+
+    [Fact]
     public void Operation_and_route_metadata_round_trip()
     {
         var expected = CreateRecovery([1, 2, 3], [4, 5, 6]);

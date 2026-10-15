@@ -2984,9 +2984,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     }
     if (outcome.application_reply)
         s->admission_payload = std::move (application_reply_payload);
-    s->admission_reply_content_type = outcome.application_reply
-                                        ? outcome.application_reply->content_type
-                                        : "application/octet-stream";
+    s->admission_reply_content_type =
+      outcome.application_reply ? std::string (runtime::protocol::framework_multipart_content_type)
+                                : std::string{};
     co_return co_await seal_remote_application_actor_join (std::move (s));
 }
 
@@ -3192,8 +3192,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .expected_owner_lease_generation = s->source_owner_lease_generation,
       .relocation = s->relocation,
       .relocation_content_type = s->relocation_content_type,
-      .request_content_type = s->application_content_type.empty () ? "application/octet-stream"
-                                                                   : s->application_content_type,
+      .request_content_type = s->application_content_type.empty ()
+                                ? std::string (stream_content_type (stream_codec_t::raw))
+                                : s->application_content_type,
       .request = s->request.to_bytes (),
       .reservation_token = s->transfer_id,
       .reserved_payload_bytes = runtime::protocol::actor_join_reserved_payload_bytes (
@@ -3206,9 +3207,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .target_spot_authority_owner_generation = s->target_spot_authority_owner_generation,
       .coordinator = s->relocation_coordinator,
       .operation = {s->target_completion_operation_id_high, s->target_completion_operation_id_low},
-      .reply_content_type = s->admission_reply_content_type.empty ()
-                              ? "application/octet-stream"
-                              : s->admission_reply_content_type,
+      .reply_content_type = s->admission_reply_content_type,
       .reply = s->admission_payload};
     runtime::protocol::frozen_record_t recovery_frozen;
     std::string recovery_encode_error;

@@ -26,7 +26,8 @@ status·header와 decode한 DTO를 함께 담고, raw 응답은 status·header�
 
 `await`·`awaitRaw`·`fetch`·`awaitDownload`·`yield`는 suspend 함수다. 확장은 `CompletionStage`가
 완료될 때 coroutine을 재개하므로 HTTP 응답을 기다리는 동안 thread를 점유하지 않는다. `yield`는
-server request builder에서 현재 execution turn을 유지하며 완료를 기다리는 종결자다.
+server request builder의 종결자다. 응답을 기다리는 동안 execution gate를 반납하므로 같은 Spot의 다른
+handler가 실행될 수 있고, 응답이 오면 gate를 다시 얻어 같은 Spot의 turn에서 재개한다.
 
 다음 tutorial은 typed 응답을 body만 받는 suspend 확장으로 읽는다.
 

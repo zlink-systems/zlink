@@ -8,6 +8,77 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Fact]
+    public async Task Logical_Disconnect_Submits_Actor_Unbound_Exactly_Once()
+    {
+        var (runtime, actor) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        var closeCount = 0;
+        try
+        {
+            _ = RegisterProbeActor(runtime, actor);
+            var stream = new RetainedOutboundCapturingStream(RoutingId.From("logical-disconnect"));
+            var context = new ZLinkSessionContext(
+                runtime,
+                stream,
+                new RelaySessionHandlerRegistry(),
+                () =>
+                {
+                    closeCount++;
+                    return ValueTask.CompletedTask;
+                },
+                static _ => ValueTask.CompletedTask
+            );
+            const string token = "logical-disconnect-binding";
+            runtime.BindActorSession(
+                actor.ActorId,
+                null,
+                stream.RoutingId!.Value,
+                token,
+                objectGeneration: actor.Generation,
+                authorityOwnerGeneration: 1,
+                meshName: "entry",
+                ownerLeaseGeneration: 1
+            );
+            var registry = new ZLinkSessionActorBindingRegistry(runtime);
+            var bound = await registry.BindAsync(
+                context,
+                new ActorRef(actor.ActorId, actor.Generation, "entry", actor.NodeRid),
+                token,
+                1,
+                1,
+                "entry",
+                1,
+                1,
+                1,
+                actor.NodeRid,
+                "session-owner",
+                1,
+                CancellationToken.None
+            );
+
+            await bound.NotifyDisconnectedAsync();
+
+            Assert.Empty(registry.BoundActors);
+            Assert.Equal(0, closeCount);
+            Assert.Equal(2, stream.Writes.Count);
+            Assert.Equal(
+                Systems
+                    .Zlink
+                    .Stream
+                    .Connector
+                    .Runtime
+                    .Protocol
+                    .ZlinkStreamControlProtocol
+                    .ActorUnboundPayloadSize,
+                stream.Writes[1].Length
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

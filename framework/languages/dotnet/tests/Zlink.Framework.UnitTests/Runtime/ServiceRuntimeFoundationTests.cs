@@ -3192,6 +3192,117 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public async Task Managed_mesh_logical_multicast_posts_each_child_with_its_own_receive_permit()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var applicationJobQueue = new ZLinkApplicationJobQueue(
+            new ZLinkApplicationJobQueueCapacity(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                ConfiguredManualMax: 1,
+                EffectiveProcessorCount: 8,
+                EffectiveMaxQueuedApplicationJobs: 1
+            )
+        );
+        await using var source = new ZLinkManagedMeshNode(context, "events");
+        await using var target = new ZLinkManagedMeshNode(
+            context,
+            "events",
+            applicationJobQueue: applicationJobQueue
+        );
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceEndpoint = $"inproc://events-fanout-source-{suffix}";
+        var targetEndpoint = $"inproc://events-fanout-target-{suffix}";
+        var targetRid = RoutingId.From("events-fanout-target");
+        const string channelName = "events";
+        const string topic = "created";
+        const int children = 3;
+
+        source.SetRoutingId(RoutingId.From("events-fanout-source"));
+        source.SetBind(sourceEndpoint);
+        source.ConnectPeer(targetEndpoint, targetRid);
+        target.SetRoutingId(targetRid);
+        target.SetBind(targetEndpoint);
+        target.AddChannel(channelName);
+        for (var index = 0; index < children; index++)
+            (
+                (ZLinkManagedSpot)target.GetOrCreateSpot($"events-fanout-{index}-{suffix}", out _)
+            ).SetSubscription(channelName, topic);
+
+        // The test is the mailbox consumer, so each claim shows exactly which
+        // children the receive source has posted and with which permits.
+        using var ready = new SemaphoreSlim(0);
+        target.SetReadyHandler(domains =>
+        {
+            ready.Release();
+            return domains;
+        });
+        target.Start();
+        source.Start();
+        await WaitUntilAsync(() =>
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
+
+        using var payload = Message.From(new byte[] { 7, 8, 9 });
+        source.EntrySpot().Publish(channelName, topic, [payload]);
+
+        // Spec 04 application job queue: the receive permit moves into the owner
+        // mailbox with the record, a 1:N fanout posts no more children than the
+        // permits it holds, and its source keeps one waiter for the next permit.
+        for (var child = 0; child < children; child++)
+        {
+            using var admitted = await ClaimOnlyMulticastChildAsync(target, ready);
+            if (child < children - 1)
+                await WaitUntilAsync(() => applicationJobQueue.GetStatus().CapacityWaiters == 1);
+            else
+                // After the last child the source receives again, so a later
+                // record such as a heartbeat may wait with the same one waiter.
+                Assert.True(applicationJobQueue.GetStatus().CapacityWaiters <= 1);
+            Assert.Equal(1UL, applicationJobQueue.GetStatus().PermitsInUse);
+        }
+        await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
+        Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
+    }
+
+    private static async Task<IDisposable> ClaimOnlyMulticastChildAsync(
+        ZLinkManagedMeshNode node,
+        SemaphoreSlim ready
+    )
+    {
+        using var readyBatch = new MeshReadyBatch();
+        using var receiveBatch = new MeshReceiveBatch();
+        while (true)
+        {
+            Assert.True(
+                await ready.WaitAsync(TimeSpan.FromSeconds(3)),
+                "No multicast child reached an owner mailbox."
+            );
+            readyBatch.Reset();
+            await node.DrainReadyAsync(
+                MeshReadyDomains.Application,
+                readyBatch,
+                RecvFlags.DontWait
+            );
+            IDisposable? child = null;
+            for (var index = 0; index < readyBatch.Count; index++)
+            {
+                receiveBatch.Reset();
+                await readyBatch.TakeClaim(index).ReceiveAsync(receiveBatch, RecvFlags.DontWait);
+                for (var record = 0; record < receiveBatch.Count; record++)
+                {
+                    if (receiveBatch[record].Kind != MeshRecordKind.SpotMulticast)
+                        continue;
+                    Assert.Null(child);
+                    Assert.NotNull(receiveBatch.GetApplicationJobAdmission(record));
+                    child = receiveBatch.TakePayloadOwner(record);
+                }
+            }
+            receiveBatch.Reset();
+            if (child is not null)
+                return child;
+        }
+    }
+
+    [Fact]
     public async Task Managed_mesh_shutdown_keeps_application_permit_until_the_admitted_multicast_child_finishes()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

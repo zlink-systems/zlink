@@ -1732,6 +1732,15 @@ class recording_actor_client_t final : public zlink::framework::actor_client_t
     zlink::framework::serializer_registry_t serializers;
 };
 
+// A handler awaits its Yield: the Spot gate is released where it suspends.
+zlink::framework::task_t<zlink::framework::message_t>
+await_other_actor_yield (recording_actor_client_t &client)
+{
+    using namespace zlink::framework;
+    actor_request_call_t request (client, actor_id_t ("actor-2"), "OtherRequest", message_t{});
+    co_return co_await request.yield_message ();
+}
+
 zlink::framework::task_t<zlink::framework::message_t>
 request_after_actor_await (recording_actor_client_t &client)
 {
@@ -2141,9 +2150,7 @@ void verify_actor_yield_releases_spot_gate_before_reply ()
 
     assert (queue.try_post_async ("different-member-actor-yield", [&] (auto complete) {
         runtime::actor_execution_scope_t actor_scope ("player:actor-1", "spot-1");
-        actor_request_call_t request (actor_client, actor_id_t ("actor-2"), "OtherRequest",
-                                      message_t{});
-        request_task = std::make_shared<task_t<message_t>> (request.yield_message ());
+        request_task = std::make_shared<task_t<message_t>> (await_other_actor_yield (actor_client));
         detail::observe_task_completion (
           *request_task,
           [&, request_task, complete = std::move (complete)] (const auto &result) mutable {
@@ -6671,6 +6678,28 @@ void verify_remote_user_spot_create_close_terminal_once ()
        static_cast<std::uint64_t> (reservation->fence.target.owner.lease_generation),
        reservation->fence.capacity_bundle.spot_slots},
       unix_deadline};
+    const auto send_create_and_wait = [&] (const protocol::user_spot_create_header_t &request) {
+        std::optional<protocol::user_spot_create_reply_t> reply;
+        assert (source
+                  ->create_user_spot_remote (
+                    target->status ().routing_id (), request, 5s,
+                    [&] (foundation::operation_terminal_t terminal,
+                         protocol::user_spot_create_reply_t result,
+                         std::optional<protocol::application_payload_t>) {
+                        assert (terminal == foundation::operation_terminal_t::completed);
+                        reply = std::move (result);
+                    })
+                  .result ()
+                  .value ());
+        const auto wait_deadline = std::chrono::steady_clock::now () + 5s;
+        while (!reply && std::chrono::steady_clock::now () < wait_deadline) {
+            (void) target->dispatch_ready (dispatch);
+            (void) source->dispatch_ready (dispatch);
+            std::this_thread::sleep_for (1ms);
+        }
+        assert (reply);
+        return std::move (*reply);
+    };
     auto invalid_create = create;
     invalid_create.operation = {98, 1};
     invalid_create.spot_id = invalid_spot_id;
@@ -6761,6 +6790,48 @@ void verify_remote_user_spot_create_close_terminal_once ()
     assert (replayed_mismatch_reply->header.failure_code
             == static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch));
     assert (materialize_count == 0);
+
+    auto moving_create = create;
+    moving_create.operation = {99, 2};
+    moving_create.deadline_unix_ms =
+      static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                    std::chrono::system_clock::now ().time_since_epoch () + 5s)
+                                    .count ());
+    const auto moving_inventory = target->objects ().try_begin_maintenance_inventory ();
+    assert (moving_inventory);
+    const auto moving_reply = send_create_and_wait (moving_create);
+    assert (moving_reply.header.terminal_result
+            == static_cast<std::uint32_t> (protocol::request_terminal_result::conflict));
+    assert (moving_reply.header.failure_code
+            == static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
+    target->objects ().end_maintenance_inventory ();
+
+    const stateful::object_ref_t reserved_ref{
+      stateful::object_kind_t::user_spot,
+      spot_id,
+      reservation->fence.object_generation,
+      reservation->fence.authority_owner_generation,
+      reservation->fence.target.mesh_name,
+      std::string (reservation->fence.target.node_rid.value ())};
+    const auto local_reservation =
+      target->objects ().begin_reserved_object (reserved_ref, "room", {0x41, 0x42});
+    assert (local_reservation.status == stateful::create_status_t::reserved);
+    assert (local_reservation.factory_owner);
+    auto joined_create = create;
+    joined_create.operation = {99, 9};
+    joined_create.deadline_unix_ms =
+      static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                    std::chrono::system_clock::now ().time_since_epoch () + 5s)
+                                    .count ());
+    const auto joined_reply = send_create_and_wait (joined_create);
+    assert (joined_reply.header.terminal_result
+            == static_cast<std::uint32_t> (protocol::request_terminal_result::internalError));
+    assert (joined_reply.header.failure_code
+            == static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed));
+    assert (target->objects ().abort_create (local_reservation.attempt)
+            == stateful::stateful_error_t::none);
+    assert (materialize_count == 0);
+
     const auto replay_expiry_unix_ms = mismatch_create.deadline_unix_ms + 51;
     while (static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
                                          std::chrono::system_clock::now ().time_since_epoch ())

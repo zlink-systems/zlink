@@ -149,7 +149,7 @@ differ, it is marked in the body only with **Per-language discretion.**
 | Session's bind/relay/rebind/relocation responsibility | [Session Topic](../04-session/README.en.md) |
 | Location Store record format and CAS discipline | [Location Runtime](../05-location-relocation/01-location-runtime.en.md) — being migrated to the 05-location-relocation topic |
 | Relocation's phase state machine and [Actor membership](../00-foundation/02-glossary.en.md#actor-membership) commit procedure — which Spot an Actor belongs to | [Relocation Handoff State Transitions](../05-location-relocation/04-relocation-flow.en.md) — being migrated to the 05-location-relocation topic |
-| Public encoding/validation rules for typed application message JSON | [Message Model §2.3](../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile) |
+| Public encoding/validation rules for typed application message JSON | [Message Model §5](../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile) |
 | Shared permit and byte HWM | [Core Byte HWM And Application Job Flow](../01-execution/04-application-job-queue-and-backpressure.en.md) — being migrated to the 01-execution topic |
 
 ---

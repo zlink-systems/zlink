@@ -134,26 +134,31 @@ inline task_scheduler_t held_serial_turn_scheduler (std::shared_ptr<serial_turn_
     };
 }
 
-struct serial_turn_await_plan_t
-{
-    std::shared_ptr<serial_turn_t> turn;
-    task_scheduler_t scheduler;
-    bool holds_turn = false;
-};
-
-inline std::optional<serial_turn_await_plan_t> prepare_serial_turn_await (bool release_turn)
+inline std::shared_ptr<serial_turn_t> current_held_serial_turn ()
 {
     auto turn = capture_current_serial_turn ();
-    if (!turn || turn->released ()) {
-        return std::nullopt;
-    }
-    if (release_turn) {
-        if (!turn->release ()) {
-            return std::nullopt;
-        }
-        return serial_turn_await_plan_t{turn, turn->resume_scheduler (), false};
-    }
-    return serial_turn_await_plan_t{turn, held_serial_turn_scheduler (turn), true};
+    return turn && !turn->released () ? turn : nullptr;
+}
+
+// The handoff that keeps a task await in the current, unreleased turn. The
+// wait registration restores the turn it captured, so the handoff only runs
+// the continuation where the completion lands.
+inline task_scheduler_t held_serial_turn_await_scheduler ()
+{
+    if (!current_held_serial_turn ())
+        return {};
+    return [] (std::function<void ()> work) {
+        if (work)
+            work ();
+    };
+}
+
+// Execution gate §3·§4: a Yield releases the turn only where the handler
+// suspends, and the continuation then always enters a new turn of the same
+// queue. A turn that cannot be released is no longer the caller's.
+inline task_scheduler_t release_serial_turn_for_resume (serial_turn_t &turn)
+{
+    return turn.release () ? turn.resume_scheduler () : task_scheduler_t{};
 }
 
 inline bool current_serial_turn_allows_yield ()
@@ -256,9 +261,9 @@ inline ambient_context_scope_t enter_ambient_context (const ambient_context_snap
 // admission retry/readiness remains owned by the binding.
 inline task_scheduler_t capture_native_continuation_scheduler ()
 {
-    auto turn_plan = prepare_serial_turn_await (false);
+    auto held_turn = current_held_serial_turn ();
     task_scheduler_t turn_scheduler =
-      turn_plan ? std::move (turn_plan->scheduler) : task_scheduler_t{};
+      held_turn ? held_serial_turn_scheduler (std::move (held_turn)) : task_scheduler_t{};
     task_scheduler_t runtime_scheduler = capture_runtime_native_continuation_scheduler ();
     auto ambient = capture_ambient_context ();
     if (!turn_scheduler && !runtime_scheduler && !ambient.state && !ambient.application_job
@@ -360,10 +365,12 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         catch (const framework_exception_t &error) {
             if (error.kind () != framework_error_kind_t::shutting_down)
                 std::terminate ();
-            if (_ambient.wait_owner.stop_requested ())
-                return true;
-            if (_started.load (std::memory_order_acquire))
+            // Started without an owner stop: the scheduler ran the work and failed.
+            if (_started.load (std::memory_order_acquire) && !_ambient.wait_owner.stop_requested ())
                 std::terminate ();
+            /* Cancellation §5.1: the owner ends this wait, even when its stop
+             * is already requested and its callback has not run yet. The
+             * registration stays owned until that callback settles it. */
             if (_ambient.wait_owner.stop_possible ())
                 return false;
             /* No owner can cancel this wait and the context that captured the
@@ -382,7 +389,12 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         bool pending = false;
         if (!_started.compare_exchange_strong (pending, true, std::memory_order_acq_rel))
             return true;
-        serial_turn_scope_t turn_guard (_turn);
+        // A registration restores only a turn it still owned when it was made.
+        // Otherwise the continuation keeps the turn its delivery runs in, such
+        // as the new queue turn a Yield resumes in (execution gate §3·§4).
+        std::optional<serial_turn_scope_t> turn_guard;
+        if (_turn)
+            turn_guard.emplace (_turn);
         auto work = std::move (_work);
         work (cancelled, _ambient);
         return true;
@@ -652,9 +664,21 @@ std::optional<result_t<T>> observe_task_result_for (const task_t<T> &task,
                                                     std::chrono::milliseconds timeout,
                                                     std::stop_token cancellation);
 
-template <typename T> task_t<T> reschedule_task (task_t<T> task, task_scheduler_t scheduler);
 template <typename T>
 task_t<T> with_task_resume_scheduler (task_t<T> task, task_scheduler_t scheduler);
+// Yield: the awaiting handler keeps the current turn until it suspends on
+// this task. A result that is ready before then continues in that turn.
+template <typename T> task_t<T> release_turn_on_suspend (task_t<T> task);
+
+inline task_scheduler_t task_suspend_scheduler (const std::unique_ptr<task_scheduler_t> &resume,
+                                                bool release_turn)
+{
+    if (const auto turn = release_turn ? capture_current_serial_turn () : nullptr) {
+        if (auto scheduler = release_serial_turn_for_resume (*turn))
+            return scheduler;
+    }
+    return resume ? *resume : task_scheduler_t{};
+}
 
 // The one conversion of the exception being handled into a task failure.
 // Call only inside a catch handler.
@@ -726,8 +750,8 @@ template <typename T> class task_t
     bool await_ready () const noexcept { return _state->is_ready (); }
     void await_suspend (std::coroutine_handle<> continuation)
     {
-        _state->set_continuation (continuation, _resume_scheduler ? *_resume_scheduler
-                                                                  : detail::task_scheduler_t{});
+        _state->set_continuation (continuation, detail::task_suspend_scheduler (
+                                                  _resume_scheduler, _release_turn_on_suspend));
     }
     T await_resume ()
     {
@@ -754,9 +778,11 @@ template <typename T> class task_t
     std::shared_ptr<detail::task_shared_state_t<T>> _state;
 
     std::unique_ptr<detail::task_scheduler_t> _resume_scheduler;
+    bool _release_turn_on_suspend = false;
 
     template <typename U>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
+    template <typename U> friend task_t<U> detail::release_turn_on_suspend (task_t<U>);
     friend class task_completion_source_t<T>;
     template <typename U> friend class request_task_t;
     template <typename U>
@@ -792,8 +818,8 @@ template <> class task_t<void>
     bool await_ready () const noexcept { return _state->is_ready (); }
     void await_suspend (std::coroutine_handle<> continuation)
     {
-        _state->set_continuation (continuation, _resume_scheduler ? *_resume_scheduler
-                                                                  : detail::task_scheduler_t{});
+        _state->set_continuation (continuation, detail::task_suspend_scheduler (
+                                                  _resume_scheduler, _release_turn_on_suspend));
     }
     void await_resume ()
     {
@@ -820,9 +846,11 @@ template <> class task_t<void>
     std::shared_ptr<detail::task_shared_state_t<void>> _state;
 
     std::unique_ptr<detail::task_scheduler_t> _resume_scheduler;
+    bool _release_turn_on_suspend = false;
 
     template <typename U>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
+    template <typename U> friend task_t<U> detail::release_turn_on_suspend (task_t<U>);
     friend class task_completion_source_t<void>;
     template <typename U> friend class request_task_t;
     template <typename U>
@@ -873,22 +901,10 @@ task_t<T> with_task_resume_scheduler (task_t<T> task, task_scheduler_t scheduler
     return task;
 }
 
-template <typename T> task_t<T> reschedule_task (task_t<T> task, task_scheduler_t scheduler)
+template <typename T> task_t<T> release_turn_on_suspend (task_t<T> task)
 {
-    auto source = std::make_shared<task_completion_source_t<T>> ();
-    auto output = source->task ();
-    auto observed = std::make_shared<task_t<T>> (std::move (task));
-    auto target_scheduler = std::make_shared<task_scheduler_t> (std::move (scheduler));
-    detail::observe_task_completion (
-      *observed, [source, observed, target_scheduler] (const result_t<T> &result) mutable {
-          auto complete = [source, result] () mutable { source->complete (std::move (result)); };
-          if (*target_scheduler) {
-              (*target_scheduler) (std::move (complete));
-          } else {
-              complete ();
-          }
-      });
-    return output;
+    task._release_turn_on_suspend = true;
+    return task;
 }
 
 template <typename T> task_t<T> unsupported_yield_task ()

@@ -173,10 +173,11 @@ The host validates the following conditions before network bind.
 - RID prefix format, and a fixed-RID reclaim conflict
 - TLS certificate, key, and trust configuration
 
-A validation failure fails host startup with
+A host-configuration validation failure in this section fails host startup with
 `ZLinkConfigurationException`. Since the runtime isn't created on the
-first call, a configuration error doesn't first appear while processing a
-message.
+first call, a host-configuration error doesn't first appear while processing a
+message. The check timing of registrations decided in a Spot's `Configure()` is defined by
+[Common API "23"](../../../00-foundation/06-framework-api.en.md#23-startup-validation).
 
 ## 8. Runtime Option
 

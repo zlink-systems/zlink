@@ -387,6 +387,10 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
     const permits = await Promise.all([jobs.acquire(undefined, 'remote'), jobs.acquire(undefined, 'remote'), ...(queuedBeforeClose ? [jobs.acquire(undefined, 'remote')] : [])]);
     const beforeHandler = permits.map(() => 0);
     const scopePermits = permits.map((permit, index) => ({
+      get origin() { return permit.origin; },
+      get detachedForHandlerTurn() { return permit.detachedForHandlerTurn; },
+      markApplicationQueued() { permit.markApplicationQueued(); },
+      detachForHandlerTurn() { permit.detachForHandlerTurn(); },
       releaseBeforeHandler() { beforeHandler[index]++; permit.releaseBeforeHandler(); },
       releaseAfterInternalProcessing() { permit.releaseAfterInternalProcessing(); }
     }));

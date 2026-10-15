@@ -181,9 +181,9 @@ receive boundary.
   blocking recv directly on the handler execution thread. The runtime waits for
   readiness with `Poller` and then performs a `RecvFlags.DONT_WAIT` recv on the
   ready socket.
-- Application handlers run behind the framework-configured handler executor, not
-  on the native wait thread. If virtual threads are used, they are used at this
-  handler-executor boundary.
+- The execution turn of application handlers and the placement of their
+  execution resources are decided by the Framework execution contract. Native
+  wait and receive processing follow the binding's public poller contract.
 - No separate public dispatcher API is provided. The existing `Poller`, socket
   `recv(..., DONT_WAIT)`, and the framework's internal receive loop are
   sufficient; framework execution policy is not mixed into the public bindings

@@ -271,6 +271,11 @@ Peer handshake에서는 다음 정보를 교환한다.
 하나를 선택하며([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)), Framework는 선택된 route에서 받은
 handshake만 admission한다.
 
+**선택 route에서 handshake로 admission을 확인하기 전에 그 route로 받은 handshake 밖의 record는 처리하지
+않고 버리며, 응답을 보내지 않는다.** 선택 route가 바뀐 뒤 상대가 새 route의 handshake보다 먼저 보낸
+record도 같다. 이렇게 잃은 durable operation은 송신 측이 [Actor 모델 §8.1](04-actor-model.ko.md#81-실패)대로
+다시 보낸다.
+
 Lifecycle generation은 0이 아닌 opaque equality token이다. 숫자 크기로 어느
 lifecycle이 더 새로운지 판단하지 않는다.
 
@@ -329,6 +334,10 @@ sequenceDiagram
         Note over A,B: 같은 RID의 pipe가 둘이면 Core가 하나를 선택하고, Framework는 선택 route에서만 admission한다
     end
 ```
+
+**수락하는 쪽은 상대를 admitted peer로 기록한 뒤 admission 수락을 제출한다.** 이 node가 그 peer로
+admission 수락과 같은 Application lane에 보내는 record(DATA·REQUEST)는 admission 수락보다 뒤에
+나간다.
 
 ### 7.2 Channel weight 갱신
 

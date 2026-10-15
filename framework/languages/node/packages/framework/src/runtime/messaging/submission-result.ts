@@ -18,6 +18,10 @@ export interface ZLinkSubmitResult {
   readonly status: ZLinkSubmitStatus;
 }
 
+export const submittedResult: ZLinkSubmitResult = Object.freeze({
+  status: ZLinkSubmitStatus.Submitted
+});
+
 /** Projects typed submit failure; capacity refusal has no admission wait token. */
 export function submitToRequestResult(result: number, phase: 'submit' | 'completion'): number {
   switch (result) {
@@ -54,7 +58,7 @@ export function classifySubmitResult(
   const terminal = submitToRequestResult(result, phase);
   switch (terminal) {
     case RequestResult.Ok:
-      return { status: ZLinkSubmitStatus.Submitted };
+      return submittedResult;
     case RequestResult.TimedOut:
       return { status: ZLinkSubmitStatus.TimedOut };
     case RequestResult.NotFound:

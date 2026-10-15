@@ -634,17 +634,17 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             boolean accepted,
             long receiveChunkLimitBytes,
             List<Message> applicationReply,
-            java.util.UUID handoffId,
-            String replyContentType) {
-        public CanonicalActorJoinReply(
-                boolean accepted, long receiveChunkLimitBytes, List<Message> applicationReply) {
-            this(accepted, receiveChunkLimitBytes, applicationReply, null, "application/json");
-        }
-
+            java.util.UUID handoffId) {
         public CanonicalActorJoinReply {
             applicationReply =
                     List.copyOf(Objects.requireNonNull(applicationReply, "applicationReply"));
-            Objects.requireNonNull(replyContentType, "replyContentType");
+        }
+
+        public String replyContentType() {
+            return applicationReply.isEmpty()
+                    ? null
+                    : systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                            .FRAMEWORK_MULTIPART_CONTENT_TYPE;
         }
     }
 

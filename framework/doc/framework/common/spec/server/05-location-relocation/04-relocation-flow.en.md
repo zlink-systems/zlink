@@ -91,7 +91,7 @@ One relocation unit's handoff state owns these values.
 |---|---|
 | Object identity | Fixes ActorId or SpotId and `ObjectGeneration`. |
 | Source fence | Fixes source node RID/node generation and the initially read owner generation. |
-| Target fence | Fixes target node RID/node generation and the requested new owner generation. |
+| Target fence | Fixes target node RID/node generation. The new owner generation is issued in the `NewOwner` transition of [Location runtime §6.1](01-location-runtime.en.md#61-read-and-cas). |
 | Relocation identity | Distinguishes retries and late completions belonging to the same handoff. |
 | Saved-work reference | Refers to captured state, existing queue, and timers held in source memory pending the direct payload chunk transfer. |
 | Relay connection | Fixes TCP order between the source relay and the cutover boundary. |
@@ -255,9 +255,12 @@ also arrived, so this comparison always succeeds on the normal path; a compariso
 failure is an Error signaling an implementation defect.
 
 The server setting `RelocationCutoverWaitTimeout` (**default 1,000 ms**) is only a
-Warning threshold measured from the ready-to-receive-relay reply until cutover arrives. If the connection breaks and cutover is lost, and
-the source process is still running, the source resends the whole pre-boundary relay
-batch and the cutover over a new connection. The target discards the partially received
+Warning threshold measured from the ready-to-receive-relay reply until cutover arrives. If the connection breaks, or the source later observes a
+selected route of the target whose route generation differs from the one that was
+ready when it submitted pre-boundary relay or cutover, so that cutover may have
+been lost, and the source
+process is still running, the source resends the whole pre-boundary relay batch and
+the cutover over a new connection (the new selected route). The target discards the partially received
 pre-boundary relay span and replaces it wholly with the retransmitted batch — a whole
 replacement, not per-record deduplication or partial merge, so the order inside the span
 is fixed by the batch order even on the new connection. When the verification values
@@ -514,8 +517,9 @@ last item's ownership transfers to ordinary terminal ownership or is cleaned up.
 
 The Location Store CAS is the transition point that keeps owner from existing
 simultaneously at both source and target. The target supplies the expected source owner
-and generation as the condition, and requests its own node and the new owner generation
-as new values.
+and generation as the condition, and requests its own node as the new owner. The new owner
+generation is issued in the `NewOwner` transition this CAS executes, and the target uses
+the value in the CAS result for later fences.
 
 | CAS result | Handling |
 |---|---|

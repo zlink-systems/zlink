@@ -53,7 +53,7 @@ public sealed class StreamWireInteropTests
     [Theory]
     [InlineData(true, "$zlink.actor.bound")]
     [InlineData(false, "$zlink.actor.unbound")]
-    public void ActorControlFrame_IsSentAsRawWireFrame(bool bound, string name)
+    public async Task ActorControlFrame_IsSentAsRawWireFrame(bool bound, string name)
     {
         var socket = DispatchProxy.Create<IZLinkBackendStreamSocket, CapturingStreamSocketProxy>();
         var capture = (CapturingStreamSocketProxy)(object)socket;
@@ -67,20 +67,29 @@ public sealed class StreamWireInteropTests
         if (bound)
             ZLinkStreamControlFrames.SendActorBound(stream, 0x1234, "actor-한");
         else
-            ZLinkStreamControlFrames.SendActorUnbound(stream, 0x1234);
+            await ZLinkStreamControlFrames.SendActorUnboundAsync(
+                stream,
+                0x1234,
+                CancellationToken.None
+            );
 
-        var frame = Assert.Single(capture.Frames);
-        Assert.True(CoreFrameCodec.TryDecode(frame, out var headerBytes, out var payload));
-        var header = new ConnectorHeaderCodec().Decode(headerBytes.ToArray());
-        Assert.Equal(ZlinkStreamMessageKind.Control, header.Kind);
-        Assert.Equal(ZlinkStreamCodec.Raw, header.Codec);
-        Assert.Equal(ZlinkStreamHeaderFlags.None, header.Flags);
-        Assert.Equal(name, header.Name);
-        Assert.Null(header.ActorSlot);
-        var expected = bound
-            ? new byte[] { 1, 0x12, 0x34, 9, 97, 99, 116, 111, 114, 45, 237, 149, 156 }
-            : new byte[] { 1, 0x12, 0x34 };
-        Assert.Equal(expected, payload.ToArray());
+        VerifyFrame();
+
+        void VerifyFrame()
+        {
+            var frame = Assert.Single(capture.Frames);
+            Assert.True(CoreFrameCodec.TryDecode(frame, out var headerBytes, out var payload));
+            var header = new ConnectorHeaderCodec().Decode(headerBytes.ToArray());
+            Assert.Equal(ZlinkStreamMessageKind.Control, header.Kind);
+            Assert.Equal(ZlinkStreamCodec.Raw, header.Codec);
+            Assert.Equal(ZlinkStreamHeaderFlags.None, header.Flags);
+            Assert.Equal(name, header.Name);
+            Assert.Null(header.ActorSlot);
+            var expected = bound
+                ? new byte[] { 1, 0x12, 0x34, 9, 97, 99, 116, 111, 114, 45, 237, 149, 156 }
+                : new byte[] { 1, 0x12, 0x34 };
+            Assert.Equal(expected, payload.ToArray());
+        }
     }
 
     private class CapturingStreamSocketProxy : DispatchProxy

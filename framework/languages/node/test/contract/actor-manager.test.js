@@ -5307,7 +5307,7 @@ async function localCoordinatorFixture({ entry = false, admissionError } = {}) {
       reportSourceLeaveError(error) { throw error; },
       spotRouteResolver: { async resolve() { return target; } },
       entrySpotIdProvider: () => 'node-a',
-      locationLifecycle: { async notifyActorJoinedSpot() { events.push('store'); }, async notifyActorLeftSpot() { events.push('store'); } },
+      locationLifecycle: { async commitActorMembership() { events.push('store'); } },
       async localSpotJoin(_spot, _actor, _request, commit) {
         events.push('admission');
         if (admissionError) throw admissionError;

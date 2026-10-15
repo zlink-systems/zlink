@@ -163,7 +163,10 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
     }
 
     CompletionStage<Void> dispatchResolvedActorPacket(
-            ZLinkActor actor, ActorPacketFrames.Header packetHeader, ActorMessageRead read) {
+            ZLinkActor actor,
+            ActorPacketFrames.Header packetHeader,
+            ActorMessageRead read,
+            CompletableFuture<Void> requestAdmission) {
         return host.dispatchLocalActorPacket(
                 context,
                 spotSurface,
@@ -171,7 +174,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 packetHeader,
                 read.headerPart(),
                 read.bodyPart(),
-                read.fromPendingHeader());
+                read.fromPendingHeader(),
+                requestAdmission);
     }
 
     final CompletionStage<Void> admitActor(List<ZLinkBackendActorReceived> messages) {
@@ -268,8 +272,10 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                             admission.apply(
                                                     () ->
                                                             dispatchResolvedActorPacket(
-                                                                    actor, packetHeader, read)),
-                                    requestAdmission);
+                                                                    actor,
+                                                                    packetHeader,
+                                                                    read,
+                                                                    requestAdmission)));
                     dispatched.whenComplete(
                             (done, failure) ->
                                     host.closePendingActorHeader(headerPart, pendingHeader));

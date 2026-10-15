@@ -260,8 +260,7 @@ export class StartGameHandler implements ZLinkSpotRequestHandler<RoomSpot, Start
 | Instance Spot 앞 packet(raw builder) | `ZLinkInstanceSpotHandlerRegistry.addPacket(handlerType)` | 없음(직접 등록) |
 
 **완료 결과.** 반환값 없이 동기로 등록된다. `spot`/`entrySpot` field는 `Type<T> | (() => Type<T>)`
-— 순환 참조를 피하려면 lazy resolver(`() => RoomSpot`)를 사용한다. 같은 owner의 handler key 중복은
-startup 검증에서 configuration error로 드러난다.
+— 순환 참조를 피하려면 lazy resolver(`() => RoomSpot`)를 사용한다. 같은 owner의 handler key 중복의 검사 시점과 실패 결과는 [공통 API 「23」](../../common/spec/server/00-foundation/06-framework-api.ko.md#23-startup-validation)을 따른다.
 
 **선택 기준.** 모든 Spot handler class에 정확히 하나의 decorator를 붙인다. Node·Channel handler는
 topology-discovery category의 등록 항목을, STREAM session handler는 stream-session category를

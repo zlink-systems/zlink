@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -696,7 +697,11 @@ internal sealed record ZLinkDrainExecutionOperations(
             runtime.GetDrainRemainderCounts,
             runtime.StopAsync,
             runtime.ForceStopAsync,
-            autoConnect is null ? static _ => ValueTask.CompletedTask : autoConnect.StopAsync,
+            autoConnect is null
+                ? static _ => ValueTask.CompletedTask
+                : runtime
+                    .Services.GetRequiredService<ZLinkAutoConnectLifecycleCoordinator>()
+                    .StopAsync,
             locationRuntime is null
                 ? static _ => ValueTask.CompletedTask
                 : locationRuntime.StopAsync,

@@ -2,6 +2,7 @@ import { constants as osConstants } from 'node:os';
 import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
 import type {
   ApplicationJobPermitPort,
+  ApplicationJobReceiveRotationPort,
   ApplicationJobQueuePort
 } from '../application-jobs/contracts';
 import type {
@@ -130,6 +131,7 @@ export interface RawServiceMeshRuntimeOptions {
 // Framework error code 13 (RequestTargetNotFound) is encoded as 14 on a
 // RequestResult.NotFound reply. Boundary transport results keep failureCode 0.
 const RAW_MESH_RECEIVE_RECORD_BUDGET = 64;
+const NODE_SEND_HEADER = encodeNodeSendHeader();
 const RAW_MESH_RECEIVE_BYTE_BUDGET = 4 * 1024 * 1024;
 export const RAW_MESH_RECEIVE_TIME_BUDGET_MS = 2;
 
@@ -171,10 +173,12 @@ export class RawServiceMeshRuntime {
   private selectedRoutes = new Map<string, bigint>();
   private readonly bindingPort: ZLinkRawBindingPort;
   private readonly applicationJobQueue: ApplicationJobQueuePort;
+  private readonly nodeMailboxOwner: string;
   private readonly peerAdmissionSealed?: () => boolean;
   private readonly applicationJobStop = new AbortController();
   private receiveAcquisition?: Promise<ApplicationJobPermitPort>;
   private receivePermit?: ApplicationJobPermitPort;
+  private receiveRotation?: ApplicationJobReceiveRotationPort;
   private readonly controlSends = new Map<
     string,
     {
@@ -196,6 +200,7 @@ export class RawServiceMeshRuntime {
   private router?: ZLinkRawRouterPort;
   private nextCorrelation = 1n;
   private serviceIngress?: RawServiceIngressHandler;
+  private serviceIngressAccepts?: (command: number) => boolean;
   private closed = false;
 
   constructor(options: RawServiceMeshRuntimeOptions) {
@@ -203,6 +208,7 @@ export class RawServiceMeshRuntime {
     this.infrastructureTaskRunner = options.infrastructureTaskRunner;
     this.operations = new OperationRegistry(undefined, options.onPendingOperationsChanged);
     this.descriptor = options.descriptor;
+    this.nodeMailboxOwner = `node:${options.descriptor.nodeRoutingId}`;
     this.topology = new ServiceTopologyRegistry(options.descriptor);
     this.mailbox = new ServiceMailbox(options.onMailboxReady);
     this.liveness = new ServiceLivenessRegistry(options.probeIntervalMs, options.peerTimeoutMs);
@@ -424,7 +430,7 @@ export class RawServiceMeshRuntime {
   isPeerRouteReady(nodeRoutingId: string, lifecycleGeneration?: bigint): boolean {
     // Admission is bound to the observed selected route: the route observer
     // removes the peer when that route ends or is replaced.
-    const peer = this.topology.peer(nodeRoutingId);
+    const peer = this.topology.admittedPeer(nodeRoutingId);
     return (
       peer !== undefined &&
       (lifecycleGeneration === undefined ||
@@ -476,7 +482,7 @@ export class RawServiceMeshRuntime {
       this.topology.localDescriptor()
     );
     for (const peer of this.topology.peers()) {
-      await this.send(peer.descriptor.nodeRoutingId, [update]);
+      await this.sendService(peer.descriptor.nodeRoutingId, [update]);
     }
   }
 
@@ -485,18 +491,14 @@ export class RawServiceMeshRuntime {
   }
 
   isObjectClientNodeDirectTarget(nodeRoutingId: string): boolean {
-    const descriptor =
-      nodeRoutingId === this.descriptor.nodeRoutingId
-        ? this.topology.localDescriptor()
-        : this.topology.knownDescriptor(nodeRoutingId);
-    return descriptor?.objectRole === 'client';
+    return this.topology.isObjectClientNodeDirectTarget(nodeRoutingId);
   }
 
-  async sendToNode(
+  sendToNode(
     targetNodeRoutingId: string,
     payload: ServiceApplicationPayloadInput
-  ): Promise<boolean> {
-    return this.send(targetNodeRoutingId, [encodeNodeSendHeader(), this.applicationFrame(payload)]);
+  ): boolean | Promise<boolean> {
+    return this.send(targetNodeRoutingId, [NODE_SEND_HEADER, this.applicationFrame(payload)]);
   }
 
   async sendToChannel(
@@ -566,11 +568,15 @@ export class RawServiceMeshRuntime {
         };
   }
 
-  setServiceIngress(handler: RawServiceIngressHandler): void {
+  setServiceIngress(
+    handler: RawServiceIngressHandler,
+    accepts?: (command: number) => boolean
+  ): void {
     if (this.serviceIngress !== undefined && this.serviceIngress !== handler) {
       throw new Error('Raw service ingress is already registered.');
     }
     this.serviceIngress = handler;
+    this.serviceIngressAccepts = accepts;
   }
 
   async reserveLocalIngress(signal?: AbortSignal): Promise<ApplicationIngressRecordOwner> {
@@ -583,7 +589,12 @@ export class RawServiceMeshRuntime {
   }
 
   async sendService(targetNodeRoutingId: string, parts: readonly Uint8Array[]): Promise<boolean> {
-    return this.send(targetNodeRoutingId, parts);
+    try {
+      await this.requireStarted().send(targetNodeRoutingId, parts);
+      return true;
+    } catch (error) {
+      return this.sendFailure(error);
+    }
   }
 
   requestService(
@@ -592,7 +603,7 @@ export class RawServiceMeshRuntime {
     timeoutMs: number,
     onAdmitted?: () => void
   ): Promise<readonly Buffer[]> {
-    const admission = this.topology.peer(targetNodeRoutingId)?.liveness;
+    const admission = this.topology.admittedPeer(targetNodeRoutingId)?.liveness;
     return this.requireStarted().request(
       targetNodeRoutingId,
       parts,
@@ -674,20 +685,30 @@ export class RawServiceMeshRuntime {
     const observe: RawServicePumpObserver = (_source, byteCount) => {
       bytes += byteCount;
     };
-    while (receiveReady && messages < RAW_MESH_RECEIVE_RECORD_BUDGET && !this.closed) {
-      const result = await this.receiveOne(performance.now(), observe);
-      if (result === 'noData') {
-        receiveReady = false;
-        break;
+    const rotation = (this.receiveRotation ??= this.applicationJobQueue.createReceiveRotation(
+      RAW_MESH_RECEIVE_RECORD_BUDGET,
+      'remote'
+    ));
+    if (receiveReady) rotation.reserve();
+    try {
+      while (receiveReady && messages < RAW_MESH_RECEIVE_RECORD_BUDGET && !this.closed) {
+        const received = this.receiveOne(performance.now(), observe, rotation);
+        const result = received instanceof Promise ? await received : received;
+        if (result === 'noData') {
+          receiveReady = false;
+          break;
+        }
+        messages += 1;
+        // Core owns the per-peer fair-queue cursor. The Framework limit bounds
+        // the entire round, so changing peers does not renew its byte/count budget.
+        if (
+          bytes >= RAW_MESH_RECEIVE_BYTE_BUDGET ||
+          performance.now() - startedAtMs >= RAW_MESH_RECEIVE_TIME_BUDGET_MS
+        )
+          break;
       }
-      messages += 1;
-      // Core owns the per-peer fair-queue cursor. The Framework limit bounds
-      // the entire round, so changing peers does not renew its byte/count budget.
-      if (
-        bytes >= RAW_MESH_RECEIVE_BYTE_BUDGET ||
-        performance.now() - startedAtMs >= RAW_MESH_RECEIVE_TIME_BUDGET_MS
-      )
-        break;
+    } finally {
+      rotation.releaseUnused();
     }
     if (!this.closed) {
       for (const nodeRoutingId of this.expectedPeers.keys()) {
@@ -698,35 +719,40 @@ export class RawServiceMeshRuntime {
     return receiveReady && messages > 0;
   }
 
-  private async receiveOne(
+  private receiveOne(
     nowMs: number,
-    observe?: RawServicePumpObserver
-  ): Promise<RawServicePumpResult> {
+    observe?: RawServicePumpObserver,
+    rotation?: ApplicationJobReceiveRotationPort
+  ): RawServicePumpResult | Promise<RawServicePumpResult> {
     const router = this.requireStarted();
     this.observeInfrastructureFailure();
-    if (this.receivePermit === undefined && this.receiveAcquisition === undefined) {
-      let resolveAcquisition!: (permit: ApplicationJobPermitPort) => void;
-      let rejectAcquisition!: (error: unknown) => void;
-      const acquisition = new Promise<ApplicationJobPermitPort>((resolve, reject) => {
-        resolveAcquisition = resolve;
-        rejectAcquisition = reject;
-      });
-      const permit = this.applicationJobQueue.acquireOrResume(
+    let permit = this.receivePermit;
+    this.receivePermit = undefined;
+    permit ??= rotation?.take();
+    if (permit === undefined && this.receiveAcquisition === undefined) {
+      let resolveAcquisition: ((permit: ApplicationJobPermitPort) => void) | undefined;
+      let rejectAcquisition: ((error: unknown) => void) | undefined;
+      permit = this.applicationJobQueue.acquireOrResume(
         (permit) => {
           this.receiveAcquisition = undefined;
-          if (this.closed) permit.releaseAfterInternalProcessing();
-          else {
+          if (this.closed) {
+            permit.releaseAfterInternalProcessing();
+            permit.releaseStorage?.();
+          } else {
             this.receivePermit = permit;
             this.onReceiveReady?.();
           }
-          resolveAcquisition(permit);
+          resolveAcquisition?.(permit);
         },
-        rejectAcquisition,
+        (error) => rejectAcquisition?.(error),
         this.applicationJobStop.signal,
         'remote'
       );
-      if (permit !== undefined) this.receivePermit = permit;
-      else {
+      if (permit === undefined) {
+        const acquisition = new Promise<ApplicationJobPermitPort>((resolve, reject) => {
+          resolveAcquisition = resolve;
+          rejectAcquisition = reject;
+        });
         this.receiveAcquisition = acquisition;
         acquisition.catch((error) => {
           this.receiveAcquisition = undefined;
@@ -734,11 +760,10 @@ export class RawServiceMeshRuntime {
         });
       }
     }
-    const permit = this.receivePermit;
-    this.receivePermit = undefined;
     if (permit === undefined) return 'noData';
     if (this.closed) {
       permit.releaseAfterInternalProcessing();
+      permit.releaseStorage?.();
       return 'noData';
     }
     let received: ZLinkRawReceivedRecord | undefined;
@@ -746,10 +771,12 @@ export class RawServiceMeshRuntime {
       received = router.receive(true);
     } catch (error) {
       permit.releaseAfterInternalProcessing();
+      permit.releaseStorage?.();
       throw error;
     }
     if (received === undefined) {
       permit.releaseAfterInternalProcessing();
+      permit.releaseStorage?.();
       return 'noData';
     }
     const applicationJobOwner = ApplicationIngressRecordOwner.create(
@@ -757,18 +784,40 @@ export class RawServiceMeshRuntime {
       permit,
       received
     );
+    let result: RawServicePumpResult | Promise<RawServicePumpResult>;
     try {
-      const result = await this.processReceived(received, nowMs, applicationJobOwner);
-      if (result === 'protocolError') {
-        this.reportProtocolError(received);
+      result = this.processReceived(received, nowMs, applicationJobOwner);
+    } catch (error) {
+      applicationJobOwner.close();
+      throw error;
+    }
+    return result instanceof Promise
+      ? result.then(
+          (value) => this.finishReceive(received, applicationJobOwner, observe, value),
+          (error) => {
+            applicationJobOwner.close();
+            throw error;
+          }
+        )
+      : this.finishReceive(received, applicationJobOwner, observe, result);
+  }
+
+  private finishReceive(
+    received: ZLinkRawReceivedRecord,
+    owner: ApplicationIngressRecordOwner,
+    observe: RawServicePumpObserver | undefined,
+    result: RawServicePumpResult
+  ): RawServicePumpResult {
+    try {
+      if (result === 'protocolError') this.reportProtocolError(received);
+      if (observe !== undefined) {
+        let bytes = 0;
+        for (const part of received.parts) bytes += part.byteLength;
+        observe(received.sourceRid, bytes);
       }
-      observe?.(
-        received.sourceRid,
-        received.parts.reduce((sum, part) => sum + part.byteLength, 0)
-      );
       return result;
     } finally {
-      applicationJobOwner.close();
+      owner.close();
     }
   }
 
@@ -814,21 +863,19 @@ export class RawServiceMeshRuntime {
     }
   }
 
-  private async processReceived(
+  private processReceived(
     received: ZLinkRawReceivedRecord,
     nowMs: number,
     applicationJobOwner: ApplicationIngressRecordOwner
-  ): Promise<RawServicePumpResult> {
+  ): RawServicePumpResult | Promise<RawServicePumpResult> {
     if (
       received.parts.length === 0 ||
       (received.parts.length === 1 && received.parts[0]!.byteLength === 0)
     ) {
       if (this.peerAdmissionSealed?.() === true) return 'dropped';
-      return (await this.sendControl(received.sourceRid, [
+      return this.sendControl(received.sourceRid, [
         encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
-      ]))
-        ? 'infrastructure'
-        : 'dropped';
+      ]).then((sent) => (sent ? 'infrastructure' : 'dropped'));
     }
     try {
       const header = decodeHeader(received.parts[0]!);
@@ -840,59 +887,16 @@ export class RawServiceMeshRuntime {
         header.command === M6aServiceWireCommand.admit ||
         header.command === M6aServiceWireCommand.update
       ) {
-        if (received.parts.length !== 1) return 'protocolError';
-        const descriptor = decodeRouteMeshAdmission(
-          received.parts[0]!,
-          header.command,
-          received.sourceRid
+        return this.processAdmission(received, header, nowMs).catch((error) =>
+          this.receiveProtocolFailure(error)
         );
-        const expected = this.expectedPeers.get(received.sourceRid);
-        if (
-          expected !== undefined &&
-          (expected.meshName !== descriptor.meshName ||
-            expected.nodeRoutingId !== descriptor.nodeRoutingId)
-        ) {
-          await this.sendControl(received.sourceRid, [
-            encodeReject(enumWireRejectReason('identityMismatch'))
-          ]);
-          return 'infrastructure';
-        }
-        const result = this.admitPeer(descriptor, received.routeGeneration, nowMs, expected);
-        if (result !== 'admitted' && result !== 'notRequired') {
-          const detail =
-            result === 'invalidDescriptor'
-              ? describeInvalidAdmissionDescriptor(
-                  descriptor,
-                  expected,
-                  this.topology.peer(descriptor.nodeRoutingId)?.descriptor
-                )
-              : undefined;
-          console.warn(
-            `RouteMesh admission rejected peer '${received.sourceRid}' as ${result}` +
-              (detail === undefined ? '.' : ` (${detail}).`)
-          );
-          await this.sendControl(received.sourceRid, [encodeReject(admissionReason(result))]);
-          return 'infrastructure';
-        }
-        if (result === 'admitted') this.selectBilateralConnection(descriptor);
-        if (header.command === M6aServiceWireCommand.hello) {
-          // Hello supplies only the sender's descriptor. Even NotRequired
-          // peers must receive ours before the intent owner closes transport;
-          // submitting a response does not guarantee delivery before close.
-          await this.sendControl(received.sourceRid, [
-            encodeRouteMeshAdmission(M6aServiceWireCommand.admit, this.topology.localDescriptor())
-          ]);
-        } else if (result === 'notRequired') {
-          this.retireNotRequiredExpectedPeer(received.sourceRid, descriptor.advertisedEndpoint);
-        }
-        return 'infrastructure';
       }
       if (header.command === M6aServiceWireCommand.reject) {
         if (received.parts.length !== 1) return 'protocolError';
         decodeReject(received.parts[0]!);
         return 'infrastructure';
       }
-      const peer = this.topology.peer(received.sourceRid);
+      const peer = this.topology.admittedPeer(received.sourceRid);
       if (peer === undefined) return 'protocolError';
       if (peer.liveness !== undefined && peer.liveness.connectionId === received.routeGeneration)
         this.liveness.recordReceived(peer.liveness, nowMs);
@@ -900,44 +904,134 @@ export class RawServiceMeshRuntime {
         header.command === M6aServiceWireCommand.livenessProbe ||
         header.command === M6aServiceWireCommand.livenessAck
       ) {
-        if (received.parts.length !== 1) return 'protocolError';
-        const record = livenessCodec.decodeLivenessRecord(received.parts[0]!);
-        if (record.command === M6aServiceWireCommand.livenessProbe) {
-          const ack = this.liveness.acknowledgeProbe(
-            received.sourceRid,
-            received.routeGeneration,
-            record.probeId
-          );
-          if (ack === undefined) return 'protocolError';
-          const sent = await this.sendControl(received.sourceRid, [
-            livenessCodec.encodeLivenessRecord({
-              command: M6aServiceWireCommand.livenessAck,
-              probeId: record.probeId
-            })
-          ]);
-          if (!sent) return 'dropped';
-        } else {
-          this.liveness.acknowledge(
-            received.sourceRid,
-            received.routeGeneration,
-            record.probeId,
-            nowMs
-          );
-        }
-        return 'infrastructure';
+        return this.processLiveness(received, nowMs).catch((error) =>
+          this.receiveProtocolFailure(error)
+        );
       }
-      const stateful = await this.serviceIngress?.({
-        command: header.command,
-        flags: header.flags,
-        sourceRoutingId: received.sourceRid,
-        sourceNodeGeneration: peer.descriptor.lifecycleGeneration,
-        sourceRoute: received.sourceRoute,
-        ...(received.reply === undefined ? {} : { reply: received.reply }),
-        ...(received.requestSeq === undefined ? {} : { requestSequence: received.requestSeq }),
-        parts: received.parts,
-        applicationJobOwner
-      });
+      const stateful =
+        this.serviceIngress !== undefined && this.serviceIngressAccepts?.(header.command) !== false
+          ? this.serviceIngress({
+              command: header.command,
+              flags: header.flags,
+              sourceRoutingId: received.sourceRid,
+              sourceNodeGeneration: peer.descriptor.lifecycleGeneration,
+              sourceRoute: received.sourceRoute,
+              ...(received.reply === undefined ? {} : { reply: received.reply }),
+              ...(received.requestSeq === undefined
+                ? {}
+                : { requestSequence: received.requestSeq }),
+              parts: received.parts,
+              applicationJobOwner
+            })
+          : undefined;
+      if (stateful instanceof Promise)
+        return stateful.then(
+          (result) =>
+            result ?? this.processApplicationReceived(received, header, applicationJobOwner),
+          (error) => this.receiveProtocolFailure(error)
+        );
       if (stateful !== undefined) return stateful;
+      return this.processApplicationReceived(received, header, applicationJobOwner);
+    } catch (error) {
+      return this.receiveProtocolFailure(error);
+    }
+  }
+
+  private receiveProtocolFailure(error: unknown): RawServicePumpResult {
+    if (error instanceof ServiceWireProtocolError) return 'protocolError';
+    throw error;
+  }
+
+  private async processAdmission(
+    received: ZLinkRawReceivedRecord,
+    header: ReturnType<typeof decodeHeader>,
+    nowMs: number
+  ): Promise<RawServicePumpResult> {
+    if (received.parts.length !== 1) return 'protocolError';
+    const descriptor = decodeRouteMeshAdmission(
+      received.parts[0]!,
+      header.command,
+      received.sourceRid
+    );
+    const expected = this.expectedPeers.get(received.sourceRid);
+    if (
+      expected !== undefined &&
+      (expected.meshName !== descriptor.meshName ||
+        expected.nodeRoutingId !== descriptor.nodeRoutingId)
+    ) {
+      await this.sendControl(received.sourceRid, [
+        encodeReject(enumWireRejectReason('identityMismatch'))
+      ]);
+      return 'infrastructure';
+    }
+    const result = this.admitPeer(descriptor, received.routeGeneration, nowMs, expected);
+    if (result !== 'admitted' && result !== 'notRequired') {
+      const detail =
+        result === 'invalidDescriptor'
+          ? describeInvalidAdmissionDescriptor(
+              descriptor,
+              expected,
+              this.topology.peer(descriptor.nodeRoutingId)?.descriptor
+            )
+          : undefined;
+      console.warn(
+        `RouteMesh admission rejected peer '${received.sourceRid}' as ${result}` +
+          (detail === undefined ? '.' : ` (${detail}).`)
+      );
+      await this.sendControl(received.sourceRid, [encodeReject(admissionReason(result))]);
+      return 'infrastructure';
+    }
+    if (result === 'admitted') this.selectBilateralConnection(descriptor);
+    if (header.command === M6aServiceWireCommand.hello) {
+      // Hello supplies only the sender's descriptor. Even NotRequired
+      // peers must receive ours before the intent owner closes transport;
+      // submitting a response does not guarantee delivery before close.
+      await this.sendControl(received.sourceRid, [
+        encodeRouteMeshAdmission(M6aServiceWireCommand.admit, this.topology.localDescriptor())
+      ]);
+    } else if (result === 'notRequired') {
+      this.retireNotRequiredExpectedPeer(received.sourceRid, descriptor.advertisedEndpoint);
+    }
+    return 'infrastructure';
+  }
+
+  private async processLiveness(
+    received: ZLinkRawReceivedRecord,
+    nowMs: number
+  ): Promise<RawServicePumpResult> {
+    if (received.parts.length !== 1) return 'protocolError';
+    const record = livenessCodec.decodeLivenessRecord(received.parts[0]!);
+    if (record.command === M6aServiceWireCommand.livenessProbe) {
+      const ack = this.liveness.acknowledgeProbe(
+        received.sourceRid,
+        received.routeGeneration,
+        record.probeId
+      );
+      if (ack === undefined) return 'protocolError';
+      const sent = await this.sendControl(received.sourceRid, [
+        livenessCodec.encodeLivenessRecord({
+          command: M6aServiceWireCommand.livenessAck,
+          probeId: record.probeId
+        })
+      ]);
+      if (!sent) return 'dropped';
+    } else {
+      this.liveness.acknowledge(
+        received.sourceRid,
+        received.routeGeneration,
+        record.probeId,
+        nowMs
+      );
+    }
+    return 'infrastructure';
+  }
+
+  private processApplicationReceived(
+    received: ZLinkRawReceivedRecord,
+    header: ReturnType<typeof decodeHeader>,
+    applicationJobOwner: ApplicationIngressRecordOwner
+  ): RawServicePumpResult | Promise<RawServicePumpResult> {
+    try {
       if (
         header.flags === 0 &&
         // A bare infrastructure control is normally exactly one frame, but a
@@ -955,7 +1049,7 @@ export class RawServiceMeshRuntime {
         isBareInfrastructureControl(header.command)
       ) {
         const accepted = this.mailbox.tryEnqueue({
-          owner: `node:${this.descriptor.nodeRoutingId}`,
+          owner: this.nodeMailboxOwner,
           domain: 'infrastructure',
           parts: received.parts,
           sourceRoutingId: received.sourceRid,
@@ -980,48 +1074,58 @@ export class RawServiceMeshRuntime {
       let owner: string;
       let correlation: bigint | undefined;
       if (header.command === M6aServiceWireCommand.nodeSend) {
-        owner = `node:${this.descriptor.nodeRoutingId}`;
+        owner = this.nodeMailboxOwner;
       } else if (header.command === M6aServiceWireCommand.nodeRequest) {
-        owner = `node:${this.descriptor.nodeRoutingId}`;
-        correlation = decodeNodeRequestHeader(received.parts[0]!);
+        owner = this.nodeMailboxOwner;
+        correlation = decodeNodeRequestHeader(received.parts[0]!, header);
       } else if (header.command === M6aServiceWireCommand.channelSend) {
-        owner = `channel:${decodeChannelSendHeader(received.parts[0]!)}`;
+        owner = `channel:${decodeChannelSendHeader(received.parts[0]!, header)}`;
       } else {
-        const channel = decodeChannelRequestHeader(received.parts[0]!);
+        const channel = decodeChannelRequestHeader(received.parts[0]!, header);
         owner = `channel:${channel.channelName}`;
         correlation = channel.correlation;
       }
-      const applicationJob = await applicationJobOwner.acquire('application');
-      const accepted = this.mailbox.tryEnqueue({
-        owner,
-        domain: 'application',
-        parts: received.parts,
-        sourceRoutingId: received.sourceRid,
-        sourceRoute: received.sourceRoute,
-        ...(received.reply === undefined ? {} : { reply: received.reply }),
-        requestSequence: received.requestSeq,
-        ...(correlation === undefined ? {} : { correlation }),
-        applicationJob
-      });
-      if (accepted) return 'application';
-      applicationJob.close();
-      if (correlation !== undefined && received.requestSeq !== undefined) {
-        this.replyService(
-          {
-            sourceRoutingId: received.sourceRid,
-            sourceRoute: received.sourceRoute,
-            requestSequence: received.requestSeq,
-            ...(received.reply === undefined ? {} : { reply: received.reply })
-          },
-          [encodeReplyHeader(correlation, RequestResult.NotConnected, 0)]
-        );
-        return 'infrastructure';
-      }
-      return 'dropped';
+      const job = applicationJobOwner.acquire('application');
+      return job instanceof Promise
+        ? job.then((permit) => this.enqueueOrdinaryRecord(received, owner, correlation, permit))
+        : this.enqueueOrdinaryRecord(received, owner, correlation, job);
     } catch (error) {
-      if (error instanceof ServiceWireProtocolError) return 'protocolError';
-      throw error;
+      return this.receiveProtocolFailure(error);
     }
+  }
+
+  private enqueueOrdinaryRecord(
+    received: ZLinkRawReceivedRecord,
+    owner: string,
+    correlation: bigint | undefined,
+    applicationJob: import('../application-jobs/application-ingress-record-owner').ApplicationJobRecordLease
+  ): RawServicePumpResult {
+    const accepted = this.mailbox.tryEnqueue({
+      owner,
+      domain: 'application',
+      parts: received.parts,
+      sourceRoutingId: received.sourceRid,
+      sourceRoute: received.sourceRoute,
+      ...(received.reply === undefined ? {} : { reply: received.reply }),
+      requestSequence: received.requestSeq,
+      ...(correlation === undefined ? {} : { correlation }),
+      applicationJob
+    });
+    if (accepted) return 'application';
+    applicationJob.close();
+    if (correlation !== undefined && received.requestSeq !== undefined) {
+      this.replyService(
+        {
+          sourceRoutingId: received.sourceRid,
+          sourceRoute: received.sourceRoute,
+          requestSequence: received.requestSeq,
+          ...(received.reply === undefined ? {} : { reply: received.reply })
+        },
+        [encodeReplyHeader(correlation, RequestResult.NotConnected, 0)]
+      );
+      return 'infrastructure';
+    }
+    return 'dropped';
   }
 
   expireOperations(nowMs: number, turnDeadlineMs: number): number {
@@ -1098,6 +1202,7 @@ export class RawServiceMeshRuntime {
       new Error('Raw service runtime application job admission stopped.')
     );
     this.receivePermit?.releaseAfterInternalProcessing();
+    this.receivePermit?.releaseStorage?.();
     this.receivePermit = undefined;
     for (const send of this.controlSends.values()) delete send.next;
     this.mailbox.close();
@@ -1198,7 +1303,7 @@ export class RawServiceMeshRuntime {
       })().catch((error) => this.operations.fail(pending.id, error));
       return pending;
     }
-    const selectedPeer = this.topology.peer(selectedTargetNodeRoutingId);
+    const selectedPeer = this.topology.admittedPeer(selectedTargetNodeRoutingId);
     if (selectedPeer === undefined) {
       // Logical target selection is the requester's decision: an RID that is
       // not an admitted peer is not a target. Whether an admitted target's
@@ -1465,17 +1570,20 @@ export class RawServiceMeshRuntime {
     if (failure !== undefined) throw failure.error;
   }
 
-  private send(targetNodeRoutingId: string, parts: readonly Uint8Array[]): Promise<boolean> {
-    return this.requireStarted()
-      .send(targetNodeRoutingId, parts)
-      .then(
-        () => {
-          return true;
-        },
-        (error) => {
-          return this.sendFailure(error);
-        }
+  private send(
+    targetNodeRoutingId: string,
+    parts: readonly Uint8Array[]
+  ): boolean | Promise<boolean> {
+    try {
+      const submission = this.requireStarted().submitSend(targetNodeRoutingId, parts);
+      if (submission.result === SubmitResult.Ok) return true;
+      return submission.admitted.then(
+        () => true,
+        (error) => this.sendFailure(error)
       );
+    } catch (error) {
+      return this.sendFailure(error);
+    }
   }
 
   private sendFailure(error: unknown): false {

@@ -1,8 +1,11 @@
+using Zlink.Framework.Runtime.Host;
+
 namespace Zlink.Framework.Runtime.Execution;
 
 internal sealed class ZLinkSerialWorkItem
 {
     private readonly Func<CancellationToken, ValueTask> _callback;
+    private readonly ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease? _operation;
     private readonly Action? _relocationRelease;
     private readonly Func<ReadOnlyMemory<byte>>? _acceptedPayloadFactory;
     private readonly object? _acceptedPayloadGate;
@@ -27,6 +30,7 @@ internal sealed class ZLinkSerialWorkItem
     {
         _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _callback = callback;
+        _operation = ZLinkFrameworkRuntime.CurrentOperation;
         _relocationRelease = relocationRelease;
         PreviousOwnerMessageFollow = previousOwnerMessageFollow;
         Lane = lane;
@@ -159,6 +163,7 @@ internal sealed class ZLinkSerialWorkItem
         try
         {
             using var turnScope = ZLinkSerialTurn.Push(turn);
+            using var operationScope = ZLinkFrameworkRuntime.EnterAcceptedOperation(_operation);
             var operation = _callback(cancellationToken);
             if (operation.IsCompletedSuccessfully)
             {

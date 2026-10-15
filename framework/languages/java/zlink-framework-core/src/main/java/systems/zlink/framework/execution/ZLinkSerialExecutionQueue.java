@@ -484,10 +484,9 @@ public final class ZLinkSerialExecutionQueue {
                             (ignored, failure) -> admission.completeExceptionally(failure));
                 return rejected;
             }
-            result = enqueueAccepted(null, payloadBytes, operation, release, message);
+            result = enqueueAccepted(null, payloadBytes, operation, release, message, admission);
         }
         scheduleDrainIfNeeded(result);
-        if (admission != null) admission.complete(null);
         return result.result();
     }
 
@@ -735,7 +734,10 @@ public final class ZLinkSerialExecutionQueue {
         CompletionStage<Void> rejection = null;
         synchronized (this) {
             rejection = admissionFailureLocked();
-            result = rejection == null ? enqueueAccepted(null, 0, operation) : null;
+            result =
+                    rejection == null
+                            ? enqueueAccepted(null, 0, operation, () -> {}, null, admission)
+                            : null;
         }
         if (rejection != null) {
             if (admission != null) {
@@ -744,7 +746,6 @@ public final class ZLinkSerialExecutionQueue {
             return rejection;
         }
         scheduleDrainIfNeeded(result);
-        if (admission != null) admission.complete(null);
         return result.result();
     }
 
@@ -773,7 +774,11 @@ public final class ZLinkSerialExecutionQueue {
         synchronized (this) {
             validatePayloadBytes(payloadBytes);
             rejection = admissionFailureLocked();
-            result = rejection == null ? enqueueAccepted(null, payloadBytes, operation) : null;
+            result =
+                    rejection == null
+                            ? enqueueAccepted(
+                                    null, payloadBytes, operation, () -> {}, null, admission)
+                            : null;
         }
         if (rejection != null) {
             if (admission != null) {
@@ -782,7 +787,6 @@ public final class ZLinkSerialExecutionQueue {
             return rejection;
         }
         scheduleDrainIfNeeded(result);
-        if (admission != null) admission.complete(null);
         return result.result();
     }
 
@@ -810,7 +814,7 @@ public final class ZLinkSerialExecutionQueue {
         boolean rejected;
         synchronized (this) {
             rejected = relocated;
-            result = rejected ? null : enqueueBarrierNextLocked(operation);
+            result = rejected ? null : enqueueBarrierNextLocked(operation, admission);
         }
         if (rejected) {
             RelocatedOwnerException failure = new RelocatedOwnerException();
@@ -818,7 +822,6 @@ public final class ZLinkSerialExecutionQueue {
             return CompletableFuture.failedFuture(failure);
         }
         scheduleDrainIfNeeded(result);
-        if (admission != null) admission.complete(null);
         return result.result();
     }
 
@@ -837,6 +840,11 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private EnqueueResult enqueueBarrierNextLocked(Supplier<CompletionStage<Void>> operation) {
+        return enqueueBarrierNextLocked(operation, null);
+    }
+
+    private EnqueueResult enqueueBarrierNextLocked(
+            Supplier<CompletionStage<Void>> operation, CompletableFuture<Void> admission) {
         Objects.requireNonNull(operation, "operation");
         if (nextSequence == Long.MAX_VALUE) {
             throw new IllegalStateException("queue sequence exhausted");
@@ -851,7 +859,8 @@ public final class ZLinkSerialExecutionQueue {
                         ZLinkFlowContext.current(),
                         null,
                         Lane.LIFECYCLE,
-                        false);
+                        false,
+                        admission);
         incrementOutstanding();
         if (relocation != null) {
             holdRelocationEntry(entry);
@@ -911,7 +920,12 @@ public final class ZLinkSerialExecutionQueue {
             result =
                     rejection == null
                             ? enqueueAccepted(
-                                    record.clone(), record.length, operation, relocationRelease)
+                                    record.clone(),
+                                    record.length,
+                                    operation,
+                                    relocationRelease,
+                                    null,
+                                    admission)
                             : null;
         }
         if (rejection != null) {
@@ -921,7 +935,6 @@ public final class ZLinkSerialExecutionQueue {
             return rejection;
         }
         scheduleDrainIfNeeded(result);
-        if (admission != null) admission.complete(null);
         return result.result();
     }
 
@@ -937,7 +950,6 @@ public final class ZLinkSerialExecutionQueue {
             CompletableFuture<Void> admission) {
         EnqueueResult result = null;
         CompletionStage<Void> immediate = null;
-        boolean accepted = false;
         synchronized (this) {
             Objects.requireNonNull(record, "record");
             Objects.requireNonNull(operation, "operation");
@@ -948,9 +960,9 @@ public final class ZLinkSerialExecutionQueue {
                 if (nextSequence == Long.MAX_VALUE) {
                     throw new IllegalStateException("queue sequence exhausted");
                 }
-                accepted = true;
                 if (relocation != null) {
-                    Entry held = holdRelocationIngress(record, operation, relocationRelease);
+                    Entry held =
+                            holdRelocationIngress(record, operation, relocationRelease, admission);
                     result = new EnqueueResult(held, false);
                     // Account for the held job after leaving the execution gate.
                     immediate = held.result;
@@ -967,7 +979,8 @@ public final class ZLinkSerialExecutionQueue {
                                     ZLinkFlowContext.current(),
                                     null,
                                     Lane.APPLICATION,
-                                    false)
+                                    false,
+                                    admission)
                             : null;
             if (entry != null) {
                 incrementOutstanding();
@@ -976,10 +989,8 @@ public final class ZLinkSerialExecutionQueue {
             if (entry != null) result = new EnqueueResult(entry, requestDrainLocked(entry));
         }
         if (result != null) scheduleDrainIfNeeded(result);
-        if (admission != null) {
-            if (accepted) admission.complete(null);
-            else
-                immediate.whenComplete((done, failure) -> admission.completeExceptionally(failure));
+        if (result == null && admission != null) {
+            immediate.whenComplete((done, failure) -> admission.completeExceptionally(failure));
         }
         if (immediate != null) return immediate;
         return result.result();
@@ -1039,7 +1050,7 @@ public final class ZLinkSerialExecutionQueue {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
-        return enqueueAccepted(record, payloadBytes, operation, relocationRelease, null);
+        return enqueueAccepted(record, payloadBytes, operation, relocationRelease, null, null);
     }
 
     private EnqueueResult enqueueAccepted(
@@ -1047,7 +1058,8 @@ public final class ZLinkSerialExecutionQueue {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
-            Object message) {
+            Object message,
+            CompletableFuture<Void> admission) {
         Objects.requireNonNull(operation, "operation");
         validatePayloadBytes(payloadBytes);
         if (relocated) {
@@ -1059,7 +1071,8 @@ public final class ZLinkSerialExecutionQueue {
         }
         if (relocation != null) {
             return new EnqueueResult(
-                    holdRelocationIngress(record, operation, relocationRelease, message), false);
+                    holdRelocationIngress(record, operation, relocationRelease, message, admission),
+                    false);
         }
         Entry entry =
                 new Entry(
@@ -1071,7 +1084,8 @@ public final class ZLinkSerialExecutionQueue {
                         ZLinkFlowContext.current(),
                         null,
                         Lane.APPLICATION,
-                        false);
+                        false,
+                        admission);
         incrementOutstanding();
         entry.message = message;
         publish(entry);
@@ -1082,7 +1096,8 @@ public final class ZLinkSerialExecutionQueue {
             byte[] record,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
-            Object message) {
+            Object message,
+            CompletableFuture<Void> admission) {
         Entry entry =
                 new Entry(
                         nextSequence++,
@@ -1093,7 +1108,8 @@ public final class ZLinkSerialExecutionQueue {
                         ZLinkFlowContext.current(),
                         null,
                         Lane.APPLICATION,
-                        false);
+                        false,
+                        admission);
         incrementOutstanding();
         entry.message = message;
         holdRelocationEntry(entry);
@@ -1103,7 +1119,8 @@ public final class ZLinkSerialExecutionQueue {
     private Entry holdRelocationIngress(
             Supplier<byte[]> record,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         Entry entry =
                 new Entry(
                         nextSequence++,
@@ -1114,7 +1131,8 @@ public final class ZLinkSerialExecutionQueue {
                         ZLinkFlowContext.current(),
                         null,
                         Lane.APPLICATION,
-                        false);
+                        false,
+                        admission);
         incrementOutstanding();
         holdRelocationEntry(entry);
         return entry;
@@ -1251,13 +1269,18 @@ public final class ZLinkSerialExecutionQueue {
                 == published;
     }
 
-    private void scheduleDrainIfNeeded(EnqueueResult result) {
-        scheduleDrainIfNeeded(result.scheduleDrain(), result.applicationJobOwnership());
+    private static void completeAdmission(Entry entry) {
+        if (entry != null && entry.admission != null) entry.admission.complete(null);
     }
 
-    private void scheduleDrainIfNeeded(
-            boolean scheduleDrain, ZLinkApplicationJobContext.QueuedOwnership ownership) {
-        if (sharedSpotGate == null && ownership != null) ownership.markQueued();
+    private void scheduleDrainIfNeeded(EnqueueResult result) {
+        scheduleDrainIfNeeded(result.scheduleDrain(), result.entry());
+    }
+
+    private void scheduleDrainIfNeeded(boolean scheduleDrain, Entry entry) {
+        if (sharedSpotGate == null && entry != null && entry.applicationJobOwnership != null)
+            entry.applicationJobOwnership.markQueued();
+        completeAdmission(entry);
         if (!scheduleDrain) {
             return;
         }
@@ -1528,16 +1551,16 @@ public final class ZLinkSerialExecutionQueue {
      * remains active until {@link RelocationBoundary#release()} is called.
      */
     public Optional<RelocationBoundary> reserveRelocationTurnBoundary() {
-        ZLinkApplicationJobContext.QueuedOwnership ownership;
+        Entry entry;
         Optional<RelocationBoundary> result;
         boolean scheduleDrain;
         synchronized (this) {
             result = reserveBoundaryLocked();
             if (result.isEmpty()) return result;
-            ownership = result.orElseThrow().entry.applicationJobOwnership;
+            entry = result.orElseThrow().entry;
             scheduleDrain = requestDrainLocked(result.orElseThrow().entry);
         }
-        scheduleDrainIfNeeded(scheduleDrain, ownership);
+        scheduleDrainIfNeeded(scheduleDrain, entry);
         return result;
     }
 
@@ -1813,6 +1836,7 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private CompletionStage<Void> invokeInline(Entry entry) {
+        completeAdmission(entry);
         CompletableFuture<Void> gate = new CompletableFuture<>();
         CompletableFuture<Void> invocationReturned = new CompletableFuture<>();
         boolean releaseGateOnIncompleteStage =
@@ -2137,7 +2161,7 @@ public final class ZLinkSerialExecutionQueue {
 
     private CompletionStage<Void> enqueueContinuation(
             Entry origin, Supplier<CompletionStage<Void>> operation) {
-        ZLinkApplicationJobContext.QueuedOwnership ownership;
+        Entry entry;
         CompletionStage<Void> result;
         boolean scheduleDrain = false;
         synchronized (this) {
@@ -2177,9 +2201,9 @@ public final class ZLinkSerialExecutionQueue {
             if (lifecycleContinuation) suspendedLifecycleContinuations--;
             else suspendedApplicationContinuations--;
             result = continuation.result;
-            ownership = continuation.applicationJobOwnership;
+            entry = continuation;
         }
-        scheduleDrainIfNeeded(scheduleDrain, ownership);
+        scheduleDrainIfNeeded(scheduleDrain, entry);
         return result;
     }
 
@@ -2552,6 +2576,7 @@ public final class ZLinkSerialExecutionQueue {
         private Object message;
         private final Runnable relocationRelease;
         private final CompletableFuture<Void> result;
+        private final CompletableFuture<Void> admission;
         private final ZLinkFlowContext.State flow;
         private final ZLinkApplicationJobContext.QueuedOwnership applicationJobOwnership;
         private final RelocationBoundary relocationBoundary;
@@ -2575,12 +2600,37 @@ public final class ZLinkSerialExecutionQueue {
                 RelocationBoundary relocationBoundary,
                 Lane lane,
                 boolean continuation) {
+            this(
+                    sequence,
+                    record,
+                    operation,
+                    relocationRelease,
+                    result,
+                    flow,
+                    relocationBoundary,
+                    lane,
+                    continuation,
+                    null);
+        }
+
+        private Entry(
+                long sequence,
+                byte[] record,
+                Supplier<CompletionStage<Void>> operation,
+                Runnable relocationRelease,
+                CompletableFuture<Void> result,
+                ZLinkFlowContext.State flow,
+                RelocationBoundary relocationBoundary,
+                Lane lane,
+                boolean continuation,
+                CompletableFuture<Void> admission) {
             this.sequence = sequence;
             this.record = record;
             this.lazyRecord = null;
             this.operation = operation;
             this.relocationRelease = relocationRelease;
             this.result = result;
+            this.admission = admission;
             this.flow = flow;
             this.applicationJobOwnership = ZLinkApplicationJobContext.transferQueuedOwnership();
             this.relocationBoundary = relocationBoundary;
@@ -2598,12 +2648,37 @@ public final class ZLinkSerialExecutionQueue {
                 RelocationBoundary relocationBoundary,
                 Lane lane,
                 boolean continuation) {
+            this(
+                    sequence,
+                    lazyRecord,
+                    operation,
+                    relocationRelease,
+                    result,
+                    flow,
+                    relocationBoundary,
+                    lane,
+                    continuation,
+                    null);
+        }
+
+        private Entry(
+                long sequence,
+                Supplier<byte[]> lazyRecord,
+                Supplier<CompletionStage<Void>> operation,
+                Runnable relocationRelease,
+                CompletableFuture<Void> result,
+                ZLinkFlowContext.State flow,
+                RelocationBoundary relocationBoundary,
+                Lane lane,
+                boolean continuation,
+                CompletableFuture<Void> admission) {
             this.sequence = sequence;
             this.record = null;
             this.lazyRecord = Objects.requireNonNull(lazyRecord, "lazyRecord");
             this.operation = operation;
             this.relocationRelease = relocationRelease;
             this.result = result;
+            this.admission = admission;
             this.flow = flow;
             this.applicationJobOwnership = ZLinkApplicationJobContext.transferQueuedOwnership();
             this.relocationBoundary = relocationBoundary;
@@ -2625,12 +2700,9 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
-    private record EnqueueResult(
-            CompletionStage<Void> result,
-            boolean scheduleDrain,
-            ZLinkApplicationJobContext.QueuedOwnership applicationJobOwnership) {
+    private record EnqueueResult(CompletionStage<Void> result, boolean scheduleDrain, Entry entry) {
         EnqueueResult(Entry entry, boolean scheduleDrain) {
-            this(entry.result, scheduleDrain, entry.applicationJobOwnership);
+            this(entry.result, scheduleDrain, entry);
         }
     }
 

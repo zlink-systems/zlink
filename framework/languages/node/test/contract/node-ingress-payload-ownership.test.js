@@ -49,7 +49,7 @@ function multipartParts(payload) {
   return parts;
 }
 
-test('completion retention keeps owned framework buffers and copies only native message storage', async () => {
+test('completion retention keeps managed and binding payload views after source close', async () => {
   const table = new ZLinkMeshCompletionTable();
   const ownedBytes = Buffer.from('managed completion');
   const owned = ZLinkBufferMessage.fromOwned(ownedBytes);
@@ -65,6 +65,7 @@ test('completion retention keeps owned framework buffers and copies only native 
   }
 
   const native = zlink.Message.from(Buffer.from('native completion'));
+  const nativeView = native.data();
   const nativeCompletion = table.submit(() => ({ high: 1n, low: 2n }));
   try {
     table.complete(completionRecord(2n, [native]));
@@ -73,10 +74,53 @@ test('completion retention keeps owned framework buffers and copies only native 
   }
   const retainedNative = await nativeCompletion;
   try {
-    assert.equal(retainedNative.parts[0].data().toString(), 'native completion');
+    nativeView[0] = 'N'.charCodeAt(0);
+    assert.equal(retainedNative.parts[0].data()[0], nativeView[0]);
+    assert.equal(retainedNative.parts[0].data().toString(), 'Native completion');
   } finally {
     closeMeshCompletion(retainedNative);
     table.dispose();
+  }
+});
+
+test('native received binary payload has one retained view across completion and reply decoding', async () => {
+  const { encodeChannelReplyParts, decodeChannelReply } = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+  const context = zlink.createContext();
+  const router = zlink.createRouterSocket(context);
+  const dealer = zlink.createDealerSocket(context);
+  const received = new zlink.Received();
+  const table = new ZLinkMeshCompletionTable();
+  let completion;
+  try {
+    const endpoint = 'inproc://native-payload-retention';
+    router.bind(endpoint);
+    dealer.connect(endpoint);
+    const parts = encodeChannelReplyParts(
+      { channelName: 'mesh', messageName: 'Reply', correlationId: 'a'.repeat(32) },
+      Buffer.alloc(1024, 7)
+    );
+    dealer.send().message(parts[0]).message(parts[1]).submit_sync();
+    assert.equal(router.recv(received), true);
+    const nativeView = received.parts[1].data();
+    const pending = table.submit(() => ({ high: 1n, low: 3n }));
+    table.complete(completionRecord(3n, received.parts));
+    const directReply = decodeChannelReply(received.parts);
+    received.close();
+    completion = await pending;
+    const completionReply = decodeChannelReply(completion.parts);
+    assert.equal(directReply[0], 7);
+    assert.equal(completionReply[0], 7);
+    nativeView[0] = 9;
+    assert.equal(directReply[0], 9);
+    assert.equal(completionReply[0], 9);
+    assert.strictEqual(completionReply, completion.parts[1].data());
+  } finally {
+    if (completion !== undefined) closeMeshCompletion(completion);
+    table.dispose();
+    received.close();
+    dealer.close();
+    router.close();
+    context.close();
   }
 });
 
@@ -88,6 +132,10 @@ test('generic channel send writes one valid multipart application frame before s
     connectToRoutingId() {}, disconnectRid() {}, close() {}, localEndpoint: () => 'inproc://source-node',
     monitor: () => ({ statusReady: () => true, drain: () => 0, close() {} }),
     receive: () => undefined, send: async (_target, parts) => { sentParts = parts; },
+    submitSend: (_target, parts) => {
+      sentParts = parts;
+      return { result: SubmitResult.Ok, admitted: Promise.resolve() };
+    },
     request: async (_target, parts) => [
       encodeReplyHeader(decodeNodeRequestHeader(parts[0])), replyFrame
     ]

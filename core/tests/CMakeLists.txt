@@ -98,6 +98,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_request_writable_credit
   ${INTEGRATION_TEST_ROOT}/test_ready_empty_pipe_first_data
   ${INTEGRATION_TEST_ROOT}/test_option_type_public
+  ${INTEGRATION_TEST_ROOT}/test_option_events
   ${INTEGRATION_TEST_ROOT}/test_ancillaries
   ${INTEGRATION_TEST_ROOT}/test_asio_ws
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_enhanced
@@ -1034,6 +1035,9 @@ endif()
 
 if(TARGET test_router_selected_route_contract)
   set_tests_properties(test_router_selected_route_contract PROPERTIES LABELS "contract")
+endif()
+if(TARGET test_option_events)
+  set_property(TEST test_option_events APPEND PROPERTY LABELS "contract")
 endif()
 if(TARGET test_poller_ctx_shutdown_contract)
   set_tests_properties(test_poller_ctx_shutdown_contract PROPERTIES LABELS "contract")

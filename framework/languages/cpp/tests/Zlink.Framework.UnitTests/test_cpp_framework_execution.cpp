@@ -7674,11 +7674,12 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
             if (!zlink::framework::detail::defer_current_serial_turn (
                   [&] { record ("join"); }, [&] { record ("join-discarded"); }))
                 throw std::runtime_error ("join was not deferred");
-            auto plan = zlink::framework::detail::prepare_serial_turn_await (true);
-            if (!plan)
+            auto turn = zlink::framework::detail::capture_current_serial_turn ();
+            auto resume = zlink::framework::detail::release_serial_turn_for_resume (*turn);
+            if (!resume)
                 throw std::runtime_error ("turn was not released");
             record ("yield");
-            plan->scheduler ([&, turn = plan->turn, fail_after_yield] {
+            resume ([&, turn, fail_after_yield] {
                 record ("continuation");
                 if (fail_after_yield)
                     turn->cancel_deferred ();
@@ -9156,6 +9157,33 @@ int main (int argc, char **argv)
     }
     if (elastic_executor.live_worker_count () != 0) {
         return 24;
+    }
+
+    {
+        // A worker that returns on idle timeout is joined by its owner before
+        // the next worker starts, so returned threads do not accumulate.
+        constexpr int restart_rounds = 8;
+        zlink::framework::runtime::offload_executor_t restarting_executor (
+          0, 1, std::chrono::milliseconds (1));
+        for (int round = 0; round < restart_rounds; ++round) {
+            std::atomic_bool ran = false;
+            if (!restarting_executor.try_submit ([&] { ran.store (true); })) {
+                return 76;
+            }
+            for (int attempt = 0;
+                 attempt < 2500 && (!ran.load () || restarting_executor.live_worker_count () != 0);
+                 ++attempt) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (2));
+            }
+            if (!ran.load () || restarting_executor.live_worker_count () != 0) {
+                return 77;
+            }
+        }
+        if (restarting_executor.owned_thread_count () > 1) {
+            std::cerr << "offload executor kept returned workers: "
+                      << restarting_executor.owned_thread_count () << '\n';
+            return 78;
+        }
     }
 
     if (!verify_spot_wide_consumer_waits_for_shared_gate ()) {

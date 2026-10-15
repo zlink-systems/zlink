@@ -39,6 +39,7 @@ import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
@@ -120,6 +121,74 @@ final class ZLinkSpotCloseConformanceTest {
     static volatile CompletableFuture<Void> joinCallbackEntered = new CompletableFuture<>();
     static volatile CompletableFuture<Void> joinCallbackRelease = new CompletableFuture<>();
     static volatile CompletableFuture<Void> joinCompleted = new CompletableFuture<>();
+
+    @Test
+    void emptySpotClosesThroughCreatedReference() throws Exception {
+        closeEmptySpot(false, false);
+    }
+
+    @Test
+    void emptySpotClosesThroughFoundReference() throws Exception {
+        closeEmptySpot(true, false);
+    }
+
+    @Test
+    void emptySpotClosesThroughCreatedReferenceAfterAsyncStoreRead() throws Exception {
+        closeEmptySpot(false, true);
+    }
+
+    @Test
+    void emptySpotClosesThroughFoundReferenceAfterAsyncStoreRead() throws Exception {
+        closeEmptySpot(true, true);
+    }
+
+    private static void closeEmptySpot(boolean find, boolean asyncRead) throws Exception {
+        closeEmptySpot(
+                find,
+                asyncRead
+                        ? new AsyncStore(new ZLinkInMemoryLocationStore())
+                        : new ZLinkInMemoryLocationStore());
+    }
+
+    static void closeEmptySpot(boolean find, ZLinkLocationStore store) throws Exception {
+        resetStatics();
+        String spotId = "empty-close-" + UUID.randomUUID();
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureDispatch()
+                .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
+        options.addLocationStore(store);
+        var node = options.addRouteMesh("empty-close-mesh");
+        node.listen("inproc://" + spotId).setRoutingId(RoutingId.from(spotId));
+        var objects = node.objects().server();
+        objects.addEntrySpot(EntrySpot.class);
+        objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
+        ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory());
+        try {
+            SpotRef created = create(runtime, spotId);
+            SpotRef ref =
+                    find
+                            ? runtime.spotManager()
+                                    .find(spotId)
+                                    .toCompletableFuture()
+                                    .get(WAIT_SECONDS, TimeUnit.SECONDS)
+                                    .orElseThrow()
+                            : created;
+            assertEquals(created, ref);
+            CompletableFuture<Boolean> closing = closeStage(runtime, ref);
+            assertTrue(closing.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(1, ON_CLOSING_CALLS.get());
+            assertFalse(closeStage(runtime, ref).get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(1, ON_CLOSING_CALLS.get());
+        } finally {
+            var termination =
+                    runtime.shutdown(Duration.ofSeconds(WAIT_SECONDS))
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
+            assertEquals(ZLinkFrameworkTerminationOutcome.STOPPED, termination.outcome());
+        }
+    }
 
     @Test
     void messageAcceptedWhileCloseAwaitsAuthorityReadAndMembershipPreventsCommit()
@@ -746,6 +815,30 @@ final class ZLinkSpotCloseConformanceTest {
         @Override
         public void close() {
             Logger.getLogger("").removeHandler(this);
+        }
+    }
+
+    /** Completes Store operations outside the Spot turn, as a network Store does. */
+    private record AsyncStore(ZLinkLocationStore inner) implements ZLinkLocationStore {
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            return CompletableFuture.supplyAsync(() -> inner.read(key, cancellation))
+                    .thenCompose(stage -> stage);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            return CompletableFuture.supplyAsync(() -> inner.write(request, cancellation))
+                    .thenCompose(stage -> stage);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+            return CompletableFuture.supplyAsync(() -> inner.scan(request, cancellation))
+                    .thenCompose(stage -> stage);
         }
     }
 

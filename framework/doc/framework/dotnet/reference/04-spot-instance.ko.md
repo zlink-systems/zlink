@@ -265,8 +265,7 @@ Entry Spot의 `AddActorPacket<THandler, TActor>()`는 User Spot의 것과 메서
 구현해야 하는 interface가 다르다 — 등록하는 registry가 어느 Spot 종류의 것인지에 따라 달라진다.
 
 **완료 결과.** 반환값 없이 동기로 등록된다. Packet name을 생략하면 handler가 처리하는 메시지
-타입의 `ZLinkPacketAttribute`를 확인하고, 그것도 없으면 타입 이름을 사용한다. 같은 owner의 handler key
-중복은 host startup 검증에서 `ZLinkConfigurationException`으로 드러난다.
+타입의 `ZLinkPacketAttribute`를 확인하고, 그것도 없으면 타입 이름을 사용한다. 같은 owner의 handler key 중복의 검사 시점과 실패 결과는 [공통 API 「23」](../../common/spec/server/00-foundation/06-framework-api.ko.md#23-startup-validation)을 따른다.
 
 **선택 기준.** `Configure()`가 호출될 때마다 이 Spot이 처리할 모든 handler를 등록한다. Node·Channel
 handler는 topology-discovery category의 등록 항목을, STREAM session handler는 stream-session

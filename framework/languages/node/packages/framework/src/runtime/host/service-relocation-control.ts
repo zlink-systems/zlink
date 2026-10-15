@@ -1,5 +1,6 @@
 import {
   SERVICE_WIRE_MAJOR_OFFSET,
+  SERVICE_WIRE_COMMAND_OFFSET,
   SERVICE_WIRE_PREFIX_SIZE
 } from '../foundation/service-wire-binary-primitives';
 import {
@@ -27,14 +28,19 @@ export function decodeServiceRelocationControlRequest(
   const bytes = Buffer.isBuffer(payload)
     ? payload
     : Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
+  if (serviceRelocationControlCommand(bytes) === undefined) return undefined;
+  return decodeMaintenanceRelocationControl(bytes);
+}
+
+export function serviceRelocationControlCommand(payload: Uint8Array): number | undefined {
   if (
-    bytes.byteLength < SERVICE_WIRE_PREFIX_SIZE ||
-    bytes[0] !== SERVICE_WIRE_MAGIC[0] ||
-    bytes[1] !== SERVICE_WIRE_MAGIC[1] ||
-    bytes[SERVICE_WIRE_MAJOR_OFFSET] !== SERVICE_WIRE_MAJOR
+    payload.byteLength < SERVICE_WIRE_PREFIX_SIZE ||
+    payload[0] !== SERVICE_WIRE_MAGIC[0] ||
+    payload[1] !== SERVICE_WIRE_MAGIC[1] ||
+    payload[SERVICE_WIRE_MAJOR_OFFSET] !== SERVICE_WIRE_MAJOR
   )
     return undefined;
-  return decodeMaintenanceRelocationControl(bytes);
+  return payload[SERVICE_WIRE_COMMAND_OFFSET];
 }
 
 export function encodeServiceRelocationControlResponse(

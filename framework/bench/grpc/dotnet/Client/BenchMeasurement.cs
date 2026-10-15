@@ -171,7 +171,9 @@ internal static class BenchMeasurement
             snapshot.ErrorSummary,
             snapshot.OtherErrors,
             sourceResources.AllocatedBytes,
-            boundary.Target.AllocatedBytes
+            boundary.Target.AllocatedBytes,
+            sourceResources.ThreadPoolWorkItems,
+            boundary.Target.ThreadPoolWorkItems
         );
     }
 

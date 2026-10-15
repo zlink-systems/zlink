@@ -2177,6 +2177,35 @@ void verify_raw_owner_node_send_and_liveness (
     assert (first.topology ().peer (second_descriptor.node_routing_id));
     assert (second.topology ().peer (first_descriptor.node_routing_id));
 
+    // Each peer probes right after admission (05-transport-liveness.ko.md:95).
+    // Finish that probe and ACK exchange here: until then the probe is due and
+    // wait_for_activity returns at once, so the waits below would not observe
+    // the second ROUTER's DATA admission they expect.
+    const auto admission_probe_now = mesh::service_liveness_registry_t::clock_t::now ();
+    const auto first_admission_tick = await_task (first.tick_liveness (admission_probe_now));
+    const auto second_admission_tick = await_task (second.tick_liveness (admission_probe_now));
+    assert (first_admission_tick.probes.size () == 1);
+    assert (second_admission_tick.probes.size () == 1);
+    const auto probe_outstanding = [] (mesh::raw_mesh_node_owner_t &node,
+                                       const std::vector<std::uint8_t> &peer_routing_id) {
+        const auto peer = node.liveness ().connection (peer_routing_id);
+        return !peer || peer->outstanding_probe.has_value ();
+    };
+    while ((probe_outstanding (first, second_descriptor.node_routing_id)
+            || probe_outstanding (second, first_descriptor.node_routing_id))
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        const auto progress_now = mesh::service_liveness_registry_t::clock_t::now ();
+        const auto first_pumped = await_task (first.pump_one (progress_now));
+        const auto second_pumped = await_task (second.pump_one (progress_now));
+        assert (first_pumped != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (second_pumped != mesh::raw_mesh_pump_result_t::protocol_error);
+        if (first_pumped == mesh::raw_mesh_pump_result_t::no_data
+            && second_pumped == mesh::raw_mesh_pump_result_t::no_data)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (!probe_outstanding (first, second_descriptor.node_routing_id));
+    assert (!probe_outstanding (second, first_descriptor.node_routing_id));
+
     std::atomic_int local_operation_callbacks{0};
     const auto local_operation = first.register_local_operation (
       foundation::operation_registry_t::clock_t::time_point::max (),

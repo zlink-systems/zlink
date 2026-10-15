@@ -175,8 +175,12 @@ export class ServiceTopologyRegistry {
   }
 
   peer(nodeRoutingId: string): AdmittedServicePeer | undefined {
-    const peer = this.peersByRid.get(nodeRoutingId);
+    const peer = this.admittedPeer(nodeRoutingId);
     return peer === undefined ? undefined : clonePeer(peer);
+  }
+
+  admittedPeer(nodeRoutingId: string): AdmittedServicePeer | undefined {
+    return this.peersByRid.get(nodeRoutingId);
   }
 
   peers(): readonly AdmittedServicePeer[] {
@@ -222,10 +226,23 @@ export class ServiceTopologyRegistry {
   }
 
   knownDescriptor(nodeRoutingId: string): ServiceNodeDescriptor | undefined {
-    const admitted = this.peersByRid.get(nodeRoutingId)?.descriptor;
-    const descriptor =
-      admitted ?? this.notRequiredByRid.get(nodeRoutingId) ?? this.knownByRid.get(nodeRoutingId);
+    const descriptor = this.knownPeerDescriptor(nodeRoutingId);
     return descriptor === undefined ? undefined : cloneDescriptor(descriptor);
+  }
+
+  isObjectClientNodeDirectTarget(nodeRoutingId: string): boolean {
+    const descriptor =
+      nodeRoutingId === this.local.nodeRoutingId
+        ? this.local
+        : this.knownPeerDescriptor(nodeRoutingId);
+    return descriptor?.objectRole === 'client';
+  }
+
+  private knownPeerDescriptor(nodeRoutingId: string): ServiceNodeDescriptor | undefined {
+    const admitted = this.peersByRid.get(nodeRoutingId)?.descriptor;
+    return (
+      admitted ?? this.notRequiredByRid.get(nodeRoutingId) ?? this.knownByRid.get(nodeRoutingId)
+    );
   }
 
   hasKnownChannelTarget(channelName: string): boolean {

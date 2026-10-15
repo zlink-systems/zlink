@@ -62,6 +62,7 @@ export type ZLinkBackendObjectPlacement =
   | { readonly kind: 'unavailable' };
 
 export interface ZLinkBackendMeshNode {
+  readonly routingId?: RoutingId;
   completeClosedInstance?(spotId: string, objectGeneration: bigint): void;
   setDispatchErrorReporter?(
     reporter: import('../../channels/dispatch-error-reporter').ZLinkDispatchErrorReporter,
@@ -189,7 +190,7 @@ export interface ZLinkBackendMeshNode {
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
     options?: { flags?: number }
-  ): Promise<SubmitResult>;
+  ): SubmitResult | Promise<SubmitResult>;
   /**
    * Sends service-wire infrastructure frames directly to a peer. Relocation
    * Prepare may add NODE-INTERNAL sideband frames after its canonical frame.

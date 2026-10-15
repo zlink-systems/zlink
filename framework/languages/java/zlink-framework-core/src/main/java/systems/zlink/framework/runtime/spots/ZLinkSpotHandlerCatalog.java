@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.spots.ZLinkSpotHandlerRegistry;
 
 import java.util.ArrayList;
@@ -24,10 +25,12 @@ final class ZLinkSpotHandlerCatalog implements ZLinkSpotHandlerRegistry {
     @Override
     public void addHandler(Class<?> handlerType) {
         if (!registrationOpen) {
-            throw new ZLinkConfigurationException(registrationClosedMessage);
+            throw new ZLinkConfigurationException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION, registrationClosedMessage);
         }
         if (handlerType == null) {
-            throw new ZLinkConfigurationException("SPOT handler type is required");
+            throw new ZLinkConfigurationException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION, "SPOT handler type is required");
         }
         configuredHandlerTypes.add(handlerType);
     }

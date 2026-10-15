@@ -9,12 +9,8 @@ export interface ZLinkHandlerInstanceScope {
 }
 
 interface ZLinkHandlerInstanceScopeFactory {
-  prepare?(type: Type): void;
+  prepare?(type: Type): void | (() => unknown);
   create(context?: ZLinkMessageContext): ZLinkHandlerInstanceScope;
-}
-
-interface ActiveHandlerScope {
-  readonly scope: ZLinkHandlerInstanceScope;
 }
 
 interface Deferred<T> {
@@ -30,7 +26,7 @@ interface LifecycleScopeDisposal {
 }
 
 const HANDLER_SCOPE_FACTORY = Symbol.for('@zlink-systems/framework.handler-instance-scope-factory');
-const activeHandlerScope = new AsyncLocalStorage<ActiveHandlerScope>();
+const activeHandlerScope = new AsyncLocalStorage<ZLinkHandlerInstanceScope>();
 const activeLifecycleScope = new AsyncLocalStorage<LifecycleHandlerInstanceScope>();
 const detachedLifecycleResource = new AsyncResource('zlink:handler-instance-scope');
 const dispatchScopes = new WeakMap<object, ZLinkHandlerInstanceScope>();
@@ -46,15 +42,19 @@ export function registerHandlerInstanceScopeFactory(
   });
 }
 
-export function prepareHandlerInstance(
+export function prepareHandlerInstance<T>(
   providerResolver: ZLinkProviderResolver | undefined,
-  type: Type
-): void {
-  const factory =
-    providerResolver === undefined
-      ? undefined
-      : (providerResolver as unknown as Record<PropertyKey, unknown>)[HANDLER_SCOPE_FACTORY];
-  if (isHandlerInstanceScopeFactory(factory)) factory.prepare?.(type);
+  type: Type<T>
+): (() => T) | undefined {
+  if (providerResolver === undefined) return () => new type();
+  const factory = (providerResolver as unknown as Record<PropertyKey, unknown>)[
+    HANDLER_SCOPE_FACTORY
+  ];
+  if (isHandlerInstanceScopeFactory(factory)) {
+    const activate = factory.prepare?.(type);
+    if (activate !== undefined) return activate as () => T;
+  }
+  return undefined;
 }
 
 export async function runInHandlerInstanceScope<T>(
@@ -64,7 +64,7 @@ export async function runInHandlerInstanceScope<T>(
 ): Promise<T> {
   const active = activeHandlerScope.getStore();
   if (active !== undefined) {
-    return callback(active.scope);
+    return callback(active);
   }
   if (context !== undefined) {
     const existing = dispatchScopes.get(context);
@@ -78,7 +78,7 @@ export async function runInHandlerInstanceScope<T>(
     dispatchScopes.set(context, scope);
   }
   try {
-    return await activeHandlerScope.run({ scope }, () => callback(scope));
+    return await activeHandlerScope.run(scope, () => callback(scope));
   } finally {
     if (context !== undefined && dispatchScopes.get(context) === scope) {
       dispatchScopes.delete(context);
@@ -166,14 +166,15 @@ class DefaultHandlerInstanceScope implements ZLinkHandlerInstanceScope {
     if (existing !== undefined) return existing;
     const activation = createDeferred<unknown>();
     this.instances.set(type, activation.promise);
-    void this.activate(type, activation);
+    this.activate(type, activation);
     return activation.promise as Promise<T>;
   }
 
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    await Promise.allSettled(this.instances.values());
+    if (this.owned.length !== this.instances.size)
+      await Promise.allSettled(this.instances.values());
     try {
       await disposeOwnedInstances(this.owned);
     } finally {
@@ -181,21 +182,43 @@ class DefaultHandlerInstanceScope implements ZLinkHandlerInstanceScope {
       this.instances.clear();
     }
   }
-  private async activate<T>(type: Type<T>, activation: Deferred<unknown>): Promise<void> {
-    let instance: T;
+  private activate<T>(type: Type<T>, activation: Deferred<unknown>): void {
     try {
       const created = this.providerResolver?.create?.(type);
-      instance = created === undefined ? new type() : await created;
+      if (created === undefined) {
+        this.completeActivation(new type(), activation);
+      } else {
+        void this.activatePending(created, activation);
+      }
     } catch (error) {
       activation.reject(error);
-      return;
     }
+  }
 
+  private async activatePending<T>(
+    created: T | Promise<T>,
+    activation: Deferred<unknown>
+  ): Promise<void> {
+    try {
+      this.completeActivation(await created, activation);
+    } catch (error) {
+      activation.reject(error);
+    }
+  }
+
+  private completeActivation(instance: unknown, activation: Deferred<unknown>): void {
     if (!this.disposed) {
       this.owned.push(instance);
       activation.resolve(instance);
       return;
     }
+    void this.disposeLateActivation(instance, activation);
+  }
+
+  private async disposeLateActivation(
+    instance: unknown,
+    activation: Deferred<unknown>
+  ): Promise<void> {
     try {
       await disposeOwnedInstance(instance);
       activation.reject(new Error('Handler instance scope was disposed during activation.'));
@@ -328,6 +351,11 @@ function startOutsideLifecycleInvocation<T>(work: () => T): T {
 }
 
 export async function disposeOwnedInstance(instance: unknown): Promise<void> {
+  const cleanup = handlerInstanceCleanup(instance);
+  if (cleanup !== undefined) await cleanup.call(instance);
+}
+
+export function handlerInstanceCleanup(instance: unknown): (() => unknown) | undefined {
   if (instance === null || instance === undefined) return;
   const value = instance as {
     dispose?: () => unknown;
@@ -335,12 +363,13 @@ export async function disposeOwnedInstance(instance: unknown): Promise<void> {
     onModuleDestroy?: () => unknown;
   };
   if (typeof value.dispose === 'function') {
-    await value.dispose();
+    return value.dispose;
   } else if (typeof value.close === 'function') {
-    await value.close();
+    return value.close;
   } else if (typeof value.onModuleDestroy === 'function') {
-    await value.onModuleDestroy();
+    return value.onModuleDestroy;
   }
+  return undefined;
 }
 
 export async function disposeOwnedInstances(instances: readonly unknown[]): Promise<void> {

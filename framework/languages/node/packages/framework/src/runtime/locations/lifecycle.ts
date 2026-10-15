@@ -118,40 +118,22 @@ export class ZLinkLocationLifecycle {
     );
   }
 
-  async notifyActorJoinedSpot(
+  async commitActorMembership(
     actorType: string,
-    actorId: string,
-    spotMeshName: string,
+    actorRef: ActorRef,
+    authorityOwnerGeneration: bigint,
     spotId: RoutingId,
     spotGeneration: bigint,
-    membershipEpoch: bigint,
+    spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User,
     ownerNodeGeneration: bigint
   ): Promise<void> {
-    await this.actorClaims.notifyJoinedSpot(
+    await this.actorClaims.commitMembership(
       actorType,
-      actorId,
-      spotMeshName,
+      actorRef,
+      authorityOwnerGeneration,
       spotId,
       spotGeneration,
-      membershipEpoch,
-      ownerNodeGeneration
-    );
-  }
-
-  async notifyActorLeftSpot(
-    actorType: string,
-    actorId: string,
-    entrySpotId: RoutingId,
-    entrySpotGeneration: bigint,
-    membershipEpoch: bigint,
-    ownerNodeGeneration: bigint
-  ): Promise<void> {
-    await this.actorClaims.notifyLeftSpot(
-      actorType,
-      actorId,
-      entrySpotId,
-      entrySpotGeneration,
-      membershipEpoch,
+      spotKind,
       ownerNodeGeneration
     );
   }

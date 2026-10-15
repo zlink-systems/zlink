@@ -1771,8 +1771,7 @@ final class ZLinkJavaRawMeshNode
                         request.actor().actorId(),
                         request.actor().generation(),
                         request.actorNodeGeneration(),
-                        correlation),
-                application == null ? "application/json" : application.contentType());
+                        correlation));
     }
 
     @Override
@@ -3776,9 +3775,16 @@ final class ZLinkJavaRawMeshNode
                                         + (userSpotOperationHandler != null)
                                         + "]"));
             }
-            return userSpotOperationHandler.create(
-                    new ZLinkInternalMeshNode.UserSpotCreateRequest(
-                            routingId, localGeneration, operationHigh, operationLow, intent));
+            return userSpotOperationHandler
+                    .create(
+                            new ZLinkInternalMeshNode.UserSpotCreateRequest(
+                                    routingId,
+                                    localGeneration,
+                                    operationHigh,
+                                    operationLow,
+                                    intent))
+                    .exceptionallyCompose(
+                            failure -> CompletableFuture.failedFuture(requestFailure(failure)));
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peerFromOwner(targetNodeRid);
@@ -3852,6 +3858,8 @@ final class ZLinkJavaRawMeshNode
     static Throwable requestFailure(Throwable failure) {
         Throwable cause = unwrap(failure);
         if (cause instanceof ZLinkFrameworkException) return cause;
+        if (cause instanceof ZLinkUserSpotOperationException typed)
+            return userSpotFailure(typed.terminalResult(), typed.failureCode(), cause);
         RequestResult terminal = requestResult(cause);
         return terminal == null
                 ? failure
@@ -3924,7 +3932,7 @@ final class ZLinkJavaRawMeshNode
                             failure -> {
                                 UserSpotTerminalReply reply = terminalFailure(failure);
                                 return CompletableFuture.failedFuture(
-                                        userSpotCloseFailure(
+                                        userSpotFailure(
                                                 reply.terminalResult(),
                                                 reply.failureCode(),
                                                 unwrap(failure)));
@@ -4085,15 +4093,7 @@ final class ZLinkJavaRawMeshNode
                 //  authoritative ownership-aware translator instead of
                 //  collapsing to a generic rejection
                 //  (spec 32-framework-error-model:81-118, 99-108).
-                throw ZLinkRequestFailureMapping.receivedFailure(
-                        ZLinkBackendRequestResult.fromWireTerminal(reply.terminalResult())
-                                .toFrameworkErrorKind(reply.failureCode()),
-                        "remote User Spot create failed: terminal="
-                                + reply.terminalResult()
-                                + " failureCode="
-                                + reply.failureCode(),
-                        reply.failureCode(),
-                        java.util.Map.of());
+                throw userSpotFailure(reply.terminalResult(), reply.failureCode(), null);
             }
             if (reply.success() == null
                     || (reply.success().result()
@@ -4212,7 +4212,7 @@ final class ZLinkJavaRawMeshNode
                 //  authoritative ownership-aware translator instead of
                 //  collapsing to a generic rejection
                 //  (spec 32-framework-error-model:81-118, 99-108).
-                throw userSpotCloseFailure(reply.terminalResult(), reply.failureCode(), null);
+                throw userSpotFailure(reply.terminalResult(), reply.failureCode(), null);
             }
             if (reply.closed() == null) {
                 throw new ZLinkFrameworkException(
@@ -4239,13 +4239,13 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
-    /** Classifies a User Spot Close terminal the same way for a remote reply and a local owner. */
-    private static ZLinkFrameworkException userSpotCloseFailure(
+    /** Classifies a User Spot terminal the same way for a remote reply and a local owner. */
+    private static ZLinkFrameworkException userSpotFailure(
             int terminalResult, int failureCode, Throwable cause) {
         return ZLinkRequestFailureMapping.receivedFailure(
                 ZLinkBackendRequestResult.fromWireTerminal(terminalResult)
                         .toFrameworkErrorKind(failureCode),
-                "User Spot close failed: terminal="
+                "User Spot operation failed: terminal="
                         + terminalResult
                         + " failureCode="
                         + failureCode,
@@ -4260,7 +4260,7 @@ final class ZLinkJavaRawMeshNode
      */
     private static ZLinkFrameworkException userSpotCloseTargetMoved(
             long expectedGeneration, long currentGeneration) {
-        return userSpotCloseFailure(
+        return userSpotFailure(
                 107,
                 34,
                 new IllegalStateException(
@@ -6237,7 +6237,18 @@ final class ZLinkJavaRawMeshNode
             return new UserSpotTerminalReply(
                     typed.terminalResult(), typed.failureCode(), null, null, null);
         }
-        return new UserSpotTerminalReply(105, 17, null, null, null);
+        if (current instanceof ZLinkFrameworkException typed) {
+            int[] terminal =
+                    ZLinkRequestFailureMapping.outgoing(
+                            typed.kind(), ZLinkRequestFailureMapping.causeCode(typed));
+            return new UserSpotTerminalReply(terminal[0], terminal[1], null, null, null);
+        }
+        return new UserSpotTerminalReply(
+                RequestResult.INTERNAL_ERROR.value(),
+                (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED,
+                null,
+                null,
+                null);
     }
 
     private void sendUserSpotCreateTerminal(

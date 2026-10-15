@@ -8,6 +8,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -26,6 +27,11 @@ public final class ZLinkRequestStages {
                 });
     }
 
+    /** The owner source of a submitted request, observed without creating a caller view. */
+    public static CompletionStage<Void> ownerAdmission(ZLinkRequestStage<?> submitted) {
+        return submitted instanceof RequestStage<?> stage ? stage.admission : submitted.admitted();
+    }
+
     public static <T> ZLinkRequestStage<T> observe(
             CompletionStage<T> reply, CompletableFuture<Void> admission) {
         reply.whenComplete(
@@ -34,7 +40,8 @@ public final class ZLinkRequestStages {
                     else admission.completeExceptionally(unwrap(failure));
                 });
         ZLinkCompletionBridge.forwardCancellation(admission, reply);
-        return new RequestStage<>(reply, ZLinkSerialExecutionQueue.manageCurrent(admission));
+        CompletionStage<Void> managed = ZLinkSerialExecutionQueue.manageCurrent(admission);
+        return new RequestStage<>(reply, admission, managed == admission ? null : managed);
     }
 
     private static Throwable unwrap(Throwable failure) {
@@ -44,17 +51,32 @@ public final class ZLinkRequestStages {
     }
 
     private static final class RequestStage<T> implements ZLinkRequestStage<T> {
-        private final CompletionStage<T> reply;
-        private final CompletionStage<Void> admission;
+        @SuppressWarnings("rawtypes")
+        private static final AtomicReferenceFieldUpdater<RequestStage, CompletionStage> ADMITTED =
+                AtomicReferenceFieldUpdater.newUpdater(
+                        RequestStage.class, CompletionStage.class, "admitted");
 
-        private RequestStage(CompletionStage<T> reply, CompletionStage<Void> admission) {
+        private final CompletionStage<T> reply;
+        private final CompletableFuture<Void> admission;
+
+        /** The handler-turn stage, or the caller view created on the first observation. */
+        private volatile CompletionStage<Void> admitted;
+
+        private RequestStage(
+                CompletionStage<T> reply,
+                CompletableFuture<Void> admission,
+                CompletionStage<Void> managed) {
             this.reply = reply;
             this.admission = admission;
+            this.admitted = managed;
         }
 
         @Override
         public CompletionStage<Void> admitted() {
-            return admission;
+            CompletionStage<Void> current = admitted;
+            if (current != null) return current;
+            CompletionStage<Void> view = ZLinkCompletionBridge.applicationView(admission);
+            return ADMITTED.compareAndSet(this, null, view) ? view : admitted;
         }
 
         @Override

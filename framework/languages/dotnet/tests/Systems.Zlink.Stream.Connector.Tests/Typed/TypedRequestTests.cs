@@ -33,7 +33,7 @@ public sealed partial class StreamConnectorTests
                 string.Empty,
                 ZlinkStreamMetadata.Empty
             );
-            var responsePayload = JsonSerializer.SerializeToUtf8Bytes(new Pong("pong"));
+            var responsePayload = new Pong("pong").ToJson().Payload.ToArray();
             await WritePacketAsync(
                 stream,
                 headerCodec.Encode(responseHeader).ToArray(),
@@ -85,7 +85,7 @@ public sealed partial class StreamConnectorTests
             await WritePacketAsync(
                 stream,
                 headerCodec.Encode(responseHeader).ToArray(),
-                JsonSerializer.SerializeToUtf8Bytes(new Pong("callback"))
+                new Pong("callback").ToJson().Payload.ToArray()
             );
         });
 

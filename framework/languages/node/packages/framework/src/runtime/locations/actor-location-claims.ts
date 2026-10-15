@@ -12,6 +12,10 @@ import { ZLinkSpotKind } from '../../contracts/Spots';
 import { ZLinkLocationKeyCodec } from './key-codec';
 import { encodeAuthorityKey } from './authority-key-codec';
 import { routingIdsEqual } from '../routing-id';
+import {
+  decodeActorAuthorityIdentity,
+  rewriteActorAuthorityRoute
+} from '../actors/actor-authority-publication';
 import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 
 export enum ZLinkActorClaimStatus {
@@ -203,41 +207,59 @@ export class ZLinkActorLocationClaims {
     return { status: ZLinkActorClaimStatus.Claimed, claimed, generation: result.generation };
   }
 
-  async notifyJoinedSpot(
+  async commitMembership(
     actorType: string,
-    actorId: string,
-    _spotMeshName: string,
+    actorRef: ActorRef,
+    authorityOwnerGeneration: bigint,
     spotId: RoutingId,
     spotGeneration: bigint,
-    membershipEpoch: bigint,
+    spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User,
     ownerNodeGeneration: bigint
   ): Promise<void> {
-    await this.renew(actorType, actorId, (row) => ({
-      ...row,
-      spotKind: ZLinkSpotKind.User,
-      spotId,
-      spotGeneration,
-      membershipEpoch,
-      ownerNodeGeneration
-    }));
-  }
-
-  async notifyLeftSpot(
-    actorType: string,
-    actorId: string,
-    entrySpotId: RoutingId,
-    entrySpotGeneration: bigint,
-    membershipEpoch: bigint,
-    ownerNodeGeneration: bigint
-  ): Promise<void> {
-    await this.renew(actorType, actorId, (row) => ({
-      ...row,
-      spotKind: ZLinkSpotKind.Entry,
-      spotId: entrySpotId,
-      spotGeneration: entrySpotGeneration,
-      membershipEpoch,
-      ownerNodeGeneration
-    }));
+    const actorId = actorRef.actorId;
+    const store = this.authorityStore;
+    const owner = this.runtime.currentOwnerToken;
+    if (store === undefined || owner === undefined) {
+      throw new Error('Actor membership commit requires Location Store authority and owner.');
+    }
+    const key = encodeAuthorityKey('actor', actorId);
+    const current = await store.readAuthority(key);
+    if (
+      !matchesActorAuthority(current, actorRef, owner) ||
+      current.allocation.stableType !== actorType ||
+      current.authorityOwnerGeneration !== authorityOwnerGeneration ||
+      current.allocation.descriptorLifecycleGeneration !== ownerNodeGeneration
+    ) {
+      throw new Error(`Actor '${actorId}' membership authority fence does not match.`);
+    }
+    const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
+    if (
+      identity === undefined ||
+      identity.actorType !== actorType ||
+      identity.ownerNodeGeneration !== ownerNodeGeneration ||
+      identity.owner.ownerId !== owner.ownerId ||
+      identity.owner.leaseGeneration !== owner.leaseGeneration ||
+      !routingIdsEqual(identity.actor.nodeRid, actorRef.nodeRid) ||
+      identity.meshName !== actorRef.meshName
+    ) {
+      throw new Error(`Actor '${actorId}' membership authority identity does not match.`);
+    }
+    const result = await store.compareExchangeAuthority(key, current.storeVersion, {
+      kind: 'put',
+      generationTransition: 'preserve',
+      payload: rewriteActorAuthorityRoute(
+        current.payload,
+        actorRef,
+        String(spotId),
+        spotGeneration,
+        spotKind
+      )
+    });
+    if (result.kind !== 'stored') {
+      throw new Error(
+        `Actor '${actorId}' membership commit was rejected with status ${result.kind}.`
+      );
+    }
   }
 
   async release(_actorType: string, actorId: string, actorRef?: ActorRef): Promise<void> {
