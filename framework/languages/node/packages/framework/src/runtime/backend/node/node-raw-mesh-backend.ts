@@ -635,14 +635,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   hasPeerRouteOrConnectionIntent(targetRid: unknown, endpoint: string): boolean {
     const rid = String(targetRid);
-    return (
-      this.requireRuntime().hasSelectedPeerRoute(rid) ||
-      [...this.peerIntents.values()].some(
-        (intent) =>
-          intent.nodeRoutingId === rid ||
-          (intent.nodeRoutingId === undefined && intent.endpoint === endpoint)
+    if (this.requireRuntime().hasSelectedPeerRoute(rid)) return true;
+    for (const intent of this.peerIntents.values()) {
+      if (
+        intent.nodeRoutingId === rid ||
+        (intent.nodeRoutingId === undefined && intent.endpoint === endpoint)
       )
-    );
+        return true;
+    }
+    return false;
   }
 
   isPeerRouteReady(targetRid: unknown, lifecycleGeneration?: bigint): boolean {
