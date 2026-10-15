@@ -33,7 +33,11 @@ fun checkStructure(root: Path) {
         }
         return resolved
     }
-    check(structure["version"]?.isIntegralNumber == true && structure["version"].canConvertToInt() && structure["version"].asInt() == 1)
+    check(
+        structure["version"]?.isIntegralNumber == true &&
+            structure["version"].canConvertToInt() &&
+            structure["version"].asInt() == 1
+    )
     for (key in listOf("id", "name", "language")) text(structure, key)
     check(text(structure, "language") == Names.LANGUAGE) {
         "Structure language differs from server"
@@ -102,10 +106,17 @@ fun checkStructure(root: Path) {
     }
     unique(logicalIds)
     val bootstraps = configs.filterValues { it.bootstrap }.keys
-    val matchmakingOwners = spots.filter { it["type"]?.asText() == Names.MATCHMAKING }.map {
-        check(it["dynamic"]?.asBoolean() != true && text(it, "logicalId") == Names.MATCHMAKING_ID)
-        owner(it)
-    }.toSet()
+    val matchmakingOwners =
+        spots
+            .filter { it["type"]?.asText() == Names.MATCHMAKING }
+            .map {
+                check(
+                    it["dynamic"]?.asBoolean() != true &&
+                        text(it, "logicalId") == Names.MATCHMAKING_ID
+                )
+                owner(it)
+            }
+            .toSet()
     check(bootstraps == matchmakingOwners) { "Bootstrap differs from fixed Matchmaking owner" }
     for ((id, config) in configs.filterKeys { roles[it] == "match" }) {
         check(config.roomCapacity > 0)

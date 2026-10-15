@@ -11,7 +11,11 @@ fun main(args: Array<String>) = runBlocking {
     if (args.contentEquals(arrayOf("--check-structure"))) return@runBlocking
     require(args.isEmpty() || (args.size == 2 && args[0] == "--scenario"))
     val selected = if (args.isEmpty()) Names.SCENARIOS else args[1].split(',')
-    require(selected.isNotEmpty() && selected.distinct() == selected && selected.all { it in Names.SCENARIOS })
+    require(
+        selected.isNotEmpty() &&
+            selected.distinct() == selected &&
+            selected.all { it in Names.SCENARIOS }
+    )
     var passed = 0
     for (id in Names.SCENARIOS.filter { it in selected }) {
         try {

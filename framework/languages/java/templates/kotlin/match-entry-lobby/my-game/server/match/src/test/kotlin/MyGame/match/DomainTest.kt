@@ -4,11 +4,14 @@ import MyGame.*
 import kotlin.test.*
 
 class DomainTest {
-    private fun room() = RoomState().also {
-        assertTrue(it.admit("p1"))
-        assertTrue(it.admit("p2"))
-    }
-    @Test fun queueOwnsModesAndRoomSequence() {
+    private fun room() =
+        RoomState().also {
+            assertTrue(it.admit("p1"))
+            assertTrue(it.admit("p2"))
+        }
+
+    @Test
+    fun queueOwnsModesAndRoomSequence() {
         val state = MatchmakingState()
         state.enqueue(QueueRequest("p1"))
         state.enqueue(QueueRequest("p1"))
@@ -21,7 +24,9 @@ class DomainTest {
         assertEquals(listOf("ranked"), state.waiting.keys.toList())
         assertEquals("room-2", state.allocateRoom())
     }
-    @Test fun hitRejectsWallRangeAndMissingTargetWithoutDamage() {
+
+    @Test
+    fun hitRejectsWallRangeAndMissingTargetWithoutDamage() {
         val state = room()
         assertNull(state.move("p1", MoveRequest(10.0, 10.0, 1)))
         assertNull(state.move("p2", MoveRequest(20.0, 10.0, 1)))
@@ -34,7 +39,9 @@ class DomainTest {
         assertEquals(Rejection.NO_TARGET, state.shoot("p1", ShootRequest("missing", 5)))
         assertEquals(75, state.players.last().hp)
     }
-    @Test fun closedWallEndpointsAndInclusiveRange() {
+
+    @Test
+    fun closedWallEndpointsAndInclusiveRange() {
         val state = room()
         state.move("p1", MoveRequest(10.0, 100.0, 1))
         state.move("p2", MoveRequest(90.0, 100.0, 1))
@@ -48,7 +55,9 @@ class DomainTest {
         state.move("p2", MoveRequest(50.0, 80.0, 4))
         assertEquals(Rejection.BLOCKED_BY_WALL, state.shoot("p1", ShootRequest("p2", 7)))
     }
-    @Test fun terminalAndSequenceChecksPreserveCombatState() {
+
+    @Test
+    fun terminalAndSequenceChecksPreserveCombatState() {
         val state = room()
         assertFalse(state.admit("p3"))
         assertTrue(state.admit("p1"))

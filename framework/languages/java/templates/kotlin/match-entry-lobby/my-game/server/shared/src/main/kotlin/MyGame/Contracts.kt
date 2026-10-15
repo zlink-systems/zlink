@@ -12,6 +12,7 @@ object Names {
     const val LANGUAGE = "kotlin"
     val SCENARIOS = listOf("hit", "reconnect", "update")
 }
+
 object Game {
     const val MATCHMAKING_CAPACITY = 1
     const val PLAYERS_PER_ROOM = 2
@@ -20,7 +21,9 @@ object Game {
     const val SHOT_RANGE = 80.0
     val WALLS = listOf(Wall(50.0, 0.0, 100.0))
 }
+
 data class Wall(val x: Double, val minY: Double, val maxY: Double)
+
 object Rejection {
     const val ADMISSION_REJECTED = "admission-rejected"
     const val OUT_OF_RANGE = "out-of-range"
@@ -30,17 +33,44 @@ object Rejection {
     const val STALE_SEQUENCE = "stale-sequence"
     const val MATCH_FINISHED = "match-finished"
 }
+
 class SessionInfoRequest
-data class SessionInfo(val sessionId: String = "", val actorId: String = "", val objectGeneration: Long = 0)
+
+data class SessionInfo(
+    val sessionId: String = "",
+    val actorId: String = "",
+    val objectGeneration: Long = 0,
+)
+
 data class QueueRequest(val playerId: String = "", val mode: String = Names.DEFAULT_MODE)
+
 data class RoomAdmission(val playerId: String = "", val roomId: String = "")
+
 data class RoomAssignment(val roomId: String = "")
+
 data class MatchFound(val roomId: String = "")
+
 data class MoveRequest(val x: Double = 0.0, val y: Double = 0.0, val sequence: Long = 0)
+
 data class ShootRequest(val targetId: String = "", val sequence: Long = 0)
+
 class RoomViewRequest
-data class PlayerView(val playerId: String = "", val x: Double = 0.0, val y: Double = 0.0, val hp: Int = Game.INITIAL_HP)
-data class RoomView(val roomId: String = "", val nodeId: String = "", val players: List<PlayerView> = emptyList())
+
+data class PlayerView(
+    val playerId: String = "",
+    val x: Double = 0.0,
+    val y: Double = 0.0,
+    val hp: Int = Game.INITIAL_HP,
+)
+
+data class RoomView(
+    val roomId: String = "",
+    val nodeId: String = "",
+    val players: List<PlayerView> = emptyList(),
+)
+
 data class ShotRejected(val reason: String = "")
+
 data class ActionRejected(val reason: String = "")
+
 data class MatchEnded(val winner: String = "")

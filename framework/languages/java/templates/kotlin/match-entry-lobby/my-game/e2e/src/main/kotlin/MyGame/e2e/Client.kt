@@ -40,7 +40,13 @@ class Client(endpoint: String, val playerId: String) {
     @Volatile var disconnects = 0
 
     init {
-        listOf(RoomView::class.java, MatchFound::class.java, MatchEnded::class.java, ShotRejected::class.java, ActionRejected::class.java)
+        listOf(
+                RoomView::class.java,
+                MatchFound::class.java,
+                MatchEnded::class.java,
+                ShotRejected::class.java,
+                ActionRejected::class.java,
+            )
             .forEach { type ->
                 registrations +=
                     connector.on(type) { message ->

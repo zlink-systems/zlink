@@ -126,9 +126,15 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
         ready.get(Control.HOST_DEADLINE.toSeconds(), java.util.concurrent.TimeUnit.SECONDS)
         if (config.bootstrap) {
             val spots = app.getBean(ZLinkSpotManager::class.java)
-            val result = spots.kotlin().getOrCreate(Names.MATCHMAKING_ID, Names.MATCHMAKING)
-                .inMesh(Names.MESH).await()
-            check(result.state() != ZLinkSpotCreateState.REJECTED) { "Matchmaking bootstrap failed: $result" }
+            val result =
+                spots
+                    .kotlin()
+                    .getOrCreate(Names.MATCHMAKING_ID, Names.MATCHMAKING)
+                    .inMesh(Names.MESH)
+                    .await()
+            check(result.state() != ZLinkSpotCreateState.REJECTED) {
+                "Matchmaking bootstrap failed: $result"
+            }
         }
         println(
             Control.READY +
