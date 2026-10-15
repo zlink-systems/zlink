@@ -1938,7 +1938,10 @@ public sealed class ServiceRuntimeFoundationTests
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
             )!
             .GetAddMethod(nonPublic: true)!;
-        addListener.Invoke(node, [new Action<RoutingId>(ended.Add)]);
+        addListener.Invoke(
+            node,
+            [new Func<RoutingId, Action?>(removed => () => ended.Add(removed))]
+        );
 
         node.RemovePeerConnection(first);
         Assert.Empty(ended);

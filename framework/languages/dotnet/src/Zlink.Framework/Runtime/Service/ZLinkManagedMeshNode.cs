@@ -76,7 +76,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly Dictionary<ulong, ZLinkMeshConnectionIntent> _peersByIntent = new();
     private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
     private readonly Dictionary<RoutingId, ZLinkMeshPeerExpectation> _peerExpectations = new();
-    private event Action<RoutingId>? PeerConnectionIntentRemoved;
+    private event Func<RoutingId, Action?>? PeerConnectionIntentRemoved;
     private readonly ZLinkMeshSelectedRoutes _selectedRoutes = new();
     private readonly ConcurrentDictionary<MailboxKey, OwnedMailbox> _ownedMailboxes = new();
     private readonly ConcurrentDictionary<ulong, PendingOperation> _operations = new();
@@ -643,10 +643,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 DisconnectTransport(disconnected, disconnected.PhysicalRoutingId);
             RemovePeer(disconnected);
         }
-        // Capture the listeners with the retirement decision, then invoke them
-        // outside the lane: cancellation can run request cleanup inline.
-        var listeners = PeerConnectionIntentRemoved;
-        return listeners is null ? null : () => listeners(target);
+        // Observe retirement in this turn. Observers publish their existing
+        // lifetime signal without running cancellation cleanup on this lane.
+        // The returned cleanup runs after the caller leaves the state turn.
+        Action? cleanup = null;
+        if (PeerConnectionIntentRemoved is { } listeners)
+            foreach (Func<RoutingId, Action?> listener in listeners.GetInvocationList())
+                cleanup += listener(target);
+        return cleanup;
     }
 
     public bool RemovePeerConnectionIfNotAdmitted(ulong connectionIntentId)
@@ -4876,11 +4880,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ? CompleteNativeActorJoinRequest
                 : CompleteNativeInfrastructureRequest;
         var pendingToken = pending.Token;
-        var lifetime = new NativeDurableRequestLifetime(
-            this,
-            targetRid,
-            () => complete(pending, RequestResult.NotConnected, Array.Empty<Message>())
-        );
+        var lifetime = new NativeDurableRequestLifetime(this, targetRid);
         if (
             !RunInboundOperation(async () =>
             {
@@ -10349,22 +10349,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         private readonly ZLinkManagedMeshNode _node;
         private readonly CancellationTokenSource _lifecycle = new();
-        private readonly Action<RoutingId> _onIntentRemoved;
+        private readonly Func<RoutingId, Action?> _onIntentRemoved;
 
-        public NativeDurableRequestLifetime(
-            ZLinkManagedMeshNode node,
-            RoutingId target,
-            Action? onLifecycleEnded = null
-        )
+        public NativeDurableRequestLifetime(ZLinkManagedMeshNode node, RoutingId target)
         {
             _node = node;
             _onIntentRemoved = removed =>
             {
-                if (removed == target)
-                {
-                    _lifecycle.Cancel();
-                    onLifecycleEnded?.Invoke();
-                }
+                if (removed != target)
+                    return null;
+                // CancelAsync publishes IsCancellationRequested synchronously;
+                // registered cleanup runs asynchronously outside the state lane.
+                var canceled = _lifecycle.CancelAsync();
+                return () => canceled.GetAwaiter().GetResult();
             };
             node.RunState(() => node.PeerConnectionIntentRemoved += _onIntentRemoved);
         }
@@ -10379,9 +10376,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         public void Dispose()
         {
             _node.RunState(() => _node.PeerConnectionIntentRemoved -= _onIntentRemoved);
-            // A retirement turn may already have captured this listener. The
-            // source has no timer or wait handle; let that capture release it
-            // after notification instead of racing Cancel with Dispose.
+            // Retirement may already have scheduled cancellation callbacks.
+            // The source has no timer or wait handle; let those callbacks
+            // release it instead of racing cancellation with Dispose.
         }
     }
 
@@ -10430,9 +10427,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 )
                 .ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (lifetime.Ended)
+        catch (Exception error)
+            when (error
+                    is OperationCanceledException
+                        or ZlinkRequestException
+                        or ZlinkSubmitException
+            )
         {
-            throw lifetime.CreateEndedFailure();
+            // Serialize the observation with retirement: native disconnect can
+            // complete before that turn has published the lifecycle signal.
+            if (await _lane.RunAsync(() => lifetime.Ended).ConfigureAwait(false))
+                throw lifetime.CreateEndedFailure();
+            throw;
         }
     }
 
