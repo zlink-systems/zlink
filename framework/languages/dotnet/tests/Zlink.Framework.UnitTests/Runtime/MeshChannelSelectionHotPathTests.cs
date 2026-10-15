@@ -437,7 +437,10 @@ public sealed class MeshChannelSelectionHotPathTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, "direct-peer-turn");
         var peer = AddReadyPeer(node);
-        var require = Method<Func<RoutingId, ZLinkMeshDirectPeer>>(node, "RequireDirectPeer");
+        var require = Method<Func<RoutingId, ulong, ZLinkMeshDirectPeer>>(
+            node,
+            "RequireDirectPeer"
+        );
         var lane = Field<ZLinkStateLane>(node, "_lane");
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -450,7 +453,7 @@ public sealed class MeshChannelSelectionHotPathTests
         var reads = Task.Run(() =>
         {
             for (var index = 0; index < 1024; index++)
-                Assert.Equal(peer.PhysicalRoutingId, require(peer.RoutingId).PhysicalRoutingId);
+                Assert.Equal(peer.PhysicalRoutingId, require(peer.RoutingId, 0).PhysicalRoutingId);
         });
         try
         {

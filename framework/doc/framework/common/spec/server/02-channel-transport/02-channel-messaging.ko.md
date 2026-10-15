@@ -93,8 +93,9 @@ Target RID가 member가 아니거나 제한 시간까지 ready가 되지 않으�
 
 Object Client는 application Node direct handler를 등록할 수 없으며 Node direct target이
 아니다. 이 제한은 같은 MeshNode에 등록한 RouteMesh Channel Server에는 적용하지 않는다.
-Automatic discovery는 양쪽 모두 Object Client이고 RouteMesh Channel Server membership도
-없는 pair에만 connection intent를 만들지 않는다. Manual endpoint도 handshake에서 같은
+Object role로 연결이 필요 없다고 판정하는 pair는 양쪽 모두 Object Client이고 RouteMesh Channel Server
+membership도 없는 pair뿐이다. Automatic discovery의 intent 생성 조건 전체는
+[Channel topology §8](01-channel-topology.ko.md#8-routemesh-peer-연결과-discoveryautomatic-rid-비교-manual-descriptor-기반)이 정한다. Manual endpoint도 handshake에서 같은
 조건을 확인하면 ready 전에 connection을 닫고 같은 configuration generation에는 다시
 연결하지 않는다. Caller가 Object Client RID를 Node direct target으로 지정하면 다른
 target으로 바꾸지 않고 `NotFound`로 끝낸다.

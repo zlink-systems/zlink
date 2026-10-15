@@ -94,9 +94,11 @@ different RID on the same MeshName.
 
 Object Client can't register an application Node direct handler and isn't a Node
 direct target. This restriction doesn't apply to a RouteMesh Channel Server
-registered on the same MeshNode. Automatic discovery only skips creating a
-connection intent for a pair where both sides are Object Client and neither has
-RouteMesh Channel Server membership. A manual endpoint also checks the same
+registered on the same MeshNode. The only pair that the Object role marks as not
+needing a connection is one where both sides are Object Client and neither has
+RouteMesh Channel Server membership. The full condition for creating an automatic
+discovery intent is owned by
+[Channel topology §8](01-channel-topology.en.md#8-routemesh-peer-connection-and-discovery-automatic-rid-comparison-manual-descriptor-based). A manual endpoint also checks the same
 condition at handshake, closing the connection before ready and not reconnecting
 under the same configuration generation. If a caller specifies an Object Client RID
 as a Node direct target, it isn't switched to a different target — it ends with
