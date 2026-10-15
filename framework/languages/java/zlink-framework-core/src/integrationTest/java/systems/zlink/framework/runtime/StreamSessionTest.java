@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -57,6 +58,7 @@ import java.util.function.BooleanSupplier;
 
 final class StreamSessionTest {
     private static final int REPLACEMENT_ATTEMPTS = 1000;
+    private static final int OVERLAPPING_CLOSE_ATTEMPTS = 200;
     private static final int PARALLEL_RELAYS = 64;
     private static final int CLIENT_TIMEOUT_MILLIS = 3000;
     private static final String PARALLEL_SEND_PACKET = "StreamActorParallelSend";
@@ -505,6 +507,69 @@ final class StreamSessionTest {
     }
 
     @Test
+    void replacementRelaySurvivesPreviousPhysicalDisconnectCallback() throws Exception {
+        try (ZLinkFrameworkRuntime runtime = startActorRelayRuntime()) {
+            for (int iteration = 0; iteration < OVERLAPPING_CLOSE_ATTEMPTS; iteration++) {
+                var disconnectEntered = new CompletableFuture<Void>();
+                var releaseDisconnect = new CompletableFuture<Void>();
+                GameEntrySpot.disconnectCallback =
+                        actor -> {
+                            disconnectEntered.complete(null);
+                            return releaseDisconnect;
+                        };
+                try (Socket previous = new Socket("127.0.0.1", streamPort(runtime));
+                        AutoCloseable release = () -> releaseDisconnect.complete(null)) {
+                    previous.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+                    previous.getOutputStream()
+                            .write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
+                    previous.getOutputStream().flush();
+                    assertBoundControl(previous.getInputStream(), "player-1");
+                    assertReply(previous, 1L, "\"bound\"");
+                    ActorRelaySession previousSession = ActorRelaySession.lastConnected;
+                    previous.close();
+                    disconnectEntered.get(CLIENT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+
+                    // The old disconnect is still pending when the new bind acknowledges.
+                    try (Socket next = new Socket("127.0.0.1", streamPort(runtime))) {
+                        next.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+                        next.getOutputStream()
+                                .write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
+                        next.getOutputStream().flush();
+                        assertBoundControl(next.getInputStream(), "player-1");
+                        assertReply(next, 1L, "\"bound\"");
+                        ActorRelaySession nextSession = ActorRelaySession.lastConnected;
+                        assertFalse(releaseDisconnect.isDone());
+                        next.getOutputStream()
+                                .write(
+                                        frame(
+                                                requestHeader(2L, "StreamActorEcho"),
+                                                bytes("\"hello\"")));
+                        next.getOutputStream().flush();
+                        nextSession.relaySubmitted.get(
+                                CLIENT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+                        releaseDisconnect.complete(null);
+                        previousSession.disconnected.get(
+                                CLIENT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+                        assertReply(next, 2L, "\"player-1:hello\"");
+                        // onDisconnected follows the old Session's bound Actor cleanup.
+                        next.getOutputStream()
+                                .write(
+                                        frame(
+                                                requestHeader(3L, "StreamActorEcho"),
+                                                bytes("\"after\"")));
+                        next.getOutputStream().flush();
+                        assertReply(next, 3L, "\"player-1:after\"");
+                        next.close();
+                        nextSession.disconnected.get(CLIENT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+                    }
+                } finally {
+                    GameEntrySpot.disconnectCallback = GameEntrySpot.DEFAULT_DISCONNECT_CALLBACK;
+                }
+            }
+        }
+    }
+
+    @Test
     void sameSessionConcurrentRelaysPreserveAcceptedSequence() throws Exception {
         try (ZLinkFrameworkRuntime runtime = startActorRelayRuntime();
                 Socket client = new Socket("127.0.0.1", streamPort(runtime))) {
@@ -681,8 +746,8 @@ final class StreamSessionTest {
     public static final class GameEntrySpot implements ZLinkEntrySpot<ZLinkActor> {
         private static final java.util.function.Function<ZLinkActor, CompletionStage<Void>>
                 DEFAULT_DISCONNECT_CALLBACK = actor -> CompletableFuture.completedFuture(null);
-        static java.util.function.Function<ZLinkActor, CompletionStage<Void>> disconnectCallback =
-                DEFAULT_DISCONNECT_CALLBACK;
+        static volatile java.util.function.Function<ZLinkActor, CompletionStage<Void>>
+                disconnectCallback = DEFAULT_DISCONNECT_CALLBACK;
 
         @Override
         public CompletionStage<Void> onDisconnectActor(ZLinkActor actor) {
@@ -979,6 +1044,8 @@ final class StreamSessionTest {
     public static final class ActorRelaySession implements ZLinkSession {
         static volatile ActorRelaySession lastConnected;
         static volatile CompletableFuture<Void> parallelRelayCompleted;
+        final CompletableFuture<Void> disconnected = new CompletableFuture<>();
+        final CompletableFuture<Void> relaySubmitted = new CompletableFuture<>();
         private final ZLinkSessionContext context;
         private final ZLinkActorManager actors;
 
@@ -1000,6 +1067,7 @@ final class StreamSessionTest {
 
         @Override
         public CompletionStage<Void> onDisconnected() {
+            disconnected.complete(null);
             return CompletableFuture.completedFuture(null);
         }
 
@@ -1053,7 +1121,9 @@ final class StreamSessionTest {
                                 })
                         .thenRun(() -> context.client().reply("bound").submit());
             }
-            return context.actors().bound().get(0).relay(payload);
+            CompletionStage<Void> relayed = context.actors().bound().get(0).relay(payload);
+            relaySubmitted.complete(null);
+            return relayed;
         }
     }
 
