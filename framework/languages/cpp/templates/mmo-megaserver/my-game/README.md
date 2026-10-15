@@ -62,8 +62,12 @@ Each scenario checks `zlink.structure.json`, starts an isolated Redis Compose pr
 
 ## Known issues
 
-- Public C++ Session has no typed reply method: `SessionInfoRequest` uses typed send/wait, with `SessionInfo` derived from the actual bound Actor. Raw `reply_packet` would require manual payload encoding and is excluded from this template.
-- Public 0.30.0 validation is blocked by Region activation / delivery and shutdown failures. Host SafeToShutdown observation is also unavailable (#1740); the template reports this missing contract instead of inferring safety. The complete platform evidence is kept in the implementation job report. Candidate 0.30.1 validation remains required.
+Public 0.30.0 validation does not pass; candidate 0.30.1 validation remains required. The template does not compensate for these Framework defects.
+
+- After the deferred join from Entry to a Region completes, the first RegionView can fail to reach the client without an error ([#1786](https://github.com/zlink-systems/zlink/issues/1786)).
+- Planned host relocation of a Region node ends with `relocation_failed` before `RELOCATED` ([#1788](https://github.com/zlink-systems/zlink/issues/1788)).
+- Node shutdown reports TeardownFailed, and the C++ lifecycle status has no `SafeToShutdown` field ([#1740](https://github.com/zlink-systems/zlink/issues/1740)).
+- A C++ Session cannot yet send a typed reply it creates, so `SessionInfoRequest` uses a typed push with `SessionInfo` read from the bound Actor ([#1785](https://github.com/zlink-systems/zlink/issues/1785)).
 
 ## Deployment sequence
 
