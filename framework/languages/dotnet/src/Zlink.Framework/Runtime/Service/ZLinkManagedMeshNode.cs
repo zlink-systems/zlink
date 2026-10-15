@@ -4161,10 +4161,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 (ulong)DateTimeOffset.UtcNow.Add(effectiveTimeout).ToUnixTimeMilliseconds()
             );
             StartDetached(() => ExpireOperationAsync(correlation, operation, effectiveTimeout));
+            // Caller cancellation competes for the operation like every other
+            // completion path; only the path that removes it completes the caller.
             using var cancellation = cancellationToken.Register(() =>
             {
                 if (TryRemoveOperation(correlation, out _))
-                    operation.Cancel();
+                    operation.Cancel(cancellationToken);
             });
             var result = SubmitSpot(
                 targetRid,
@@ -4184,9 +4186,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 operation.Cancel();
                 throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
             }
-            var completion = await operation
-                .AwaitedCompletion!.Task.WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
+            var completion = await operation.AwaitedCompletion!.Task.ConfigureAwait(false);
             if (completion.Result != RequestResult.Ok)
             {
                 DisposeParts(completion.Parts);
@@ -12836,14 +12836,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return true;
         }
 
-        internal void Cancel()
+        // The token cancellation ends this operation's Framework queue wait
+        // before the caller observes its result. A caller cancellation completes
+        // the caller as cancelled; every other path completes it as Terminated.
+        internal void Cancel(CancellationToken callerCancellation = default)
         {
             if (Interlocked.Exchange(ref _terminal, 1) == 0)
             {
                 _timeout.Cancel();
-                AwaitedCompletion?.TrySetResult(
-                    new ManagedRequestCompletion(RequestResult.Terminated, Array.Empty<Message>())
-                );
+                if (callerCancellation.IsCancellationRequested)
+                    AwaitedCompletion?.TrySetCanceled(callerCancellation);
+                else
+                    AwaitedCompletion?.TrySetResult(
+                        new ManagedRequestCompletion(
+                            RequestResult.Terminated,
+                            Array.Empty<Message>()
+                        )
+                    );
             }
             _timeout.Dispose();
         }
