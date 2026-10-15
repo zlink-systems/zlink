@@ -1,5 +1,5 @@
-import { Inject, Injectable, Scope } from "@nestjs/common";
-import { ZLINK_ACTOR_CLIENT } from "@zlink-systems/nestjs";
+import { Inject, Injectable, Scope } from '@nestjs/common';
+import { ZLINK_ACTOR_CLIENT } from '@zlink-systems/nestjs';
 import type {
   ZLinkActorClient,
   ZLinkEntrySpot,
@@ -7,18 +7,12 @@ import type {
   ZLinkMessage,
   ZLinkSpot,
   ZLinkSpotContext,
-  ZLinkSpotRelocationAdapter,
-} from "@zlink-systems/framework";
-import {
-  Names,
-  Game,
-  zoneId,
-  adjacentZones,
-  borderTopic,
-} from "../shared/constants";
-import { BorderPresence, BorderVisible, EnterZone } from "../shared/messages";
-import { Player } from "./player";
-import { BorderHandler, BorderTick } from "./handlers";
+  ZLinkSpotRelocationAdapter
+} from '@zlink-systems/framework';
+import { Names, Game, zoneId, adjacentZones, borderTopic } from '../shared/constants';
+import { BorderPresence, BorderVisible, EnterZone } from '../shared/messages';
+import { Player } from './player';
+import { BorderHandler, BorderTick } from './handlers';
 @Injectable({ scope: Scope.TRANSIENT })
 export class Entry implements ZLinkEntrySpot<Player> {
   readonly context!: ZLinkEntrySpotContext<Player, Entry>;
@@ -31,15 +25,13 @@ export class Zone implements ZLinkSpot<Player> {
   // Visibility is a projection; Player owns the authoritative movement state.
   private readonly visible = new Map<string, EnterZone>();
   private readonly arrivals = new Map<string, EnterZone>();
-  constructor(
-    @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient,
-  ) {}
+  constructor(@Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient) {}
   configure(): void {
     for (const adjacent of adjacentZones(String(this.context.spotId)))
       this.context.handlers.addSubscribe(
         BorderHandler,
         Names.border,
-        borderTopic(adjacent, String(this.context.spotId)),
+        borderTopic(adjacent, String(this.context.spotId))
       );
   }
   async onInitialize(): Promise<void> {
@@ -47,14 +39,13 @@ export class Zone implements ZLinkSpot<Player> {
   }
   async onActorJoin(actorId: string, request: ZLinkMessage) {
     const arrival = request.decode(EnterZone);
-    if (zoneId(arrival.x) !== String(this.context.spotId))
-      return { accepted: false };
+    if (zoneId(arrival.x) !== String(this.context.spotId)) return { accepted: false };
     this.arrivals.set(actorId, arrival);
     return { accepted: true };
   }
   async onJoinedActor(actor: Player): Promise<void> {
     const arrival = this.arrivals.get(actor.context.actorId);
-    if (!arrival) throw new Error("Zone admission has no movement intent");
+    if (!arrival) throw new Error('Zone admission has no movement intent');
     this.arrivals.delete(actor.context.actorId);
     actor.apply(arrival);
     this.remember(actor);
@@ -66,27 +57,20 @@ export class Zone implements ZLinkSpot<Player> {
     await this.onLeaveActor(actor);
   }
   remember(actor: Player): void {
-    this.visible.set(
-      actor.context.actorId,
-      new EnterZone(actor.x, actor.sequence),
-    );
+    this.visible.set(actor.context.actorId, new EnterZone(actor.x, actor.sequence));
   }
   async publishBorder(): Promise<void> {
     const id = String(this.context.spotId);
     const adjacent = adjacentZones(id);
     for (const [actorId, position] of this.visible) {
       const offset = position.x % Game.zoneWidth;
-      if (
-        offset >= Game.borderRadius &&
-        offset < Game.zoneWidth - Game.borderRadius
-      )
-        continue;
+      if (offset >= Game.borderRadius && offset < Game.zoneWidth - Game.borderRadius) continue;
       for (const target of adjacent)
         await this.context.outbound
           .publish(
             Names.border,
             borderTopic(id, target),
-            new BorderPresence(id, actorId, position.x, position.sequence),
+            new BorderPresence(id, actorId, position.x, position.sequence)
           )
           .submit();
     }
@@ -102,8 +86,8 @@ export class Zone implements ZLinkSpot<Player> {
             presence.sourceZoneId,
             presence.actorId,
             presence.x,
-            presence.sequence,
-          ),
+            presence.sequence
+          )
         )
         .submit();
     }
@@ -128,8 +112,6 @@ export class ZoneRelocation implements ZLinkSpotRelocationAdapter<Zone> {
     return Buffer.from(JSON.stringify(spot.capture()));
   }
   async restore(spot: Zone, payload: Uint8Array): Promise<void> {
-    spot.restore(
-      JSON.parse(Buffer.from(payload).toString("utf8")) as ZoneSnapshot,
-    );
+    spot.restore(JSON.parse(Buffer.from(payload).toString('utf8')) as ZoneSnapshot);
   }
 }

@@ -1,10 +1,10 @@
-import { logs } from "@opentelemetry/api-logs";
+import { logs } from '@opentelemetry/api-logs';
 import {
   LoggerProvider,
   SimpleLogRecordProcessor,
   type ReadableLogRecord,
-  type LogRecordExporter,
-} from "@opentelemetry/sdk-logs";
+  type LogRecordExporter
+} from '@opentelemetry/sdk-logs';
 const exporter: LogRecordExporter = {
   export(records: ReadableLogRecord[], callback) {
     for (const record of records)
@@ -12,15 +12,15 @@ const exporter: LogRecordExporter = {
         JSON.stringify({
           time: new Date().toISOString(),
           body: record.body,
-          ...record.attributes,
-        }) + "\n",
+          ...record.attributes
+        }) + '\n'
       );
     callback({ code: 0 });
   },
   async forceFlush() {},
-  async shutdown() {},
+  async shutdown() {}
 };
 export const diagnostics = new LoggerProvider({
-  processors: [new SimpleLogRecordProcessor({ exporter })],
+  processors: [new SimpleLogRecordProcessor({ exporter })]
 });
 logs.setGlobalLoggerProvider(diagnostics);
