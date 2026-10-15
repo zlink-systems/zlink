@@ -389,7 +389,12 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         bool pending = false;
         if (!_started.compare_exchange_strong (pending, true, std::memory_order_acq_rel))
             return true;
-        serial_turn_scope_t turn_guard (_turn);
+        // A registration restores only a turn it still owned when it was made.
+        // Otherwise the continuation keeps the turn its delivery runs in, such
+        // as the new queue turn a Yield resumes in (execution gate §3·§4).
+        std::optional<serial_turn_scope_t> turn_guard;
+        if (_turn)
+            turn_guard.emplace (_turn);
         auto work = std::move (_work);
         work (cancelled, _ambient);
         return true;

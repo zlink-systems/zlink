@@ -21,7 +21,7 @@ template <typename T> class immediate_call_state_t
     task_t<T> async () { return task_t<T> (_result); }
     task_t<T> yield ()
     {
-        return current_serial_turn_allows_yield () ? task_t<T> (_result)
+        return current_serial_turn_allows_yield () ? release_turn_on_suspend (task_t<T> (_result))
                                                    : unsupported_yield_task<T> ();
     }
 
@@ -39,8 +39,9 @@ template <> class immediate_call_state_t<void>
     task_t<void> async () { return task_t<void> (_result); }
     task_t<void> yield ()
     {
-        return current_serial_turn_allows_yield () ? task_t<void> (_result)
-                                                   : unsupported_yield_task<void> ();
+        return current_serial_turn_allows_yield ()
+                 ? release_turn_on_suspend (task_t<void> (_result))
+                 : unsupported_yield_task<void> ();
     }
 
   private:
@@ -64,7 +65,7 @@ template <typename T> class async_call_state_t
     task_t<T> async () { return _completion->task (); }
     task_t<T> yield ()
     {
-        return current_serial_turn_allows_yield () ? _completion->task ()
+        return current_serial_turn_allows_yield () ? release_turn_on_suspend (_completion->task ())
                                                    : unsupported_yield_task<T> ();
     }
 
