@@ -3974,6 +3974,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 target,
                 actorId,
                 operation,
+                admission,
                 turn -> dispatches.enqueue(turn, payloadBytes, operation, () -> {}, admission));
     }
 
@@ -4016,6 +4017,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 target,
                 actorId,
                 operation,
+                admission,
                 turn ->
                         dispatches.enqueueLazyRecord(
                                 turn,
@@ -4047,6 +4049,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 target,
                 actorId,
                 operation,
+                null,
                 turn -> {
                     if (acceptedJournalRecord != null) {
                         return dispatches.enqueue(
@@ -4062,9 +4065,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkActorDispatchTarget target,
             String actorId,
             Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
             java.util.function.Function<ZLinkActorDispatchSerials.QueuedTurn, CompletionStage<Void>>
                     enqueue) {
         if (dispatches.isCurrent(actorId)) {
+            // The current turn of this Actor runs the dispatch in place: accepting it here is
+            // its source-local admission (spec 01-execution/01-submit-and-completion §2).
+            if (admission != null) admission.complete(null);
             try {
                 return operation.get();
             } catch (RuntimeException ex) {

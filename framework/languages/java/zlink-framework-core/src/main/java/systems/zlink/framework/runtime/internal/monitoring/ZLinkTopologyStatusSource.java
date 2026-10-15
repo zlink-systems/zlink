@@ -82,13 +82,25 @@ public final class ZLinkTopologyStatusSource<T> {
     }
 
     private Source source(String sourceKey) {
-        return sources.compute(
+        Source current = sources.get(sourceKey);
+        if (current == null) {
+            // Projection can enter a runtime lane whose owner also reads this source.
+            // Collect it before acquiring the source map's publication turn.
+            Source created = new Source(sourceKey);
+            current = sources.putIfAbsent(sourceKey, created);
+            if (current == null) return created;
+        }
+        T previous = current.status;
+        T projected = current.projectSnapshot(previous);
+        sources.computeIfPresent(
                 sourceKey,
-                (key, previous) -> {
-                    Source current = previous == null ? new Source(key) : previous;
-                    current.publishSnapshot();
-                    return current;
+                (key, published) -> {
+                    // A concurrent query may have published while projection was collected.
+                    // Keep that newer publication instead of applying a stale projection.
+                    if (published.status == previous) published.publishSnapshot(projected);
+                    return published;
                 });
+        return current;
     }
 
     private final class Source {
@@ -99,6 +111,7 @@ public final class ZLinkTopologyStatusSource<T> {
         private Source(String key) {
             this.key = key;
             status = snapshot.apply(key, null);
+            publishSnapshot(projectSnapshot(status));
             publisher =
                     ZLinkStatusPublisher.create(
                             () -> source(key).status,
@@ -109,13 +122,18 @@ public final class ZLinkTopologyStatusSource<T> {
                             preserve);
         }
 
-        /** Called only inside this source key's existing map compute turn. */
-        private void publishSnapshot() {
+        private T projectSnapshot(T previous) {
+            return sequence.applyAsLong(previous) == 0 || terminal.test(previous)
+                    ? previous
+                    : snapshot.apply(key, previous);
+        }
+
+        /** Publishes before registration or inside this source key's map compute turn. */
+        private void publishSnapshot(T current) {
             long previousSequence = sequence.applyAsLong(status);
             if (previousSequence != 0 && terminal.test(status)) {
                 return;
             }
-            T current = previousSequence == 0 ? status : snapshot.apply(key, status);
             if (previousSequence == 0
                     || !Objects.equals(fingerprint.apply(status), fingerprint.apply(current))) {
                 status = withSequence.apply(current, Math.addExact(previousSequence, 1));
