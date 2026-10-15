@@ -605,17 +605,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     @Override
     public CompletionStage<Void> sendRemoteActorBoundSession(
             ZLinkBackendActorRef actor, List<Message> parts) {
-        return stateLane
-                .runNowOrQueue(
-                        () -> {
-                            RemoteStreamBinding remote = remoteStreamBindings.get(actor.actorId());
-                            if (remote == null || !remote.actor().equals(actor)) {
-                                return CompletableFuture.<Void>failedFuture(
-                                        new ZlinkSubmitException(SubmitResult.NOT_FOUND));
-                            }
-                            return owner.sendBoundSession(remote, parts);
-                        })
-                .thenCompose(java.util.function.Function.identity());
+        RemoteStreamBinding remote = remoteStreamBindings.get(actor.actorId());
+        if (remote == null || !remote.actor().equals(actor)) {
+            return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
+        }
+        return owner.sendBoundSession(remote, parts);
     }
 
     @Override
@@ -2023,10 +2017,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                 return RemoteBindingAdmission.rejected();
                             }
                             if (!command.active()) {
-                                resultSubmitted.accept(true);
+                                // Retire the binding before acknowledging the unbind, so a push
+                                // that follows the acknowledgement finds it retired.
                                 if (remoteStreamBindings.remove(actor.actorId(), candidate)) {
                                     remoteStreamSequences.remove(actor.actorId());
                                 }
+                                resultSubmitted.accept(true);
                                 return RemoteBindingAdmission.accepted(null);
                             }
                             if (!isCurrentActor(actor)) {
