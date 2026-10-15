@@ -251,7 +251,8 @@ class mesh_node_runtime_t
     void connect_peer (const zlink::routing_id_t &expected_routing_id,
                        const std::string &endpoint,
                        std::uint64_t expected_lifecycle_generation = 0,
-                       std::string security_identity = "default");
+                       std::string security_identity = "default",
+                       bool automatic = false);
     void connect_peer (const std::string &endpoint, std::string security_identity = "default");
     void expect_peer (const zlink::routing_id_t &expected_routing_id,
                       const std::string &endpoint,
@@ -260,7 +261,8 @@ class mesh_node_runtime_t
     void forget_peer (const zlink::routing_id_t &expected_routing_id, const std::string &endpoint);
     void disconnect_peer (const std::string &endpoint) noexcept;
     void disconnect_peer (const zlink::routing_id_t &expected_routing_id,
-                          const std::string &endpoint) noexcept;
+                          const std::string &endpoint,
+                          bool automatic = false) noexcept;
     bool wait_for_peer_ready (const zlink::routing_id_t &target,
                               std::chrono::milliseconds timeout) const;
 

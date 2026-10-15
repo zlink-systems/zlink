@@ -600,7 +600,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool connect_peer (const std::string &endpoint,
                        std::optional<zlink::routing_id_t> expected = std::nullopt,
                        std::uint64_t expected_lifecycle_generation = 0,
-                       std::string security_identity = "default");
+                       std::string security_identity = "default",
+                       bool automatic = false);
     void expect_peer (const std::string &endpoint,
                       const zlink::routing_id_t &expected,
                       std::uint64_t expected_lifecycle_generation,
