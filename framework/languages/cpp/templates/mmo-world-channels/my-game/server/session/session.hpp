@@ -56,12 +56,11 @@ class Session final : public fx::packet_stream_session_t
             throw std::runtime_error ("Exactly one Actor must be bound");
         auto &actor = bound.front ();
         if (dispatch.packet_name == SessionInfoRequest::packet_name) {
-            if (!dispatch.can_reply)
-                throw std::invalid_argument ("SessionInfoRequest requires request/reply");
-            // The public raw reply_packet API cannot express a typed reply without manual encoding.
-            throw fx::framework_exception_t (
-              fx::framework_error_kind_t::not_configured,
-              "Public C++ STREAM typed reply API is unavailable for SessionInfoRequest");
+            co_await actor.bound_session ()
+              .send (SessionInfo{stream.session_id (), std::string (actor.actor_id ()),
+                                 actor.ref ().object_generation ()})
+              .async ();
+            co_return;
         }
         co_await actor.relay (std::string (dispatch.packet_name), payload);
     }

@@ -15,7 +15,7 @@ This template implements independent MMORPG worlds with channel relocation using
 
 Player owns gold. Zone identity and membership belong to Framework. Never keep Actor references in Spot state. Request handlers send to the supplied Actor's bound Session; other pushes use Actor send followed by the Zone's delivery handler. Relocation adapters capture application state only.
 
-Use Framework's default typed JSON serializer. Do not introduce internal APIs, raw Framework frames, per-message codecs, manual packet encoding, reflection, retry loops, sleeps, deadline increases, or weakened assertions. `SessionInfoRequest` must use request/reply; report a missing public typed reply API rather than replacing it with a push. Application Redis protocol code does not implement Framework transport or state.
+Use Framework's default typed JSON serializer. Do not introduce internal APIs, raw Framework frames, per-message codecs, manual packet encoding, reflection, retry loops, sleeps, deadline increases, or weakened assertions. For the approved C++ behavior in #1785, send `SessionInfoRequest` and await a typed `SessionInfo` push from the bound Session; identity comes from the bound Actor. Application Redis protocol code does not implement Framework transport or state.
 
 ## Changes and verification
 

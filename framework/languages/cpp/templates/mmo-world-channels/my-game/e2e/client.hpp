@@ -60,14 +60,7 @@ class Client
         return exchange<ChangeChannelRequest, PlayerView> ({channel});
     }
     PlayerView view () { return exchange<ViewRequest, PlayerView> ({}); }
-    SessionInfo info ()
-    {
-        healthy ();
-        const auto reply =
-          checked (connector_.request (SessionInfoRequest{}).submit<SessionInfo> ());
-        healthy ();
-        return reply;
-    }
+    SessionInfo info () { return exchange<SessionInfoRequest, SessionInfo> ({}); }
     void close ()
     {
         healthy ();

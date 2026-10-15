@@ -59,11 +59,9 @@ Run `build/bin/my-game-e2e --root . --check-structure` for an isolated structure
 
 ## Known issues
 
-Public C++ Framework 0.30.0 exposes `stream_t::reply_packet(message_t)` but no typed Session reply API. `SessionInfoRequest` remains a request; the server reports the missing typed reply capability instead of using a push or manually encoded payload. Identity assertions require a public typed reply API before they can pass.
-
-Public 0.30.0 also has registered host shutdown and SafeToShutdown limitations (#1740), relocation handoff waiting (#1771), new Actor placement without Entry Spots (#1772), and bound Session send-route availability (#1775). The runner preserves failures and returns a nonzero exit status; it does not compensate with retries or longer deadlines. These issues require candidate package validation before deployment.
-
-Validation with public 0.30.0 currently stops during initial world setup. Local Actor placement reaches `field@1`'s `location_committed` but returns no initial `PlayerView`; a Windows run with cross-node placement receives the initial view, then times out after `EarnRequest`. The remaining game scenarios are blocked at this shared prerequisite. The candidate package must resolve or classify these failures as well as the typed reply gap.
+- [#1786: missing PlayerView or EarnRequest response](https://github.com/zlink-systems/zlink/issues/1786). Public 0.30.0 validation stops during world setup after local or cross-node Actor join: the expected typed push does not arrive, and no dispatch error explains its absence. Remaining scenarios depend on this setup.
+- [#1740: SafeToShutdown and TeardownFailed](https://github.com/zlink-systems/zlink/issues/1740). Public 0.30.0 lacks the required SafeToShutdown observation, and validation observed node shutdown failure. The runner preserves the failure and returns a nonzero exit status.
+- [#1785: typed Session reply API unavailable](https://github.com/zlink-systems/zlink/issues/1785). As approved for C++ templates, the client sends `SessionInfoRequest` and waits for a typed `SessionInfo` push. The Session reads identity from its bound Actor and uses the public bound Session send API without manual encoding.
 
 ## Deployment sequence
 
@@ -78,4 +76,4 @@ Player gold persistence currently follows the public Bingo sample's synchronous 
 
 ZLink 저장소의 `framework-cpp/v0.30.1` 태그와 vcpkg를 준비하고 `VCPKG_ROOT`, `VCPKG_OVERLAY_PORTS`를 설정하십시오. Windows에서는 Visual Studio 개발자 셸에서 빌드합니다. Docker Compose가 실행 중이어야 e2e runner가 월드별 Redis를 생성할 수 있습니다.
 
-위 Build와 Local e2e 명령으로 빌드·검증합니다. 실행 기록은 `.logs/run-<id>/`에 보존됩니다. 공개 패키지의 typed Session reply 및 종료·relocation 제약은 Known issues에 기록되어 있으며, 해당 제약을 해결한 패키지로 검증하기 전에는 전체 시나리오 통과로 판정하지 않습니다.
+위 Build와 Local e2e 명령으로 빌드·검증합니다. 실행 기록은 `.logs/run-<id>/`에 보존됩니다. SessionInfo는 승인된 C++ typed push 경로를 사용합니다. 입장 후 응답 누락과 종료 제약은 Known issues에 기록되어 있으며, 해당 제약을 해결한 패키지로 검증하기 전에는 전체 시나리오 통과로 판정하지 않습니다.
