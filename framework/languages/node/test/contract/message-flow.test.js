@@ -1476,10 +1476,10 @@ const {
 } = require('../../packages/framework/dist/runtime/channels/channel-dispatchers');
 const boundSessionWire = require('../../packages/framework/dist/runtime/actors/bound-session-wire');
 
-function makeDispatchErrorReporter() {
+function makeDispatchErrorReporter(mode = 'errors') {
   return new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
-    diagnostics: diagnostics('errors'),
-    liveMode: { mode: 'errors' },
+    diagnostics: diagnostics(mode),
+    liveMode: { mode },
     sourceMeshGeneration: 1n
   });
 }
@@ -1502,9 +1502,11 @@ function malformedEnvelopeParts(headerFields) {
 }
 
 test('MFLOW-MAL malformed request envelope replies protocol error and records invalid_frame/reply_error', async () => {
+  // Flow fields are validated only while message-flow tracing is on — Normal
+  // and Detailed (04-flow-correlation.ko.md:68-69, :91).
   const dispatcher = new ZLinkChannelRequestDispatcher({
     channelName: 'api',
-    dispatchErrors: makeDispatchErrorReporter(),
+    dispatchErrors: makeDispatchErrorReporter('normal'),
     handlers: new Map()
   });
   const replies = [];
@@ -1554,9 +1556,11 @@ test('MFLOW-MAL malformed request envelope replies protocol error and records in
 });
 
 test('MFLOW-MAL malformed one-way envelope drops and records invalid_frame/drop', async () => {
+  // Flow fields are validated only while message-flow tracing is on — Normal
+  // and Detailed (04-flow-correlation.ko.md:68-69, :91).
   const dispatcher = new ZLinkChannelRequestDispatcher({
     channelName: 'api',
-    dispatchErrors: makeDispatchErrorReporter(),
+    dispatchErrors: makeDispatchErrorReporter('normal'),
     handlers: new Map()
   });
   let replied = false;
