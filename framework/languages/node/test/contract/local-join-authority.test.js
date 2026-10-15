@@ -29,6 +29,7 @@ const test = require('node:test');
 const PUBLIC_OPERATION_TIMEOUT_MS = 5_000;
 const OBSERVATION_INTERVAL_MS = 10;
 const RELOCATION_TEST_TIMEOUT_MS = 30_000;
+const SOURCE_FOLLOW_DURATION_MS = 5_000;
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const framework = require('../../packages/framework/dist');
@@ -222,7 +223,14 @@ function authorityFixture() {
   return { actor, owner, identity, snapshot };
 }
 
-for (const variant of ['same-node', 'cross-node']) {
+for (const variant of [
+  'same-node',
+  'cross-node',
+  'relocated Entry',
+  'safe status',
+  'Spot generation',
+  'target shutdown'
+]) {
   test(
     `${variant} public Join and PlannedMaintenance preserve canonical Table inventory`,
     { timeout: RELOCATION_TEST_TIMEOUT_MS },
@@ -320,6 +328,7 @@ for (const variant of ['same-node', 'cross-node']) {
         packetName: 'Move'
       })(MoveHandler);
       const apps = [];
+      const localTable = variant !== 'cross-node' && variant !== 'relocated Entry';
       async function start(node) {
         const builder = nestjs
           .zlinkFramework()
@@ -327,10 +336,11 @@ for (const variant of ['same-node', 'cross-node']) {
           .addRelocationStore(relocationStore);
         if (process.env.ZLINK_JOIN_TEST_FLOW_FILE)
           builder.configureDispatch().messageFlow('normal');
-        builder
+        const locations = builder
           .configureLocations()
           .pollingIntervalMs(OBSERVATION_INTERVAL_MS)
           .routeCacheMaxAgeMs(0);
+        if (variant === 'safe status') locations.messageFollowDurationMs(SOURCE_FOLLOW_DURATION_MS);
         builder
           .addRouteMesh('play')
           .listen('tcp://127.0.0.1:0')
@@ -358,7 +368,7 @@ for (const variant of ['same-node', 'cross-node']) {
         const query = source.get(nestjs.ZLINK_LOCATION_RUNTIME_QUERY);
         await actors.create('player', 'Player').inMesh('play').submit();
         let table;
-        if (variant === 'same-node')
+        if (localTable)
           table = await source
             .get(nestjs.ZLINK_SPOT_MANAGER)
             .getOrCreate('table', 'Table')
@@ -413,15 +423,63 @@ for (const variant of ['same-node', 'cross-node']) {
         const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
         assert.equal(identity.spotId, 'table');
         assert.equal(identity.spotGeneration, table.spot.objectGeneration);
-        assert.equal(String(identity.actor.nodeRid), variant === 'same-node' ? 'source' : 'target');
-        if (variant === 'same-node') {
-          const terminal = await source.get(nestjs.ZLINK_FRAMEWORK_RUNTIME).relocate({
-            mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
-            deadlineMs: PUBLIC_OPERATION_TIMEOUT_MS
-          });
-          assert.equal(terminal.outcome, framework.ZLinkFrameworkRelocationOutcome.Relocated);
-          assert.ok(restored.includes('Table:table'));
-          assert.ok(restored.includes('Player:player'));
+        assert.equal(String(identity.actor.nodeRid), localTable ? 'source' : 'target');
+        if (variant === 'Spot generation') {
+          assert.equal(
+            (await actors.findSpot('player')).objectGeneration,
+            table.spot.objectGeneration
+          );
+        }
+        if (localTable) {
+          const runtime = source.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
+          const observation = new AbortController();
+          const statuses = [];
+          const observer =
+            variant === 'safe status'
+              ? (async () => {
+                  for await (const event of runtime.observe(observation.signal)) {
+                    statuses.push(event.status);
+                  }
+                })()
+              : Promise.resolve();
+          try {
+            const terminal = await source.get(nestjs.ZLINK_FRAMEWORK_RUNTIME).relocate({
+              mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+              deadlineMs: PUBLIC_OPERATION_TIMEOUT_MS
+            });
+            assert.equal(terminal.outcome, framework.ZLinkFrameworkRelocationOutcome.Relocated);
+            assert.ok(restored.includes('Table:table'));
+            assert.ok(restored.includes('Player:player'));
+            if (variant === 'target shutdown') {
+              assert.deepEqual(
+                await target.get(nestjs.ZLINK_FRAMEWORK_RUNTIME).shutdown({
+                  deadlineMs: PUBLIC_OPERATION_TIMEOUT_MS
+                }),
+                {
+                  outcome: framework.ZLinkFrameworkTerminationOutcome.Stopped,
+                  reason: framework.ZLinkFrameworkTerminationReason.None
+                }
+              );
+            }
+            if (variant === 'safe status') {
+              const observationDeadline = Date.now() + PUBLIC_OPERATION_TIMEOUT_MS;
+              while (!runtime.status.safeToShutdown && Date.now() < observationDeadline) {
+                await new Promise((resolve) => setTimeout(resolve, OBSERVATION_INTERVAL_MS));
+              }
+              assert.equal(runtime.status.safeToShutdown, true, 'source quiescence is queryable');
+              assert.ok(
+                statuses.some(
+                  (status) =>
+                    status.state === framework.ZLinkFrameworkRuntimeState.Relocated &&
+                    status.safeToShutdown
+                ),
+                'SAFE_TO_SHUTDOWN must be published after source quiescence changes'
+              );
+            }
+          } finally {
+            observation.abort();
+            await observer;
+          }
         }
         if (variant === 'cross-node') {
           const destination = await start('restore');
