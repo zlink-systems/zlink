@@ -17,6 +17,7 @@ public static class GameNames
     public const double WallMinY = 0;
     public const double WallMaxY = 100;
 }
+
 public static class Rejection
 {
     public const string OutOfRange = "out-of-range";
@@ -27,20 +28,40 @@ public static class Rejection
     public const string StaleSequence = "stale-sequence";
     public const string MatchFinished = "match-finished";
 }
+
 public sealed record SessionInfoRequest;
+
 public sealed record SessionInfo(string SessionId, string ActorId, ulong ObjectGeneration);
+
 public sealed record MatchRequest(string PlayerId, string Mode = GameNames.DefaultMode);
+
 public sealed record MatchResponse(string RoomId, string SessionEndpoint);
+
 public sealed record JoinRoomRequest(string PlayerId, string RoomId);
+
 public sealed record MoveRequest(double X, double Y, long Sequence);
+
 public sealed record ShootRequest(string TargetId, long Sequence);
+
 public sealed record RoomViewRequest;
+
 public sealed record PlayerView(string PlayerId, double X, double Y, int Hp);
+
 public sealed record RoomView(string RoomId, string NodeId, PlayerView[] Players);
+
 public sealed record ShotRejected(string Reason);
+
 public sealed record ActionRejected(string Reason);
+
 public sealed record MatchEnded(string Winner);
-public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEndpoint, string? HttpEndpoint = null);
+
+public sealed record NodeReady(
+    string Id,
+    string MeshEndpoint,
+    string? StreamEndpoint,
+    string? HttpEndpoint = null
+);
+
 public static class NodeProtocol
 {
     public const string ReadyPrefix = "READY ";

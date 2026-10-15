@@ -48,7 +48,9 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
             session.Ready.StreamEndpoint
             ?? throw new InvalidOperationException("Session stream endpoint was not published.");
         var lobby = await StartNodeAsync("lobby", "MyGame.Lobby", false, ct);
-        LobbyEndpoint = lobby.Ready.HttpEndpoint ?? throw new InvalidOperationException("HTTP endpoint was not published.");
+        LobbyEndpoint =
+            lobby.Ready.HttpEndpoint
+            ?? throw new InvalidOperationException("HTTP endpoint was not published.");
     }
 
     private async Task<(ManagedProcess Process, NodeReady Ready)> StartNodeAsync(

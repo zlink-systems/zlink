@@ -32,7 +32,8 @@ public sealed record NodeSettings(
         ArgumentException.ThrowIfNullOrWhiteSpace(settings.RedisEndpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(settings.KeyPrefix);
         ArgumentException.ThrowIfNullOrWhiteSpace(settings.MeshEndpoint);
-        if (settings.RoomCapacity <= 0) throw new InvalidDataException("RoomCapacity must be positive.");
+        if (settings.RoomCapacity <= 0)
+            throw new InvalidDataException("RoomCapacity must be positive.");
         return settings;
     }
 }

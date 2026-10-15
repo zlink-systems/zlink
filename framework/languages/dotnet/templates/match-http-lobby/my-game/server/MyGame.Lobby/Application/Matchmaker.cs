@@ -11,7 +11,8 @@ public interface IRoomProvisioner
 public sealed class Matchmaker(IRoomProvisioner rooms)
 {
     private readonly object gate = new();
-    private readonly Dictionary<string, LinkedList<TaskCompletionSource<MatchResponse>>> queues = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LinkedList<TaskCompletionSource<MatchResponse>>> queues =
+        new(StringComparer.Ordinal);
     private readonly HashSet<string> participants = new(StringComparer.Ordinal);
     private long sequence;
 
@@ -35,7 +36,12 @@ public sealed class Matchmaker(IRoomProvisioner rooms)
                 roomId = GameNames.RoomPrefix + checked(++sequence);
                 queues.Remove(request.Mode);
             }
-            else pending = queue.AddLast(new TaskCompletionSource<MatchResponse>(TaskCreationOptions.RunContinuationsAsynchronously));
+            else
+                pending = queue.AddLast(
+                    new TaskCompletionSource<MatchResponse>(
+                        TaskCreationOptions.RunContinuationsAsynchronously
+                    )
+                );
         }
         try
         {
@@ -63,7 +69,8 @@ public sealed class Matchmaker(IRoomProvisioner rooms)
                 if (pending?.List is { } queue)
                 {
                     queue.Remove(pending);
-                    if (queue.Count == 0) queues.Remove(request.Mode);
+                    if (queue.Count == 0)
+                        queues.Remove(request.Mode);
                 }
             }
         }

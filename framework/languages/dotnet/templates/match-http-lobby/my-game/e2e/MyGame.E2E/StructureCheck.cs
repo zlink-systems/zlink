@@ -142,7 +142,10 @@ internal static class StructureCheck
         {
             Require(spotIds.Add(Text(spot, "id")), "Duplicate Spot ID.");
             var owner = Text(spot, "owner");
-            Require(settings.ContainsKey(owner) && roles[owner] == "match", "Spot owner must reference a match node.");
+            Require(
+                settings.ContainsKey(owner) && roles[owner] == "match",
+                "Spot owner must reference a match node."
+            );
             var kind = Text(spot, "kind");
             if (kind == "entry")
             {

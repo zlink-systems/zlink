@@ -1,8 +1,8 @@
 using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Zlink.Framework.Contracts.Configuration;
 
 namespace MyGame.Shared;
@@ -20,8 +20,10 @@ public static class NodeControl
             : runtime.GetListenerStatus(ZLinkListenerKind.Stream, GameNames.SessionStream).Endpoint;
         var http = settings.HttpEndpoint is null
             ? null
-            : host.Services.GetRequiredService<IServer>().Features
-                .Get<IServerAddressesFeature>()!.Addresses.Single();
+            : host
+                .Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!
+                .Addresses.Single();
         Console.WriteLine(
             NodeProtocol.ReadyPrefix
                 + JsonSerializer.Serialize(
