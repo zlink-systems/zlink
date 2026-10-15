@@ -7,7 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -18,6 +18,7 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -68,13 +69,20 @@ final class ZLinkJoinedActorSendAdmissionTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void joinedCallbackSendToJoiningActorIsAdmittedBeforeTheJoinCompletes(boolean crossNode)
-            throws Exception {
+    @CsvSource({"false, PER_ACTOR", "true, PER_ACTOR", "false, SPOT_WIDE", "true, SPOT_WIDE"})
+    void joinedCallbackSendToJoiningActorIsAdmittedBeforeTheJoinCompletes(
+            boolean crossNode, ZLinkUserSpotExecutionMode executionMode) throws Exception {
         var locations = new ZLinkInMemoryLocationStore();
         var relocations = new InMemoryRelocationStore();
         try (var source =
-                start(options("send-join-source", locations, relocations, null, !crossNode))) {
+                start(
+                        options(
+                                "send-join-source",
+                                locations,
+                                relocations,
+                                null,
+                                !crossNode,
+                                executionMode))) {
             ZLinkFrameworkRuntime target =
                     crossNode
                             ? start(
@@ -85,7 +93,8 @@ final class ZLinkJoinedActorSendAdmissionTest {
                                             source.listenerStatus(
                                                             ZLinkListenerKind.ROUTE_MESH, "game")
                                                     .endpoint(),
-                                            true))
+                                            true,
+                                            executionMode))
                             : source;
             try {
                 TABLE_CLIENT.set(target.actorClient());
@@ -185,6 +194,22 @@ final class ZLinkJoinedActorSendAdmissionTest {
             InMemoryRelocationStore relocations,
             String sourceEndpoint,
             boolean hostsTable) {
+        return options(
+                rid,
+                locations,
+                relocations,
+                sourceEndpoint,
+                hostsTable,
+                ZLinkUserSpotExecutionMode.SPOT_WIDE);
+    }
+
+    private static DefaultZLinkFrameworkOptions options(
+            String rid,
+            ZLinkInMemoryLocationStore locations,
+            InMemoryRelocationStore relocations,
+            String sourceEndpoint,
+            boolean hostsTable,
+            ZLinkUserSpotExecutionMode executionMode) {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(locations == null ? new ZLinkInMemoryLocationStore() : locations);
         options.addRelocationStore(
@@ -200,7 +225,13 @@ final class ZLinkJoinedActorSendAdmissionTest {
                 PlayerFactory.class,
                 factory -> factory.preserveStateWith(EmptyState.class));
         if (hostsTable) {
-            objects.addSpotFactory("table", Table.class, factory -> factory.disableRelocation());
+            objects.addSpotFactory(
+                    "table",
+                    Table.class,
+                    factory -> {
+                        factory.executionMode(executionMode);
+                        factory.recreateOnRelocation();
+                    });
         }
         return options;
     }

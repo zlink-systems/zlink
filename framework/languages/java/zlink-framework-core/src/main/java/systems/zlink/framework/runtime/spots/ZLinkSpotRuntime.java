@@ -548,14 +548,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     .spotFactories()
                     .forEach(
                             type ->
-                                    initializedSpotExecutionModes.putIfAbsent(
-                                            type,
-                                            systems.zlink.framework.configuration
-                                                    .ZLinkUserSpotExecutionMode.SPOT_WIDE));
-            nodeRegistration
-                    .spotFactories()
-                    .forEach(
-                            type ->
                                     initializedSpotRelocationCoordinationModes.putIfAbsent(
                                             type,
                                             systems.zlink.framework.configuration
@@ -744,14 +736,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             nodes.add(node);
             nodesByName.put(nodeRegistration.meshName(), node);
             initializedSpotTypes.addAll(nodeRegistration.spotFactories());
-            nodeRegistration
-                    .spotFactories()
-                    .forEach(
-                            type ->
-                                    initializedSpotExecutionModes.putIfAbsent(
-                                            type,
-                                            systems.zlink.framework.configuration
-                                                    .ZLinkUserSpotExecutionMode.SPOT_WIDE));
             nodeRegistration
                     .spotFactories()
                     .forEach(
@@ -6552,19 +6536,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     release.run();
                 });
         return queued;
-    }
-
-    static <T> CompletionStage<T> yieldSharedSpotTurnForActorRelocation(
-            SpotDispatchLine dispatchLine, CompletionStage<T> stage) {
-        // Resume the relocation prerequisite on the shared Spot continuation
-        // lane before composing replay or Actor dispatch. Yielding the whole
-        // composed operation would submit the Actor turn from the relocation
-        // executor into the ordinary FIFO, where steady Spot ingress can starve
-        // it; not yielding would leave that Actor turn behind the turn awaiting
-        // it.
-        return dispatchLine.usesSharedExecutionGate()
-                ? ZLinkSerialExecutionQueue.yieldCurrent(stage)
-                : stage;
     }
 
     /**

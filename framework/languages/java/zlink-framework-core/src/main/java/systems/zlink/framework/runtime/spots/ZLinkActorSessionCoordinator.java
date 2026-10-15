@@ -268,22 +268,6 @@ final class ZLinkActorSessionCoordinator {
                 .isPresent();
     }
 
-    CompletionStage<Void> dispatch(ZLinkActor actor, Supplier<CompletionStage<Void>> operation) {
-        return requireActors().submitActorDispatch(actor.context().actorId(), operation);
-    }
-
-    Optional<ZLinkBackendActorRef> messageFollowTargetActorRef(ZLinkActor actor) {
-        return requireActors().messageFollowTargetActorRef(actor);
-    }
-
-    boolean isMoving(ZLinkActor actor) {
-        return requireActors().isMoving(actor);
-    }
-
-    CompletionStage<Void> awaitMoveCompletion(ZLinkActor actor) {
-        return requireActors().awaitMoveCompletion(actor);
-    }
-
     CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
             ZLinkBackendActorRef actorRef,
             ZLinkStreamHeader header,
