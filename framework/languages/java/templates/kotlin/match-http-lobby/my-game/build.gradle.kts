@@ -4,6 +4,8 @@ extra["frameworkVersion"] = "0.30.1"
 
 extra["bindingVersion"] = "1.19.0"
 
+extra["springBootVersion"] = "3.5.14"
+
 subprojects {
     apply(plugin = "org.jetbrains.kotlin.jvm")
     extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension> {

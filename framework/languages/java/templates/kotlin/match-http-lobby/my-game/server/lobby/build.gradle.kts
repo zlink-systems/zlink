@@ -2,7 +2,9 @@ plugins { application }
 
 dependencies {
     implementation(project(":server:shared"))
-    implementation(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+    implementation(
+        platform("org.springframework.boot:spring-boot-dependencies:${rootProject.extra["springBootVersion"]}")
+    )
     implementation("io.netty:netty-codec-http")
 }
 
