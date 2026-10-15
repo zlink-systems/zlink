@@ -231,8 +231,9 @@ Cutover가 target에 도착하면 같은 connection에서 boundary보다 앞서 
 Error다.
 
 Server 설정 `RelocationCutoverWaitTimeout`(**기본 1,000 ms**)은 relay 수신 준비 reply부터
-cutover 도착까지의 Warning 임계값일 뿐이다. Connection이 끊겨 cutover가 유실된 경우, source process가 실행 중이면 source는 새
-connection으로 boundary 전 relay batch 전체와 cutover를 다시 보낸다. Target은 부분 수신한
+cutover 도착까지의 Warning 임계값일 뿐이다. Connection이 끊기거나, boundary 전 relay나 cutover를 제출할 때 ready였던 route generation과 다른
+target의 선택 route를 그 뒤 source가 관찰해 cutover가 유실됐을 수 있는 경우, source process가 실행 중이면 source는 새
+connection(새 선택 route)으로 boundary 전 relay batch 전체와 cutover를 다시 보낸다. Target은 부분 수신한
 boundary 전 relay 구간을 폐기하고 재전송된 batch 전체로 한 번에 교체한다 — 개별 중복 제거나
 부분 병합이 아니라 전체 교체이므로, 새 connection에서도 구간 안의 순서가 batch 순서로
 확정된다. 확인 값이 일치하면 target은 CAS와 queue 개방을 진행한다.

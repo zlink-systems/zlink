@@ -546,8 +546,8 @@ control transaction은 deadline까지 진행한다.
   lifecycle operation뿐이다.** Application request의 재제출 경계는
   [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다. Core socket 계약의 "Caller는 handover 뒤 다시 보낸다"는 application request에서는
   application, durable operation에서는 Framework를 뜻한다.
-- **Replay 조건은 terminal envelope를 받지 못한 typed transient transport 실패(route 부재, handover에
-  따른 1회 timeout, reply 유실, 단절)뿐이다.** Protocol error, encode·configuration 실패, typed
+- **Replay 조건은 terminal envelope를 받지 못한 typed transient transport 실패(route 부재, 제출할 때
+  ready였던 route generation과 다른 그 peer의 선택 route를 제출 뒤 관찰함, reply 유실, 단절)뿐이다.** Protocol error, encode·configuration 실패, typed
   non-replayable terminal은 그 실패로 즉시 끝난다 — 같은 입력을 다시 보내도 결과가 달라지지 않기
   때문이다. Terminal envelope(`Created`·`Existing`·`Rejected`·`Failed` 등)를 받은 operation은 다시
   보내지 않는다.
@@ -629,8 +629,8 @@ Gate·Yield·Actor claim과 self-request의 관찰은
   5분 안에서는 처음과 같은 semantic 결과(`Created`·`Rejected`·`Failed`와 optional reply)를 받고,
   그 뒤 Ready authority가 없으면 새 reservation으로 다시 생성된다.
 - `Rejected`·`Failed` 뒤에는 `Find`가 Actor를 찾지 못하고 reserved capacity가 반환된다.
-- Durable lifecycle operation(Actor create·join, session bind)은 route 부재·handover에 따른 1회
-  timeout·reply 유실 뒤에도 같은 `OperationId`로 이어져 deadline 안에 원래 terminal을 받고,
+- Durable lifecycle operation(Actor create·join, session bind)은 route 부재·제출 뒤 선택 route
+  변경·reply 유실 뒤에도 같은 `OperationId`로 이어져 deadline 안에 원래 terminal을 받고,
   application request의 재제출은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 따른다.
 - Durable operation이 deadline까지 한 번도 admission되지 못하면 `Unavailable`, admission된 뒤 reply
   없이 deadline이 지나면 `DeadlineExceeded`로 끝나며, protocol error·encode 실패 같은 typed

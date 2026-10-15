@@ -615,8 +615,9 @@ owned by
   in the Core socket contract means the application for application requests
   and the framework for durable operations.
 - **The only replay condition is a typed transient transport failure with no
-  terminal envelope received (a missing route, the single timeout caused by a
-  handover, a lost reply, a disconnect).** A protocol error, an encode or
+  terminal envelope received (a missing route, observing after submission a
+  selected route of the peer whose route generation differs from the one that was
+  ready at submission, a lost reply, a disconnect).** A protocol error, an encode or
   configuration failure, or a typed non-replayable terminal ends the operation
   with that failure at once — resending the same input wouldn't change the
   result. An operation whose terminal envelope (`Created`, `Existing`,
@@ -730,8 +731,8 @@ Gate, Yield, Actor-claim, and self-request observations reference
 - After `Rejected` or `Failed`, `Find` doesn't find the Actor and the reserved
   capacity is returned.
 - A durable lifecycle operation (Actor create/join, session bind) continues
-  with the same `OperationId` after a missing route, the single timeout caused
-  by a handover, or a lost reply, and receives its original terminal within the
+  with the same `OperationId` after a missing route, a change of the selected
+  route after submission, or a lost reply, and receives its original terminal within the
   deadline; resubmission of an application request in the same situation follows
   [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - A durable operation that was never admitted by the deadline ends with

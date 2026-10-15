@@ -292,6 +292,12 @@ If `MeshName` differs or the trust profiles differ, it isn't admitted. When more
 exists for the same RID, Core selects one ([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)), and the framework
 admits only the handshake received on the selected route.
 
+**Until admission is confirmed by a handshake on the selected route, records other than the
+handshake received on that route are discarded without processing, and no response is sent.** The
+same applies to records the peer sent before the handshake of a new route after the selected route
+changed. A durable operation lost this way is sent again by the sender as defined in
+[Actor model §8.1](04-actor-model.en.md#81-failure).
+
 Lifecycle generation is a non-zero opaque equality token. Which lifecycle is
 newer isn't judged by numeric magnitude.
 
