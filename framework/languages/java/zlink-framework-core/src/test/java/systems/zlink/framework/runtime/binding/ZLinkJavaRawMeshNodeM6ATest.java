@@ -112,6 +112,44 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void localActorJournalHasNoRecordWithoutBindingIdentityOrAuthority() {
+        // The encoder does not classify; the dispatch caller classifies the empty record.
+        try (Context context = Zlink.createContext();
+                ZLinkJavaRawMeshNode node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("actor-owner"));
+            RoutingId owner = node.routingId();
+            RoutingId session = RoutingId.from("session-a");
+            ZLinkBackendActorRef actor = new ZLinkBackendActorRef(owner, "actor-a", 7);
+            assertEquals(
+                    0,
+                    node.encodeLocalActorAccepted(
+                                    actor,
+                                    owner,
+                                    session,
+                                    0,
+                                    0,
+                                    0,
+                                    "Send",
+                                    java.util.Map.of(),
+                                    new byte[0])
+                            .length);
+            assertEquals(
+                    0,
+                    node.encodeLocalActorAccepted(
+                                    actor,
+                                    owner,
+                                    session,
+                                    1,
+                                    1,
+                                    0,
+                                    "Send",
+                                    java.util.Map.of(),
+                                    new byte[0])
+                            .length);
+        }
+    }
+
+    @Test
     void oneWayAdapterClassifiesNativeSubmitRejection() {
         for (var rejected :
                 List.of(

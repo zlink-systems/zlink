@@ -588,7 +588,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
           this.options.forceStopResources(meshName).catch(() => undefined)
         )
       );
-      result = { kind: 'forceStopped', reason };
+      result = { kind: 'forceStopped', reason, error };
       for (const [meshName, state] of entries) {
         this.transition(meshName, state, ZLinkTopologyState.Failed);
       }
