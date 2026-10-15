@@ -267,7 +267,8 @@ test('location runtime claims on the next heartbeat after startup Store recovery
 });
 
 test('location runtime installs the same late-committed lease after heartbeat Conflict', async t => {
-  let now = performance.now();
+  const initialMockClockMs = 511.99999999999994;
+  let now = initialMockClockMs;
   t.mock.method(performance, 'now', () => now);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const store = new internal.ZLinkInMemoryLocationStore();
