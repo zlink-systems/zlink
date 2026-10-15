@@ -224,14 +224,21 @@ class channel_runtime_state_t
     };
     std::shared_ptr<const node_transport_index_t> node_transports =
       std::make_shared<const node_transport_index_t> ();
+    // Route channel initialization runs outside the state lane and binding
+    // runs on it, so a publication retries until it replaces the index it
+    // copied; no change is lost.
     void publish_node_transports (const std::function<void (node_transport_index_t &)> &change)
     {
-        auto next = std::make_shared<node_transport_index_t> (
-          *std::atomic_load_explicit (&node_transports, std::memory_order_acquire));
-        change (*next);
-        std::atomic_store_explicit (
-          &node_transports, std::shared_ptr<const node_transport_index_t> (std::move (next)),
-          std::memory_order_release);
+        auto current = std::atomic_load_explicit (&node_transports, std::memory_order_acquire);
+        for (;;) {
+            auto next = std::make_shared<node_transport_index_t> (*current);
+            change (*next);
+            if (std::atomic_compare_exchange_weak_explicit (
+                  &node_transports, &current,
+                  std::shared_ptr<const node_transport_index_t> (std::move (next)),
+                  std::memory_order_acq_rel, std::memory_order_acquire))
+                return;
+        }
     }
     std::map<std::string, mesh_channel_send_t> mesh_channel_senders;
     std::map<std::string, mesh_channel_request_t> mesh_channel_requesters;

@@ -756,7 +756,8 @@ void channel_runtime_t::bind_mesh_node_transport (
           auto transport = std::make_shared<const channel_runtime_state_t::mesh_node_transport_t> (
             channel_runtime_state_t::mesh_node_transport_t{std::move (send), std::move (request)});
           _state->publish_node_transports ([&] (auto &index) {
-              index.mesh_nodes.insert_or_assign (std::move (mesh_name), std::move (transport));
+              // A publication can retry, so the change copies its inputs.
+              index.mesh_nodes.insert_or_assign (mesh_name, transport);
           });
       })
       .get ();
