@@ -781,12 +781,16 @@ void verify_topology_snapshot_and_connection_fence ()
     auto immutable_mutation = peer;
     immutable_mutation.descriptor_revision = 2;
     immutable_mutation.security_identity = "changed-security";
-    assert (topology.admit (immutable_mutation, replacement_connection)
+    assert (topology.admit (immutable_mutation, replacement_connection,
+                            mesh::service_liveness_registry_t::clock_t::now (),
+                            protocol::command::update)
             == mesh::peer_admission_result_t::stale_descriptor);
 
     peer.descriptor_revision = 2;
     peer.state = mesh::service_node_state_t::retiring;
-    assert (topology.admit (peer, replacement_connection)
+    assert (topology.admit (peer, replacement_connection,
+                            mesh::service_liveness_registry_t::clock_t::now (),
+                            protocol::command::update)
             == mesh::peer_admission_result_t::admitted);
     assert (!topology.select ("alpha"));
 }
@@ -1190,7 +1194,9 @@ void verify_signed_weight_contract ()
     auto revision = weight_100;
     revision.descriptor_revision = 2;
     revision.channels.front ().weight = 0;
-    assert (topology.admit (revision, bytes ("weight-connection-100"))
+    assert (topology.admit (revision, bytes ("weight-connection-100"),
+                            mesh::service_liveness_registry_t::clock_t::now (),
+                            protocol::command::update)
             == mesh::peer_admission_result_t::admitted);
     const auto after_revision = topology.multicast_targets ("weighted");
     assert (after_revision.size () == 1);
@@ -2206,7 +2212,9 @@ void verify_client_server_weighted_selection ()
 
     weighted_route_b.descriptor_revision = 2;
     weighted_route_b.state = mesh::service_node_state_t::retiring;
-    assert (weighted_topology.admit (weighted_route_b, bytes ("weighted-route-connection-b"))
+    assert (weighted_topology.admit (weighted_route_b, bytes ("weighted-route-connection-b"),
+                                     mesh::service_liveness_registry_t::clock_t::now (),
+                                     protocol::command::update)
             == mesh::peer_admission_result_t::admitted);
     for (std::size_t index = 0; index < 32; ++index) {
         const auto selected_route = weighted_topology.select ("alpha");
@@ -3800,14 +3808,14 @@ void verify_topology_ready_is_remote_admit_on_current_route ()
     auto observe = topology.observe_peer (remote.node_routing_id);
     auto initial = observe ();
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-    assert (topology.admit (remote, bytes ("route-one"), now, false)
+    assert (topology.admit (remote, bytes ("route-one"), now, protocol::command::hello)
             == mesh::peer_admission_result_t::admitted);
     assert (initial.changed.await_ready ());
     auto hello = observe ();
     assert (hello.peer && !hello.peer->ready);
     assert (!topology.select ("alpha"));
     assert (topology.multicast_targets ("alpha").empty ());
-    assert (topology.admit (remote, bytes ("route-one"), now, true)
+    assert (topology.admit (remote, bytes ("route-one"), now, protocol::command::admit)
             == mesh::peer_admission_result_t::duplicate_connection);
     assert (hello.changed.await_ready ());
     auto ready = observe ();
@@ -3815,10 +3823,10 @@ void verify_topology_ready_is_remote_admit_on_current_route ()
     assert (ready.peer->admission_epoch == hello.peer->admission_epoch);
     assert (topology.select ("alpha"));
     assert (topology.multicast_targets ("alpha").size () == 1);
-    assert (topology.admit (remote, bytes ("route-one"), now, false)
+    assert (topology.admit (remote, bytes ("route-one"), now, protocol::command::hello)
             == mesh::peer_admission_result_t::duplicate_connection);
     assert (!ready.changed.await_ready ());
-    assert (topology.admit (remote, bytes ("route-two"), now, false)
+    assert (topology.admit (remote, bytes ("route-two"), now, protocol::command::hello)
             == mesh::peer_admission_result_t::admitted);
     assert (ready.changed.await_ready ());
     assert (!observe ().peer->ready);
