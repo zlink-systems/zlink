@@ -546,6 +546,40 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void admittedInboundPeerMarkedNotRequiredIsNotFoundForNodeDirect() throws Exception {
+        RoutingId localRid = RoutingId.from("jvm-inbound-not-required-local");
+        RoutingId peerRid = RoutingId.from("jvm-inbound-not-required-peer");
+        String localEndpoint = "inproc://jvm-inbound-not-required-local-" + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-inbound-not-required-peer-" + System.nanoTime();
+        try (var context = Zlink.createContext();
+                var local = meshNode(context);
+                var peer = meshNode(context)) {
+            local.setRoutingId(localRid);
+            local.setBind(localEndpoint);
+            peer.setRoutingId(peerRid);
+            peer.setBind(peerEndpoint);
+            local.start();
+            peer.start();
+            // The peer connects; the local node admits it without an intent of its own.
+            peer.connectPeer(localEndpoint, localRid);
+            awaitState(peer, MeshPeerState.ADMITTED);
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (local.spotNode().classifyNodeSendTarget(peerRid).isPresent()) {
+                assertTrue(System.nanoTime() < deadline, "local node did not admit the peer");
+                Thread.sleep(5);
+            }
+
+            local.markPeerConnectionNotRequired(peerRid, peerEndpoint, 1);
+
+            // Without an intent, a not-required peer is not a node-direct target even while
+            // its admission stays in the topology.
+            assertEquals(
+                    ZLinkOneWayCalls.TARGET_NOT_FOUND,
+                    local.spotNode().classifyNodeSendTarget(peerRid).orElseThrow());
+        }
+    }
+
+    @Test
     void bilateralManualConnectKeepsOneReadyPeer() throws Exception {
         RoutingId lowerRid = RoutingId.from("a");
         RoutingId higherRid = RoutingId.from("z");
