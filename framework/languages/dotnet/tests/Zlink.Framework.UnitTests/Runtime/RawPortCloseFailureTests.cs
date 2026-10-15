@@ -112,13 +112,15 @@ public sealed class RawPortCloseFailureTests
         proxy.Inner = socket;
         proxy.FailClose = true;
         using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
         var runtime = new ZLinkClientServerClientRuntime(
             "events",
             null!,
             null!,
             null!,
             CancellationToken.None,
-            errors
+            errors,
+            runner
         );
         var type = typeof(ZLinkClientServerClientRuntime).GetNestedType(
             "Connection",
@@ -138,6 +140,7 @@ public sealed class RawPortCloseFailureTests
                 (Action<bool>)(_ => { }),
                 TimeProvider.System,
                 errors,
+                runner,
             ],
             null
         )!;
@@ -185,6 +188,7 @@ public sealed class RawPortCloseFailureTests
             new ZLinkChannelReceiveLoop(null!, null!),
             new ZLinkFanoutRuntimeService(registration, lifecycle),
             errors,
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
             CancellationToken.None
         );
         var descriptor = new ZLinkFanoutPublisherDescriptor(
@@ -254,6 +258,7 @@ public sealed class RawPortCloseFailureTests
             new ZLinkChannelReceiveLoop(null!, null!),
             new ZLinkFanoutRuntimeService(registration, lifecycle),
             errors,
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
             CancellationToken.None
         );
         var descriptor = new ZLinkFanoutPublisherDescriptor(
@@ -279,8 +284,8 @@ public sealed class RawPortCloseFailureTests
             [runtime, descriptor],
             null
         )!;
-        type.GetField("_socket", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(connection, subscriber);
+        type.GetField("_socketOwner", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(connection, new ZLinkReceiveSocketOwner(subscriber.DisposeAsync));
         var connections = (System.Collections.IDictionary)
             typeof(ZLinkAutomaticFanoutSubscriberRuntime)
                 .GetField("_connections", BindingFlags.Instance | BindingFlags.NonPublic)!

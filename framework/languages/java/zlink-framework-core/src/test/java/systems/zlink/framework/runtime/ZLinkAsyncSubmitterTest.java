@@ -72,6 +72,14 @@ final class ZLinkChannelSubmissionContractTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
             var submission = runtime.fanout().publish("events", "payload").submit();
+            var beacon = ZLinkClassicFanoutLiveness.beaconRecord();
+            try (Message payload = Message.from(beacon.get(1))) {
+                new RecordingPublisher(backend)
+                        .publish(
+                                new String(beacon.getFirst(), StandardCharsets.UTF_8),
+                                List.of(payload),
+                                SendFlags.DONT_WAIT);
+            }
 
             assertEquals(0, OneWayTestStatus.status(submission));
             assertEquals(SendFlags.NONE, backend.flags);
@@ -531,9 +539,9 @@ final class ZLinkChannelSubmissionContractTest {
         }
 
         private void record(String topic, SendFlags flags) {
-            owner.flags = flags;
             if (!ZLinkClassicFanoutLiveness.isReservedTopic(
                     topic.getBytes(StandardCharsets.UTF_8))) {
+                owner.flags = flags;
                 owner.submissions++;
             }
         }

@@ -1837,8 +1837,9 @@ Descriptor values are only used to quickly filter candidates — actual slot
 acquisition is confirmed by the Location Store's atomic reservation.
 
 A remote MeshNode checks the endpoint and Object role from this registration
-information. If both descriptors' Object role is `Client`, an automatic connection
-intent isn't created. For every other pair, the actual transport handshake must also
+information. Which pairs need no connection by the Object role, and when an automatic
+connection intent is created, is owned by
+[Channel topology §8](../02-channel-transport/01-channel-topology.en.md#8-routemesh-peer-connection-and-discovery-automatic-rid-comparison-manual-descriptor-based). For a pair that connects, the actual transport handshake must also
 re-verify that MeshName, RID, lifecycle generation, Object role, and security
 identity match the registration information, before completing peer admission.
 

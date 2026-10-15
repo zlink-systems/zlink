@@ -150,8 +150,6 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         }
     }
 
-    public List<Task> ListenerTasks { get; } = [];
-
     // All former SyncRoot-protected component dictionaries share this lane.
     // The dispose gate remains separate because it serializes the external
     // disposal protocol and intentionally spans asynchronous resource cleanup.
@@ -184,25 +182,32 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
-    public ValueTask DisposeAsync()
-    {
-        return BeginDispose(CancellationToken.None);
-    }
+    public ValueTask DisposeAsync() =>
+        DisposeAsync(DateTimeOffset.UtcNow + ZLinkFrameworkMaintenanceRuntime.DefaultDeadline);
 
-    internal ValueTask ForceStopAsync(CancellationToken cancellationToken)
-    {
-        return BeginDispose(cancellationToken);
-    }
+    internal ValueTask DisposeAsync(DateTimeOffset listenerCloseDeadline) =>
+        BeginDispose(CancellationToken.None, listenerCloseDeadline);
 
-    private ValueTask BeginDispose(CancellationToken forceStopToken) =>
+    internal ValueTask ForceStopAsync(
+        CancellationToken cancellationToken,
+        DateTimeOffset listenerCloseDeadline
+    ) => BeginDispose(cancellationToken, listenerCloseDeadline);
+
+    private ValueTask BeginDispose(
+        CancellationToken forceStopToken,
+        DateTimeOffset listenerCloseDeadline
+    ) =>
         new(
             ZLinkRuntimeTaskRunner.RunDisposal(
                 ref _disposeTask,
-                () => DisposeCoreAsync(forceStopToken)
+                () => DisposeCoreAsync(forceStopToken, listenerCloseDeadline)
             )
         );
 
-    private async Task DisposeCoreAsync(CancellationToken forceStopToken)
+    private async Task DisposeCoreAsync(
+        CancellationToken forceStopToken,
+        DateTimeOffset listenerCloseDeadline
+    )
     {
         // Leave the dispose gate before any disposal step runs.
         await Task.Yield();
@@ -215,8 +220,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
                     ClientServerServerBundles.Values.ToArray(),
                     PublisherBundles.Values.ToArray(),
                     AutomaticFanoutSubscriberRuntimes.Values.ToArray(),
-                    SubscriberBundles.Values.ToArray(),
-                    ListenerTasks.ToArray()
+                    SubscriberBundles.Values.ToArray()
                 )
             )
             .ConfigureAwait(false);
@@ -227,6 +231,10 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             await _drainRelocationTargets(forceStopToken).ConfigureAwait(false);
         if (forceStopToken.CanBeCanceled)
             Capture(ForceStopTokenSource.Cancel);
+        // Each listener loop closes its router when it returns; the deadline reaches it
+        // before the stop signal does.
+        foreach (var bundle in resources.ClientServerServerBundles)
+            bundle.SetListenerCloseDeadline(listenerCloseDeadline);
         Capture(StopTokenSource.Cancel);
         Capture(ApplicationJobQueue.Dispose);
         foreach (var stream in resources.StreamNodes)
@@ -242,14 +250,6 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         foreach (var runtime in resources.ClientServerClientRuntimes)
             await CaptureAsync(() => DisposeSafelyAsync(runtime.DisposeAsync))
                 .ConfigureAwait(false);
-
-        // Cancellation requests the stop; joining the receive owners ends their
-        // native API calls before any inbound channel socket is closed.
-        await CaptureAsync(() => WaitForListenerTasksAsync(resources.ListenerTasks))
-            .ConfigureAwait(false);
-
-        foreach (var bundle in resources.ClientServerServerBundles)
-            await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);
 
         // A STREAM node's native session service is created from the shared
         // MeshNode. Destroy the dependent session service and socket before
@@ -268,6 +268,11 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         foreach (var runtime in resources.AutomaticFanoutSubscriberRuntimes)
             await CaptureAsync(() => DisposeSafelyAsync(runtime.DisposeAsync))
                 .ConfigureAwait(false);
+
+        // A receive bundle's loop closes its socket when the loop returns. The runner stop
+        // above waited for every runtime loop, and the bundle disposal waits for that close.
+        foreach (var bundle in resources.ClientServerServerBundles)
+            await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);
 
         foreach (var bundle in resources.SubscriberBundles)
             await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);
@@ -316,19 +321,6 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         }
     }
 
-    private static async ValueTask WaitForListenerTasksAsync(Task[] listenerTasks)
-    {
-        if (listenerTasks.Length == 0)
-            return;
-
-        try
-        {
-            await Task.WhenAll(listenerTasks);
-        }
-        catch (OperationCanceledException) { }
-        catch (ObjectDisposedException) { }
-    }
-
     private sealed record RuntimeResources(
         ZLinkSpotNodeRuntime[] SpotNodes,
         ZLinkStreamNodeRuntime[] StreamNodes,
@@ -337,8 +329,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         ZLinkChannelRuntimeBundle[] ClientServerServerBundles,
         ZLinkChannelRuntimeBundle[] PublisherBundles,
         ZLinkAutomaticFanoutSubscriberRuntime[] AutomaticFanoutSubscriberRuntimes,
-        ZLinkChannelRuntimeBundle[] SubscriberBundles,
-        Task[] ListenerTasks
+        ZLinkChannelRuntimeBundle[] SubscriberBundles
     );
 
     private static async ValueTask DisposeSafelyAsync(Func<ValueTask> dispose)

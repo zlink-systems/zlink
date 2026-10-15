@@ -13,7 +13,9 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         IDisposable
 {
     private readonly IZLinkRuntimeFailureReporter _failureReporter;
-    private static readonly TimeSpan DefaultDeadline = TimeSpan.FromSeconds(30);
+
+    // The Shutdown default deadline: a stop call without a deadline uses it.
+    internal static readonly TimeSpan DefaultDeadline = TimeSpan.FromSeconds(30);
 
     private readonly ZLinkDrainCoordinator _lifecycle;
     private readonly ZLinkFrameworkHostLifecycleState _hostLifecycle;

@@ -10,6 +10,8 @@ internal sealed class ZLinkRequestAdmission
 
     internal void Complete() => _completion.TrySetResult();
 
+    internal bool IsAdmitted => _completion.Task.IsCompletedSuccessfully;
+
     internal static ZLinkRequest<TReply> Run<TReply>(
         Func<ZLinkRequestAdmission, ValueTask<TReply>> execute
     )

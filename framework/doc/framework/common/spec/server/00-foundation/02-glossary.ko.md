@@ -1743,8 +1743,9 @@ count 및 설정한 limit을 서로 구분한 projection이다. 일반 object �
 Descriptor 값은 후보를 빠르게 거르는 데만 사용하고, 실제 slot 확보 여부는 Location Store의 atomic
 reservation으로 확정한다.
 
-Remote MeshNode는 이 등록 정보에서 endpoint와 Object role을 확인한다. 두 descriptor의
-Object role이 모두 `Client`이면 automatic connection intent를 만들지 않는다. 그 밖의
+Remote MeshNode는 이 등록 정보에서 endpoint와 Object role을 확인한다. Object role로 연결이
+필요 없는 pair와 automatic connection intent를 만드는 조건은
+[Channel topology §8](../02-channel-transport/01-channel-topology.ko.md#8-routemesh-peer-연결과-discoveryautomatic-rid-비교-manual-descriptor-기반)이 정한다. 연결하는
 pair는 실제 transport handshake에서 MeshName, RID, lifecycle generation, Object role과
 security identity가 등록 정보와 같은지 다시 확인하고 peer admission을 마쳐야 한다.
 

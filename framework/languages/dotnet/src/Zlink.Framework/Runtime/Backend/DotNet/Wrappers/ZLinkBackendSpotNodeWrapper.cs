@@ -294,6 +294,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _node.SetCanonicalRelocationTarget(target);
     }
 
+    public ZLinkPeerRouteObservation ObservePeerRoute(RoutingId target) =>
+        _node.ObservePeerRoute(target);
+
     public ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareCanonicalRelocationAsync(
         RoutingId targetNodeRid,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
