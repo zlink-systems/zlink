@@ -877,6 +877,8 @@ export class RawServiceMeshRuntime {
         encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
       ]).then((sent) => (sent ? 'infrastructure' : 'dropped'));
     }
+    const peer = this.topology.admittedPeer(received.sourceRid);
+    const currentSource = peer?.liveness?.connectionId === received.routeGeneration;
     try {
       const header = decodeHeader(received.parts[0]!);
       if (header.command === M6aServiceWireCommand.hello && this.peerAdmissionSealed?.() === true) {
@@ -884,8 +886,7 @@ export class RawServiceMeshRuntime {
       }
       if (
         header.command === M6aServiceWireCommand.hello ||
-        header.command === M6aServiceWireCommand.admit ||
-        header.command === M6aServiceWireCommand.update
+        header.command === M6aServiceWireCommand.admit
       ) {
         return this.processAdmission(received, header, nowMs).catch((error) =>
           this.receiveProtocolFailure(error)
@@ -896,10 +897,13 @@ export class RawServiceMeshRuntime {
         decodeReject(received.parts[0]!);
         return 'infrastructure';
       }
-      const peer = this.topology.admittedPeer(received.sourceRid);
-      if (peer === undefined) return 'protocolError';
-      if (peer.liveness !== undefined && peer.liveness.connectionId === received.routeGeneration)
-        this.liveness.recordReceived(peer.liveness, nowMs);
+      if (!currentSource || peer === undefined) return 'dropped';
+      this.liveness.recordReceived(peer.liveness!, nowMs);
+      if (header.command === M6aServiceWireCommand.update) {
+        return this.processAdmission(received, header, nowMs).catch((error) =>
+          this.receiveProtocolFailure(error)
+        );
+      }
       if (
         header.command === M6aServiceWireCommand.livenessProbe ||
         header.command === M6aServiceWireCommand.livenessAck
@@ -933,6 +937,7 @@ export class RawServiceMeshRuntime {
       if (stateful !== undefined) return stateful;
       return this.processApplicationReceived(received, header, applicationJobOwner);
     } catch (error) {
+      if (!currentSource && error instanceof ServiceWireProtocolError) return 'dropped';
       return this.receiveProtocolFailure(error);
     }
   }
