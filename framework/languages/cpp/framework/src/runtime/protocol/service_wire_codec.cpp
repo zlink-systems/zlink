@@ -309,7 +309,7 @@ pack_infrastructure_reply (const std::vector<std::vector<std::uint8_t>> &parts)
 }
 
 std::vector<std::vector<std::uint8_t>>
-unpack_infrastructure_reply (const std::vector<std::uint8_t> &packed)
+unpack_infrastructure_reply (std::span<const std::uint8_t> packed)
 {
     if (packed.empty () || packed.front () == 0 || packed.front () > 2) {
         throw service_wire_error_t ("invalid packed infrastructure reply");
@@ -3228,7 +3228,8 @@ std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
 reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes)
 {
     const auto header = decode_header (bytes);
-    if (header.kind != command::reply || header.flags != 0 || bytes.size () < prefix_size + 16) {
+    if (header.kind != command::reply || header.flags != 0
+        || bytes.size () < reply_header_t::encoded_size) {
         throw service_wire_error_t ("invalid reply header");
     }
     //  service-wire-v1.schema.json: reply(20).tail -> `request-specific-tail`,

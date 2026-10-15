@@ -217,7 +217,8 @@ void expect_successful_channel_request (mesh::raw_mesh_node_owner_t &source,
     ASSERT_TRUE (await_task (
       source.request_to_channel ("X", request, 2s,
                                  [&promise] (foundation::operation_terminal_t terminal,
-                                             std::vector<std::uint8_t> payload) mutable {
+                                             zlink::message_t native_payload) mutable {
+                                     auto payload = native_payload.to_bytes ();
                                      promise.set_value ({terminal, std::move (payload)});
                                  })));
 

@@ -423,7 +423,8 @@ void complete_remote_request (mesh::raw_mesh_node_owner_t &source,
     std::promise<request_result_t> promise;
     auto completion = promise.get_future ();
     require (await_task (submit ([&promise] (foundation::operation_terminal_t terminal,
-                                             std::vector<std::uint8_t> payload) mutable {
+                                             zlink::message_t native_payload) mutable {
+                 auto payload = native_payload.to_bytes ();
                  promise.set_value ({terminal, std::move (payload)});
              })),
              surface + " request was not submitted");
@@ -564,7 +565,8 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
       await_task (source.request_instance_spot_activation (
         remote.node_routing_id, std::move (failed_activation), std::nullopt, request_payload, 2s,
         [&activation_failure_promise] (foundation::operation_terminal_t terminal,
-                                       std::vector<std::uint8_t> payload) mutable {
+                                       zlink::message_t native_payload) mutable {
+            auto payload = native_payload.to_bytes ();
             activation_failure_promise.set_value ({terminal, std::move (payload)});
         })),
       "failed instance activation was not submitted");
@@ -621,7 +623,8 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     require (await_task (source.request_to_node (
                remote.node_routing_id, request_payload, 2s,
                [&failed_promise] (foundation::operation_terminal_t terminal,
-                                  std::vector<std::uint8_t> payload) mutable {
+                                  zlink::message_t native_payload) mutable {
+                   auto payload = native_payload.to_bytes ();
                    failed_promise.set_value ({terminal, std::move (payload)});
                })),
              "failed-outcome request was not submitted");
@@ -663,7 +666,8 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     require (await_task (source.request_to_node (
                remote.node_routing_id, request_payload, 2s,
                [&timeout_promise] (foundation::operation_terminal_t terminal,
-                                   std::vector<std::uint8_t> payload) mutable {
+                                   zlink::message_t native_payload) mutable {
+                   auto payload = native_payload.to_bytes ();
                    timeout_promise.set_value ({terminal, std::move (payload)});
                })),
              "timeout request was not submitted");
@@ -699,7 +703,8 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     require (await_task (source.request_to_node (
                remote.node_routing_id, request_payload, 2s,
                [&wire_timeout_promise] (foundation::operation_terminal_t terminal,
-                                        std::vector<std::uint8_t> payload) mutable {
+                                        zlink::message_t native_payload) mutable {
+                   auto payload = native_payload.to_bytes ();
                    wire_timeout_promise.set_value ({terminal, std::move (payload)});
                })),
              "wire timeout request was not submitted");

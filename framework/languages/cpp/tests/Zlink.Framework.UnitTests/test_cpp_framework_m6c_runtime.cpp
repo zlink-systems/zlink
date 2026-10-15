@@ -3993,7 +3993,8 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
             {actor.key, actor.object_generation, src.node_routing_id, src.lifecycle_generation,
              actor.authority_owner_generation, 1},
             {"ActorPacket", "application/json", {static_cast<std::uint8_t> (id)}}, 5s,
-            [&, id] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> bytes) {
+            [&, id] (foundation::operation_terminal_t terminal, zlink::message_t native_bytes) {
+                auto bytes = native_bytes.to_bytes ();
                 if (id == 91) {
                     reply_matches =
                       reply_matches

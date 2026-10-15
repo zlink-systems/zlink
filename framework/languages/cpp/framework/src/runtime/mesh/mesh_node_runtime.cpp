@@ -3938,7 +3938,7 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
             {runtime::protocol::bound_session_binding_state_t::active, binding_generation}},
           timeout,
           [completion] (runtime::foundation::operation_terminal_t terminal,
-                        std::vector<std::uint8_t> payload) {
+                        zlink::message_t payload) {
               if (terminal != runtime::foundation::operation_terminal_t::completed) {
                   const auto kind = terminal == runtime::foundation::operation_terminal_t::timed_out
                                       ? framework_error_kind_t::deadline_exceeded
@@ -3949,7 +3949,8 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
               }
               try {
                   completion->complete (result_t<runtime::protocol::reply_header_t>::success (
-                    runtime::protocol::decode_reply_header (payload)));
+                    runtime::protocol::decode_reply_header (
+                      runtime::protocol::message_bytes (payload))));
               }
               catch (const runtime::protocol::service_wire_error_t &) {
                   completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
@@ -4030,8 +4031,7 @@ mesh_node_runtime_t::retire_application_actor_session (runtime::stateful::stream
         session_rid.to_bytes (),
         {runtime::protocol::bound_session_binding_state_t::tombstone, binding.binding_generation}},
       timeout,
-      [completion] (runtime::foundation::operation_terminal_t terminal,
-                    std::vector<std::uint8_t> payload) {
+      [completion] (runtime::foundation::operation_terminal_t terminal, zlink::message_t payload) {
           if (terminal != runtime::foundation::operation_terminal_t::completed) {
               completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
                 framework_error_kind_t::unavailable,
@@ -4040,7 +4040,8 @@ mesh_node_runtime_t::retire_application_actor_session (runtime::stateful::stream
           }
           try {
               completion->complete (result_t<runtime::protocol::reply_header_t>::success (
-                runtime::protocol::decode_reply_header (payload)));
+                runtime::protocol::decode_reply_header (
+                  runtime::protocol::message_bytes (payload))));
           }
           catch (const runtime::protocol::service_wire_error_t &) {
               completion->complete (result_t<runtime::protocol::reply_header_t>::failure (

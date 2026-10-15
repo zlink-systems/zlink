@@ -1292,12 +1292,14 @@ task_t<bool> raw_client_server_client_t::apply_pending_control_replies (
         } else if (completion.terminal == zlink::request_result_t::ok
                    && completion.parts.size () == 1) {
             try {
-                const auto header = protocol::decode_header (completion.parts.front ());
+                const auto header =
+                  protocol::decode_header (protocol::message_bytes (completion.parts.front ()));
                 if (header.kind == protocol::command::admit) {
-                    (void) co_await accept_server_admission (completion.parts.front (), header.kind,
-                                                             now);
+                    (void) co_await accept_server_admission (completion.parts.front ().to_bytes (),
+                                                             header.kind, now);
                 } else if (header.kind == protocol::command::reject) {
-                    (void) protocol::decode_reject (completion.parts.front ());
+                    (void) protocol::decode_reject (
+                      protocol::message_bytes (completion.parts.front ()));
                     co_await _lane.run_task ([this] {
                         _ready = false;
                         return true;
@@ -1340,7 +1342,8 @@ task_t<bool> raw_client_server_client_t::apply_pending_control_replies (
             continue;
         }
         try {
-            const auto liveness = protocol::decode_liveness (completion.parts.front ());
+            const auto liveness =
+              protocol::decode_liveness (protocol::message_bytes (completion.parts.front ()));
             if (liveness.kind != protocol::command::livenessAck
                 || liveness.probe_id != probe.first) {
                 continue;
@@ -1487,8 +1490,7 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     if (parts.size () != 2) {
         co_return protocol_failure ("ClientServer reply has an invalid part count");
     }
-    const auto reply_header =
-      messaging::envelope_codec_t{}.decode_header (zlink::message_t::from (parts.front ()), false);
+    const auto reply_header = messaging::envelope_codec_t{}.decode_header (parts.front (), false);
     if (!reply_header) {
         co_return protocol_failure (reply_header.error () != nullptr
                                       ? reply_header.error ()->what ()
@@ -1507,7 +1509,7 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     }
     client_server_request_completion_t success{foundation::operation_terminal_t::completed};
     success.content_type = reply.content_type;
-    success.payload = std::move (parts[1]);
+    success.payload = parts[1].to_bytes ();
     co_return success;
 }
 

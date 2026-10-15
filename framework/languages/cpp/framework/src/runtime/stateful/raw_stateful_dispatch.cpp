@@ -332,18 +332,19 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
     const auto sequence = turn.sequence;
     auto complete = [this, owner, sequence, operation = application.operation,
                      reply_route = application.reply_route_id] (
-                      foundation::operation_terminal_t terminal, std::vector<std::uint8_t> bytes) {
+                      foundation::operation_terminal_t terminal, zlink::message_t bytes) {
         // A hop with no observed terminal retains the original delivery for
         // authority settlement. An explicit application failure is a reply.
-        if (terminal != foundation::operation_terminal_t::completed && bytes.empty ())
+        if (terminal != foundation::operation_terminal_t::completed && bytes.is_empty ())
             return;
         std::optional<protocol::application_payload_t> reply;
         protocol::reply_relay_t relay{
           operation, *reply_route, {}, 0, {}, 0, sequence, 0, protocol::framework_error_code::none};
         if (terminal == foundation::operation_terminal_t::completed)
-            reply = protocol::decode_application_payload (bytes, capture_flow ());
+            reply = protocol::decode_application_payload (protocol::message_bytes (bytes),
+                                                          capture_flow ());
         else {
-            const auto failed = protocol::decode_reply_header (bytes);
+            const auto failed = protocol::decode_reply_header (protocol::message_bytes (bytes));
             relay.terminal_result = failed.terminal_result;
             relay.failure_code = static_cast<protocol::framework_error_code> (failed.failure_code);
         }

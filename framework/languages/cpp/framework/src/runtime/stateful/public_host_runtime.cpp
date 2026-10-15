@@ -618,7 +618,7 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
           target_node_rid.to_bytes (), spot_id (), target,
           _host->encode_application (parts, metadata), timeout,
           [host, operation, completion = std::move (completion), direct_completion] (
-            foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) mutable {
+            foundation::operation_terminal_t terminal, zlink::message_t payload) mutable {
               if (!direct_completion) {
                   host->complete_operation (operation, operation_kind_t::none, terminal,
                                             std::move (payload));
@@ -633,8 +633,8 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
                       /* flow-correlation §4: reply flow pair is observation-
                        * only — skip validation/materialization at Off. */
                       decoded = result_t<std::vector<zlink::message_t>>::success (
-                        protocol::decode_application_parts (
-                          protocol::decode_application_payload (payload, host->capture_flow ())));
+                        protocol::decode_application_parts (std::move (payload),
+                                                            host->capture_flow ()));
                   }
                   catch (const protocol::service_wire_error_t &error) {
                       decoded = result_t<std::vector<zlink::message_t>>::failure (
@@ -1966,90 +1966,93 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
         co_return false;
     const auto expected = seal;
     const auto weak_host = weak_from_this ();
-    auto response = std::make_shared<
-      std::function<void (foundation::operation_terminal_t, std::vector<std::uint8_t>)>> (
-      [weak_host, expected, relocation_key, operation_deadline,
-       relocations = std::move (relocations), capture_journal = std::move (capture_journal),
-       completion = std::move (completion)] (foundation::operation_terminal_t terminal,
-                                             std::vector<std::uint8_t> payload) mutable {
-          if (terminal != foundation::operation_terminal_t::completed) {
-              completion (terminal, std::nullopt);
-              return;
-          }
-          try {
-              const auto host = weak_host.lock ();
-              if (!host) {
-                  completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
-                  return;
-              }
-              const auto sealed = protocol::decode_session_relocation_sealed (payload);
-              if (sealed.relocation != expected.relocation
-                  || sealed.coordinator != expected.coordinator || sealed.actor != expected.actor
-                  || sealed.session_owner_node_routing_id != expected.session_owner_node_routing_id
-                  || sealed.session_owner_node_generation != expected.session_owner_node_generation
-                  || sealed.session_owner_id != expected.session_owner_id
-                  || sealed.session_owner_lease_generation
-                       != expected.session_owner_lease_generation
-                  || sealed.session_routing_id != expected.session_routing_id
-                  || sealed.binding_generation != expected.binding_generation) {
-                  completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
-                  return;
-              }
-              stateful::durable_session_journal_record_t record{
-                expected.relocation.high,
-                expected.relocation.low,
-                stateful::object_ref_t{
-                  stateful::object_kind_t::actor,
-                  expected.actor.actor_id,
-                  expected.actor.object_generation,
-                  expected.actor.authority_owner_generation,
-                  {},
-                  zlink::routing_id_t::from (expected.actor.target_node_routing_id).to_string ()},
-                expected.binding_generation,
-                0,
-                capture_journal ()};
-              stateful::durable_session_journal_store_t journal_store (relocations);
-              const auto root = journal_store.prepare (record, operation_deadline);
-              const auto recovered = journal_store.recover (root);
-              if (!recovered || *recovered != record) {
-                  journal_store.cleanup (root);
-                  completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
-                  return;
-              }
-              const session_relocation_seal_result_t result{sealed, root};
-              std::optional<session_relocation_seal_result_t> existing_result;
-              bool conflicting_terminal = false;
-              host->_relocation_session_terminal_lane
-                .run ([&] {
-                    const auto [stored, inserted] = host->_session_journal_terminals.emplace (
-                      relocation_key, std::pair{expected, result});
-                    if (!inserted) {
-                        journal_store.cleanup (root);
-                        conflicting_terminal = stored->second.first != expected;
-                        if (!conflicting_terminal)
-                            existing_result = stored->second.second;
-                    }
-                })
-                .get ();
-              if (conflicting_terminal) {
-                  completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
-                  return;
-              }
-              if (existing_result) {
-                  completion (terminal, std::move (existing_result));
-                  return;
-              }
-              completion (terminal, result);
-          }
-          catch (...) {
-              const auto failure = detail::current_exception_result<void> ();
-              const auto *error = failure.error ();
-              completion (error && error->kind () == framework_error_kind_t::deadline_exceeded
-                            ? foundation::operation_terminal_t::timed_out
-                            : foundation::operation_terminal_t::transport_failed,
-                          std::nullopt);
-          }
-      });
+    auto response =
+      std::make_shared<std::function<void (foundation::operation_terminal_t, zlink::message_t)>> (
+        [weak_host, expected, relocation_key, operation_deadline,
+         relocations = std::move (relocations), capture_journal = std::move (capture_journal),
+         completion = std::move (completion)] (foundation::operation_terminal_t terminal,
+                                               zlink::message_t payload) mutable {
+            if (terminal != foundation::operation_terminal_t::completed) {
+                completion (terminal, std::nullopt);
+                return;
+            }
+            try {
+                const auto host = weak_host.lock ();
+                if (!host) {
+                    completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
+                    return;
+                }
+                const auto sealed =
+                  protocol::decode_session_relocation_sealed (protocol::message_bytes (payload));
+                if (sealed.relocation != expected.relocation
+                    || sealed.coordinator != expected.coordinator || sealed.actor != expected.actor
+                    || sealed.session_owner_node_routing_id
+                         != expected.session_owner_node_routing_id
+                    || sealed.session_owner_node_generation
+                         != expected.session_owner_node_generation
+                    || sealed.session_owner_id != expected.session_owner_id
+                    || sealed.session_owner_lease_generation
+                         != expected.session_owner_lease_generation
+                    || sealed.session_routing_id != expected.session_routing_id
+                    || sealed.binding_generation != expected.binding_generation) {
+                    completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
+                    return;
+                }
+                stateful::durable_session_journal_record_t record{
+                  expected.relocation.high,
+                  expected.relocation.low,
+                  stateful::object_ref_t{
+                    stateful::object_kind_t::actor,
+                    expected.actor.actor_id,
+                    expected.actor.object_generation,
+                    expected.actor.authority_owner_generation,
+                    {},
+                    zlink::routing_id_t::from (expected.actor.target_node_routing_id).to_string ()},
+                  expected.binding_generation,
+                  0,
+                  capture_journal ()};
+                stateful::durable_session_journal_store_t journal_store (relocations);
+                const auto root = journal_store.prepare (record, operation_deadline);
+                const auto recovered = journal_store.recover (root);
+                if (!recovered || *recovered != record) {
+                    journal_store.cleanup (root);
+                    completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
+                    return;
+                }
+                const session_relocation_seal_result_t result{sealed, root};
+                std::optional<session_relocation_seal_result_t> existing_result;
+                bool conflicting_terminal = false;
+                host->_relocation_session_terminal_lane
+                  .run ([&] {
+                      const auto [stored, inserted] = host->_session_journal_terminals.emplace (
+                        relocation_key, std::pair{expected, result});
+                      if (!inserted) {
+                          journal_store.cleanup (root);
+                          conflicting_terminal = stored->second.first != expected;
+                          if (!conflicting_terminal)
+                              existing_result = stored->second.second;
+                      }
+                  })
+                  .get ();
+                if (conflicting_terminal) {
+                    completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
+                    return;
+                }
+                if (existing_result) {
+                    completion (terminal, std::move (existing_result));
+                    return;
+                }
+                completion (terminal, result);
+            }
+            catch (...) {
+                const auto failure = detail::current_exception_result<void> ();
+                const auto *error = failure.error ();
+                completion (error && error->kind () == framework_error_kind_t::deadline_exceeded
+                              ? foundation::operation_terminal_t::timed_out
+                              : foundation::operation_terminal_t::transport_failed,
+                            std::nullopt);
+            }
+        });
 
     const auto local = status ();
     if (local.routing_id ().to_bytes () == session_owner_node.to_bytes ()) {
@@ -2064,8 +2067,10 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
         auto local_completion =
           [response] (foundation::operation_terminal_t terminal,
                       std::optional<protocol::session_relocation_sealed_t> sealed) mutable {
-              (*response) (terminal, sealed ? protocol::encode_session_relocation_sealed (*sealed)
-                                            : std::vector<std::uint8_t>{});
+              (*response) (terminal, sealed
+                                       ? zlink::message_t::from (
+                                           protocol::encode_session_relocation_sealed (*sealed))
+                                       : zlink::message_t{});
           };
         auto [accepted, immediate] =
           admit_session_relocation_seal (seal, *owner, {}, local_completion);
@@ -2077,8 +2082,7 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
     }
     co_return co_await _transport->request_session_relocation_seal (
       session_owner_node.to_bytes (), std::move (seal), timeout,
-      [response] (foundation::operation_terminal_t terminal,
-                  std::vector<std::uint8_t> payload) mutable {
+      [response] (foundation::operation_terminal_t terminal, zlink::message_t payload) mutable {
           (*response) (terminal, std::move (payload));
       });
 }
@@ -2097,12 +2101,13 @@ task_t<bool> public_host_runtime_t::activate_instance_spot_remote (
       target_node.to_bytes (), std::move (request), std::move (metadata),
       std::move (application_payload), timeout,
       [completion = std::move (completion), capture = capture_flow ()] (
-        foundation::operation_terminal_t terminal, std::vector<std::uint8_t> packed) mutable {
+        foundation::operation_terminal_t terminal, zlink::message_t packed) mutable {
           protocol::reply_header_t reply{};
           std::optional<protocol::application_payload_t> application_reply;
           if (terminal == foundation::operation_terminal_t::completed) {
               try {
-                  const auto parts = protocol::unpack_infrastructure_reply (packed);
+                  const auto parts =
+                    protocol::unpack_infrastructure_reply (protocol::message_bytes (packed));
                   reply = protocol::decode_reply_header (parts.front ());
                   if (parts.size () == 2)
                       application_reply = protocol::decode_application_payload (parts[1], capture);
@@ -2388,12 +2393,13 @@ public_host_runtime_t::create_user_spot_remote (const zlink::routing_id_t &targe
     co_return co_await _transport->request_user_spot_create (
       target_node.to_bytes (), std::move (request), timeout,
       [completion = std::move (completion), capture = capture_flow ()] (
-        foundation::operation_terminal_t terminal, std::vector<std::uint8_t> packed) mutable {
+        foundation::operation_terminal_t terminal, zlink::message_t packed) mutable {
           protocol::user_spot_create_reply_t reply{};
           std::optional<protocol::application_payload_t> application_reply;
           if (terminal == foundation::operation_terminal_t::completed) {
               try {
-                  const auto parts = protocol::unpack_infrastructure_reply (packed);
+                  const auto parts =
+                    protocol::unpack_infrastructure_reply (protocol::message_bytes (packed));
                   reply = protocol::decode_user_spot_create_reply (parts.front ());
                   if (parts.size () == 2)
                       application_reply = protocol::decode_application_payload (parts[1], capture);
@@ -2459,12 +2465,13 @@ public_host_runtime_t::create_actor_remote (const zlink::routing_id_t &target_no
     co_return co_await _transport->request_actor_create (
       target_node.to_bytes (), std::move (request), timeout,
       [completion = std::move (completion), capture = capture_flow ()] (
-        foundation::operation_terminal_t terminal, std::vector<std::uint8_t> packed) mutable {
+        foundation::operation_terminal_t terminal, zlink::message_t packed) mutable {
           protocol::actor_create_reply_t reply;
           std::optional<protocol::application_payload_t> application_reply;
           if (terminal == foundation::operation_terminal_t::completed) {
               try {
-                  const auto parts = protocol::unpack_infrastructure_reply (packed);
+                  const auto parts =
+                    protocol::unpack_infrastructure_reply (protocol::message_bytes (packed));
                   reply = protocol::decode_actor_create_reply (parts.front ());
                   if (parts.size () == 2)
                       application_reply = protocol::decode_application_payload (parts[1], capture);
@@ -2497,11 +2504,12 @@ public_host_runtime_t::close_user_spot_remote (const zlink::routing_id_t &target
     co_return co_await _transport->request_user_spot_close (
       target_node.to_bytes (), std::move (request), timeout,
       [completion = std::move (completion)] (foundation::operation_terminal_t terminal,
-                                             std::vector<std::uint8_t> packed) mutable {
+                                             zlink::message_t packed) mutable {
           protocol::user_spot_close_reply_t reply;
           if (terminal == foundation::operation_terminal_t::completed) {
               try {
-                  const auto parts = protocol::unpack_infrastructure_reply (packed);
+                  const auto parts =
+                    protocol::unpack_infrastructure_reply (protocol::message_bytes (packed));
                   if (parts.size () != 1)
                       throw protocol::service_wire_error_t (
                         "User Spot close reply carries a payload");
@@ -2822,7 +2830,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         node_generation, authority_generation, route_fence->fence.second},
       encode_application (parts, metadata), timeout,
       [host, operation] (foundation::operation_terminal_t terminal,
-                         std::vector<std::uint8_t> payload) mutable {
+                         zlink::message_t payload) mutable {
           host->complete_operation (operation, operation_kind_t::none, terminal,
                                     std::move (payload));
       },
@@ -2860,7 +2868,7 @@ public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
     const auto accepted = co_await _transport->request_to_node (
       target.to_bytes (), encode_application (std::move (parts)), timeout,
       [host, operation] (foundation::operation_terminal_t terminal,
-                         std::vector<std::uint8_t> payload) mutable {
+                         zlink::message_t payload) mutable {
           host->complete_operation (operation, operation_kind_t::none, terminal,
                                     std::move (payload));
       });
@@ -2907,7 +2915,7 @@ public_host_runtime_t::request_to_channel (const std::string &channel_name,
     const auto accepted = co_await _transport->request_to_channel (
       channel_name, encode_application (parts), timeout,
       [host, operation] (foundation::operation_terminal_t terminal,
-                         std::vector<std::uint8_t> payload) mutable {
+                         zlink::message_t payload) mutable {
           host->complete_operation (operation, operation_kind_t::none, terminal,
                                     std::move (payload));
       });
@@ -6700,8 +6708,8 @@ void public_host_runtime_t::register_local_completion (pending_operation_t &oper
         const auto result = operation.local_result;
         const auto registered = _transport->register_local_operation (
           foundation::operation_registry_t::clock_t::now () + timeout,
-          [source, result, completion = std::move (completion), incomplete] (
-            foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) mutable {
+          [source, result, completion = std::move (completion),
+           incomplete] (foundation::operation_terminal_t terminal, zlink::message_t) mutable {
               std::string terminal_message;
               if (terminal != foundation::operation_terminal_t::completed)
                   terminal_message = "Local operation did not complete";
@@ -7172,7 +7180,7 @@ bool public_host_runtime_t::complete_local_request (const pending_operation_t &o
 void public_host_runtime_t::complete_operation (const pending_operation_t &operation,
                                                 operation_kind_t kind,
                                                 foundation::operation_terminal_t terminal,
-                                                std::vector<std::uint8_t> payload)
+                                                zlink::message_t payload)
 {
     try {
         receive_record_t record;
@@ -7202,15 +7210,15 @@ void public_host_runtime_t::complete_operation (const pending_operation_t &opera
         std::vector<zlink::message_t> parts;
         if (record.terminal_result == 0) {
             try {
-                parts = protocol::decode_application_parts (
-                  protocol::decode_application_payload (payload, capture_flow ()));
+                parts = protocol::decode_application_parts (std::move (payload), capture_flow ());
             }
             catch (const protocol::service_wire_error_t &) {
                 record.terminal_result = static_cast<int> (zlink::request_result_t::protocol_error);
             }
-        } else if (!payload.empty ()) {
+        } else if (!payload.is_empty ()) {
             try {
-                const auto reply = protocol::decode_reply_header (payload);
+                const auto reply =
+                  protocol::decode_reply_header (protocol::message_bytes (payload));
                 record.terminal_result = static_cast<int> (reply.terminal_result);
                 record.failure_errno = static_cast<int> (reply.failure_code);
             }

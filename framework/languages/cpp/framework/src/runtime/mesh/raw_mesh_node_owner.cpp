@@ -282,12 +282,13 @@ class infrastructure_request_retry_state_t final
             } else {
                 auto payload =
                   _decode_reply (request_failure_reply_parts (_correlation, completion.terminal));
-                (void) _operations->complete (_operation, std::move (payload));
+                (void) _operations->complete (
+                  _operation, detail::backend::materialize_binding_part (std::move (payload)));
             }
             return;
         }
         try {
-            const auto &parts = completion.parts;
+            const auto parts = detail::backend::copy_binding_parts (completion.parts);
             if (parts.empty ()) {
                 throw protocol::service_wire_error_t ("infrastructure reply has no header");
             }
@@ -297,7 +298,8 @@ class infrastructure_request_retry_state_t final
                   "infrastructure reply correlation does not match");
             }
             auto payload = _decode_reply (parts);
-            (void) _operations->complete (_operation, std::move (payload));
+            (void) _operations->complete (
+              _operation, detail::backend::materialize_binding_part (std::move (payload)));
         }
         catch (const protocol::service_wire_error_t &) {
             fail (foundation::operation_terminal_t::protocol_error);
@@ -422,12 +424,13 @@ task_t<bool> submit_registered_infrastructure_request (
               } else {
                   auto payload =
                     decode_reply (request_failure_reply_parts (correlation, completion.terminal));
-                  (void) operations->complete (operation, std::move (payload));
+                  (void) operations->complete (
+                    operation, detail::backend::materialize_binding_part (std::move (payload)));
               }
               return;
           }
           try {
-              const auto &parts = completion.parts;
+              const auto parts = detail::backend::copy_binding_parts (completion.parts);
               if (parts.empty ()) {
                   throw protocol::service_wire_error_t ("infrastructure reply has no header");
               }
@@ -437,7 +440,8 @@ task_t<bool> submit_registered_infrastructure_request (
                     "infrastructure reply correlation does not match");
               }
               auto payload = decode_reply (parts);
-              (void) operations->complete (operation, std::move (payload));
+              (void) operations->complete (
+                operation, detail::backend::materialize_binding_part (std::move (payload)));
           }
           catch (const protocol::service_wire_error_t &) {
               (void) operations->fail (operation,
@@ -992,7 +996,8 @@ bool raw_mesh_node_owner_t::observe_request (
                   .transport_terminal (completion.terminal)
                   .value_or (foundation::operation_terminal_t::transport_failed);
               auto failure_reply = request_failure_reply_parts (correlation, completion.terminal);
-              (void) operations->fail (operation, terminal, std::move (failure_reply.front ()));
+              (void) operations->fail (operation, terminal,
+                                       zlink::message_t::from (failure_reply.front ()));
               return;
           }
           try {
@@ -1000,7 +1005,8 @@ bool raw_mesh_node_owner_t::observe_request (
               if (parts.empty () || parts.size () > 2) {
                   throw protocol::service_wire_error_t ("request reply has an invalid part count");
               }
-              const auto reply = protocol::decode_reply_header (parts.front ());
+              const auto reply =
+                protocol::decode_reply_header (protocol::message_bytes (parts.front ()));
               //  This is a generic application request reply (requestToNode
               //  / spotRequest): its originalOperationKind is not one of
               //  request-specific-tail's tail-bearing cases
@@ -1012,7 +1018,7 @@ bool raw_mesh_node_owner_t::observe_request (
               //  Node's raw-service-mesh-runtime.ts generic reply guard
               //  ("Generic node/channel reply carries an operation-specific
               //  tail.").
-              if (parts.front ().size () != 21) {
+              if (parts.front ().size () != protocol::reply_header_t::encoded_size) {
                   throw protocol::service_wire_error_t (
                     "generic request reply carries an operation-specific "
                     "tail");
@@ -1025,17 +1031,17 @@ bool raw_mesh_node_owner_t::observe_request (
                       throw protocol::service_wire_error_t (
                         "failed request reply cannot carry a payload");
                   }
-                  (void) operations->fail (operation,
-                                           foundation::operation_terminal_t::transport_failed,
-                                           parts.front (), {}, request_metric_terminal (reply));
+                  (void) operations->fail (
+                    operation, foundation::operation_terminal_t::transport_failed,
+                    parts.front ().copy (), {}, request_metric_terminal (reply));
                   return;
               }
               if (parts.size () != 2) {
                   throw protocol::service_wire_error_t (
                     "successful request reply must carry a payload");
               }
-              (void) protocol::decode_application_payload (parts[1], false);
-              (void) operations->complete (operation, std::move (parts[1]));
+              (void) protocol::application_payload_hwm_bytes (protocol::message_bytes (parts[1]));
+              (void) operations->complete (operation, parts[1].copy ());
           }
           catch (const protocol::service_wire_error_t &) {
               //  Spec 32-framework-error-model:91-92 — a malformed reply is
@@ -1044,11 +1050,11 @@ bool raw_mesh_node_owner_t::observe_request (
               //  terminal 104 instead of collapsing to internal_error.
               (void) operations->fail (
                 operation, foundation::operation_terminal_t::transport_failed,
-                protocol::encode_reply_header (
+                zlink::message_t::from (protocol::encode_reply_header (
                   correlation,
                   static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
                   static_cast<std::uint32_t> (
-                    protocol::framework_error_code::requestProtocolError)));
+                    protocol::framework_error_code::requestProtocolError))));
           }
       });
     return true;
@@ -1502,7 +1508,8 @@ task_t<relocation_prepare_response_t> raw_mesh_node_owner_t::request_relocation_
       };
     relocation_prepare_response_t response;
     try {
-        const auto control = protocol::decode_relocation_control (completed.parts.front ());
+        const auto control =
+          protocol::decode_relocation_control (protocol::message_bytes (completed.parts.front ()));
         if (const auto *ready = std::get_if<protocol::relocation_ready_t> (&control)) {
             if (identity_matches (ready->relocation, ready->target_attempt_generation,
                                   ready->coordinator, ready->target, ready->object))
@@ -2107,7 +2114,7 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
     catch (const std::invalid_argument &) {
         throw protocol::service_wire_error_t ("invalid Actor join request");
     }
-    using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
+    using completion_t = std::pair<foundation::operation_terminal_t, zlink::message_t>;
     auto completion = std::make_shared<task_completion_source_t<completion_t>> ();
     auto pending = completion->task ();
     foundation::call_id_t id{};
@@ -2141,7 +2148,8 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
         co_return outcome;
     }
     try {
-        const auto reply_parts = protocol::unpack_infrastructure_reply (packed);
+        const auto reply_parts =
+          protocol::unpack_infrastructure_reply (protocol::message_bytes (packed));
         auto reply = protocol::decode_actor_join_reply (reply_parts.front ());
         if (reply_parts.size () == 2) {
             //  Surface the decoded application reply to the caller instead
@@ -2265,15 +2273,16 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                   (void) operations->fail (id, *terminal);
               } else {
                   (void) operations->complete (
-                    id, protocol::pack_infrastructure_reply (
-                          request_failure_reply_parts (correlation, completion.terminal)));
+                    id,
+                    detail::backend::materialize_binding_part (protocol::pack_infrastructure_reply (
+                      request_failure_reply_parts (correlation, completion.terminal))));
               }
               return;
           }
           try {
               constexpr std::size_t header_part_count = 1;
               constexpr std::size_t reply_with_payload_part_count = 2;
-              const auto &reply_parts = completion.parts;
+              const auto reply_parts = detail::backend::copy_binding_parts (completion.parts);
               if (reply_parts.empty () || reply_parts.size () > reply_with_payload_part_count)
                   throw protocol::service_wire_error_t (
                     "Instance Spot activation reply has an invalid part count");
@@ -2289,7 +2298,9 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
               if (reply_parts.size () == reply_with_payload_part_count)
                   (void) protocol::decode_application_payload (reply_parts[header_part_count],
                                                                false);
-              (void) operations->complete (id, protocol::pack_infrastructure_reply (reply_parts),
+              (void) operations->complete (id,
+                                           detail::backend::materialize_binding_part (
+                                             protocol::pack_infrastructure_reply (reply_parts)),
                                            {}, request_metric_terminal (reply));
           }
           catch (const protocol::service_wire_error_t &) {
@@ -2299,12 +2310,12 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
               //  and sink classify it via reply_header_exception.
               (void) operations->complete (
                 id,
-                protocol::pack_infrastructure_reply (
+                detail::backend::materialize_binding_part (protocol::pack_infrastructure_reply (
                   detail::backend::raw_message_t{protocol::encode_reply_header (
                     correlation,
                     static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
                     static_cast<std::uint32_t> (
-                      protocol::framework_error_code::requestProtocolError))}),
+                      protocol::framework_error_code::requestProtocolError))})),
                 {}, foundation::operation_terminal_t::protocol_error);
           }
       });
@@ -2394,7 +2405,8 @@ bool raw_mesh_node_owner_t::reply_infrastructure (const service_mailbox_record_t
     if (request.source_routing_id == local.node_routing_id) {
         return _operations->complete (
           operation_id (local.lifecycle_generation, *request.correlation),
-          protocol::pack_infrastructure_reply ({std::move (header)}));
+          detail::backend::materialize_binding_part (
+            protocol::pack_infrastructure_reply ({std::move (header)})));
     }
     if (!request.reply_token)
         return false;
@@ -2431,7 +2443,7 @@ bool raw_mesh_node_owner_t::reply_user_spot_create (
     if (request.source_routing_id == local.node_routing_id) {
         return _operations->complete (
           operation_id (local.lifecycle_generation, *request.correlation),
-          protocol::pack_infrastructure_reply (parts));
+          detail::backend::materialize_binding_part (protocol::pack_infrastructure_reply (parts)));
     }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -2463,7 +2475,7 @@ bool raw_mesh_node_owner_t::reply_actor_create (
     if (request.source_routing_id == local.node_routing_id)
         return _operations->complete (
           operation_id (local.lifecycle_generation, *request.correlation),
-          protocol::pack_infrastructure_reply (parts));
+          detail::backend::materialize_binding_part (protocol::pack_infrastructure_reply (parts)));
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -2535,8 +2547,8 @@ bool raw_mesh_node_owner_t::reply_instance_spot_activation (
     if (request.source_routing_id == local.node_routing_id) {
         return _operations->complete (
           operation_id (local.lifecycle_generation, *request.correlation),
-          protocol::pack_infrastructure_reply (parts), {},
-          request_metric_terminal ({*request.correlation, terminal_result, failure_code}));
+          detail::backend::materialize_binding_part (protocol::pack_infrastructure_reply (parts)),
+          {}, request_metric_terminal ({*request.correlation, terminal_result, failure_code}));
     }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -3298,7 +3310,7 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                     return raw_mesh_pump_result_t::protocol_error;
                 }
                 const auto operation = operation_id (sealed.relocation.high, sealed.relocation.low);
-                if (!_operations->complete (operation, received->parts.front ().to_bytes ())) {
+                if (!_operations->complete (operation, received->parts.front ().copy ())) {
                     return raw_mesh_pump_result_t::protocol_error;
                 }
                 return raw_mesh_pump_result_t::infrastructure;
