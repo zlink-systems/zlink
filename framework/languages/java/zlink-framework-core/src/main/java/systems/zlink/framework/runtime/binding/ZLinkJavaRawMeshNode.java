@@ -4671,28 +4671,6 @@ final class ZLinkJavaRawMeshNode
         return MAX_INGRESS_BATCH;
     }
 
-    private boolean hasCurrentInfrastructureControlSource(
-            Optional<ZLinkServiceTopologyRegistry.Peer> source, int command) {
-        if (command == ServiceWireConstants.COMMAND_HELLO
-                || command == ServiceWireConstants.COMMAND_ADMIT
-                || command == ServiceWireConstants.COMMAND_REJECT
-                || command == ServiceWireConstants.COMMAND_UPDATE) {
-            return true;
-        }
-        return source.filter(
-                        peer ->
-                                // lifecycleGeneration is a non-zero opaque equality token
-                                // (spec 01-glossary "Lifecycle generation": ".NET 표기: ulong
-                                // LifecycleGeneration" / "숫자 크기로 실행 순서를 판단하지
-                                // 않는다"). A remote ulong value with its top bit set decodes
-                                // to a negative Java long; a signed `> 0` sentinel silently
-                                // treats that legitimate generation as unassigned and drops
-                                // every non-admission control frame (liveness probe/ack,
-                                // relocation control) for the whole connection.
-                                peer.descriptor().lifecycleGeneration() != 0)
-                .isPresent();
-    }
-
     static int allowedInfrastructureControlCommand(List<byte[]> parts) {
         if (parts == null || parts.isEmpty() || parts.size() > MAX_INFRASTRUCTURE_CONTROL_PARTS) {
             return -1;
@@ -4771,12 +4749,6 @@ final class ZLinkJavaRawMeshNode
 
     private void dispatch(ZLinkJavaRawServicePort.Inbound inbound) {
         var source = topology.peer(inbound.source());
-        if (source.isPresent()) {
-            var peer = source.get();
-            if (peer.liveness() != null
-                    && Long.parseUnsignedLong(peer.connectionId(), 16) == inbound.routeGeneration())
-                peer.liveness().recordReceived(System.nanoTime());
-        }
         boolean handedOff = false;
         try {
             List<byte[]> frames = inbound.frames();
@@ -4786,9 +4758,7 @@ final class ZLinkJavaRawMeshNode
             byte[] head = frames.getFirst();
             int infrastructureCommand = allowedInfrastructureControlCommand(head);
             if (infrastructureCommand >= 0
-                    && (allowedInfrastructureControlCommand(frames) != infrastructureCommand
-                            || !hasCurrentInfrastructureControlSource(
-                                    source, infrastructureCommand))) {
+                    && allowedInfrastructureControlCommand(frames) != infrastructureCommand) {
                 return;
             }
             ZLinkServiceM6AWireCodec.Header header;
@@ -4799,6 +4769,21 @@ final class ZLinkJavaRawMeshNode
             }
             int command = header.command();
             int flags = header.flags();
+            // MeshNode §7.1: only HELLO/ADMIT/REJECT can precede route admission.
+            // Core stamps the delivering route, even before its snapshot is observed.
+            boolean currentSource =
+                    source.isPresent()
+                            && Long.parseUnsignedLong(source.orElseThrow().connectionId(), 16)
+                                    == inbound.routeGeneration();
+            if (!currentSource
+                    && command != ServiceWireConstants.COMMAND_HELLO
+                    && command != ServiceWireConstants.COMMAND_ADMIT
+                    && command != ServiceWireConstants.COMMAND_REJECT) {
+                return;
+            }
+            if (currentSource && source.orElseThrow().liveness() != null) {
+                source.orElseThrow().liveness().recordReceived(System.nanoTime());
+            }
             if (command == ServiceWireConstants.COMMAND_HELLO
                     || command == ServiceWireConstants.COMMAND_ADMIT
                     || command == ServiceWireConstants.COMMAND_UPDATE) {
@@ -4817,9 +4802,6 @@ final class ZLinkJavaRawMeshNode
             if (command == ServiceWireConstants.COMMAND_LIVENESS_PROBE
                     || command == ServiceWireConstants.COMMAND_LIVENESS_ACK) {
                 dispatchLiveness(inbound, command, source.orElseThrow());
-                return;
-            }
-            if (source.isEmpty()) {
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_MESSAGE_FOLLOW) {
