@@ -44,11 +44,11 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect
 
 Both scripts run `npm ci`, the build, and the same runner. After the structure check, the runner starts Redis in a uniquely named Compose project and exposes only an ephemeral loopback port. It records the node endpoints and a unique Redis prefix in the configuration under `.logs/run-<id>/`. After receiving `READY`, it runs the scenarios and then cleans up the processes and the Compose project it started.
 
-| Scenario | Verified behavior |
-| --- | --- |
-| table | Two players take seats, cards stay private, an out-of-turn action is rejected, and settlement preserves the winner and chips. |
-| reconnect | A new Session restores the same Actor ID, generation, seat, chips, cards, and turn. |
-| update | PlannedMaintenance drain, RELOCATED and SAFE_TO_SHUTDOWN, connection and state preserved, and a new hand completes on the replacement process after shutdown. |
+| Scenario  | Verified behavior                                                                                                                                             |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| table     | Two players take seats, cards stay private, an out-of-turn action is rejected, and settlement preserves the winner and chips.                                 |
+| reconnect | A new Session restores the same Actor ID, generation, seat, chips, cards, and turn.                                                                           |
+| update    | PlannedMaintenance drain, RELOCATED and SAFE_TO_SHUTDOWN, connection and state preserved, and a new hand completes on the replacement process after shutdown. |
 
 Results print as `✓ <id>` or `✗ <id>` followed by `Scenarios: N/M passed`. A failure or a cleanup failure returns exit code 1. The node stderr and client JSONL of the first failure are retained. Node stderr records dispatch `Normal` message flow through the OpenTelemetry log exporter.
 

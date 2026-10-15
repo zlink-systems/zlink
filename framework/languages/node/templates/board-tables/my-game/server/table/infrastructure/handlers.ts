@@ -2,13 +2,13 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   ZLINK_SPOT_MANAGER,
   zlinkEntrySpotActorSendHandler,
-  zlinkSpotActorSendHandler,
+  zlinkSpotActorSendHandler
 } from '@zlink-systems/nestjs';
 import {
   ZLinkSpotCreateState,
   type Type,
   type ZLinkMessageContext,
-  type ZLinkSpotManager,
+  type ZLinkSpotManager
 } from '@zlink-systems/framework';
 import { Names, PacketNames } from '../../shared/constants';
 import {
@@ -19,7 +19,7 @@ import {
   JoinTableRequest,
   StartHandRequest,
   TableView,
-  TableViewRequest,
+  TableViewRequest
 } from '../../shared/messages';
 import { Player } from './player';
 import { Entry, Table } from './table';
@@ -27,7 +27,7 @@ import { Entry, Table } from './table';
 @zlinkEntrySpotActorSendHandler({
   entrySpot: () => Entry,
   actor: () => Player,
-  packetName: PacketNames.joinTableRequest,
+  packetName: PacketNames.joinTableRequest
 })
 export class EntryJoin {
   constructor(@Inject(ZLINK_SPOT_MANAGER) private readonly spots: ZLinkSpotManager) {}
@@ -35,7 +35,7 @@ export class EntryJoin {
     _spot: Entry,
     actor: Player,
     _context: ZLinkMessageContext,
-    request: JoinTableRequest,
+    request: JoinTableRequest
   ): Promise<void> {
     if (actor.context.actorId !== request.playerId) throw new Error('Player identity mismatch');
     const created = await this.spots
@@ -50,14 +50,14 @@ export class EntryJoin {
 @zlinkSpotActorSendHandler({
   spot: () => Table,
   actor: () => Player,
-  packetName: PacketNames.joinTableRequest,
+  packetName: PacketNames.joinTableRequest
 })
 export class Rejoin {
   async handle(
     spot: Table,
     actor: Player,
     _context: ZLinkMessageContext,
-    request: JoinTableRequest,
+    request: JoinTableRequest
   ): Promise<void> {
     if (
       request.playerId !== actor.context.actorId ||
@@ -71,14 +71,14 @@ export class Rejoin {
 @zlinkSpotActorSendHandler({
   spot: () => Table,
   actor: () => Player,
-  packetName: PacketNames.tableViewRequest,
+  packetName: PacketNames.tableViewRequest
 })
 export class View {
   async handle(
     spot: Table,
     actor: Player,
     _context: ZLinkMessageContext,
-    _request: TableViewRequest,
+    _request: TableViewRequest
   ): Promise<void> {
     await spot.respond(actor);
   }
@@ -87,14 +87,14 @@ export class View {
 @zlinkSpotActorSendHandler({
   spot: () => Table,
   actor: () => Player,
-  packetName: PacketNames.startHandRequest,
+  packetName: PacketNames.startHandRequest
 })
 export class Start {
   async handle(
     spot: Table,
     actor: Player,
     _context: ZLinkMessageContext,
-    _request: StartHandRequest,
+    _request: StartHandRequest
   ): Promise<void> {
     const reason = spot.state.start(actor.context.actorId);
     if (reason) await actor.context.boundSession.send(new ActionRejected(reason)).submit();
@@ -105,14 +105,14 @@ export class Start {
 @zlinkSpotActorSendHandler({
   spot: () => Table,
   actor: () => Player,
-  packetName: PacketNames.betRequest,
+  packetName: PacketNames.betRequest
 })
 export class Bet {
   async handle(
     spot: Table,
     actor: Player,
     _context: ZLinkMessageContext,
-    request: BetRequest,
+    request: BetRequest
   ): Promise<void> {
     const result = spot.state.bet(actor.context.actorId, request.handNumber, request.amount);
     if (typeof result === 'string')
@@ -126,7 +126,7 @@ const deliveryPackets: ReadonlyMap<string, Type<TableView | HandDealt | HandResu
 >([
   [PacketNames.tableView, TableView],
   [PacketNames.handDealt, HandDealt],
-  [PacketNames.handResult, HandResult],
+  [PacketNames.handResult, HandResult]
 ]);
 @Injectable()
 export class Deliver {
@@ -134,7 +134,7 @@ export class Deliver {
     _spot: Table,
     actor: Player,
     context: ZLinkMessageContext,
-    message: TableView | HandDealt | HandResult,
+    message: TableView | HandDealt | HandResult
   ): Promise<void> {
     const type = deliveryPackets.get(context.packetName);
     if (!type) throw new Error(`Unregistered table push: ${context.packetName}`);

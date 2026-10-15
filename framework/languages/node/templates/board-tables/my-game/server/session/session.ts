@@ -6,14 +6,14 @@ import type {
   ZLinkSession,
   ZLinkSessionContext,
   ZLinkSessionDispatchContext,
-  ZLinkSessionFactory,
+  ZLinkSessionFactory
 } from '@zlink-systems/framework';
 import { Names, PacketNames } from '../shared/constants';
 import { JoinTableRequest, SessionInfo } from '../shared/messages';
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
-    private readonly actors: ZLinkActorManager,
+    private readonly actors: ZLinkActorManager
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
     if (dispatch.packetName === PacketNames.joinTableRequest) {
@@ -36,8 +36,8 @@ export class Session implements ZLinkSession {
           new SessionInfo(
             String(this.context.sessionId),
             actor.ref.actorId,
-            actor.ref.objectGeneration,
-          ),
+            actor.ref.objectGeneration
+          )
         )
         .submit();
       return;

@@ -4,13 +4,13 @@ This project is a runnable server starting point for a board-table game: a Sessi
 
 ## Node responsibilities
 
-| Node | Owned responsibility |
-| --- | --- |
-| Session | Terminate STREAM, verify the identity in the first Join, GetOrCreate and bind the Actor, relay, SessionInfo. |
-| Table | Entry Spot, Table User Spot, Player Actor host. |
-| Table User Spot | Seats, chips, deck, hands, turn, hand number, stake, settlement. |
-| Player Actor | Public Actor identity and the bound Session; holds no copy of game state. |
-| Redis | Framework Location and Relocation stores. |
+| Node            | Owned responsibility                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------ |
+| Session         | Terminate STREAM, verify the identity in the first Join, GetOrCreate and bind the Actor, relay, SessionInfo. |
+| Table           | Entry Spot, Table User Spot, Player Actor host.                                                              |
+| Table User Spot | Seats, chips, deck, hands, turn, hand number, stake, settlement.                                             |
+| Player Actor    | Public Actor identity and the bound Session; holds no copy of game state.                                    |
+| Redis           | Framework Location and Relocation stores.                                                                    |
 
 The Actor identity is answered as SessionInfo from the public ref of the Session binding. The Table owns only game state. A request reply is sent directly to the bound Session of the Actor that received it; state pushes go to the Actor by the seat's playerId. TableView, HandDealt, and HandResult use three public registrations and one delivery handler implementation. HandDealt is sent only at hand start and in replies to reconnection and TableViewRequest.
 

@@ -7,7 +7,7 @@ import type {
   ZLinkMessage,
   ZLinkSpot,
   ZLinkSpotContext,
-  ZLinkSpotRelocationAdapter,
+  ZLinkSpotRelocationAdapter
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../../shared/config';
 import {
@@ -15,7 +15,7 @@ import {
   TableView,
   HandDealt,
   JoinTableRequest,
-  type HandResult,
+  type HandResult
 } from '../../shared/messages';
 import { TableState, type TableSnapshot } from '../domain/table-state';
 import { Player } from './player';
@@ -32,7 +32,7 @@ export class Table implements ZLinkSpot<Player> {
   readonly state = new TableState();
   constructor(
     @Inject(NODE_CONFIG) private readonly config: NodeConfig,
-    @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient,
+    @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient
   ) {}
   async onActorJoin(actorId: string, request: ZLinkMessage) {
     const join = request.decode(JoinTableRequest);
@@ -57,7 +57,7 @@ export class Table implements ZLinkSpot<Player> {
       v.inHand,
       v.turnSeat,
       v.pot,
-      v.seats,
+      v.seats
     );
   }
   async respond(actor: Player): Promise<void> {
@@ -81,7 +81,7 @@ export class Table implements ZLinkSpot<Player> {
       await this.actors
         .sendToActor(
           seat.playerId,
-          new HandDealt(this.state.snapshot.handNumber, this.state.cards(seat.playerId)),
+          new HandDealt(this.state.snapshot.handNumber, this.state.cards(seat.playerId))
         )
         .submit();
   }

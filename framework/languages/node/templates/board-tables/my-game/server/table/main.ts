@@ -24,9 +24,9 @@ runHost((_builder, _config, mesh) => {
       View,
       Start,
       Bet,
-      Deliver,
+      Deliver
     ],
     listener: { kind: 'routeMesh', name: Names.mesh },
-    ready: (status) => status.placement.isAvailable,
+    ready: (status) => status.placement.isAvailable
   };
 }).catch(failHost);

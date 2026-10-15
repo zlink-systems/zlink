@@ -3,7 +3,7 @@ import {
   LoggerProvider,
   SimpleLogRecordProcessor,
   type ReadableLogRecord,
-  type LogRecordExporter,
+  type LogRecordExporter
 } from '@opentelemetry/sdk-logs';
 const exporter: LogRecordExporter = {
   export(records: ReadableLogRecord[], callback) {
@@ -12,15 +12,15 @@ const exporter: LogRecordExporter = {
         JSON.stringify({
           time: new Date().toISOString(),
           body: record.body,
-          ...record.attributes,
-        }) + '\n',
+          ...record.attributes
+        }) + '\n'
       );
     callback({ code: 0 });
   },
   async forceFlush() {},
-  async shutdown() {},
+  async shutdown() {}
 };
 export const diagnostics = new LoggerProvider({
-  processors: [new SimpleLogRecordProcessor({ exporter })],
+  processors: [new SimpleLogRecordProcessor({ exporter })]
 });
 logs.setGlobalLoggerProvider(diagnostics);

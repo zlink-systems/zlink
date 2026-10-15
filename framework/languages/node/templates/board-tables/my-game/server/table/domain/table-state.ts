@@ -24,7 +24,7 @@ export class TableState {
     inHand: false,
     turnSeat: Game.noSeat,
     pot: 0,
-    participants: [],
+    participants: []
   };
   seatOf(playerId: string): number {
     return this.snapshot.seats.findIndex((s) => s.playerId === playerId);
@@ -93,9 +93,9 @@ export class TableState {
       s.participants.map((i) => ({
         seat: i,
         playerId: s.seats[i].playerId,
-        cards: [...s.seats[i].cards],
+        cards: [...s.seats[i].cards]
       })),
-      this.seatViews(),
+      this.seatViews()
     );
   }
   seatViews(): SeatView[] {
@@ -104,7 +104,7 @@ export class TableState {
       playerId: s.playerId,
       chips: s.chips,
       acted: s.acted,
-      cardCount: s.cards.length,
+      cardCount: s.cards.length
     }));
   }
   view(playerId: string, tableId: string, nodeId: string): TableView {
@@ -117,7 +117,7 @@ export class TableState {
       inHand: s.inHand,
       turnSeat: s.turnSeat,
       pot: s.pot,
-      seats: this.seatViews(),
+      seats: this.seatViews()
     };
   }
   cards(playerId: string): number[] {

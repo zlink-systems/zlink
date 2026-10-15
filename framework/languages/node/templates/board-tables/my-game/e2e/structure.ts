@@ -52,13 +52,13 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     const config = text(node.config);
     assert(
       !isAbsolute(config) && !win32.isAbsolute(config) && !config.includes('\\'),
-      'Config path must be relative with /',
+      'Config path must be relative with /'
     );
     const file = realpathSync(resolve(root, config));
     const rel = relative(root, file);
     assert(
       rel && rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel),
-      'Config escapes project root',
+      'Config escapes project root'
     );
     if (node.role !== 'location-store') {
       const cfg = object(JSON.parse(readFileSync(file, 'utf8')));
@@ -68,7 +68,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   const channels = array(s.channels).map(object);
   unique(
     channels.map((c) => `${text(c.name)}:${text(c.owner)}`),
-    'channel',
+    'channel'
   );
   for (const c of channels) {
     owner(c.owner);
@@ -78,7 +78,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   const spots = array(s.spots).map(object);
   unique(
     spots.map((n) => text(n.id)),
-    'Spot ID',
+    'Spot ID'
   );
   const logical: string[] = [];
   for (const spot of spots) {
@@ -100,11 +100,11 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   unique(logical, 'logical Spot ID');
   assert(
     spots.some((s) => s.kind === 'entry'),
-    'Missing Entry Spot',
+    'Missing Entry Spot'
   );
   assert(
     spots.some((s) => s.type === Names.table),
-    'Missing Table type',
+    'Missing Table type'
   );
   for (const edge of array(s.edges).map(object)) {
     owner(edge.from);

@@ -21,7 +21,7 @@ test('Rejections preserve state and repeated joins preserve seats', () => {
     ['p1', 2, 0, Reasons.noHand],
     ['p1', 1, -1, Reasons.amount],
     ['p1', 1, 1001, Reasons.amount],
-    ['p1', 1, 0.5, Reasons.amount],
+    ['p1', 1, 0.5, Reasons.amount]
   ] as const) {
     const snapshot = structuredClone(table.snapshot);
     assert.equal(table.bet(player, hand, amount), expected);
@@ -32,7 +32,7 @@ test('Rejections preserve state and repeated joins preserve seats', () => {
   assert.deepEqual(table.snapshot, playing);
   assert.equal(
     new Set([...table.snapshot.deck, ...table.snapshot.seats.flatMap((s) => s.cards)]).size,
-    Game.deckSize,
+    Game.deckSize
   );
 });
 test('Tie splits the remainder to the lowest winning seat; snapshot restores a live hand', () => {
@@ -51,11 +51,11 @@ test('Tie splits the remainder to the lowest winning seat; snapshot restores a l
   assert.deepEqual(result.winners, [0, 1]);
   assert.deepEqual(
     result.seats.map((s) => s.chips),
-    [1001, 1000, 999],
+    [1001, 1000, 999]
   );
   assert.equal(
     result.seats.reduce((sum, s) => sum + s.chips, 0),
-    3000,
+    3000
   );
   assert.equal(restored.snapshot.turnSeat, Game.noSeat);
   assert.equal(restored.snapshot.pot, 0);

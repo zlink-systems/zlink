@@ -2,7 +2,7 @@ export const Names = {
   mesh: 'my-game-tables',
   stream: 'players',
   actor: 'Player',
-  table: 'Table',
+  table: 'Table'
 } as const;
 export const Game = {
   seats: 4,
@@ -12,14 +12,14 @@ export const Game = {
   ranks: 13,
   lowestRank: 2,
   cardsPerPlayer: 2,
-  noSeat: -1,
+  noSeat: -1
 } as const;
 export const Limits = {
   observationCapacity: 64,
   messageMs: 10_000,
   startupMs: 30_000,
   relocationMs: 25_000,
-  shutdownMs: 10_000,
+  shutdownMs: 10_000
 } as const;
 export const Reasons = {
   full: 'table-full',
@@ -28,7 +28,7 @@ export const Reasons = {
   players: 'not-enough-players',
   turn: 'not-your-turn',
   amount: 'invalid-amount',
-  seated: 'not-seated',
+  seated: 'not-seated'
 } as const;
 export const Scenarios = ['table', 'reconnect', 'update'] as const;
 export const PacketNames = {
@@ -41,7 +41,7 @@ export const PacketNames = {
   tableView: 'TableView',
   handDealt: 'HandDealt',
   handResult: 'HandResult',
-  actionRejected: 'ActionRejected',
+  actionRejected: 'ActionRejected'
 } as const;
 
 export const Control = {
@@ -51,11 +51,11 @@ export const Control = {
   requested: 'RELOCATION_REQUESTED',
   relocated: 'RELOCATED',
   safe: 'SAFE_TO_SHUTDOWN',
-  stopped: 'STOPPED ',
+  stopped: 'STOPPED '
 } as const;
 
 export const NodeEntrypoints = {
   session: 'server/session/main.ts',
-  table: 'server/table/main.ts',
+  table: 'server/table/main.ts'
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;

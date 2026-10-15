@@ -12,6 +12,6 @@ runHost((builder, config, mesh) => {
   return {
     providers: [SessionFactory],
     listener: { kind: 'stream', name: Names.stream },
-    ready: (status) => status.readyPeerCount > 0,
+    ready: (status) => status.readyPeerCount > 0
   };
 }).catch(failHost);

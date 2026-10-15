@@ -21,7 +21,7 @@ const sourceFiles = program
   .filter(
     (sourceFile) =>
       !sourceFile.isDeclarationFile &&
-      !sourceFile.fileName.includes(`${path.sep}node_modules${path.sep}`),
+      !sourceFile.fileName.includes(`${path.sep}node_modules${path.sep}`)
   );
 const scanSourceFiles =
   options.sources.length === 0
@@ -34,7 +34,7 @@ const scanSourceFiles =
           return (
             normalizedRelative === normalized || normalizedRelative.startsWith(`${normalized}/`)
           );
-        }),
+        })
       );
 
 reportDiagnostics(program, config.errors);
@@ -46,7 +46,7 @@ const packetNames = collectUsedPacketNames(
   checker,
   packetValues,
   typeSymbols,
-  options.sources.length > 0,
+  options.sources.length > 0
 );
 const handlerTypes = collectHandlerTypes(sourceFiles, checker);
 const contracts = new Map();
@@ -64,7 +64,7 @@ for (const packetName of [...packetNames].sort()) {
   }
   try {
     const contract = {
-      payload: schemaForType(payloadType, checker, `${packetName}.payload`),
+      payload: schemaForType(payloadType, checker, `${packetName}.payload`)
     };
     if (replyType !== undefined) {
       contract.reply = schemaForType(replyType, checker, `${packetName}.reply`);
@@ -78,7 +78,7 @@ for (const packetName of [...packetNames].sort()) {
 if (unmatched.length > 0) {
   throw new Error(
     `Unable to resolve DTO declarations for used packet name(s): ${unmatched.join(', ')}. ` +
-      'Define a class, interface, or type alias with the packet name, or provide a typed handler.',
+      'Define a class, interface, or type alias with the packet name, or provide a typed handler.'
   );
 }
 
@@ -86,7 +86,7 @@ const serialized = serializeContracts(contracts);
 writeOutput(options.out, renderCommonJs(serialized));
 process.stdout.write(
   `${SCRIPT_NAME}: generated ${contracts.size} packet schema(s)` +
-    ` from ${sourceFiles.length} source file(s)\n`,
+    ` from ${sourceFiles.length} source file(s)\n`
 );
 
 function parseArguments(args) {
@@ -96,7 +96,7 @@ function parseArguments(args) {
     const value = args[++index];
     if (!value || value.startsWith('--')) {
       throw new Error(
-        `Usage: node scripts/${SCRIPT_NAME} --project <tsconfig.json> --out <server.cjs>`,
+        `Usage: node scripts/${SCRIPT_NAME} --project <tsconfig.json> --out <server.cjs>`
       );
     }
     if (argument === '--project') parsed.project = value;
@@ -106,7 +106,7 @@ function parseArguments(args) {
   }
   if (parsed.project === undefined || parsed.out === undefined) {
     throw new Error(
-      `Usage: node scripts/${SCRIPT_NAME} --project <tsconfig.json> --out <server.cjs> [--source <relative-dir-or-file>]`,
+      `Usage: node scripts/${SCRIPT_NAME} --project <tsconfig.json> --out <server.cjs> [--source <relative-dir-or-file>]`
     );
   }
   return parsed;
@@ -122,7 +122,7 @@ function readProject(project) {
     ts.sys,
     path.dirname(project),
     undefined,
-    project,
+    project
   );
   // Schema extraction must preserve the wire-level distinction between T and
   // T | null even when an application uses a non-strict application build.
@@ -137,7 +137,7 @@ function reportDiagnostics(program, configErrors) {
     ...configErrors,
     ...ts
       .getPreEmitDiagnostics(program)
-      .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error),
+      .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
   ];
   if (diagnostics.length === 0) return;
   throw new Error(diagnostics.map(formatDiagnostic).join('\n'));
@@ -183,7 +183,7 @@ function collectUsedPacketNames(
   checker,
   packetValues,
   typeSymbols,
-  contractSourcesOnly,
+  contractSourcesOnly
 ) {
   const names = new Set();
   for (const sourceFile of sourceFiles) {
@@ -266,8 +266,8 @@ function findTypeSymbol(name, symbols, checker) {
         ts.isClassDeclaration(declaration) ||
         ts.isInterfaceDeclaration(declaration) ||
         ts.isTypeAliasDeclaration(declaration) ||
-        ts.isEnumDeclaration(declaration),
-    ),
+        ts.isEnumDeclaration(declaration)
+    )
   );
   return preferred ?? resolved[0];
 }
@@ -299,7 +299,7 @@ function collectHandlerTypes(sourceFiles, checker) {
         const current = handlers.get(packetName) ?? {};
         handlers.set(packetName, {
           payload: payload ?? current.payload,
-          reply: reply ?? current.reply,
+          reply: reply ?? current.reply
         });
       }
     });
@@ -337,7 +337,7 @@ function namesSetProxy(values) {
   return {
     add(value) {
       if (value !== undefined && !values.includes(value)) values.push(value);
-    },
+    }
   };
 }
 
@@ -358,7 +358,7 @@ function selectHandlerTypeArguments(typeName, typeArguments, checker) {
   ) {
     return {
       payload: checker.getTypeAtLocation(typeArguments.at(-2)),
-      reply: checker.getTypeAtLocation(typeArguments.at(-1)),
+      reply: checker.getTypeAtLocation(typeArguments.at(-1))
     };
   }
   return { payload: checker.getTypeAtLocation(typeArguments[0]) };
@@ -436,7 +436,7 @@ function schemaForType(type, checker, pathName, state = { stack: [], depth: 0 })
   if ((type.flags & ts.TypeFlags.Intersection) !== 0)
     return schemaForIntersection(type, checker, pathName, nextState);
   const enumDeclaration = type.symbol?.declarations?.find((declaration) =>
-    ts.isEnumDeclaration(declaration),
+    ts.isEnumDeclaration(declaration)
   );
   if (enumDeclaration !== undefined) return schemaForEnum(enumDeclaration, checker, pathName);
   if (checker.isArrayType(type)) {
@@ -449,7 +449,7 @@ function schemaForType(type, checker, pathName, state = { stack: [], depth: 0 })
   }
   if ((type.flags & ts.TypeFlags.TypeParameter) !== 0) {
     throw new Error(
-      `generic type parameter '${checker.typeToString(type)}' is not supported at ${pathName}`,
+      `generic type parameter '${checker.typeToString(type)}' is not supported at ${pathName}`
     );
   }
   if ((type.flags & ts.TypeFlags.Object) !== 0)
@@ -481,11 +481,11 @@ function schemaForUnion(type, checker, pathName, state) {
   const nullable = members.some((member) => (member.flags & ts.TypeFlags.Null) !== 0);
   const defined = members.filter(
     (member) =>
-      (member.flags & ts.TypeFlags.Null) === 0 && (member.flags & ts.TypeFlags.Undefined) === 0,
+      (member.flags & ts.TypeFlags.Null) === 0 && (member.flags & ts.TypeFlags.Undefined) === 0
   );
   if (defined.length === 0) throw new Error(`nullable union has no value type at ${pathName}`);
   const literalStrings = defined.every(
-    (member) => (member.flags & ts.TypeFlags.StringLiteral) !== 0,
+    (member) => (member.flags & ts.TypeFlags.StringLiteral) !== 0
   );
   if (literalStrings) {
     const schema = { type: 'enum', names: [...new Set(defined.map((member) => member.value))] };
@@ -507,7 +507,7 @@ function schemaForUnion(type, checker, pathName, state) {
 
 function schemaForIntersection(type, checker, pathName, state) {
   const schemas = type.types.map((part, index) =>
-    schemaForType(part, checker, `${pathName}&${index}`, state),
+    schemaForType(part, checker, `${pathName}&${index}`, state)
   );
   const primitive = schemas.find((schema) => schema.type !== 'object');
   if (primitive !== undefined) return primitive;
@@ -527,7 +527,7 @@ function schemaForIntersection(type, checker, pathName, state) {
     type: 'object',
     properties,
     required: [...required].sort(),
-    ...(additionalProperties === undefined ? {} : { additionalProperties }),
+    ...(additionalProperties === undefined ? {} : { additionalProperties })
   };
 }
 
@@ -537,19 +537,19 @@ function schemaForEnum(declaration, checker, pathName) {
     const value = checker.getConstantValue(member);
     if (typeof value !== 'string' || value.length === 0) {
       throw new Error(
-        `enum '${declaration.name.text}' must contain non-empty string values at ${pathName}`,
+        `enum '${declaration.name.text}' must contain non-empty string values at ${pathName}`
       );
     }
     if (names.includes(value)) {
       throw new Error(
-        `enum '${declaration.name.text}' contains duplicate value '${value}' at ${pathName}`,
+        `enum '${declaration.name.text}' contains duplicate value '${value}' at ${pathName}`
       );
     }
     names.push(value);
   }
   if (names.length === 0)
     throw new Error(
-      `enum '${declaration.name.text}' must contain at least one value at ${pathName}`,
+      `enum '${declaration.name.text}' must contain at least one value at ${pathName}`
     );
   return { type: 'enum', names };
 }
@@ -592,7 +592,7 @@ function schemaForObject(type, checker, pathName, state) {
       type: 'object',
       properties,
       required: required.sort(),
-      additionalProperties: true,
+      additionalProperties: true
     };
   }
   return { type: 'object', properties, required: required.sort() };
@@ -644,7 +644,7 @@ function evaluateString(expression, checker, seen = new Set()) {
     ts.isElementAccessExpression(value)
   ) {
     const symbol = checker.getSymbolAtLocation(
-      ts.isIdentifier(value) ? value : (value.name ?? value.argumentExpression),
+      ts.isIdentifier(value) ? value : (value.name ?? value.argumentExpression)
     );
     if (symbol === undefined || seen.has(symbol)) return undefined;
     const nextSeen = new Set(seen).add(symbol);
@@ -668,7 +668,7 @@ function resolveValueDeclaration(symbol, checker) {
   return (
     resolved.valueDeclaration ??
     resolved.declarations?.find(
-      (declaration) => ts.isVariableDeclaration(declaration) || ts.isEnumMember(declaration),
+      (declaration) => ts.isVariableDeclaration(declaration) || ts.isEnumMember(declaration)
     )
   );
 }

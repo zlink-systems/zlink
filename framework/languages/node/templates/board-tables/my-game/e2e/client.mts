@@ -5,7 +5,7 @@ import {
   zlinkStreamConnectorFactory,
   zlinkStreamJsonCodec,
   ZlinkStreamDispatchMode,
-  type ZlinkStreamConnector,
+  type ZlinkStreamConnector
 } from '@zlink-systems/stream-connector';
 import { Game, Limits, PacketNames, Reasons } from '../server/shared/constants.js';
 import {
@@ -18,7 +18,7 @@ import {
   type HandDealt,
   type HandResult,
   type SessionInfo,
-  type TableView,
+  type TableView
 } from '../server/shared/messages.js';
 interface Received {
   name: string;
@@ -36,7 +36,7 @@ class PlayerClient {
   disconnects = 0;
   constructor(
     endpoint: string,
-    private readonly log: string,
+    private readonly log: string
   ) {
     this.connector = zlinkStreamConnectorFactory.create({
       endpoint,
@@ -44,21 +44,21 @@ class PlayerClient {
       dispatchMode: ZlinkStreamDispatchMode.Immediate,
       waitTimeoutMs: Limits.messageMs,
       requestTimeoutMs: Limits.messageMs,
-      reconnect: { enabled: false },
+      reconnect: { enabled: false }
     });
     for (const name of [
       PacketNames.tableView,
       PacketNames.handDealt,
       PacketNames.handResult,
-      PacketNames.actionRejected,
+      PacketNames.actionRejected
     ])
       this.connector.on(name, (message) => {
         this.messages.push({ name, payload: message.payload });
         appendFileSync(
           log,
           JSON.stringify({ name, payload: message.payload }, (_, v) =>
-            typeof v === 'bigint' ? v.toString() : v,
-          ) + '\n',
+            typeof v === 'bigint' ? v.toString() : v
+          ) + '\n'
         );
         this.changed.emit('change');
       });
@@ -74,11 +74,11 @@ class PlayerClient {
   async wait<T>(
     name: string,
     from: number,
-    predicate: (payload: T) => boolean = () => true,
+    predicate: (payload: T) => boolean = () => true
   ): Promise<T> {
     const find = (): T | undefined =>
       this.messages.find(
-        (m, index) => index >= from && m.name === name && predicate(m.payload as T),
+        (m, index) => index >= from && m.name === name && predicate(m.payload as T)
       )?.payload as T | undefined;
     const result = find();
     if (result !== undefined) return result;
@@ -115,7 +115,7 @@ class PlayerClient {
     const view = await this.wait<TableView>(
       PacketNames.tableView,
       index,
-      (v) => v.tableId === tableId,
+      (v) => v.tableId === tableId
     );
     assert.equal(view.tableId, tableId);
     assert.equal((await this.sessionInfo()).actorId, playerId);
@@ -162,23 +162,23 @@ function settlement(
   result: HandResult,
   first: HandDealt,
   second: HandDealt,
-  amounts: number[],
+  amounts: number[]
 ): void {
   assert.equal(result.handNumber, first.handNumber);
   assert.equal(
     result.pot,
-    amounts.reduce((a, b) => a + b, 0),
+    amounts.reduce((a, b) => a + b, 0)
   );
   assert.deepEqual(
     result.hands.map((h) => h.seat),
-    [0, 1],
+    [0, 1]
   );
   assert.deepEqual(
     result.hands.map((h) => h.cards),
-    [first.cards, second.cards],
+    [first.cards, second.cards]
   );
   const scores = [first.cards, second.cards].map((cards) =>
-    cards.reduce((sum, c) => sum + (c % Game.ranks) + Game.lowestRank, 0),
+    cards.reduce((sum, c) => sum + (c % Game.ranks) + Game.lowestRank, 0)
   );
   const high = Math.max(...scores);
   const winners = scores.flatMap((score, i) => (score === high ? [i] : []));
@@ -188,7 +188,7 @@ function settlement(
   expected[winners[0]] += result.pot % winners.length;
   assert.deepEqual(
     result.seats.map((s) => s.chips),
-    expected,
+    expected
   );
   assert.equal(chips(result), 2 * Game.initialChips);
 }
@@ -197,7 +197,7 @@ export async function scenario(
   endpoint: string,
   runId: string,
   logDir: string,
-  control: NodeControl,
+  control: NodeControl
 ): Promise<void> {
   const tableId = `table-${name}-${runId}`,
     ids = [`p1-${name}-${runId}`, `p2-${name}-${runId}`];
@@ -216,7 +216,7 @@ export async function scenario(
     assert.equal(second.yourSeat, 1);
     assert.deepEqual(
       second.seats.map((s) => s.chips),
-      [Game.initialChips, Game.initialChips],
+      [Game.initialChips, Game.initialChips]
     );
     const session1 = await p1.sessionInfo(),
       session2 = await p2.sessionInfo();
@@ -228,7 +228,7 @@ export async function scenario(
       p1.wait<TableView>(PacketNames.tableView, start1, (v) => v.inHand),
       p2.wait<TableView>(PacketNames.tableView, start2, (v) => v.inHand),
       p1.wait<HandDealt>(PacketNames.handDealt, start1),
-      p2.wait<HandDealt>(PacketNames.handDealt, start2),
+      p2.wait<HandDealt>(PacketNames.handDealt, start2)
     ]);
     assert.equal(v1.turnSeat, 0);
     assert.equal(v2.turnSeat, 0);
@@ -244,7 +244,7 @@ export async function scenario(
       await p2.connector.send(new BetRequest(v2.handNumber, 50)).submit();
       assert.equal(
         (await p2.wait<ActionRejected>(PacketNames.actionRejected, index)).reason,
-        Reasons.turn,
+        Reasons.turn
       );
       assert.deepEqual(await p2.view(), v2);
     }
@@ -254,7 +254,7 @@ export async function scenario(
     await p1.connector.send(new BetRequest(v1.handNumber, amount)).submit();
     const [b1, b2] = await Promise.all([
       p1.wait<TableView>(PacketNames.tableView, bet1, (v) => v.turnSeat === 1),
-      p2.wait<TableView>(PacketNames.tableView, bet2, (v) => v.turnSeat === 1),
+      p2.wait<TableView>(PacketNames.tableView, bet2, (v) => v.turnSeat === 1)
     ]);
     if (name === 'reconnect') {
       await p2.close();
@@ -289,7 +289,7 @@ export async function scenario(
     await p2.connector.send(new BetRequest(v2.handNumber, 50)).submit();
     const results = await Promise.all([
       p1.wait<HandResult>(PacketNames.handResult, end1),
-      p2.wait<HandResult>(PacketNames.handResult, end2),
+      p2.wait<HandResult>(PacketNames.handResult, end2)
     ]);
     assert.deepEqual(results[0], results[1]);
     settlement(results[0], h1, h2, [amount, 50]);
@@ -298,7 +298,7 @@ export async function scenario(
       assert.equal(
         client.messages.filter((m) => m.name === PacketNames.handDealt).length,
         expectedDeals,
-        'HandDealt only at hand start or explicit view/reconnect response',
+        'HandDealt only at hand start or explicit view/reconnect response'
       );
     }
     assert.equal(p1.disconnects, 0);
@@ -313,7 +313,7 @@ export async function scenario(
       if (result.status === 'rejected') console.error('Client cleanup failed', result.reason);
     assert(
       closed.every((r) => r.status === 'fulfilled'),
-      'Client cleanup failed',
+      'Client cleanup failed'
     );
   }
 }

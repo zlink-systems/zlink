@@ -4,7 +4,7 @@ import type {
   ZLinkActorContext,
   ZLinkActorFactory,
   ZLinkActorJoinCompletion,
-  ZLinkActorRelocationAdapter,
+  ZLinkActorRelocationAdapter
 } from '@zlink-systems/framework';
 import { ActionRejected } from '../../shared/messages';
 export class Player implements ZLinkActor {

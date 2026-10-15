@@ -11,7 +11,7 @@ import {
   Scenarios,
   Control,
   NodeEntrypoints,
-  type NodeRole,
+  type NodeRole
 } from '../server/shared/constants';
 import type { NodeConfig } from '../server/shared/config';
 class NodeProcess {
@@ -25,7 +25,7 @@ class NodeProcess {
     readonly role: NodeRole,
     readonly path: string,
     logDir: string,
-    sequence: number,
+    sequence: number
   ) {
     writeFileSync(path, JSON.stringify(config, null, 2));
     const out = createWriteStream(`${logDir}/${config.id}-${sequence}.out.log`),
@@ -35,8 +35,8 @@ class NodeProcess {
       [`dist/${NodeEntrypoints[role].replace(/\.ts$/, '.js')}`, path],
       {
         windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      },
+        stdio: ['pipe', 'pipe', 'pipe']
+      }
     );
     this.child.stdout!.pipe(out);
     this.child.stderr!.pipe(err);
@@ -56,7 +56,7 @@ class NodeProcess {
             code === 0
               ? resolve(undefined)
               : resolve(new Error(`${config.id} exit=${code} signal=${signal}; logs=${logDir}`)),
-          (error: Error) => resolve(error),
+          (error: Error) => resolve(error)
         );
       });
     });
@@ -89,7 +89,7 @@ class NodeProcess {
   }
   async ready(): Promise<{ id: string; endpoint: string }> {
     return JSON.parse(
-      (await this.wait(Control.ready, Limits.startupMs)).slice(Control.ready.length),
+      (await this.wait(Control.ready, Limits.startupMs)).slice(Control.ready.length)
     ) as {
       id: string;
       endpoint: string;
@@ -144,7 +144,7 @@ async function main(): Promise<void> {
     const log = createWriteStream(`${logDir}/docker-${label}.log`);
     const child = spawn('docker', ['compose', '-p', project, '-f', 'docker-compose.yml', ...args], {
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe']
     });
     let output = '';
     child.stdout.on('data', (chunk: Buffer) => {
@@ -200,7 +200,7 @@ async function main(): Promise<void> {
         await node.stop();
         const replacement = await start(node.config, node.role);
         await replacement.ready();
-      },
+      }
     };
     for (const name of selected) {
       try {

@@ -6,7 +6,7 @@ import { Global, Module, type Type } from '@nestjs/common';
 import { createInterface } from 'node:readline';
 import {
   ZLinkRedisLocationStore,
-  ZLinkRedisRelocationStore,
+  ZLinkRedisRelocationStore
 } from '@zlink-systems/framework-locations-redis';
 import {
   zlinkFramework,
@@ -14,7 +14,7 @@ import {
   ZLinkModule,
   ZLINK_FRAMEWORK_RUNTIME,
   ZLINK_ROUTE_MESH_RUNTIME,
-  type ZLinkNestMeshNodeBuilder,
+  type ZLinkNestMeshNodeBuilder
 } from '@zlink-systems/nestjs';
 import {
   ZLinkFrameworkRelocationMode,
@@ -23,7 +23,7 @@ import {
   ZLinkFrameworkTerminationReason,
   type ZLinkFrameworkRuntime,
   type ZLinkRouteMeshRuntime,
-  type ZLinkRouteMeshStatus,
+  type ZLinkRouteMeshStatus
 } from '@zlink-systems/framework';
 import { Names, Limits, Control } from './constants';
 import { NODE_CONFIG, readConfig, type NodeConfig } from './config';
@@ -36,17 +36,17 @@ export async function runHost(
   configure: (
     builder: ReturnType<typeof zlinkFramework>,
     config: NodeConfig,
-    mesh: ZLinkNestMeshNodeBuilder,
-  ) => HostComposition,
+    mesh: ZLinkNestMeshNodeBuilder
+  ) => HostComposition
 ): Promise<void> {
   const config = readConfig(process.argv[2]);
   const location = new ZLinkRedisLocationStore({
     url: `redis://${config.redisEndpoint}`,
-    keyPrefix: `${config.keyPrefix}location`,
+    keyPrefix: `${config.keyPrefix}location`
   });
   const relocation = new ZLinkRedisRelocationStore({
     url: `redis://${config.redisEndpoint}`,
-    keyPrefix: `${config.keyPrefix}relocation`,
+    keyPrefix: `${config.keyPrefix}relocation`
   });
   @Global()
   @Module({ providers: [{ provide: NODE_CONFIG, useValue: config }], exports: [NODE_CONFIG] })
@@ -64,11 +64,11 @@ export async function runHost(
   zlinkModule({
     providerDiscovery: [],
     imports: [Configuration, ZLinkModule.forRoot(builder.build())],
-    providers: composition.providers,
+    providers: composition.providers
   })(Host);
   const app = await NestFactory.createApplicationContext(Host, {
     logger: ['error', 'warn'],
-    abortOnError: false,
+    abortOnError: false
   });
   const runtime = app.get<ZLinkFrameworkRuntime>(ZLINK_FRAMEWORK_RUNTIME);
   const meshes = app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME);
@@ -76,7 +76,7 @@ export async function runHost(
     for await (const observed of meshes.observe(
       Names.mesh,
       Limits.observationCapacity,
-      AbortSignal.timeout(Limits.startupMs),
+      AbortSignal.timeout(Limits.startupMs)
     )) {
       if (observed.loss.discardedTerminalCount !== 0n)
         throw new Error('Readiness observation lost');
@@ -99,7 +99,7 @@ export async function runHost(
     await waitReady();
     const listener = runtime.getListenerStatus(
       composition.listener.kind,
-      composition.listener.name,
+      composition.listener.name
     );
     console.log(Control.ready + JSON.stringify({ id: config.id, endpoint: listener.endpoint }));
     for await (const line of input) {
@@ -107,7 +107,7 @@ export async function runHost(
         console.log(Control.requested);
         const result = await runtime.relocate({
           mode: ZLinkFrameworkRelocationMode.PlannedMaintenance,
-          deadlineMs: Limits.relocationMs,
+          deadlineMs: Limits.relocationMs
         });
         if (result.outcome !== ZLinkFrameworkRelocationOutcome.Relocated)
           throw new Error(`Relocation blocked: ${result.reason}`);
@@ -135,7 +135,7 @@ export async function runHost(
       (): Promise<void> => app.close(),
       (): Promise<void> => location.dispose(),
       (): Promise<void> => relocation.dispose(),
-      (): Promise<void> => diagnostics.shutdown(),
+      (): Promise<void> => diagnostics.shutdown()
     ];
     for (const release of cleanup) {
       try {

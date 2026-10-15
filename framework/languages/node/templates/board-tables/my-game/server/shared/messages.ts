@@ -3,13 +3,13 @@ export class SessionInfo {
   constructor(
     readonly sessionId: string,
     readonly actorId: string,
-    readonly objectGeneration: bigint,
+    readonly objectGeneration: bigint
   ) {}
 }
 export class JoinTableRequest {
   constructor(
     readonly playerId: string,
-    readonly tableId: string,
+    readonly tableId: string
   ) {}
 }
 export class TableViewRequest {}
@@ -17,7 +17,7 @@ export class StartHandRequest {}
 export class BetRequest {
   constructor(
     readonly handNumber: number,
-    readonly amount: number,
+    readonly amount: number
   ) {}
 }
 export interface SeatView {
@@ -41,13 +41,13 @@ export class TableView {
     readonly inHand: boolean,
     readonly turnSeat: number,
     readonly pot: number,
-    readonly seats: SeatView[],
+    readonly seats: SeatView[]
   ) {}
 }
 export class HandDealt {
   constructor(
     readonly handNumber: number,
-    readonly cards: number[],
+    readonly cards: number[]
   ) {}
 }
 export class HandResult {
@@ -56,7 +56,7 @@ export class HandResult {
     readonly pot: number,
     readonly winners: number[],
     readonly hands: RevealedHand[],
-    readonly seats: SeatView[],
+    readonly seats: SeatView[]
   ) {}
 }
 export class ActionRejected {
