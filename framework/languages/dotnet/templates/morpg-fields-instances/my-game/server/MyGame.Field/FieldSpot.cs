@@ -6,8 +6,12 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace MyGame.Field;
 
-public sealed class FieldSpot(IZLinkSpotContext context, IZLinkActorClient actors, IZLinkSpotManager spots, NodeSettings settings)
-    : IZLinkSpot<PlayerActor>
+public sealed class FieldSpot(
+    IZLinkSpotContext context,
+    IZLinkActorClient actors,
+    IZLinkSpotManager spots,
+    NodeSettings settings
+) : IZLinkSpot<PlayerActor>
 {
     public IZLinkSpotContext Context { get; } = context;
 
@@ -67,17 +71,16 @@ public sealed class FieldSpot(IZLinkSpotContext context, IZLinkActorClient actor
         _visiblePlayers.Remove(actor.Context.ActorId);
         foreach (var party in _parties)
         {
-            if (!party.Value.Remove(actor.Context.ActorId)) continue;
-            if (party.Value.Count == 0) _parties.Remove(party.Key);
+            if (!party.Value.Remove(actor.Context.ActorId))
+                continue;
+            if (party.Value.Count == 0)
+                _parties.Remove(party.Key);
             break;
         }
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnDisconnectActorAsync(
-        PlayerActor actor,
-        CancellationToken cancellationToken
-    )
+    public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken cancellationToken)
     {
         _visiblePlayers.Remove(actor.Context.ActorId);
         return ValueTask.CompletedTask;
@@ -128,31 +131,59 @@ public sealed class FieldSpot(IZLinkSpotContext context, IZLinkActorClient actor
         }
     }
 
-    private FieldView View() => new(Context.SpotId, settings.Id, _visiblePlayers.Keys.Order().ToArray(),
-        _parties.OrderBy(pair => pair.Key).Select(pair => new PartyView(pair.Key, pair.Value.ToArray())).ToArray());
+    private FieldView View() =>
+        new(
+            Context.SpotId,
+            settings.Id,
+            _visiblePlayers.Keys.Order().ToArray(),
+            _parties
+                .OrderBy(pair => pair.Key)
+                .Select(pair => new PartyView(pair.Key, pair.Value.ToArray()))
+                .ToArray()
+        );
+
     private async ValueTask BroadcastAsync(PlayerActor requester, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var view = View();
         await requester.Context.BoundSession.Send(view).Async();
         foreach (var id in _visiblePlayers.Keys)
-            if (id != requester.Context.ActorId) await actors.SendToActor(id, view).Async();
+            if (id != requester.Context.ActorId)
+                await actors.SendToActor(id, view).Async();
     }
-    public async ValueTask PartyAsync(PlayerActor actor, string partyId, bool create, CancellationToken ct)
+
+    public async ValueTask PartyAsync(
+        PlayerActor actor,
+        string partyId,
+        bool create,
+        CancellationToken ct
+    )
     {
         var id = actor.Context.ActorId;
-        if (string.IsNullOrWhiteSpace(partyId) || !_visiblePlayers.ContainsKey(id) ||
-            _parties.Values.Any(members => members.Contains(id)) ||
-            (create ? _parties.ContainsKey(partyId) :
-                !_parties.TryGetValue(partyId, out var members) || members.Count >= GameNames.MaximumPartyMembers))
+        if (
+            string.IsNullOrWhiteSpace(partyId)
+            || !_visiblePlayers.ContainsKey(id)
+            || _parties.Values.Any(members => members.Contains(id))
+            || (
+                create
+                    ? _parties.ContainsKey(partyId)
+                    : !_parties.TryGetValue(partyId, out var members)
+                        || members.Count >= GameNames.MaximumPartyMembers
+            )
+        )
         {
-            await actor.Context.BoundSession.Send(new ActionRejected(Rejection.InvalidParty)).Async();
+            await actor
+                .Context.BoundSession.Send(new ActionRejected(Rejection.InvalidParty))
+                .Async();
             return;
         }
-        if (create) _parties.Add(partyId, [id]);
-        else _parties[partyId].Add(id);
+        if (create)
+            _parties.Add(partyId, [id]);
+        else
+            _parties[partyId].Add(id);
         await BroadcastAsync(actor, ct);
     }
+
     public async ValueTask EnterAsync(PlayerActor actor, CancellationToken ct)
     {
         var party = _parties.FirstOrDefault(pair => pair.Value[0] == actor.Context.ActorId);
@@ -162,14 +193,20 @@ public sealed class FieldSpot(IZLinkSpotContext context, IZLinkActorClient actor
             return;
         }
         var dungeonId = GameNames.DungeonId(party.Key);
-        var created = await spots.GetOrCreate(dungeonId, GameNames.DungeonType).InMesh(GameNames.WorldMesh).Async(ct);
+        var created = await spots
+            .GetOrCreate(dungeonId, GameNames.DungeonType)
+            .InMesh(GameNames.WorldMesh)
+            .Async(ct);
         if (created.State == ZLinkSpotCreateState.Rejected)
             throw new InvalidOperationException("Dungeon creation rejected.");
         var members = party.Value.ToArray();
-        var prepared = await Context.Outbound.RequestToSpot(dungeonId, new PrepareDungeon(party.Key, members))
+        var prepared = await Context
+            .Outbound.RequestToSpot(dungeonId, new PrepareDungeon(party.Key, members))
             .Async<DungeonPrepared>(ct);
-        if (prepared.DungeonId != dungeonId) throw new InvalidDataException("Dungeon preparation identity mismatch.");
-        foreach (var id in members) await actors.SendToActor(id, new JoinDungeon(dungeonId, party.Key)).Async();
+        if (prepared.DungeonId != dungeonId)
+            throw new InvalidDataException("Dungeon preparation identity mismatch.");
+        foreach (var id in members)
+            await actors.SendToActor(id, new JoinDungeon(dungeonId, party.Key)).Async();
     }
 
     public FieldSnapshot Capture() => new(new(_visiblePlayers), new(_arrivals), _parties);

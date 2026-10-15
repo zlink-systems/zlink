@@ -1,7 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using MyGame.Shared;
 using MyGame.Field;
+using MyGame.Shared;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Spots;
 

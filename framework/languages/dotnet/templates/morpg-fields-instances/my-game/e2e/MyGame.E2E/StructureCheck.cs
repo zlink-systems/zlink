@@ -89,7 +89,10 @@ internal static class StructureCheck
         );
         foreach (var field in new[] { "id", "name", "language" })
             Text(document, field);
-        Require(Text(document, "language") == "dotnet", "Structure language differs from this project.");
+        Require(
+            Text(document, "language") == "dotnet",
+            "Structure language differs from this project."
+        );
         ValidateRun(document);
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var roles = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -136,14 +139,22 @@ internal static class StructureCheck
         {
             var owner = Text(channel, "owner");
             var name = Text(channel, "name");
-            Require(roles.TryGetValue(owner, out var role) && role == "field",
-                "Border channel owner must register the Field server.");
-            Require(name == GameNames.BorderChannel && Text(channel, "mesh") == GameNames.WorldMesh,
-                "Channel differs from server registration.");
+            Require(
+                roles.TryGetValue(owner, out var role) && role == "field",
+                "Border channel owner must register the Field server."
+            );
+            Require(
+                name == GameNames.BorderChannel && Text(channel, "mesh") == GameNames.WorldMesh,
+                "Channel differs from server registration."
+            );
             Require(registrations.Add((name, owner)), "Duplicate channel registration.");
         }
-        Require(roles.Where(pair => pair.Value == "field").All(pair =>
-            registrations.Contains((GameNames.BorderChannel, pair.Key))), "Missing Field border registration.");
+        Require(
+            roles
+                .Where(pair => pair.Value == "field")
+                .All(pair => registrations.Contains((GameNames.BorderChannel, pair.Key))),
+            "Missing Field border registration."
+        );
         var spotIds = new HashSet<string>(StringComparer.Ordinal);
         var logicalIds = new HashSet<string>(StringComparer.Ordinal);
         var fields = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
@@ -167,8 +178,10 @@ internal static class StructureCheck
                 kind == "user" && (type == GameNames.FieldType || type == GameNames.DungeonType),
                 "Spot kind or type differs from server registration."
             );
-            Require(roles[owner] == (type == GameNames.FieldType ? "field" : "instance"),
-                "Spot type differs from its owner registration.");
+            Require(
+                roles[owner] == (type == GameNames.FieldType ? "field" : "instance"),
+                "Spot type differs from its owner registration."
+            );
             var dynamic = false;
             if (spot!["dynamic"] is JsonNode dynamicNode)
             {

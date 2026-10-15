@@ -32,7 +32,8 @@ public sealed class PlayerActor(IZLinkActorContext context, NodeSettings setting
         cancellationToken.ThrowIfCancellationRequested();
         if (completion is not ZLinkActorJoinCompletion.Accepted)
             throw new InvalidOperationException($"Spot join failed: {completion}.");
-        if (Context.SpotId == FieldId) await SendStateAsync();
+        if (Context.SpotId == FieldId)
+            await SendStateAsync();
     }
 
     public PlayerSnapshot Capture() => new(X, Sequence);

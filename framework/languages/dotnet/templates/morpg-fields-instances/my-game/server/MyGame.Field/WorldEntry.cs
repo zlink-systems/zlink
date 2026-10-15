@@ -8,7 +8,9 @@ namespace MyGame.Field;
 public sealed class WorldEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<PlayerActor>
 {
     public IZLinkEntrySpotContext Context { get; } = context;
-    public void Configure() => Context.Handlers.AddActorPacket<EnterWorldHandler, PlayerActor>(nameof(JoinWorldRequest));
+
+    public void Configure() =>
+        Context.Handlers.AddActorPacket<EnterWorldHandler, PlayerActor>(nameof(JoinWorldRequest));
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
