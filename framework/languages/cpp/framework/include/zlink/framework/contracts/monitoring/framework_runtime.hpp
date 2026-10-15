@@ -131,6 +131,7 @@ struct framework_runtime_status_t
     framework_runtime_state_t state = framework_runtime_state_t::preparing;
     bool is_ready = false;
     bool accepting_work = false;
+    bool safe_to_shutdown = false;
     std::optional<std::chrono::system_clock::time_point> operation_deadline;
     std::optional<relocation_result_t> relocation_result;
     std::optional<termination_result_t> termination_result;

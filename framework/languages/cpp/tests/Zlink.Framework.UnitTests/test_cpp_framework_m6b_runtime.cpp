@@ -6009,6 +6009,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
     std::size_t recovery_accepted_finishes = 0;
     struct recovery_barrier_t final : detail::deferred_barrier_t
     {
+        task_t<void> run (std::function<task_t<void> ()> work) override { return work (); }
         explicit recovery_barrier_t (std::size_t &finishes) : _finishes (finishes) {}
         result_t<void> activate (std::function<void ()> work) override
         {
@@ -7325,7 +7326,7 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
       [] (stateful::frozen_object_state_t &, const stateful::object_ref_t &,
           const protocol::relocation_prepare_t &) { return true; },
       [] (const stateful::object_ref_t &)
-        -> std::optional<std::tuple<std::string, std::string, std::uint64_t>> {
+        -> std::optional<zlink::framework::runtime::actor_authority_payload_t> {
           return std::nullopt;
       },
       [] (const std::string &, const stateful::object_ref_t &) {},
