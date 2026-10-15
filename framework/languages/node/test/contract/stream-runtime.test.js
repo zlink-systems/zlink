@@ -376,6 +376,8 @@ test('managed stream binds Session Actors through the Framework service without 
   let bindAttempts = 0;
   const transportAttempts = [];
   const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     async requestService(_targetNodeRid, parts) {
@@ -3893,6 +3895,8 @@ test('production command 36 is sent by binding identity after owner lifecycle fi
   const ingressResults = [];
   let serviceIngress;
   const raw = {
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) {
       serviceIngress = handler;
@@ -4037,6 +4041,8 @@ test('production command 36 is sent by binding identity after owner lifecycle fi
 test('M1 actorJoin actual command 36 reaches the current Session binding during relocation seal', async () => {
   let serviceIngress;
   const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) {
       serviceIngress = handler;
@@ -4194,6 +4200,8 @@ test('M1 actorJoin actual command 36 reaches the current Session binding during 
 test('command 36 refused as not current is traced with the closed flow vocabulary', async () => {
   let serviceIngress;
   const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) {
       serviceIngress = handler;
@@ -4284,13 +4292,13 @@ test('actual raw command 36 from an authenticated peer is admitted by the curren
       resolveApplicationJobQueueConfiguration()
     )
   });
-  assert.equal(raw.topology.admit(
+  assert.equal(raw.admitPeer(
     testServiceNodeDescriptor('source', 4n),
-    'source-connection'
+    1n, 0
   ), 'admitted');
-  assert.equal(raw.topology.admit(
+  assert.equal(raw.admitPeer(
     testServiceNodeDescriptor('target', 5n),
-    'target-connection'
+    2n, 0
   ), 'admitted');
   const serviceRuntime = new ServiceStatefulRuntime(raw, 'session-owner', 4n);
   const serviceActor = serviceRuntime.restoreActorAuthority(
@@ -4329,6 +4337,7 @@ test('actual raw command 36 from an authenticated peer is admitted by the curren
   });
   const ingress = ( sourceRid ) => raw.processReceived({
     sourceRid,
+    routeGeneration: sourceRid === 'source' ? 1n : 2n,
     sourceRoute: Buffer.from(sourceRid),
     parts: [header, payload]
   }, 0, false);
@@ -4361,6 +4370,8 @@ test('source and target command 36 push reach the client before command 44', asy
   const aggregate = await testActorRouteAggregate(sourceRef, 8, 'session');
   let serviceIngress;
   const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) {
       serviceIngress = handler;
@@ -6002,6 +6013,8 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
 test('bound-session replacement accepts an authenticated notice despite a stale Actor route projection', async () => {
   let serviceIngress;
   const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) {
       serviceIngress = handler;

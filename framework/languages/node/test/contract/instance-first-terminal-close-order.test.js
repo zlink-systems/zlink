@@ -9,6 +9,8 @@ const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtim
 function runtime() {
   return new ServiceStatefulRuntime({
     topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved: () => () => {},
     setServiceIngress() {},
     replyService() {}

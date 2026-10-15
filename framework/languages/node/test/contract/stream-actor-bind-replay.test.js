@@ -28,16 +28,24 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function bindFixture(request) {
   const actor = { nodeRid: 'actor-node', actorId: 'actor-bind-replay', generation: 7n };
   const attempts = [];
+  let ready = true;
+  const routeObservers = new Set();
   const runtime = new ServiceStatefulRuntime({
+    observePeerRoute: () => ({ generation: 1n, ready }),
+    observePeerRouteChanged: listener => { routeObservers.add(listener); return () => routeObservers.delete(listener); },
     observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
-    async requestService(target, parts, timeoutMs) {
+    async requestService(target, parts, timeoutMs, onAdmitted) {
       const attempt = {
         target, header: Buffer.from(parts[0]), timeoutMs, at: performance.now(),
         record: decodeStatefulHeader(parts[0])
       };
       attempts.push(attempt);
-      return request(attempt, attempts.length);
+      try { return await request(attempt, attempts.length, onAdmitted); }
+      catch (error) {
+        if (error instanceof ZLinkBackendResultError && error.operation === 'submit') ready = false;
+        throw error;
+      }
     }
   }, 'session-node', 3n);
   runtime.rememberActorRoute({
@@ -73,7 +81,8 @@ function bindFixture(request) {
     completions
   );
   return {
-    attempts, runtime, completions, diagnostics,
+    attempts,
+    ready() { ready = true; for (const observer of routeObservers) observer('actor-node'); }, runtime, completions, diagnostics,
     bind(timeoutMs) {
       return stream.bindActor({ ...actor, objectGeneration: actor.generation, meshName: 'play' }, timeoutMs);
     },
@@ -131,6 +140,7 @@ for (const wallJumpMs of [60_000, -60_000]) {
       // Include fractional remaining budgets, then exhaust the original deadline.
       for (const elapsed of [20.25, 20.25, 20.25, 19.25]) {
         now += elapsed;
+        if (now < 1080.25) fixture.ready();
         t.mock.timers.tick(elapsed);
         await new Promise(resolve => setImmediate(resolve));
       }
@@ -154,7 +164,7 @@ test('STREAM actor bind: route absent for the whole deadline is Unavailable with
       return true;
     });
     assert.equal(ingress, 0);
-    assert(fixture.attempts.length > 1);
+    assert.equal(fixture.attempts.length, 1, 'route absence waits for a ready transition');
     assert.equal(fixture.runtime.allSessionBindings().length, 0);
     fixture.checkAttempts();
   } finally { fixture.close(); }
@@ -162,7 +172,8 @@ test('STREAM actor bind: route absent for the whole deadline is Unavailable with
 
 test('STREAM actor bind: admitted request with reply withheld exhausts as DeadlineExceeded', async () => {
   let ingress = 0;
-  const fixture = bindFixture(async attempt => {
+  const fixture = bindFixture(async (attempt, _number, onAdmitted) => {
+    onAdmitted();
     ingress++;
     await delay(attempt.timeoutMs);
     throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
@@ -217,7 +228,7 @@ test('STREAM actor bind retains admission history after handover followed by rou
       assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
       return true;
     });
-    assert(fixture.attempts.length > 1);
+    assert.equal(fixture.attempts.length, 2);
     fixture.checkAttempts();
   } finally { fixture.close(); }
 });

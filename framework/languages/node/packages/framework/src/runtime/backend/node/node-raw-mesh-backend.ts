@@ -1,3 +1,4 @@
+import { requestDurableService } from '../../foundation/durable-service-request';
 import {
   decodeStreamWireFrame,
   decodeStreamWireHeader,
@@ -417,15 +418,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
           }
         }
       },
-      onPeerDisconnected: (nodeRoutingId, endpoint) => {
-        for (const [intentId, peer] of this.peerIntents) {
-          if (
-            peer.endpoint === endpoint &&
-            (peer.nodeRoutingId === undefined || peer.nodeRoutingId === nodeRoutingId)
-          ) {
-            this.peerIntents.delete(intentId);
-          }
-        }
+      onPeerDisconnected: (_nodeRoutingId, endpoint) => {
         for (const handler of this.peerDisconnectedHandlers) handler(endpoint);
       }
     });
@@ -636,6 +629,23 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.requireRuntime().isObjectClientNodeDirectTarget(String(targetRid));
   }
 
+  observePeerRoute(targetRid: unknown) {
+    return this.requireRuntime().observePeerRoute(String(targetRid));
+  }
+
+  hasPeerRouteOrConnectionIntent(targetRid: unknown, endpoint: string): boolean {
+    const rid = String(targetRid);
+    if (this.requireRuntime().hasSelectedPeerRoute(rid)) return true;
+    for (const intent of this.peerIntents.values()) {
+      if (
+        intent.nodeRoutingId === rid ||
+        (intent.nodeRoutingId === undefined && intent.endpoint === endpoint)
+      )
+        return true;
+    }
+    return false;
+  }
+
   isPeerRouteReady(targetRid: unknown, lifecycleGeneration?: bigint): boolean {
     return this.requireRuntime().isPeerRouteReady(String(targetRid), lifecycleGeneration);
   }
@@ -680,12 +690,20 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   async requestInfrastructureControlFrames(
     targetRid: unknown,
     frames: readonly Uint8Array[],
-    options?: { readonly timeoutMs?: number }
+    options?: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+      readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
+    }
   ): Promise<readonly Uint8Array[]> {
-    return await this.requireRuntime().requestService(
+    return requestDurableService(
+      this.requireRuntime(),
       String(targetRid),
-      frames.map((frame) => Buffer.from(frame)),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      frames,
+      performance.now() + (options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+      'relocation control',
+      options?.signal,
+      options?.onSubmitted
     );
   }
 

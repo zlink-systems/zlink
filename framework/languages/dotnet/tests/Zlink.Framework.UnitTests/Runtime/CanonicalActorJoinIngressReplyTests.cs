@@ -8,8 +8,15 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class CanonicalActorJoinIngressReplyTests
 {
-    [Fact]
-    public async Task Relocation_prepare_stops_when_the_target_intent_ends_before_readiness()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Relocation_prepare_stops_when_the_target_intent_ends(
+        bool targetReady,
+        bool prepareOnWorker
+    )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = new ZLinkManagedMeshNode(context, "mesh");
@@ -19,11 +26,35 @@ public sealed class CanonicalActorJoinIngressReplyTests
         source.Start();
         var targetRid = RoutingId.From("prepare-target");
         var targetEndpoint = $"inproc://prepare-target-{suffix}";
+        var replyWithheld = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await using var target = targetReady
+            ? new ZLinkManagedMeshNode(
+                context,
+                "mesh",
+                nativeTerminalReplySubmitOverride: _ =>
+                {
+                    replyWithheld.TrySetResult();
+                    return SubmitResult.Ok;
+                }
+            )
+            : null;
+        if (target is not null)
+        {
+            target.SetRoutingId(targetRid);
+            target.SetBind(targetEndpoint);
+            target.SetCanonicalRelocationTarget(new CountingRelocationTarget());
+            target.Start();
+            source.ConnectPeer(targetEndpoint, targetRid);
+            await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1);
+        }
+        var targetGeneration = target?.Status().LifecycleGeneration ?? 1;
         source.SetPeerExpectation(
             targetRid,
             targetEndpoint,
             ZLinkServiceSecurityIdentity.Plaintext,
-            1
+            targetGeneration
         );
         var payload = ZLinkRelocationTransferPayload.Create(
             new ZLinkRelocationEnvelope(
@@ -54,7 +85,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 source.Status().LifecycleGeneration,
                 "v-source"
             ),
-            new(targetRid, 1, "target-owner", 1),
+            new(targetRid, targetGeneration, "target-owner", 1),
             1,
             new(1, "actor", "actor", 1, 1),
             source.RoutingId,
@@ -64,17 +95,31 @@ public sealed class CanonicalActorJoinIngressReplyTests
             payload.ChecksumCrc32c,
             1
         );
-        var pending = source
-            .PrepareCanonicalRelocationAsync(
-                targetRid,
-                prepare,
-                payload,
-                TimeSpan.FromSeconds(5),
-                CancellationToken.None
-            )
-            .AsTask();
+        var preparationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Task StartPreparation()
+        {
+            var request = source
+                .PrepareCanonicalRelocationAsync(
+                    targetRid,
+                    prepare,
+                    payload,
+                    TimeSpan.FromSeconds(5),
+                    CancellationToken.None
+                )
+                .AsTask();
+            preparationStarted.SetResult();
+            return request;
+        }
+        var pending = prepareOnWorker ? Task.Run(StartPreparation) : StartPreparation();
+        await preparationStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        if (targetReady)
+            await replyWithheld.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.False(pending.IsCompleted);
         source.RemovePeerExpectation(targetRid, targetEndpoint);
+        if (targetReady)
+            source.DisconnectPeer(targetRid);
         var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await pending.WaitAsync(TimeSpan.FromSeconds(3))
         );

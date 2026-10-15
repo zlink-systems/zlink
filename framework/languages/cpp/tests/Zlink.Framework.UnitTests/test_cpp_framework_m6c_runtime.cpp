@@ -3250,6 +3250,14 @@ void test_public_authority_store_adapter (test_context_t &test)
                     && read->target.node_id == "node-b" && read->target_owner.lease_generation == 5,
                   "public authority adapter must decode its canonical actor authority row");
 
+    store.snapshot.reset ();
+    test.require (adapter.observe_relocation (captured_fence)
+                    == relocation_authority_t::source_lease_expired,
+                  "target commit then authority removal must end the source as expired owner");
+    test.require (adapter.preserve_relocation (captured_fence)
+                    == relocation_authority_t::source_lease_expired,
+                  "Missing must never attempt source Preserve");
+
     const std::vector<std::byte> application_payload{std::byte{0x31}, std::byte{0x32}};
     store.snapshot = zlink::framework::authority_snapshot_t{
       "10", application_payload, 7, 12, {"owner-b", 5}, std::chrono::system_clock::now ()};
@@ -6751,6 +6759,10 @@ int main (int argc, char **argv)
         }
     } executor_shutdown;
     test_context_t test;
+    if (argc == 2 && std::string_view (argv[1]) == "--missing-settlement") {
+        test_public_authority_store_adapter (test);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--relocation-shutdown") {
         for (int mode = 0; mode != 3; ++mode)
             test_relocation_target_shutdown (test, mode);
