@@ -2338,6 +2338,69 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void remoteUnbindPushSnapshotWaitsForTheBindingOwnerTurn() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from("unbind-snapshot-owner");
+            RoutingId sourceRid = RoutingId.from("unbind-snapshot-source");
+            RoutingId sessionRid = RoutingId.from("unbind-snapshot-session");
+            node.setRoutingId(nodeRid);
+            node.setBind("inproc://unbind-snapshot-" + System.nanoTime());
+            node.start();
+            ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = target.createActor("unbind-snapshot-actor", create);
+            }
+            target.rememberActorAuthority(actor, 41, 1);
+            var route =
+                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            actor, node.lifecycleGeneration(), 41, 1);
+            assertTrue(
+                    target.acceptRemoteStreamBinding(
+                            sourceRid,
+                            7,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    1, route, sessionRid, true, 3)));
+            CompletableFuture<CompletionStage<Void>> submitted = new CompletableFuture<>();
+            try (Message late = Message.from("late")) {
+                assertTrue(
+                        target.acceptRemoteStreamBinding(
+                                sourceRid,
+                                7,
+                                sourceRid.toString(),
+                                1,
+                                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                        2, route, sessionRid, false, 3),
+                                accepted -> {
+                                    assertTrue(accepted);
+                                    Thread.ofVirtual()
+                                            .start(
+                                                    () ->
+                                                            submitted.complete(
+                                                                    target
+                                                                            .sendRemoteActorBoundSession(
+                                                                                    actor,
+                                                                                    List.of(
+                                                                                            late))));
+                                    assertDoesNotThrow(() -> submitted.get(1, TimeUnit.SECONDS));
+                                }));
+                ExecutionException failure =
+                        assertThrows(
+                                ExecutionException.class,
+                                () ->
+                                        submitted
+                                                .get(1, TimeUnit.SECONDS)
+                                                .toCompletableFuture()
+                                                .get(1, TimeUnit.SECONDS));
+                assertEquals(
+                        SubmitResult.NOT_FOUND,
+                        ((ZlinkSubmitException) failure.getCause()).getResult());
+            }
+        }
+    }
+
+    @Test
     void remoteBindingIsPublishedOnlyAfterCommandReplySubmission() throws Exception {
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {

@@ -368,6 +368,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         }
     }
 
+    /** Transfers ownership of the reply frames to the reply callback. */
     public void reply(List<Message> replyParts) {
         if (reply == null) {
             throw new IllegalStateException("received message has no reply path");

@@ -2017,10 +2017,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                 return RemoteBindingAdmission.rejected();
                             }
                             if (!command.active()) {
-                                resultSubmitted.accept(true);
+                                // Retire the binding before acknowledging the unbind, so a push
+                                // that follows the acknowledgement finds it retired.
                                 if (remoteStreamBindings.remove(actor.actorId(), candidate)) {
                                     remoteStreamSequences.remove(actor.actorId());
                                 }
+                                resultSubmitted.accept(true);
                                 return RemoteBindingAdmission.accepted(null);
                             }
                             if (!isCurrentActor(actor)) {
