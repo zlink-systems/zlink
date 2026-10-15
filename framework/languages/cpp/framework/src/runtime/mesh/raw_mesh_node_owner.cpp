@@ -2767,16 +2767,21 @@ raw_mesh_node_owner_t::pump_one (service_liveness_registry_t::clock_t::time_poin
                                                descriptor.lifecycle_generation, header.kind,
                                                result);
                     }
-                    // The ADMIT carries the local descriptor read in this owner
-                    // turn, ordered with every descriptor publication.
                     if (result == peer_admission_result_t::not_required
                         || result == peer_admission_result_t::admitted
                         || result == peer_admission_result_t::duplicate_connection) {
                         if (header.kind == protocol::command::hello) {
+                            auto local = _topology.local_descriptor ();
+                            const auto route = _routes.find (received->source_routing_id);
+                            // The exchange owns the descriptor until the remote ADMIT;
+                            // its catch-up publication sends later revisions as UPDATE.
+                            if (route != _routes.end () && !route->second.hello.empty ())
+                                local = protocol::decode_route_mesh_admission (
+                                  route->second.hello, protocol::command::hello,
+                                  local.node_routing_id);
                             (void) submit_header_only_on_lane (
-                              received->source_routing_id,
-                              protocol::encode_route_mesh_admission (
-                                protocol::command::admit, _topology.local_descriptor ()));
+                              received->source_routing_id, protocol::encode_route_mesh_admission (
+                                                             protocol::command::admit, local));
                         } else if (header.kind == protocol::command::admit) {
                             const auto route = _routes.find (received->source_routing_id);
                             if (route != _routes.end () && !route->second.hello.empty ()) {

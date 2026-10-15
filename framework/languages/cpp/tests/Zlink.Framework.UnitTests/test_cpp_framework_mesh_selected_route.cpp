@@ -113,7 +113,14 @@ TEST (CppFrameworkMeshSelectedRoute, AdmissionFollowsCoreSelectedRouteAcrossHand
     first->close ();
 }
 
-class CppFrameworkHelloExchange : public testing::TestWithParam<bool>
+enum class remote_hello_t
+{
+    none,
+    before_update,
+    after_update
+};
+
+class CppFrameworkHelloExchange : public testing::TestWithParam<remote_hello_t>
 {
 };
 
@@ -145,7 +152,7 @@ TEST_P (CppFrameworkHelloExchange, RetainsFirstDescriptorUntilAdmit)
                first);
     auto descriptor = options ("hello-target", 201).descriptor;
     descriptor.advertised_endpoint = remote.options ().last_endpoint ();
-    if (GetParam ()) {
+    const auto receive_remote_hello = [&] {
         ASSERT_TRUE (port
                        .send (bytes ("hello-source"), {protocol::encode_route_mesh_admission (
                                                         protocol::command::hello, descriptor)})
@@ -156,18 +163,23 @@ TEST_P (CppFrameworkHelloExchange, RetainsFirstDescriptorUntilAdmit)
                    received->parts.front ().to_bytes ());
         ASSERT_TRUE (source.topology ().peer (descriptor.node_routing_id));
         EXPECT_FALSE (source.topology ().peer (descriptor.node_routing_id)->ready);
-    }
+    };
+    if (GetParam () == remote_hello_t::before_update)
+        ASSERT_NO_FATAL_FAILURE (receive_remote_hello ());
     const auto latest = source.publish_descriptor_update ([] (auto &descriptor) {
         ++descriptor.descriptor_revision;
         descriptor.state = mesh::service_node_state_t::serving;
     });
     ASSERT_EQ (initial.descriptor_revision + 1, latest.descriptor_revision);
+    // The crossed HELLO must retain our first descriptor after publication too.
+    if (GetParam () == remote_hello_t::after_update)
+        ASSERT_NO_FATAL_FAILURE (receive_remote_hello ());
     // A successful send has completed; only the remote ADMIT remains withheld.
     const auto tick =
       source.tick_liveness (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
     ASSERT_TRUE (receive ());
     EXPECT_EQ (first, received->parts.front ().to_bytes ());
-    if (GetParam ()) {
+    if (GetParam () != remote_hello_t::none) {
         ASSERT_EQ (1u, tick.probes.size ());
         ASSERT_TRUE (receive ());
         EXPECT_EQ (protocol::encode_liveness (protocol::command::livenessProbe,
@@ -194,7 +206,9 @@ TEST_P (CppFrameworkHelloExchange, RetainsFirstDescriptorUntilAdmit)
 
 INSTANTIATE_TEST_SUITE_P (WithAndWithoutRemoteHello,
                           CppFrameworkHelloExchange,
-                          testing::Values (false, true));
+                          testing::Values (remote_hello_t::none,
+                                           remote_hello_t::before_update,
+                                           remote_hello_t::after_update));
 
 TEST (CppFrameworkMeshSelectedRoute, AdmissionRevisionIntegrity)
 {
@@ -228,6 +242,40 @@ TEST (CppFrameworkMeshSelectedRoute, AdmissionRevisionIntegrity)
         EXPECT_EQ (expected,
                    topology.admit (incoming, {1},
                                    mesh::service_liveness_registry_t::clock_t::now (), command));
+    }
+}
+
+TEST (CppFrameworkMeshSelectedRoute, UpdateRequiresAdmittedLifecycle)
+{
+    const auto baseline = options ("guard-peer", 201).descriptor;
+    auto incoming = baseline;
+    incoming.lifecycle_generation = 202;
+    ++incoming.descriptor_revision;
+    const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+    for (const bool has_current : {false, true}) {
+        for (const auto command :
+             {protocol::command::hello, protocol::command::admit, protocol::command::update}) {
+            SCOPED_TRACE (has_current);
+            SCOPED_TRACE (static_cast<int> (command));
+            mesh::service_topology_registry_t topology (options ("guard-local", 101).descriptor);
+            if (has_current)
+                ASSERT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (baseline, {1}));
+            EXPECT_EQ (command == protocol::command::update
+                         ? mesh::peer_admission_result_t::stale_descriptor
+                         : mesh::peer_admission_result_t::admitted,
+                       topology.admit (incoming, {2}, incoming, now, command));
+            const auto peer = topology.peer (incoming.node_routing_id);
+            if (command == protocol::command::update) {
+                EXPECT_EQ (has_current, peer.has_value ());
+                if (has_current && peer) {
+                    EXPECT_EQ (baseline, peer->descriptor);
+                    EXPECT_EQ (std::vector<std::uint8_t> ({1}), peer->connection_id);
+                }
+            } else {
+                ASSERT_TRUE (peer);
+                EXPECT_EQ (incoming, peer->descriptor);
+            }
+        }
     }
 }
 

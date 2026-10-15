@@ -351,9 +351,10 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                                   : not_required != _not_required_peers.end ()
                                     ? &not_required->second
                                     : nullptr;
-            if (current != nullptr
-                && descriptor.lifecycle_generation != current->lifecycle_generation
-                && expected_descriptor == nullptr) {
+            if ((current == nullptr
+                 || descriptor.lifecycle_generation != current->lifecycle_generation)
+                && (command == protocol::command::update
+                    || (current != nullptr && expected_descriptor == nullptr))) {
                 return std::pair{peer_admission_result_t::stale_descriptor,
                                  std::function<void ()>{}};
             }
