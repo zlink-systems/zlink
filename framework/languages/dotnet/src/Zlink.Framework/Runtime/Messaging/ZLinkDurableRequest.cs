@@ -5,8 +5,6 @@ namespace Zlink.Framework.Runtime.Messaging;
 // replay before decoding, including rejected and malformed terminal replies.
 internal static class ZLinkDurableRequest
 {
-    private static readonly TimeSpan AdmissionPollInterval = TimeSpan.FromMilliseconds(10);
-
     internal static async ValueTask<TReply> RequestAsync<TReply>(
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         long startTimestamp,
@@ -18,7 +16,9 @@ internal static class ZLinkDurableRequest
             ValueTask<TReply>
         > submit,
         CancellationToken cancellationToken,
-        TimeProvider? timeProvider = null
+        Func<ZLinkPeerRouteObservation> observeRoute,
+        TimeProvider? timeProvider = null,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         timeProvider ??= TimeProvider.System;
@@ -29,26 +29,78 @@ internal static class ZLinkDurableRequest
             cancellationToken.ThrowIfCancellationRequested();
             var remaining = timeout - timeProvider.GetElapsedTime(startTimestamp);
             if (remaining <= TimeSpan.Zero)
-                throw Exhausted(admitted, lastFailure);
+                throw Exhausted(admitted || requestAdmission?.IsAdmitted == true, lastFailure);
+            var route = observeRoute();
+            if (route.ReadyGeneration == 0)
+            {
+                try
+                {
+                    using var readiness = new ZLinkRequestCompletion<bool>(cancellationToken);
+                    _ = ObserveReadinessAsync(
+                        route.Changed.WaitAsync(remaining, timeProvider, cancellationToken),
+                        readiness
+                    );
+                    await readiness.Task.ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    throw Exhausted(admitted || requestAdmission?.IsAdmitted == true, lastFailure);
+                }
+                continue;
+            }
             try
             {
-                return await submit(wire, remaining, cancellationToken).ConfigureAwait(false);
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken
+                );
+                var submittedGeneration = route.ReadyGeneration;
+                var reply = submit(wire, remaining, attempt.Token).AsTask();
+                while (!reply.IsCompleted)
+                {
+                    await Task.WhenAny(reply, route.Changed).ConfigureAwait(false);
+                    if (reply.IsCompleted)
+                        break;
+                    var next = observeRoute();
+                    if (next.SelectedGeneration != submittedGeneration)
+                    {
+                        await attempt.CancelAsync().ConfigureAwait(false);
+                        break;
+                    }
+                    route = next;
+                }
+                try
+                {
+                    return await reply.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                    when (attempt.IsCancellationRequested
+                        && !cancellationToken.IsCancellationRequested
+                    )
+                {
+                    admitted |= requestAdmission?.IsAdmitted == true;
+                }
             }
             catch (Exception error) when (CanReplay(error, out var requestAdmitted))
             {
                 admitted |= requestAdmitted;
                 lastFailure = error;
             }
+        }
+    }
 
-            remaining = timeout - timeProvider.GetElapsedTime(startTimestamp);
-            if (remaining <= TimeSpan.Zero)
-                throw Exhausted(admitted, lastFailure);
-            await Task.Delay(
-                    remaining < AdmissionPollInterval ? remaining : AdmissionPollInterval,
-                    timeProvider,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
+    private static async Task ObserveReadinessAsync(
+        Task changed,
+        ZLinkRequestCompletion<bool> completion
+    )
+    {
+        try
+        {
+            await changed.ConfigureAwait(false);
+            completion.Complete(true);
+        }
+        catch (Exception error)
+        {
+            completion.Fail(error);
         }
     }
 
@@ -83,3 +135,11 @@ internal static class ZLinkDurableRequest
             cause
         );
 }
+
+// MeshNode owns the selected identity and readiness; consumers retain only the
+// generation used by their attempt and await the existing topology edge.
+internal readonly record struct ZLinkPeerRouteObservation(
+    ulong SelectedGeneration,
+    ulong ReadyGeneration,
+    Task Changed
+);

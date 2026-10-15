@@ -27,6 +27,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     RoutingId RoutingId { get; }
 
+    ZLinkPeerRouteObservation ObservePeerRoute(RoutingId target);
+
     void SetRoutingId(RoutingId routingId);
 
     void SetObjectRole(ZLinkMeshNodeObjectRole objectRole);

@@ -9,6 +9,79 @@ namespace Zlink.Framework.UnitTests;
 public sealed class CanonicalActorJoinIngressReplyTests
 {
     [Fact]
+    public async Task Relocation_prepare_stops_when_the_target_intent_ends_before_readiness()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "mesh");
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetRoutingId(RoutingId.From($"prepare-source-{suffix}"));
+        source.SetBind($"inproc://prepare-source-{suffix}");
+        source.Start();
+        var targetRid = RoutingId.From("prepare-target");
+        var targetEndpoint = $"inproc://prepare-target-{suffix}";
+        source.SetPeerExpectation(
+            targetRid,
+            targetEndpoint,
+            ZLinkServiceSecurityIdentity.Plaintext,
+            1
+        );
+        var payload = ZLinkRelocationTransferPayload.Create(
+            new ZLinkRelocationEnvelope(
+                Guid.NewGuid(),
+                1,
+                new byte[32],
+                [
+                    new ZLinkRelocationParticipantEnvelope(
+                        new ZLinkAuthorityKey("actor:mesh:actor"),
+                        ZLinkPlacementObjectKind.Actor,
+                        1,
+                        1,
+                        new byte[] { 1 },
+                        [],
+                        []
+                    ),
+                ]
+            ),
+            1024
+        );
+        var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            new(1, 1),
+            1,
+            new(
+                "source-owner",
+                1,
+                source.RoutingId,
+                source.Status().LifecycleGeneration,
+                "v-source"
+            ),
+            new(targetRid, 1, "target-owner", 1),
+            1,
+            new(1, "actor", "actor", 1, 1),
+            source.RoutingId,
+            source.Status().LifecycleGeneration,
+            (ulong)payload.TotalLength,
+            (uint)payload.ChunkCount,
+            payload.ChecksumCrc32c,
+            1
+        );
+        var pending = source
+            .PrepareCanonicalRelocationAsync(
+                targetRid,
+                prepare,
+                payload,
+                TimeSpan.FromSeconds(5),
+                CancellationToken.None
+            )
+            .AsTask();
+        Assert.False(pending.IsCompleted);
+        source.RemovePeerExpectation(targetRid, targetEndpoint);
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await pending.WaitAsync(TimeSpan.FromSeconds(3))
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+    }
+
+    [Fact]
     public async Task RelocationPrepare_DuplicateRepliesShareRestoreAndManifestConflictRepliesFailed()
     {
         await using var runtime = await ConnectedRuntime.CreateAsync(null);
