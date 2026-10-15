@@ -9245,6 +9245,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         if (command == ServiceWireConstants.Command.Hello)
             SubmitAdmissionResponseUnderLock(peer, admissionResponse);
+        if (admissionCompleted && command == ServiceWireConstants.Command.Admit)
+        {
+            var helloRevision = RunInboundOperationState(() =>
+                _controlSends.TryGetValue(
+                    new ControlSendKey(
+                        peer.PhysicalRoutingId,
+                        peer.RouteGeneration,
+                        ServiceWireConstants.Command.Hello
+                    ),
+                    out var hello
+                )
+                    ? hello.HelloDescriptorRevision
+                    : 0
+            );
+            if (helloRevision != 0 && _descriptorRevision > helloRevision)
+                SendAdmissionCore(peer, ServiceWireConstants.Command.Update);
+        }
         if (admissionCompleted)
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"mesh_peer_admission_accepted local={_routingId} peer={sourceRid} command={command} endpoint={admission.AdvertisedEndpoint} lifecycle={admission.LifecycleGeneration} revision={admission.DescriptorRevision}"
@@ -12148,7 +12165,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             if (head is null)
             {
-                head = RunState(() => EncodeLocalAdmission(command));
+                head = RunState(() =>
+                {
+                    // Capture the revision in the same owner turn as the HELLO bytes.
+                    state.HelloDescriptorRevision = _descriptorRevision;
+                    return EncodeLocalAdmission(command);
+                });
                 if (!IsValidControlHead(command, head))
                     return false;
             }
@@ -12360,6 +12382,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private sealed class ControlSendState
     {
+        internal ulong HelloDescriptorRevision { get; set; }
         internal byte[]? Pending { get; set; }
     }
 
