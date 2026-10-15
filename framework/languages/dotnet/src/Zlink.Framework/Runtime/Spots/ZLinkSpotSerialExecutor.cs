@@ -474,9 +474,15 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     internal bool HasPendingAcceptedState(Func<object, bool> predicate) =>
         _queue.HasPendingAcceptedState(predicate);
 
+    // Ingress admits accepted states in a state lane turn, so the step 3
+    // decision of Spot messaging §7 runs in one too: an intent that reached
+    // this Spot before the decision is admitted before it.
     internal ValueTask<bool> HasPendingAcceptedStateOrCloseApplicationAdmissionAsync(
         Func<object, bool> predicate
-    ) => _queue.HasPendingAcceptedStateOrCloseApplicationAdmissionAsync(predicate);
+    ) =>
+        RunBarrierStateAsync(() =>
+            _queue.HasPendingAcceptedStateOrCloseApplicationAdmission(predicate)
+        );
 
     internal ValueTask<bool> VisitPendingAcceptedStateAsync(
         ZLinkSpotSerialExecutor? successor,
