@@ -2,7 +2,7 @@
 
 # ZLink .NET Framework 0.30.1 릴리스 노트
 
-Framework 0.30.1은 .NET binding 1.19.2과 Core 1.19.0을 사용합니다.
+Framework 0.30.1은 .NET binding 1.19.2와 Core 1.19.0을 사용합니다.
 
 ## 변경
 
