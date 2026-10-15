@@ -1,7 +1,5 @@
 package systems.zlink.framework.runtime.internal.service;
 
-import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
-
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Objects;
@@ -13,7 +11,9 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
@@ -97,6 +97,30 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Duration timeout,
             Supplier<? extends CompletionStage<T>> submission,
             Consumer<? super T> discardValue) {
+        Objects.requireNonNull(submission, "submission");
+        return submitTerminal(
+                id,
+                timeout,
+                terminal -> {
+                    CompletionStage<T> submitted =
+                            Objects.requireNonNull(submission.get(), "submission result");
+                    submitted.whenComplete(terminal);
+                    return submitted;
+                },
+                discardValue);
+    }
+
+    /**
+     * Registers an operation whose submission reports its terminal straight to this entry (spec 08
+     * §3 E3/E5): the submission receives the entry's terminal callback and returns the stage that
+     * caller cancellation must reach, or {@code null} when nothing remains to cancel. A value that
+     * arrives after the entry ended (timeout, cancellation, close) goes to {@code discardValue}.
+     */
+    public <T> CompletableFuture<T> submitTerminal(
+            UUID id,
+            Duration timeout,
+            Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
+            Consumer<? super T> discardValue) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(submission, "submission");
         Objects.requireNonNull(discardValue, "discardValue");
@@ -106,20 +130,19 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             if (closed) return CompletableFuture.failedFuture(closeFailure);
             operation = registerLocked(timeoutNanos, id);
         }
-        CompletionStage<T> submitted;
+        BiConsumer<T, Throwable> terminal =
+                (value, failure) -> {
+                    if (failure != null) completeExceptionally(id, failure);
+                    else if (!complete(id, value) && value != null) discardValue.accept(value);
+                };
+        CompletionStage<?> cancellationTarget;
         try {
-            submitted = Objects.requireNonNull(submission.get(), "submission result");
+            cancellationTarget = submission.apply(terminal);
         } catch (RuntimeException | Error failure) {
-            completeExceptionally(operation.id(), failure);
+            completeExceptionally(id, failure);
             return operation.completion();
         }
-        ZLinkCompletionBridge.forwardCancellation(operation.completion(), submitted);
-        submitted.whenComplete(
-                (value, failure) -> {
-                    if (failure != null) completeExceptionally(operation.id(), failure);
-                    else if (!complete(operation.id(), value) && value != null)
-                        discardValue.accept(value);
-                });
+        if (cancellationTarget != null) operation.forwardCancellationTo(cancellationTarget);
         return operation.completion();
     }
 
@@ -417,6 +440,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     public static final class Operation<T> extends CompletableFuture<T> {
         private volatile ZLinkServiceOperationRegistry owner;
+        // The submitted stage a caller cancellation reaches once this operation is cancelled.
+        private volatile CompletionStage<?> cancellationTarget;
         private final int slot;
         private final long generation;
         private final UUID id;
@@ -448,6 +473,13 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
         void completeCancellation() {
             super.cancel(false);
+            CompletionStage<?> target = cancellationTarget;
+            if (target != null) target.toCompletableFuture().cancel(false);
+        }
+
+        private void forwardCancellationTo(CompletionStage<?> target) {
+            cancellationTarget = target;
+            if (isCancelled()) target.toCompletableFuture().cancel(false);
         }
     }
 
