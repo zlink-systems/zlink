@@ -1384,14 +1384,6 @@ public sealed class ActorHandoffTests
 
         var exception = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await state.ExecuteDispatchAsync(
-                new ZlinkStreamHeader(
-                    ZlinkStreamMessageKind.Send,
-                    ZlinkStreamCodec.Raw,
-                    ZlinkStreamHeaderFlags.None,
-                    null,
-                    "blocked",
-                    ZlinkStreamMetadata.Empty
-                ),
                 _ =>
                 {
                     invoked = true;
@@ -1419,7 +1411,6 @@ public sealed class ActorHandoffTests
         Task? escapedChild = null;
 
         await state.ExecuteDispatchAsync(
-            Header("first"),
             _ =>
             {
                 escapedChild = Task.Run(async () =>
@@ -1442,7 +1433,6 @@ public sealed class ActorHandoffTests
         );
         var secondDispatch = state
             .ExecuteDispatchAsync(
-                Header("second"),
                 async _ =>
                 {
                     secondEntered.TrySetResult();

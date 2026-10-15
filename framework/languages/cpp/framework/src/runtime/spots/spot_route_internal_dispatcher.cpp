@@ -455,8 +455,6 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
                 || route.actor.object_generation != request.actor_generation
                 || route.route.previous_authority_owner_generation
                      != request.actor_authority_owner_generation
-                || route.route.target_authority_owner_generation
-                     != request.actor_authority_owner_generation + 1
                 || zlink::routing_id_t::from (route.route.target_node_routing_id).to_string ()
                      != runtime.node_rid ().value ()
                 || route.route.target_node_generation != request.target_node_lifecycle_generation

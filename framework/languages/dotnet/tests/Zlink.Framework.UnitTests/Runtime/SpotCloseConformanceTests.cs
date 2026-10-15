@@ -171,6 +171,13 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         bool request
     )
     {
+        var flowPath = Path.Combine(
+            Zlink.Framework.Tests.Common.FrameworkTestEnvironment.CreateTestLogDirectory(
+                "instance-factory-failure"
+            ),
+            "messages.flow"
+        );
+        using var flow = new TestHostMessageFlowListener(flowPath);
         await using var host = await SpotCloseHost.StartAsync();
         await host.RequestInstanceAsync($"factory-warm-{Guid.NewGuid():N}");
         await using var source = await StartPeerAsync(host, registerInstanceFactory: false);
@@ -1305,35 +1312,20 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
     )
     {
         var source = await SpotCloseHost.StartAsync(host.Store, registerInstanceFactory);
-        using (var peerDeadline = new CancellationTokenSource(Wait))
+        try
         {
-            while (true)
-            {
-                peerDeadline.Token.ThrowIfCancellationRequested();
-                try
-                {
-                    source.Runtime.EnsureKnownRouteMeshPeer(
-                        SpotCloseHost.MeshName,
-                        host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RoutingId,
-                        "Instance Spot",
-                        "test peer"
-                    );
-                    host.Runtime.EnsureKnownRouteMeshPeer(
-                        SpotCloseHost.MeshName,
-                        source.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RoutingId,
-                        "Instance Spot",
-                        "test peer"
-                    );
-                    break;
-                }
-                catch (ZLinkFrameworkException error)
-                    when (error.Kind == ZLinkFrameworkErrorKind.Unavailable)
-                {
-                    await Task.Yield();
-                }
-            }
+            using var peerDeadline = new CancellationTokenSource(Wait);
+            await Task.WhenAll(
+                source.WaitForPeerAsync(host, peerDeadline.Token),
+                host.WaitForPeerAsync(source, peerDeadline.Token)
+            );
+            return source;
         }
-        return source;
+        catch
+        {
+            await source.DisposeAsync();
+            throw;
+        }
     }
 
     private static async Task RunReadyRouteCaseAsync(JsonElement routeCase, bool instanceIntent)
@@ -2062,6 +2054,27 @@ internal sealed class SpotCloseHost : IAsyncDisposable
     internal IZLinkSpotManager Manager { get; }
     internal SpotCloseFaultStore Store { get; }
     internal SpotCloseProbeState State { get; }
+
+    internal async Task WaitForPeerAsync(SpotCloseHost peer, CancellationToken cancellationToken)
+    {
+        var targetRid = peer.Runtime.GetSpotNodeRuntime(MeshName).Node.RoutingId;
+        await foreach (
+            var observed in _provider
+                .GetRequiredService<IZLinkRouteMeshRuntime>()
+                .ObserveAsync(MeshName, cancellationToken)
+        )
+        {
+            if (
+                observed.Status.Peers.Any(status =>
+                    status.NodeRid == targetRid && status.State == ZLinkPeerState.Ready
+                )
+            )
+                return;
+        }
+        throw new InvalidOperationException(
+            "RouteMesh observation ended before the test peer was ready."
+        );
+    }
 
     internal static async Task<SpotCloseHost> StartAsync(
         SpotCloseFaultStore? sharedStore = null,

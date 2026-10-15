@@ -460,6 +460,13 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
                          : std::optional<topology_reason_t>{topology_reason_t::no_ready_peer}});
             continue;
         }
+        auto projected = detail::project_topology_peer (peer_rid, peer.descriptor.state, peer.ready,
+                                                        true, topology_reason_t::no_ready_peer);
+        classified_peer_ids.insert (peer_rid.to_hex ());
+        if (projected.state != peer_state_t::ready) {
+            peer_snapshots.push_back (std::move (projected));
+            continue;
+        }
         if (location_is_healthy && location != location_by_rid.end ()) {
             for (const auto &[channel_name, weight] : location->second->channel_weights) {
                 if (weight > 0)
@@ -471,15 +478,7 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
                     ++ready_remote_members[channel.name];
             }
         }
-        classified_peer_ids.insert (peer_rid.to_hex ());
-        peer_snapshots.push_back (mesh_peer_snapshot_t{
-          .node_rid = peer_rid,
-          .state = peer.descriptor.state == mesh::service_node_state_t::draining
-                     ? peer_state_t::draining
-                     : peer_state_t::ready,
-          .unavailable_reason = peer.descriptor.state == mesh::service_node_state_t::draining
-                                  ? std::optional<topology_reason_t>{topology_reason_t::draining}
-                                  : std::nullopt});
+        peer_snapshots.push_back (std::move (projected));
     }
     for (const auto &peer : not_required_peers) {
         const auto rid = zlink::routing_id_t::from (peer.node_routing_id);

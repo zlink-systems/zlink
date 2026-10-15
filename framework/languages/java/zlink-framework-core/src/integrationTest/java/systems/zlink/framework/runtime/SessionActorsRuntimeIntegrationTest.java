@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 import org.junit.jupiter.api.Test;
 
@@ -57,10 +58,67 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class SessionActorsRuntimeIntegrationTest {
+    private static final long REMOTE_BIND_WAIT_SECONDS = 10;
     static final LinkedBlockingQueue<String> actorRelayRequests = new LinkedBlockingQueue<>();
     static final AtomicReference<ZLinkActorManager> channelActors = new AtomicReference<>();
     private static final LinkedBlockingQueue<RoutingId> connectedSessions =
             new LinkedBlockingQueue<>();
+
+    @Test
+    void remoteBindingWithoutApplicationEntrySpotAcknowledgesSessionContext() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var targetOptions = new DefaultZLinkFrameworkOptions();
+        targetOptions.addLocationStore(locations);
+        targetOptions
+                .addRouteMesh("game")
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(RoutingId.from("implicit-entry-owner"))
+                .objects()
+                .server()
+                .addActorFactory(
+                        "player",
+                        PlayerActor.class,
+                        PlayerActorFactory.class,
+                        factory -> factory.disableRelocation());
+        try (var target =
+                RuntimeTestSupport.startFramework(
+                        targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+            var sourceOptions = new DefaultZLinkFrameworkOptions();
+            sourceOptions.addLocationStore(locations);
+            var sourceNode = sourceOptions.addRouteMesh("game");
+            sourceNode
+                    .listen("tcp://127.0.0.1:0")
+                    .setRoutingId(RoutingId.from("implicit-entry-client"));
+            sourceNode.objects().client();
+            sourceNode
+                    .peerConnections()
+                    .connect(
+                            target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game").endpoint());
+            var stream = sourceOptions.addStreamNode("gateway");
+            stream.bind("tcp://127.0.0.1:0");
+            stream.enableActorDispatch();
+            stream.registerSession(GameSession.class);
+            try (var source =
+                            RuntimeTestSupport.startFramework(
+                                    sourceOptions, new ZLinkJavaBackendAdapterFactory());
+                    Socket client = connectStream(source, "gateway")) {
+                var created =
+                        assertInstanceOf(
+                                ZLinkActorCreateResult.Created.class,
+                                source.actorManager()
+                                        .getOrCreate("implicit-player", "player")
+                                        .submit()
+                                        .toCompletableFuture()
+                                        .get(REMOTE_BIND_WAIT_SECONDS, TimeUnit.SECONDS));
+                var bound =
+                        source.sessionActors("gateway", connectedSession())
+                                .bindOrGet(created.actor())
+                                .toCompletableFuture()
+                                .get(REMOTE_BIND_WAIT_SECONDS, TimeUnit.SECONDS);
+                assertEquals(created.actor().actorId(), bound.actorId());
+            }
+        }
+    }
 
     @Test
     void bindUsesStreamActorGatewayBindingPath() throws Exception {

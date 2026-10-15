@@ -78,6 +78,13 @@ using namespace std::chrono_literals;
 namespace
 {
 
+bool ready_peer (const mesh::service_topology_registry_t &topology,
+                 const std::vector<std::uint8_t> &routing_id)
+{
+    const auto peer = topology.peer (routing_id);
+    return peer && peer->ready;
+}
+
 template <class T> T await_task (zlink::framework::task_t<T> task)
 {
     return std::move (task).result ().value ();
@@ -1902,8 +1909,9 @@ void verify_public_host_route_fence_reads_store_without_second_cache (bool relea
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline = std::chrono::steady_clock::now () + 5s;
-    while (!source->transport ().topology ().peer (target->status ().routing_id ().to_bytes ())
-           && std::chrono::steady_clock::now () < connect_deadline) {
+    while (
+      !ready_peer (source->transport ().topology (), target->status ().routing_id ().to_bytes ())
+      && std::chrono::steady_clock::now () < connect_deadline) {
         (void) source->dispatch_ready (noop_dispatch);
         (void) target->dispatch_ready (noop_dispatch);
         std::this_thread::sleep_for (1ms);
@@ -2359,8 +2367,8 @@ void verify_actor_create_replays_after_reciprocal_handover ()
         assert (await_task (target.pump_one (now)) != mesh::raw_mesh_pump_result_t::protocol_error);
     };
     const auto admission_deadline = std::chrono::steady_clock::now () + 2s;
-    while ((!source.topology ().peer (target_descriptor.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && std::chrono::steady_clock::now () < admission_deadline)
         pump ();
     assert (source.topology ().peer (target_descriptor.node_routing_id));
@@ -3371,8 +3379,14 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
-    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
-            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
+    const auto peers_ready = [&] {
+        const auto source_peer =
+          source->transport ().topology ().peer (target_status.routing_id ().to_bytes ());
+        const auto target_peer =
+          target->transport ().topology ().peer (source_status.routing_id ().to_bytes ());
+        return source_peer && source_peer->ready && target_peer && target_peer->ready;
+    };
+    while (!peers_ready ()
            && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
         await_task (source->dispatch_ready (noop_dispatch));
         await_task (target->dispatch_ready (noop_dispatch));
@@ -3380,6 +3394,7 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
     }
     assert (source->transport ().topology ().peer (target_status.routing_id ().to_bytes ()));
     assert (target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()));
+    assert (peers_ready ());
 
     const std::vector<zlink::message_t> first{zlink::message_t::from (std::string ("first"))};
     const std::vector<zlink::message_t> second{zlink::message_t::from (std::string ("second"))};
@@ -3501,9 +3516,10 @@ void verify_public_host_batches_with_finite_permits ()
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
-    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
-            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
-           && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
+    while (
+      (!ready_peer (source->transport ().topology (), target_status.routing_id ().to_bytes ())
+       || !ready_peer (target->transport ().topology (), source_status.routing_id ().to_bytes ()))
+      && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
         await_task (source->dispatch_ready (noop_dispatch));
         await_task (target->dispatch_ready (noop_dispatch));
         std::this_thread::sleep_for (1ms);
@@ -3624,13 +3640,13 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     const auto admit = [&] (host::public_host_runtime_t &runtime, const zlink::routing_id_t &peer) {
-        while (!runtime.transport ().topology ().peer (peer.to_bytes ())
+        while (!ready_peer (runtime.transport ().topology (), peer.to_bytes ())
                && clock_t::now () < connect_deadline) {
             await_task (runtime.dispatch_ready (noop_dispatch));
-            if (!runtime.transport ().topology ().peer (peer.to_bytes ()))
+            if (!ready_peer (runtime.transport ().topology (), peer.to_bytes ()))
                 wait_for_input (runtime.transport (), connect_deadline);
         }
-        return runtime.transport ().topology ().peer (peer.to_bytes ()).has_value ();
+        return ready_peer (runtime.transport ().topology (), peer.to_bytes ());
     };
     // Each endpoint must keep servicing its handshake while the other waits
     // for input. A wait on one endpoint cannot drive the other's receive turn.
@@ -3785,9 +3801,10 @@ void verify_logical_multicast_continues_after_one_target_failure ()
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
     const auto connect_deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
-    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
-            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
-           && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
+    while (
+      (!ready_peer (source->transport ().topology (), target_status.routing_id ().to_bytes ())
+       || !ready_peer (target->transport ().topology (), source_status.routing_id ().to_bytes ()))
+      && mesh::service_liveness_registry_t::clock_t::now () < connect_deadline) {
         (void) source->dispatch_ready (noop_dispatch);
         (void) target->dispatch_ready (noop_dispatch);
         std::this_thread::sleep_for (1ms);
@@ -4400,8 +4417,8 @@ void verify_raw_spot_and_actor_routing ()
     const auto target_descriptor = target.topology ().local_descriptor ();
     const auto deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     assert (source.connect_peer (target.endpoint (), target_descriptor));
-    while ((!source.topology ().peer (target_descriptor.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -5049,8 +5066,8 @@ void verify_node_request_requires_remote_admission ()
          .result ()
          .value ());
 
-    while ((!source.topology ().peer (target_descriptor.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -5189,8 +5206,8 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
     const auto published_target = target.topology ().local_descriptor ();
     const auto deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     assert (source.connect_peer (target.endpoint (), published_target));
-    while ((!source.topology ().peer (published_target.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), published_target.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -5322,8 +5339,8 @@ void verify_raw_terminal_reply_relay ()
     const auto target_descriptor = target.topology ().local_descriptor ();
     const auto deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
     assert (source.connect_peer (target.endpoint (), target_descriptor));
-    while ((!source.topology ().peer (target_descriptor.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -5513,8 +5530,8 @@ void verify_durable_reply_relay_single_winner ()
     const auto target_descriptor = target.topology ().local_descriptor ();
     auto deadline = std::chrono::steady_clock::now () + 5s;
     assert (source.connect_peer (target.endpoint (), target_descriptor));
-    while ((!source.topology ().peer (target_descriptor.node_routing_id)
-            || !target.topology ().peer (source_descriptor.node_routing_id))
+    while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
+            || !ready_peer (target.topology (), source_descriptor.node_routing_id))
            && std::chrono::steady_clock::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -6091,9 +6108,11 @@ void verify_remote_user_spot_create_close_terminal_once ()
     auto deadline = std::chrono::steady_clock::now () + 5s;
     auto dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                         std::vector<zlink::message_t>) {};
-    while ((!source->transport ().topology ().peer (target->status ().routing_id ().to_bytes ())
-            || !target->transport ().topology ().peer (source->status ().routing_id ().to_bytes ()))
-           && std::chrono::steady_clock::now () < deadline) {
+    while (
+      (!ready_peer (source->transport ().topology (), target->status ().routing_id ().to_bytes ())
+       || !ready_peer (target->transport ().topology (),
+                       source->status ().routing_id ().to_bytes ()))
+      && std::chrono::steady_clock::now () < deadline) {
         (void) source->dispatch_ready (dispatch);
         (void) target->dispatch_ready (dispatch);
         std::this_thread::sleep_for (1ms);
@@ -7320,9 +7339,10 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
     const auto dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                               std::vector<zlink::message_t>) {};
     const auto deadline = std::chrono::steady_clock::now () + 5s;
-    while ((!source->transport ().topology ().peer (target_status.routing_id ().to_bytes ())
-            || !target->transport ().topology ().peer (source_status.routing_id ().to_bytes ()))
-           && std::chrono::steady_clock::now () < deadline) {
+    while (
+      (!ready_peer (source->transport ().topology (), target_status.routing_id ().to_bytes ())
+       || !ready_peer (target->transport ().topology (), source_status.routing_id ().to_bytes ()))
+      && std::chrono::steady_clock::now () < deadline) {
         (void) source->dispatch_ready (dispatch);
         (void) target->dispatch_ready (dispatch);
     }

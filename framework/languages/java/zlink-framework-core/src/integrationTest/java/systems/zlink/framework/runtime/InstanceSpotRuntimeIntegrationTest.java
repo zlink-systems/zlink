@@ -901,123 +901,145 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         @Override
         public CompletionStage<Void> onInitialize() {
-            return start.thenCompose(
-                    ignored -> {
-                        CompletionStage<String> warmup =
-                                context.outbound()
-                                        .requestToSpot(request.get().spotId(), new Warmup("warmup"))
-                                        .instanceSpot("EchoInstance")
-                                        .inMesh("game")
-                                        .submit(String.class);
-                        CompletionStage<String> first =
-                                warmup.thenCompose(
-                                        warmupReply -> {
-                                            assertEquals("warmup:ready", warmupReply);
-                                            return context.outbound()
-                                                    .requestToSpot(request.get().spotId(), "hello")
-                                                    .instanceSpot("EchoInstance")
-                                                    .inMesh("game")
-                                                    .timeout(Duration.ofSeconds(5))
-                                                    .submit(String.class);
+            // Initialization installs the scenario; the test opens start after Serving.
+            // The scenario's terminal belongs to reply, independently of startup.
+            start.thenCompose(
+                            ignored -> {
+                                CompletionStage<String> warmup =
+                                        context.outbound()
+                                                .requestToSpot(
+                                                        request.get().spotId(),
+                                                        new Warmup("warmup"))
+                                                .instanceSpot("EchoInstance")
+                                                .inMesh("game")
+                                                .submit(String.class);
+                                CompletionStage<String> first =
+                                        warmup.thenCompose(
+                                                warmupReply -> {
+                                                    assertEquals("warmup:ready", warmupReply);
+                                                    return context.outbound()
+                                                            .requestToSpot(
+                                                                    request.get().spotId(), "hello")
+                                                            .instanceSpot("EchoInstance")
+                                                            .inMesh("game")
+                                                            .timeout(Duration.ofSeconds(5))
+                                                            .submit(String.class);
+                                                });
+                                CompletionStage<String> firstAndSecond =
+                                        first.thenCompose(
+                                                firstValue -> {
+                                                    return context.outbound()
+                                                            .requestToSpot(
+                                                                    request.get().spotId(), "again")
+                                                            .instanceSpot()
+                                                            .inMesh("game")
+                                                            .timeout(Duration.ofSeconds(5))
+                                                            .submit(String.class)
+                                                            .thenApply(
+                                                                    secondValue ->
+                                                                            firstValue
+                                                                                    + "|"
+                                                                                    + secondValue);
+                                                });
+                                CompletionStage<String> beforeAfterClose =
+                                        firstAndSecond.thenCompose(
+                                                value -> {
+                                                    beforeClose.complete(null);
+                                                    return closeStart.thenCompose(
+                                                            closeAllowed ->
+                                                                    context.outbound()
+                                                                            .sendToSpot(
+                                                                                    request.get()
+                                                                                            .spotId(),
+                                                                                    new CloseInstance())
+                                                                            .instanceSpot()
+                                                                            .inMesh("game")
+                                                                            .submit()
+                                                                            .thenApply(
+                                                                                    ignoredClose ->
+                                                                                            value));
+                                                });
+                                if (probeStart != null) {
+                                    probeStart
+                                            .thenCompose(
+                                                    probeStarted -> {
+                                                        var outbound =
+                                                                context.outbound()
+                                                                        .requestToSpot(
+                                                                                request.get()
+                                                                                        .spotId(),
+                                                                                "during-close");
+                                                        return probeDirect
+                                                                ? outbound.inMesh("game")
+                                                                        .timeout(
+                                                                                Duration.ofSeconds(
+                                                                                        5))
+                                                                        .submit(String.class)
+                                                                : outbound.instanceSpot()
+                                                                        .inMesh("game")
+                                                                        .timeout(
+                                                                                Duration.ofSeconds(
+                                                                                        5))
+                                                                        .submit(String.class);
+                                                    })
+                                            .whenComplete(
+                                                    (value, failure) -> {
+                                                        if (failure == null)
+                                                            probeReply.complete(value);
+                                                        probeFailure.complete(
+                                                                failure == null
+                                                                        ? new AssertionError(
+                                                                                "Closing request was admitted")
+                                                                        : failure
+                                                                                        instanceof
+                                                                                        CompletionException
+                                                                                                wrapped
+                                                                                ? wrapped.getCause()
+                                                                                : failure);
+                                                    });
+                                }
+                                CompletableFuture<String> completion =
+                                        beforeAfterClose
+                                                .thenCompose(
+                                                        value ->
+                                                                afterCloseStart.thenCompose(
+                                                                        afterCloseAllowed ->
+                                                                                context.outbound()
+                                                                                        .requestToSpot(
+                                                                                                request.get()
+                                                                                                        .spotId(),
+                                                                                                "after-close")
+                                                                                        .instanceSpot()
+                                                                                        .inMesh(
+                                                                                                "game")
+                                                                                        .timeout(
+                                                                                                Duration
+                                                                                                        .ofSeconds(
+                                                                                                                5))
+                                                                                        .submit(
+                                                                                                String
+                                                                                                        .class)
+                                                                                        .thenApply(
+                                                                                                after ->
+                                                                                                        value
+                                                                                                                + "|"
+                                                                                                                + after)))
+                                                .toCompletableFuture();
+                                completion.whenComplete(
+                                        (value, failure) -> {
+                                            if (failure == null) {
+                                                reply.complete(value);
+                                            } else {
+                                                reply.completeExceptionally(failure);
+                                            }
                                         });
-                        CompletionStage<String> firstAndSecond =
-                                first.thenCompose(
-                                        firstValue -> {
-                                            return context.outbound()
-                                                    .requestToSpot(request.get().spotId(), "again")
-                                                    .instanceSpot()
-                                                    .inMesh("game")
-                                                    .timeout(Duration.ofSeconds(5))
-                                                    .submit(String.class)
-                                                    .thenApply(
-                                                            secondValue ->
-                                                                    firstValue + "|" + secondValue);
-                                        });
-                        CompletionStage<String> beforeAfterClose =
-                                firstAndSecond.thenCompose(
-                                        value -> {
-                                            beforeClose.complete(null);
-                                            return closeStart.thenCompose(
-                                                    closeAllowed ->
-                                                            context.outbound()
-                                                                    .sendToSpot(
-                                                                            request.get().spotId(),
-                                                                            new CloseInstance())
-                                                                    .instanceSpot()
-                                                                    .inMesh("game")
-                                                                    .submit()
-                                                                    .thenApply(
-                                                                            ignoredClose -> value));
-                                        });
-                        if (probeStart != null) {
-                            probeStart
-                                    .thenCompose(
-                                            probeStarted -> {
-                                                var outbound =
-                                                        context.outbound()
-                                                                .requestToSpot(
-                                                                        request.get().spotId(),
-                                                                        "during-close");
-                                                return probeDirect
-                                                        ? outbound.inMesh("game")
-                                                                .timeout(Duration.ofSeconds(5))
-                                                                .submit(String.class)
-                                                        : outbound.instanceSpot()
-                                                                .inMesh("game")
-                                                                .timeout(Duration.ofSeconds(5))
-                                                                .submit(String.class);
-                                            })
-                                    .whenComplete(
-                                            (value, failure) -> {
-                                                if (failure == null) probeReply.complete(value);
-                                                probeFailure.complete(
-                                                        failure == null
-                                                                ? new AssertionError(
-                                                                        "Closing request was admitted")
-                                                                : failure
-                                                                                instanceof
-                                                                                CompletionException
-                                                                                        wrapped
-                                                                        ? wrapped.getCause()
-                                                                        : failure);
-                                            });
-                        }
-                        CompletableFuture<String> completion =
-                                beforeAfterClose
-                                        .thenCompose(
-                                                value ->
-                                                        afterCloseStart.thenCompose(
-                                                                afterCloseAllowed ->
-                                                                        context.outbound()
-                                                                                .requestToSpot(
-                                                                                        request.get()
-                                                                                                .spotId(),
-                                                                                        "after-close")
-                                                                                .instanceSpot()
-                                                                                .inMesh("game")
-                                                                                .timeout(
-                                                                                        Duration
-                                                                                                .ofSeconds(
-                                                                                                        5))
-                                                                                .submit(
-                                                                                        String
-                                                                                                .class)
-                                                                                .thenApply(
-                                                                                        after ->
-                                                                                                value
-                                                                                                        + "|"
-                                                                                                        + after)))
-                                        .toCompletableFuture();
-                        completion.whenComplete(
-                                (value, failure) -> {
-                                    if (failure == null) {
-                                        reply.complete(value);
-                                    } else {
-                                        reply.completeExceptionally(failure);
-                                    }
-                                });
-                        return completion.thenApply(value -> null);
-                    });
+                                return completion.thenApply(value -> null);
+                            })
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null) reply.completeExceptionally(failure);
+                            });
+            return CompletableFuture.completedFuture(null);
         }
     }
 
@@ -1056,7 +1078,8 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         @Override
         public CompletionStage<Void> onInitialize() {
-            return start.thenCompose(
+            // The scenario starts after runtime startup and reports its terminal via reply.
+            start.thenCompose(
                             ignored ->
                                     context.outbound()
                                             .requestToSpot(spotId, "hello")
@@ -1159,8 +1182,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                                 } else {
                                     reply.completeExceptionally(failure);
                                 }
-                            })
-                    .thenApply(ignored -> null);
+                            });
+            return CompletableFuture.completedFuture(null);
         }
     }
 

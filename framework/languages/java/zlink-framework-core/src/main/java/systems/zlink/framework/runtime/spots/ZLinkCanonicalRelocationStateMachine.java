@@ -600,8 +600,30 @@ final class ZLinkCanonicalRelocationStateMachine
                     new IllegalArgumentException("canonical relocation prepare source differs"));
         }
         Fence fence = new Fence(prepare.id(), prepare.targetAttemptGeneration());
-        TerminalTarget terminal = inStateLane(() -> terminalTargets.get(fence));
-        if (terminal != null) {
+        Map.Entry<Object, TargetAttempt> selection =
+                inStateLane(
+                        () -> {
+                            TerminalTarget terminal = terminalTargets.get(fence);
+                            if (terminal != null)
+                                return new java.util.AbstractMap.SimpleImmutableEntry<>(
+                                        terminal, null);
+                            TargetAttempt existing = targets.get(fence);
+                            if (existing != null)
+                                return new java.util.AbstractMap.SimpleImmutableEntry<>(
+                                        existing, null);
+                            TargetAttempt created = new TargetAttempt(prepare);
+                            MeshNodeState state = node.status().state();
+                            if (state == MeshNodeState.DRAINING
+                                    || state == MeshNodeState.STOPPED
+                                    || state == MeshNodeState.ERROR)
+                                return new java.util.AbstractMap.SimpleImmutableEntry<>(
+                                        created, created);
+                            targets.put(fence, created);
+                            return new java.util.AbstractMap.SimpleImmutableEntry<>(null, created);
+                        });
+        Object current = selection.getKey();
+        TargetAttempt created = selection.getValue();
+        if (current instanceof TerminalTarget terminal) {
             if (terminal.source().equals(transportSource)
                     && java.util.Arrays.equals(
                             terminal.encodedPrepare(),
@@ -617,22 +639,6 @@ final class ZLinkCanonicalRelocationStateMachine
                                     terminal.encodedPrepare()),
                             prepare));
         }
-        TargetAttempt created = new TargetAttempt(prepare);
-        TargetAttempt current =
-                inStateLane(
-                        () -> {
-                            TargetAttempt existing = targets.get(fence);
-                            if (existing == null) {
-                                MeshNodeState state = node.status().state();
-                                if (state == MeshNodeState.DRAINING
-                                        || state == MeshNodeState.STOPPED
-                                        || state == MeshNodeState.ERROR) {
-                                    return created;
-                                }
-                                targets.put(fence, created);
-                            }
-                            return existing;
-                        });
         if (current == created) {
             ZLinkFrameworkException rejected =
                     new ZLinkFrameworkException(
@@ -646,7 +652,7 @@ final class ZLinkCanonicalRelocationStateMachine
                     : publishFailure(fence, created, transportSource, rejected, true)
                             .thenApply(ignored -> null);
         }
-        TargetAttempt attempt = current == null ? created : current;
+        TargetAttempt attempt = current == null ? created : (TargetAttempt) current;
         if (!java.util.Arrays.equals(
                 ZLinkCanonicalRelocationProtocol.encodePrepare(attempt.prepare()),
                 ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))) {
@@ -683,7 +689,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                             .exceptionally(
                                                     publicationFailure -> {
                                                         LOGGER.warning(
-                                                                "Canonical relocation failure reply could not be sent: "
+                                                                "Canonical relocation failure reply"
+                                                                        + " could not be sent: "
                                                                         + unwrap(
                                                                                 publicationFailure));
                                                         return null;
@@ -1188,6 +1195,7 @@ final class ZLinkCanonicalRelocationStateMachine
                             if (existing == null) {
                                 terminalTargets.put(fence, terminal);
                             }
+                            targets.remove(fence, attempt);
                             return existing;
                         });
         if (current == null) {
@@ -1195,7 +1203,6 @@ final class ZLinkCanonicalRelocationStateMachine
                     Instant.now().plus(transferOptions.messageFollowDuration()),
                     () -> inStateLane(() -> terminalTargets.remove(fence, terminal)));
         }
-        inStateLane(() -> targets.remove(fence, attempt));
         attempt.terminal().complete(null);
     }
 
@@ -1499,7 +1506,12 @@ final class ZLinkCanonicalRelocationStateMachine
                                                                     .currentSpotId()
                                                                     .equals(
                                                                             prepare.object()
-                                                                                    .objectId())) {
+                                                                                    .objectId())
+                                                            && authority
+                                                                            .get()
+                                                                            .currentSpotGeneration()
+                                                                    == prepare.object()
+                                                                            .objectGeneration()) {
                                                         values.add(actor);
                                                     }
                                                 }
@@ -1628,7 +1640,33 @@ final class ZLinkCanonicalRelocationStateMachine
                 restorePrimary,
                 rootBytes,
                 participants,
-                List.of());
+                envelope.sessionBindings().stream()
+                        .map(
+                                binding -> {
+                                    if (binding.participantId() <= 0
+                                            || binding.participantId() > participants.size())
+                                        throw new IllegalArgumentException(
+                                                "Session binding participant is outside inventory");
+                                    var participant =
+                                            participants.get(
+                                                    Math.toIntExact(binding.participantId() - 1));
+                                    if (participant.objectKind()
+                                            != ZLinkPlacementObjectKind.ACTOR.value())
+                                        throw new IllegalArgumentException(
+                                                "Session binding participant is not an Actor");
+                                    return new ZLinkSpotRetireControl.SessionRouteFence(
+                                            participant.objectId(),
+                                            participant.objectGeneration(),
+                                            participant.sourceAuthorityOwnerGeneration(),
+                                            prepare.coordinator().expectedAuthorityStoreVersion(),
+                                            RoutingId.from(binding.sessionOwnerNodeRid()),
+                                            binding.sessionOwnerNodeGeneration(),
+                                            binding.sessionOwnerId(),
+                                            binding.sessionOwnerLeaseGeneration(),
+                                            RoutingId.from(binding.sessionRid()),
+                                            binding.bindingGeneration());
+                                })
+                        .toList());
     }
 
     private static String relocationInventoryDiagnostic(
@@ -2278,8 +2316,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                             cutover.boundaryChecksumCrc32c());
                             if (batch.isEmpty()) {
                                 LOGGER.severe(
-                                        "Canonical CUTOVER boundary record count or checksum differs"
-                                                + " from the received relay section: "
+                                        "Canonical CUTOVER boundary record count or checksum"
+                                                + " differs from the received relay section: "
                                                 + prepare.id());
                                 throw new IllegalStateException(
                                         "canonical relocation cutover boundary differs");

@@ -17,6 +17,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MessageMemoryContractTest {
     @Test
+    void virtualThreadReturnsItsNativeSlotToTheSharedPool() throws Exception {
+        TestSupport.assumeNative();
+        java.lang.reflect.Field field = Class.forName(
+                "systems.zlink.contracts.messaging.Message$MessageSlotPool")
+            .getDeclaredField("SHARED");
+        field.setAccessible(true);
+        java.util.Queue<?> shared = (java.util.Queue<?>) field.get(null);
+        int before = shared.size();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            executor.submit(() -> new Message(16).close()).get();
+        }
+        // A slot kept in the ended virtual thread's pool would be neither
+        // reused nor closed.
+        assertEquals(Math.max(before, 1), shared.size());
+    }
+
+    @Test
     void primitiveAccessPreservesEndianAtEveryAlignment() {
         TestSupport.assumeNative();
         for (int offset = 0; offset < Long.BYTES; offset++) {

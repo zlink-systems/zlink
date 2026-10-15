@@ -20,16 +20,17 @@ internal static class ZLinkCanonicalSpotRelocationWriter
         if (applicationVersion < 0)
             throw new ArgumentOutOfRangeException(nameof(applicationVersion));
         var ordered = inventory
-            .Participants.OrderBy(static participant =>
-                participant.ObjectKind
-                    is ZLinkPlacementObjectKind.UserSpot
-                        or ZLinkPlacementObjectKind.InstanceSpot
-                    ? 0
-                    : 1
+            .Participants.OrderBy(
+                static participant => participant.AuthorityKey.Value,
+                StringComparer.Ordinal
             )
-            .ThenBy(static participant => participant.AuthorityKey.Value, StringComparer.Ordinal)
             .ToArray();
-        var spot = ordered[0];
+        var spot = ordered.Single(static participant =>
+            participant.ObjectKind
+                is ZLinkPlacementObjectKind.UserSpot
+                    or ZLinkPlacementObjectKind.InstanceSpot
+        );
+        var spotParticipantId = checked((ulong)Array.IndexOf(ordered, spot) + 1);
         if (
             spot.ObjectKind
             is not (ZLinkPlacementObjectKind.UserSpot or ZLinkPlacementObjectKind.InstanceSpot)
@@ -74,7 +75,7 @@ internal static class ZLinkCanonicalSpotRelocationWriter
             )
             {
                 byte[] frozenRecord;
-                if (index == 0)
+                if (participant == spot)
                 {
                     using var record = new MemoryStream();
                     WriteAcceptedRequest(record, job, spotId, spot, targetNodeRid);
@@ -108,11 +109,11 @@ internal static class ZLinkCanonicalSpotRelocationWriter
             .ToArray();
         var timers = snapshots
             .OrderBy(static item => item.Timer.TimerId, StringComparer.Ordinal)
-            .Select(static item =>
+            .Select(item =>
             {
                 var timer = item.Snapshot.Timer;
                 return new ServiceWirePilotCodec.RelocationTimerRegistration(
-                    ParticipantId: 1,
+                    ParticipantId: spotParticipantId,
                     timer.Name,
                     item.Snapshot.HandlerType.AssemblyQualifiedName
                         ?? item.Snapshot.HandlerType.FullName
@@ -135,11 +136,11 @@ internal static class ZLinkCanonicalSpotRelocationWriter
         var pending = snapshots
             .Where(static item => item.Snapshot.Timer.PendingTick.HasValue)
             .OrderBy(static item => item.Timer.PendingAcceptedSequence)
-            .Select(static item =>
+            .Select(item =>
             {
                 var tick = item.Snapshot.Timer.PendingTick!.Value;
                 return new ServiceWirePilotCodec.RelocationPendingTimerTick(
-                    ParticipantId: 1,
+                    ParticipantId: spotParticipantId,
                     item.Timer.PendingAcceptedSequence,
                     item.Timer.TimerId,
                     tick.DeliveryIndex,
@@ -159,7 +160,19 @@ internal static class ZLinkCanonicalSpotRelocationWriter
                 states,
                 savedWork,
                 timers,
-                pending
+                pending,
+                ordered
+                    .Select(
+                        (participant, index) =>
+                            participant.SessionBinding is { } binding
+                                ? binding with
+                                {
+                                    ParticipantId = checked((ulong)index + 1),
+                                }
+                                : null
+                    )
+                    .OfType<ServiceWirePilotCodec.RelocationSessionBinding>()
+                    .ToArray()
             )
         );
         using var stream = new MemoryStream(encoded, writable: false);
@@ -175,6 +188,7 @@ internal static class ZLinkCanonicalSpotRelocationWriter
                         LogicalTimers = state.LogicalTimers,
                         CompletionPayload = participant.CompletionPayload,
                         CanonicalParticipantId = state.CanonicalParticipantId,
+                        SessionBinding = state.SessionBinding,
                     };
                 }
             )

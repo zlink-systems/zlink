@@ -185,7 +185,9 @@ public sealed class FrameworkJsonProfileTests
     public void Decoder_Rejects_Numeric_Enum_Representations(string json)
     {
         Assert.ThrowsAny<JsonException>(() =>
-            ZLinkFrameworkJsonPayloadCodec.Deserialize<ProfileEnumMessage>(Encoding.UTF8.GetBytes(json))
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<ProfileEnumMessage>(
+                Encoding.UTF8.GetBytes(json)
+            )
         );
     }
 

@@ -245,6 +245,11 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             await CaptureAsync(() => DisposeSafelyAsync(runtime.DisposeAsync))
                 .ConfigureAwait(false);
 
+        // Cancellation requests the stop; joining the receive owners ends their
+        // native API calls before any inbound channel socket is closed.
+        await CaptureAsync(() => WaitForListenerTasksAsync(resources.ListenerTasks))
+            .ConfigureAwait(false);
+
         foreach (var bundle in resources.ClientServerServerBundles)
             await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);
 
@@ -268,9 +273,6 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
         foreach (var bundle in resources.SubscriberBundles)
             await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);
-
-        await CaptureAsync(() => WaitForListenerTasksAsync(resources.ListenerTasks))
-            .ConfigureAwait(false);
 
         await CaptureAsync(TimerScheduler.DisposeAsync).ConfigureAwait(false);
         Capture(_pressureMetricRegistration.Dispose);

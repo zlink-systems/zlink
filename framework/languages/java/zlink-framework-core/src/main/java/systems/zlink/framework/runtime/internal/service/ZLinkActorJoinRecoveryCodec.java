@@ -422,10 +422,7 @@ public final class ZLinkActorJoinRecoveryCodec {
                 || value.targetSpotGeneration() <= 0
                 || value.targetAuthorityOwnerGeneration() <= 0
                 || value.targetSpotAuthorityOwnerGeneration() <= 0
-                || value.operationId().high() == 0 && value.operationId().low() == 0
-                || value.actorAuthorityOwnerGeneration() == Long.MAX_VALUE
-                || value.targetAuthorityOwnerGeneration()
-                        != value.actorAuthorityOwnerGeneration() + 1) {
+                || value.operationId().high() == 0 && value.operationId().low() == 0) {
             throw invalid("Actor Join recovery identity is invalid");
         }
         Coordinator coordinator = value.coordinator();
