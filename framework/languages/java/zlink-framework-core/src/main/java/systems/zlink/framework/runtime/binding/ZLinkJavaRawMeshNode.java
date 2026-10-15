@@ -1949,7 +1949,7 @@ final class ZLinkJavaRawMeshNode
             submission = CompletableFuture.failedFuture(failure);
         }
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
-        if (reporter == null || !reporter.captureEnabled()) {
+        if (reporter == null || !reporter.errorsEnabled()) {
             return submission.toCompletableFuture();
         }
         CompletionStage<Void> observed =
@@ -4063,7 +4063,7 @@ final class ZLinkJavaRawMeshNode
                 ((ZLinkJavaRawSpotNode) spotNode()).recoverInstanceSpot(envelope, route);
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
         if ((!envelope.request() && !ZLinkRuntimeMetrics.enabled())
-                && (reporter == null || !reporter.captureEnabled())) return recovery;
+                && (reporter == null || !reporter.errorsEnabled())) return recovery;
         return recovery.whenComplete(
                 (ignored, failure) -> {
                     if (failure != null) {
@@ -5159,7 +5159,7 @@ final class ZLinkJavaRawMeshNode
             ZLinkDispatchErrorAction action) {
         Throwable cause = unwrap(failure);
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
-        boolean captureEnabled = reporter != null && reporter.captureEnabled();
+        boolean captureEnabled = reporter != null && reporter.errorsEnabled();
         boolean metricsEnabled = !request && ZLinkRuntimeMetrics.enabled();
         if (action == ZLinkDispatchErrorAction.DROP && !metricsEnabled && !captureEnabled) {
             return null;
