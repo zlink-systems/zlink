@@ -878,7 +878,7 @@ export class RawServiceMeshRuntime {
       ]).then((sent) => (sent ? 'infrastructure' : 'dropped'));
     }
     const peer = this.topology.admittedPeer(received.sourceRid);
-    const currentSource = peer?.liveness?.connectionId === received.routeGeneration;
+    const currentSource = peer?.liveness !== undefined && peer.liveness.connectionId === received.routeGeneration;
     try {
       const header = decodeHeader(received.parts[0]!);
       if (header.command === M6aServiceWireCommand.hello && this.peerAdmissionSealed?.() === true) {
@@ -897,8 +897,8 @@ export class RawServiceMeshRuntime {
         decodeReject(received.parts[0]!);
         return 'infrastructure';
       }
-      if (!currentSource || peer === undefined) return 'dropped';
-      this.liveness.recordReceived(peer.liveness!, nowMs);
+      if (!currentSource) return 'dropped';
+      this.liveness.recordReceived(peer.liveness, nowMs);
       if (header.command === M6aServiceWireCommand.update) {
         return this.processAdmission(received, header, nowMs).catch((error) =>
           this.receiveProtocolFailure(error)

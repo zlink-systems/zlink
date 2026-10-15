@@ -445,7 +445,12 @@ test('RouteMesh admission classifies stale and conflicting descriptor revisions 
     descriptorRevision: 2n,
     state: 'serving' as const
   };
-  assert.equal(runtime.topology.admit(current, 'route:7'), 'admitted');
+  assert.equal(
+    runtime.topology.admit(current, 'route:7', undefined, () =>
+      runtime.liveness.admit(current.nodeRoutingId, 7n, 0)
+    ),
+    'admitted'
+  );
   (runtime as unknown as { selectedRoutes: Map<string, bigint> }).selectedRoutes.set(
     current.nodeRoutingId,
     7n
@@ -1116,7 +1121,9 @@ test('remote request is not rejected by legacy mailbox limits after shared admis
         ...descriptor('peer'),
         state: 'serving'
       },
-      'peer-connection'
+      'peer-connection',
+      undefined,
+      () => runtime.liveness.admit('peer', 1n, 0)
     ),
     'admitted'
   );
@@ -1133,6 +1140,7 @@ test('remote request is not rejected by legacy mailbox limits after shared admis
     processReceived(
       received: {
         sourceRid: string;
+        routeGeneration: bigint;
         requestSeq: bigint;
         parts: readonly Buffer[];
         reply(parts: readonly Uint8Array[]): void;
@@ -1145,6 +1153,7 @@ test('remote request is not rejected by legacy mailbox limits after shared admis
   const result = await internals.processReceived(
     {
       sourceRid: 'peer',
+      routeGeneration: 1n,
       requestSeq: 19n,
       parts: [
         encodeNodeRequestHeader(7n),
@@ -1226,6 +1235,7 @@ test('raw protocol errors reply when correlation is recoverable and always repor
 test('unsequenced canonical actorJoin(28) drops with ProtocolError observation and no reply', async () => {
   type UnsequencedReceived = {
     readonly sourceRid: string;
+    readonly routeGeneration: bigint;
     readonly parts: readonly Buffer[];
     reply(parts: readonly Uint8Array[]): void;
   };
@@ -1239,7 +1249,12 @@ test('unsequenced canonical actorJoin(28) drops with ProtocolError observation a
     descriptor: descriptor('local'),
     onProtocolError: (record) => observed.push(record)
   });
-  runtime.topology.admit({ ...descriptor('peer'), state: 'serving' }, 'peer-connection');
+  runtime.topology.admit(
+    { ...descriptor('peer'), state: 'serving' },
+    'peer-connection',
+    undefined,
+    () => runtime.liveness.admit('peer', 1n, 0)
+  );
   const stateful = new ServiceStatefulRuntime(runtime, 'local', 1n);
   const frames = encodeActorJoin28({
     correlation: 17n,
@@ -1264,6 +1279,7 @@ test('unsequenced canonical actorJoin(28) drops with ProtocolError observation a
   let replyAttempts = 0;
   const received: UnsequencedReceived = {
     sourceRid: 'peer',
+    routeGeneration: 1n,
     parts: frames,
     reply(_parts) {
       replyAttempts++;
