@@ -32,7 +32,7 @@ public final class ZLinkApplicationJobContext {
      */
     public static boolean hasTransferableQueuedOwnership() {
         State state = CURRENT.get();
-        return state != null && state.ownership.canHandoff();
+        return state != null && state.ownership != null && state.ownership.canHandoff();
     }
 
     /**
@@ -49,7 +49,7 @@ public final class ZLinkApplicationJobContext {
     /** Transfers queued ownership without entering the host permit owner. */
     public static QueuedOwnership transferQueuedOwnership() {
         State state = CURRENT.get();
-        if (state == null || !state.ownership.handoff()) {
+        if (state == null || state.ownership == null || !state.ownership.handoff()) {
             return null;
         }
         return new QueuedOwnership(state.permit);
@@ -65,10 +65,14 @@ public final class ZLinkApplicationJobContext {
         return permit == null ? () -> {} : enter(new State(permit, new QueuedOwnership(permit)));
     }
 
-    /** Returns capacity immediately before the first application instruction. */
+    /**
+     * Returns capacity immediately before the first application instruction. The returned permit
+     * stays in this context but no longer moves to another job.
+     */
     public static void beforeFirstApplicationInstruction() {
         State state = CURRENT.get();
         if (state != null) {
+            state.ownership = null;
             state.permit.handlerStarted();
         }
     }
@@ -132,7 +136,7 @@ public final class ZLinkApplicationJobContext {
 
     private static final class State {
         private final ZLinkApplicationJobQueue.Permit permit;
-        private final QueuedOwnership ownership;
+        private QueuedOwnership ownership;
 
         private State(ZLinkApplicationJobQueue.Permit permit, QueuedOwnership ownership) {
             this.permit = permit;

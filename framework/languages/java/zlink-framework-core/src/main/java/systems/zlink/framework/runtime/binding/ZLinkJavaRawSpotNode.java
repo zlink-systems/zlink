@@ -2769,38 +2769,50 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return owner.publishLogicalMulticast(source, channelName, topic, metadata, parts);
     }
 
+    /** Posts a local publication to every local Spot subscribed to its topic. */
     void enqueueLogicalMulticast(
             String channelName,
             String topic,
-            String sourceSpotId,
-            RoutingId sourceNodeRid,
-            byte[] metadata,
-            List<Message> parts) {
-        enqueueLogicalMulticast(
-                channelName, topic, sourceSpotId, sourceNodeRid, metadata, null, parts);
-    }
-
-    void enqueueLogicalMulticast(
-            String channelName,
-            String topic,
-            String sourceSpotId,
             RoutingId sourceNodeRid,
             byte[] metadata,
             String contentType,
             List<Message> parts) {
         for (ZLinkJavaRawSpot target : spots.values()) {
-            if (!target.accepts(topic)) {
-                continue;
+            if (target.accepts(topic)) {
+                enqueueLogicalMulticast(
+                        target, channelName, topic, sourceNodeRid, metadata, contentType, parts);
             }
-            target.enqueueTopic(
-                    new systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage(
-                            Optional.of(sourceNodeRid),
-                            channelName,
-                            topic,
-                            metadata == null ? new byte[0] : metadata.clone(),
-                            ZLinkJavaRawSpot.copy(parts),
-                            contentType));
         }
+    }
+
+    /** The local Spots a received Logical Multicast fans out to, in the order they are posted. */
+    List<ZLinkJavaRawSpot> logicalMulticastTargets(String topic) {
+        List<ZLinkJavaRawSpot> targets = new ArrayList<>();
+        for (ZLinkJavaRawSpot target : spots.values()) {
+            if (target.accepts(topic)) {
+                targets.add(target);
+            }
+        }
+        return targets;
+    }
+
+    /** Posts one Logical Multicast child to one Spot with its own copy of the payload. */
+    static void enqueueLogicalMulticast(
+            ZLinkJavaRawSpot target,
+            String channelName,
+            String topic,
+            RoutingId sourceNodeRid,
+            byte[] metadata,
+            String contentType,
+            List<Message> parts) {
+        target.enqueueTopic(
+                new systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage(
+                        Optional.of(sourceNodeRid),
+                        channelName,
+                        topic,
+                        metadata == null ? new byte[0] : metadata.clone(),
+                        ZLinkJavaRawSpot.copy(parts),
+                        contentType));
     }
 
     CompletionStage<Void> sendToSpot(
