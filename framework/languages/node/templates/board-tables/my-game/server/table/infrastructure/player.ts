@@ -6,15 +6,14 @@ import type {
   ZLinkActorJoinCompletion,
   ZLinkActorRelocationAdapter
 } from '@zlink-systems/framework';
+import { Reasons } from '../../shared/constants';
 import { ActionRejected } from '../../shared/messages';
 export class Player implements ZLinkActor {
   constructor(readonly context: ZLinkActorContext) {}
   async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
     if (completion.status === 'failed') throw new Error(`Actor join failed: ${completion.kind}`);
-    if (completion.status === 'rejected') {
-      if (!completion.reply) throw new Error('Actor join rejected without a reason');
-      await this.context.boundSession.send(completion.reply.decode(ActionRejected)).submit();
-    }
+    if (completion.status === 'rejected')
+      await this.context.boundSession.send(new ActionRejected(Reasons.full)).submit();
   }
 }
 @Injectable()

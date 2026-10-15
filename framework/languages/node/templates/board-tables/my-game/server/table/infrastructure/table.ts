@@ -10,13 +10,7 @@ import type {
   ZLinkSpotRelocationAdapter
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../../shared/config';
-import {
-  ActionRejected,
-  TableView,
-  HandDealt,
-  JoinTableRequest,
-  type HandResult
-} from '../../shared/messages';
+import { TableView, HandDealt, JoinTableRequest, type HandResult } from '../../shared/messages';
 import { TableState, type TableSnapshot } from '../domain/table-state';
 import { Player } from './player';
 @Injectable({ scope: Scope.TRANSIENT })
@@ -38,8 +32,7 @@ export class Table implements ZLinkSpot<Player> {
     const join = request.decode(JoinTableRequest);
     if (join.playerId !== actorId || join.tableId !== String(this.context.spotId))
       throw new Error('Join identity mismatch');
-    const reason = this.state.admission(actorId);
-    return reason ? { accepted: false, reply: new ActionRejected(reason) } : { accepted: true };
+    return this.state.admission(actorId) ? { accepted: false } : { accepted: true };
   }
   async onJoinedActor(actor: Player): Promise<void> {
     this.state.join(actor.context.actorId);
