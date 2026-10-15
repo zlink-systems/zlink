@@ -57,6 +57,13 @@ class Matchmaker(private val rooms: RoomProvisioner) : AutoCloseable {
         return result
     }
 
+    @Synchronized
+    fun cancelWaiting(request: MatchRequest, result: CompletableFuture<MatchResponse>): Boolean {
+        if (waiting[request.mode] !== result) return false
+        result.cancel(false)
+        return true
+    }
+
     override fun close() {
         val pending =
             synchronized(this) {

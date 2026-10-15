@@ -2,13 +2,20 @@ package MyGame.lobby.infrastructure
 
 import MyGame.*
 import MyGame.lobby.application.*
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
+import io.netty.bootstrap.ServerBootstrap
+import io.netty.buffer.ByteBufInputStream
+import io.netty.buffer.Unpooled
+import io.netty.channel.*
+import io.netty.channel.group.DefaultChannelGroup
+import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.socket.ChannelInputShutdownEvent
+import io.netty.channel.socket.SocketChannel
+import io.netty.channel.socket.nio.NioServerSocketChannel
+import io.netty.handler.codec.http.*
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.URI
-import java.util.concurrent.CompletionException
-import java.util.concurrent.Executors
+import java.util.concurrent.*
 import systems.zlink.framework.spots.*
 
 class ZLinkRooms(private val spots: ZLinkSpotManager, private val config: NodeConfig) :
@@ -21,50 +28,127 @@ class ZLinkRooms(private val spots: ZLinkSpotManager, private val config: NodeCo
 }
 
 class HttpLobby(config: NodeConfig, private val matches: Matchmaker) : AutoCloseable, HttpEndpoint {
-    private val executor = Executors.newVirtualThreadPerTaskExecutor()
-    private val server: HttpServer
+    private val io = NioEventLoopGroup()
+    private val channels = DefaultChannelGroup(io.next())
+    private val server: Channel
 
     init {
         val uri = URI.create(requireNotNull(config.httpEndpoint))
-        server = HttpServer.create(InetSocketAddress(uri.host, uri.port), 0)
-        server.executor = executor
-        server.createContext(Names.MATCH_PATH, ::handle)
-        server.start()
-    }
-
-    override fun endpoint() = "http://${server.address.hostString}:${server.address.port}"
-
-    private fun handle(exchange: HttpExchange) {
-        exchange.use {
-            if (it.requestMethod != HttpProtocol.POST || it.requestURI.path != Names.MATCH_PATH) {
-                it.sendResponseHeaders(HttpProtocol.NOT_FOUND, -1)
-                return
-            }
-            val request =
-                try {
-                    Json.mapper.readValue(it.requestBody, MatchRequest::class.java)
-                } catch (error: IOException) {
-                    it.sendResponseHeaders(HttpProtocol.BAD_REQUEST, -1)
-                    return
-                }
-            try {
-                val assignment = matches.match(request).toCompletableFuture().join()
-                val body = Json.mapper.writeValueAsBytes(assignment)
-                it.responseHeaders.set(HttpProtocol.CONTENT_TYPE, HttpProtocol.JSON)
-                it.sendResponseHeaders(HttpProtocol.OK, body.size.toLong())
-                it.responseBody.write(body)
-            } catch (error: IllegalArgumentException) {
-                it.sendResponseHeaders(HttpProtocol.BAD_REQUEST, -1)
-            } catch (error: CompletionException) {
-                error.cause?.printStackTrace(System.err)
-                it.sendResponseHeaders(HttpProtocol.UNAVAILABLE, -1)
-            }
+        try {
+            server =
+                ServerBootstrap()
+                    .group(io)
+                    .channel(NioServerSocketChannel::class.java)
+                    .childOption(ChannelOption.ALLOW_HALF_CLOSURE, true)
+                    .childHandler(
+                        object : ChannelInitializer<SocketChannel>() {
+                            override fun initChannel(channel: SocketChannel) {
+                                channels.add(channel)
+                                channel
+                                    .pipeline()
+                                    .addLast(
+                                        HttpServerCodec(),
+                                        HttpObjectAggregator(Int.MAX_VALUE),
+                                        RequestHandler(),
+                                    )
+                            }
+                        }
+                    )
+                    .bind(uri.host, uri.port)
+                    .syncUninterruptibly()
+                    .channel()
+        } catch (error: RuntimeException) {
+            io.shutdownGracefully(0, 0, TimeUnit.SECONDS).syncUninterruptibly()
+            throw IOException("HTTP listener failed", error)
         }
     }
 
+    override fun endpoint(): String {
+        val address = server.localAddress() as InetSocketAddress
+        return "http://${address.hostString}:${address.port}"
+    }
+
+    private inner class RequestHandler : SimpleChannelInboundHandler<FullHttpRequest>() {
+        private lateinit var request: MatchRequest
+        private var pending: CompletableFuture<MatchResponse>? = null
+
+        override fun channelRead0(ctx: ChannelHandlerContext, message: FullHttpRequest) {
+            if (pending != null) return
+            if (
+                message.method().name() != HttpProtocol.POST ||
+                    QueryStringDecoder(message.uri()).path() != Names.MATCH_PATH
+            ) {
+                reply(ctx, HttpProtocol.NOT_FOUND, null)
+                return
+            }
+            val result: CompletableFuture<MatchResponse>
+            try {
+                request =
+                    Json.mapper.readValue(
+                        ByteBufInputStream(message.content()) as java.io.InputStream,
+                        MatchRequest::class.java,
+                    )
+                result = matches.match(request).toCompletableFuture()
+                pending = result
+            } catch (error: IOException) {
+                reply(ctx, HttpProtocol.BAD_REQUEST, null)
+                return
+            } catch (error: IllegalArgumentException) {
+                reply(ctx, HttpProtocol.BAD_REQUEST, null)
+                return
+            }
+            ctx.channel().closeFuture().addListener { matches.cancelWaiting(request, result) }
+            result.whenComplete { assignment, error ->
+                ctx.executor().execute {
+                    if (!ctx.channel().isActive) return@execute
+                    if (error != null) {
+                        if (error !is CancellationException) {
+                            error.printStackTrace(System.err)
+                            reply(ctx, HttpProtocol.UNAVAILABLE, null)
+                        }
+                    } else {
+                        try {
+                            reply(ctx, HttpProtocol.OK, Json.mapper.writeValueAsBytes(assignment))
+                        } catch (failure: IOException) {
+                            failure.printStackTrace(System.err)
+                            reply(ctx, HttpProtocol.UNAVAILABLE, null)
+                        }
+                    }
+                }
+            }
+        }
+
+        override fun userEventTriggered(ctx: ChannelHandlerContext, event: Any) {
+            if (event is ChannelInputShutdownEvent) {
+                // Remove an unpaired waiter before closing the peer's half-closed connection.
+                val result = pending
+                if (result == null || matches.cancelWaiting(request, result)) ctx.close()
+            } else super.userEventTriggered(ctx, event)
+        }
+
+        override fun exceptionCaught(ctx: ChannelHandlerContext, error: Throwable) {
+            error.printStackTrace(System.err)
+            ctx.close()
+        }
+    }
+
+    private fun reply(ctx: ChannelHandlerContext, status: Int, body: ByteArray?) {
+        val response =
+            DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1,
+                HttpResponseStatus.valueOf(status),
+                if (body == null) Unpooled.EMPTY_BUFFER else Unpooled.wrappedBuffer(body),
+            )
+        if (body != null) response.headers().set(HttpProtocol.CONTENT_TYPE, HttpProtocol.JSON)
+        HttpUtil.setContentLength(response, response.content().readableBytes().toLong())
+        HttpUtil.setKeepAlive(response, false)
+        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE)
+    }
+
     override fun close() {
+        server.close().syncUninterruptibly()
         matches.close()
-        server.stop(0)
-        executor.close()
+        channels.close().awaitUninterruptibly()
+        io.shutdownGracefully(0, 0, TimeUnit.SECONDS).syncUninterruptibly()
     }
 }

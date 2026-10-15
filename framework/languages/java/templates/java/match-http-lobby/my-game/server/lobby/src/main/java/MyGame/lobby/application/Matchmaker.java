@@ -67,6 +67,13 @@ public final class Matchmaker implements AutoCloseable {
         return result;
     }
 
+    public synchronized boolean cancelWaiting(
+            MatchRequest request, CompletableFuture<MatchResponse> result) {
+        if (waiting.get(request.mode()) != result) return false;
+        result.cancel(false);
+        return true;
+    }
+
     public void close() {
         List<CompletableFuture<MatchResponse>> pending;
         synchronized (this) {

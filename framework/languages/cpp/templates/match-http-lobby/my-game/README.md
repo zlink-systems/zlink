@@ -47,9 +47,9 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,reconnect,update
 
 Each run checks `zlink.structure.json` before starting Redis, uses a unique Compose project and Redis key prefix, and stores configuration and node stdout/stderr (including Normal message-flow diagnostics) under `.logs/run-<id>/`. Cleanup failures make the run fail. `build/bin/my-game-e2e --check-structure` validates the actual structure without starting services (append `.exe` on Windows).
 
-`POST /match {"playerId":"p1","mode":"duel"}` holds the first response until another player requests the same mode. Both receive `{roomId, sessionEndpoint}` after Room preparation. The lobby is process-local and is not a relocation participant. Configure `HttpEndpoint` with port 0; READY reports the actual bound port. Set its `SessionEndpoint` to the Session node's published endpoint. A pending HTTP request is owned by the lobby until paired or process shutdown; production authentication, cancellation policy and durable matchmaking are extension points.
+`POST /match {"playerId":"p1","mode":"duel"}` holds the first response until another player requests the same mode. Both receive `{roomId, sessionEndpoint}` after Room preparation. The lobby is process-local and is not a relocation participant. Configure `HttpEndpoint` with port 0; READY reports the actual bound port. Set its `SessionEndpoint` to the Session node's published endpoint. A waiting client disconnect removes its request from the queue and releases its player ID. Paired requests keep their existing Room preparation behavior. Production authentication and durable matchmaking are extension points.
 
-Pure Room rule tests (admission, closed wall boundaries, exact range, sequence rejection, winner and application snapshot) are available with `ctest --test-dir build --output-on-failure` (`-C Release` for a multi-configuration build).
+Room rule tests (admission, closed wall boundaries, exact range, sequence rejection, winner and application snapshot) and the HTTP disconnect/rejoin regression are available with `ctest --test-dir build --output-on-failure` (`-C Release` for a multi-configuration build).
 
 ## Known issues
 

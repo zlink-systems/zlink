@@ -26,8 +26,13 @@ public final class Scenarios {
                                 "p2-" + suffix,
                                 assignment.roomId())) {
             a.connect();
-            b.connect();
-            var initial = both(a, b, v -> v.players().size() == Rules.PLAYERS);
+            var initial = b.connect();
+            Structure.require(
+                    initial.players().size() == Rules.PLAYERS, "Incorrect initial player count");
+            Structure.require(
+                    initial.equals(
+                            a.next(RoomView.class, v -> v.players().size() == Rules.PLAYERS)),
+                    "Room views differ");
             Structure.require(
                     initial.roomId().equals(assignment.roomId())
                             && initial.players().stream().allMatch(p -> p.hp() == Rules.INITIAL_HP),

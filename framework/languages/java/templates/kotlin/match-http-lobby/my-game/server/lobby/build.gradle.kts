@@ -1,6 +1,10 @@
 plugins { application }
 
-dependencies { implementation(project(":server:shared")) }
+dependencies {
+    implementation(project(":server:shared"))
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:3.5.14"))
+    implementation("io.netty:netty-codec-http")
+}
 
 application {
     mainClass.set("MyGame.lobby.ProgramKt")

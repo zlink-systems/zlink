@@ -1,6 +1,7 @@
 #pragma once
 #include "server/shared/http.hpp"
 #include "server/shared/hosting.hpp"
+#include <functional>
 #include <map>
 #include <set>
 namespace MyGame
@@ -12,6 +13,7 @@ class HttpLobby final : public fx::hosted_service_t
     {
         boost::beast::tcp_stream stream;
         boost::beast::flat_buffer buffer;
+        char probe;
         http::request<http::string_body> request;
         http::response<http::string_body> response;
         explicit Connection (Tcp::socket socket) : stream (std::move (socket)) {}
@@ -35,7 +37,7 @@ class HttpLobby final : public fx::hosted_service_t
     Tcp::acceptor acceptor_;
     std::thread worker_;
     const NodeConfig &config_;
-    fx::spot_manager_t *spots_ = nullptr;
+    std::function<MatchResponse (const std::string &)> prepare_;
     struct Waiting
     {
         std::string player;
@@ -44,6 +46,24 @@ class HttpLobby final : public fx::hosted_service_t
     std::map<std::string, Waiting> queues_;
     std::set<std::string> participants_;
     std::uint64_t sequence_ = 0;
+    void watch_waiter (const std::string &mode, const std::shared_ptr<Connection> &connection)
+    {
+        connection->stream.expires_never ();
+        connection->stream.socket ().async_read_some (
+          net::buffer (&connection->probe, 1), [this, mode, connection] (auto error, auto) {
+              const auto waiting = queues_.find (mode);
+              if (waiting == queues_.end () || waiting->second.connection != connection)
+                  return;
+              if (!error) {
+                  watch_waiter (mode, connection);
+                  return;
+              }
+              participants_.erase (waiting->second.player);
+              queues_.erase (waiting);
+              boost::system::error_code ignored;
+              connection->stream.socket ().close (ignored);
+          });
+    }
     void match (const std::shared_ptr<Connection> &connection)
     {
         if (connection->request.method () != http::verb::post
@@ -67,20 +87,18 @@ class HttpLobby final : public fx::hosted_service_t
             if (found == queues_.end ()) {
                 participants_.insert (player);
                 queues_.emplace (request.mode, Waiting{player, connection});
+                watch_waiter (request.mode, connection);
                 return;
             }
             partner = found->second.connection;
+            boost::system::error_code ignored;
+            partner->stream.socket ().cancel (ignored);
             participants_.erase (found->second.player);
             queues_.erase (found);
             if (sequence_ == std::numeric_limits<std::uint64_t>::max ())
                 throw std::overflow_error ("Room sequence exhausted");
             const auto room = std::string (Names::room_prefix) + std::to_string (++sequence_);
-            const auto created =
-              await_host (spots_->get_or_create (room, Names::room).in_mesh (Names::mesh).async (),
-                          Limits::packet);
-            if (created.state == fx::spot_create_state_t::rejected)
-                throw std::runtime_error ("Room preparation rejected");
-            const nlohmann::json assignment = MatchResponse{room, config_.SessionEndpoint};
+            const nlohmann::json assignment = prepare_ (room);
             partner->reply (http::status::ok, assignment);
             connection->reply (http::status::ok, assignment);
         }
@@ -116,10 +134,23 @@ class HttpLobby final : public fx::hosted_service_t
         });
     }
 
+    void start_io ()
+    {
+        accept ();
+        worker_ = std::thread ([this] { io_.run (); });
+    }
+
   public:
     explicit HttpLobby (const NodeConfig &config) :
         acceptor_ (io_, http_address (config.HttpEndpoint)), config_ (config)
     {
+    }
+    HttpLobby (const NodeConfig &config,
+               std::function<MatchResponse (const std::string &)> prepare) :
+        HttpLobby (config)
+    {
+        prepare_ = std::move (prepare);
+        start_io ();
     }
     std::string endpoint () const
     {
@@ -128,9 +159,16 @@ class HttpLobby final : public fx::hosted_service_t
     }
     fx::task_t<void> start (fx::service_provider_t &services) override
     {
-        spots_ = &services.get_required<fx::spot_manager_t> ();
-        accept ();
-        worker_ = std::thread ([this] { io_.run (); });
+        auto &spots = services.get_required<fx::spot_manager_t> ();
+        prepare_ = [this, &spots] (const std::string &room) {
+            const auto created =
+              await_host (spots.get_or_create (room, Names::room).in_mesh (Names::mesh).async (),
+                          Limits::packet);
+            if (created.state == fx::spot_create_state_t::rejected)
+                throw std::runtime_error ("Room preparation rejected");
+            return MatchResponse{room, config_.SessionEndpoint};
+        };
+        start_io ();
         co_return;
     }
     void stop () noexcept override
