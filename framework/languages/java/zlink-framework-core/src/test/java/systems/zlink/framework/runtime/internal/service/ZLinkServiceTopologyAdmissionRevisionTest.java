@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
@@ -94,12 +95,52 @@ final class ZLinkServiceTopologyAdmissionRevisionTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void updateCannotEstablishAdmission(boolean knownPeer) {
+        var registry =
+                new ZLinkServiceTopologyRegistry(
+                        descriptor("local", 1, ZLinkServiceNodeDescriptor.State.PREPARING, false));
+        var original = descriptor("peer", 2, ZLinkServiceNodeDescriptor.State.PREPARING, false);
+        if (knownPeer) {
+            assertEquals(
+                    ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                    registry.admit(original, "route", ServiceWireConstants.COMMAND_HELLO));
+        }
+        var incoming =
+                descriptor(
+                        "peer",
+                        3,
+                        ZLinkServiceNodeDescriptor.State.SERVING,
+                        false,
+                        knownPeer ? 8 : 7);
+        assertEquals(
+                ZLinkServiceTopologyRegistry.AdmissionResult.STALE_DESCRIPTOR,
+                registry.admit(incoming, "replacement", ServiceWireConstants.COMMAND_UPDATE));
+        if (knownPeer) {
+            var peer = registry.peer(original.nodeRoutingId()).orElseThrow();
+            assertEquals(original, peer.descriptor());
+            assertEquals("route", peer.connectionId());
+        } else {
+            assertTrue(registry.peer(incoming.nodeRoutingId()).isEmpty());
+        }
+    }
+
     private static ZLinkServiceNodeDescriptor descriptor(
             String id, long revision, ZLinkServiceNodeDescriptor.State state, boolean changed) {
+        return descriptor(id, revision, state, changed, 7);
+    }
+
+    private static ZLinkServiceNodeDescriptor descriptor(
+            String id,
+            long revision,
+            ZLinkServiceNodeDescriptor.State state,
+            boolean changed,
+            long lifecycleGeneration) {
         return new ZLinkServiceNodeDescriptor(
                 "mesh",
                 RoutingId.from(id),
-                7,
+                lifecycleGeneration,
                 revision,
                 "inproc://" + id + (changed ? "-changed" : ""),
                 List.of(),

@@ -94,7 +94,8 @@ public final class ZLinkServiceTopologyRegistry {
                 current != null
                         && current.descriptor().lifecycleGeneration()
                                 == descriptor.lifecycleGeneration();
-        if (sameConnection && !sameLifecycle) return AdmissionResult.STALE_DESCRIPTOR;
+        if (!sameLifecycle && (sameConnection || command == ServiceWireConstants.COMMAND_UPDATE))
+            return AdmissionResult.STALE_DESCRIPTOR;
         if (sameLifecycle) {
             var previous = current.descriptor();
             if (descriptor.descriptorRevision() < previous.descriptorRevision()
