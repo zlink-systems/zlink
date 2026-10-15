@@ -2456,7 +2456,7 @@ different owner's or a restarted process's value.
 <a id="authority-owner-generation"></a>
 ### AuthorityOwnerGeneration
 
-A provider-issued value indicating the order in which the authority owner changed
+A value indicating the order in which the authority owner changed
 within the same object incarnation. Different from ObjectGeneration, which
 distinguishes whether an object was re-created after deletion.
 

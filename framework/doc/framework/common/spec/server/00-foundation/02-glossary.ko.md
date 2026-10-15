@@ -2345,7 +2345,7 @@ owner-local 값이다. 다른 owner나 재시작한 process의 값과 크기를 
 ### AuthorityOwnerGeneration
 
 같은 object incarnation에서 authority owner가 바뀐 순서를 나타내는
-provider 발급 값이다. Object가 delete 뒤 다시 생성되었는지를 구분하는
+값이다. Object가 delete 뒤 다시 생성되었는지를 구분하는
 ObjectGeneration과는 다른 값이다.
 
 | 항목 | 내용 |
