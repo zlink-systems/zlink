@@ -60,9 +60,13 @@ The three party scenarios share a fixture so each can run alone or in combinatio
 
 ## Known issues
 
-Framework 0.30.0 is a diagnostic baseline, not the required package version. Its lifecycle observation lacks public `SafeToShutdown` (#1740); `update` must report this absence instead of inferring shutdown safety. Published 0.30.1 or a supervisor-supplied candidate must complete Windows and Linux validation before deployment acceptance. Further reproduced package failures are recorded in the job report.
+Framework 0.30.0 is a diagnostic baseline, not the required package version. Published 0.30.1 or a candidate must complete Windows and Linux validation before deployment acceptance. Public 0.30.0 runs encountered the following Framework defects; the template does not compensate for them.
 
-The 0.30.0 runs also encountered Actor creation rejection (related to #1772), deferred cross-node Join failure with `activation_rejected`, and host relocation ending with `relocation_failed`. The deferred Join failure also aborted the source process. #1771 tracks handoff waiting; equivalence to these Join and relocation failures has not been established. No transport or lifecycle workaround is included.
+- The Session's Actor GetOrCreate can be rejected when placement selects an instance node without an Entry Spot ([#1772](https://github.com/zlink-systems/zlink/issues/1772)).
+- A failed cross-node deferred Join ends with `activation_rejected` and terminates the source process ([#1784](https://github.com/zlink-systems/zlink/issues/1784)).
+- Planned host relocation of an instance ends with `relocation_failed` before `RELOCATED` ([#1788](https://github.com/zlink-systems/zlink/issues/1788)).
+- The C++ lifecycle status has no `SafeToShutdown` field, and node shutdown reports TeardownFailed ([#1740](https://github.com/zlink-systems/zlink/issues/1740)).
+- A C++ Session cannot yet send a typed reply it creates, so `SessionInfoRequest` is answered with a push ([#1785](https://github.com/zlink-systems/zlink/issues/1785)).
 
 ## Deployment sequence
 

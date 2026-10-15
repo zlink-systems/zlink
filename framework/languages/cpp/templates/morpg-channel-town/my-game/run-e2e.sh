@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
-exec ./build/bin/my-game-e2e "$@"
+exec ./build/bin/my-game-e2e --root "$PWD" "$@"
