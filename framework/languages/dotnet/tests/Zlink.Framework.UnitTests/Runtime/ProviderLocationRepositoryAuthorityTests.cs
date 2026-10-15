@@ -4061,6 +4061,47 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
+    public async Task SharedOpaqueProvider_CommittedReadOverlappingNormalizationKeepsTargetAuthority()
+    {
+        var fixture = await PrepareInventoryFixtureAsync(1);
+        var interruptedProvider = new ApplyThenThrowLocationStore(fixture.Provider)
+        {
+            ThrowAfterNextWrite = true,
+            BlockWritesAfterThrownResponse = true,
+        };
+        var interruptedRepository = new ZLinkProviderLocationRepository(interruptedProvider);
+        await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await interruptedRepository.CommitAggregateAsync(fixture.Prepared.Fence)
+        );
+        var provider = new InspectAuthorityBatchLocationStore(fixture.Provider);
+        var rootKey = new ZLinkStoreKey(AggregatePrefix(fixture.Prepared.Fence));
+        provider.BeforeRead = async key =>
+        {
+            if (key != rootKey)
+                return;
+            provider.BeforeRead = null;
+            Assert.Equal(
+                ZLinkAggregateCommitResult.AlreadyCommitted,
+                await fixture.Repository.CommitAggregateAsync(fixture.Prepared.Fence)
+            );
+        };
+        var reader = new ZLinkProviderLocationRepository(provider);
+        var participant = fixture.Request.Participants.Single();
+        var authority = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await reader.ReadAuthorityAsync(participant.Key)
+            )
+            .Snapshot;
+
+        Assert.Equal(fixture.Request.TargetOwner.OwnerId, authority.OwnerId);
+        Assert.Equal(
+            fixture.Prepared.TargetAuthorityOwnerGenerations[participant.Key],
+            authority.AuthorityOwnerGeneration
+        );
+        Assert.Null(provider.BeforeRead);
+    }
+
+    [Fact]
     public async Task SharedOpaqueProvider_CommittedProjectionReadsOnlyInventoryPath()
     {
         const int participantCount = 10_000;

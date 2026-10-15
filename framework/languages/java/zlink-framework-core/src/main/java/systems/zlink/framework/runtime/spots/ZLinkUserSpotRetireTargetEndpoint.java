@@ -20,7 +20,6 @@ import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocat
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
-import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
@@ -36,7 +35,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -293,17 +291,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
         Objects.requireNonNull(frozenRecord, "frozenRecord");
         if (isStandaloneActor(request)) {
             ActorTargetStage target = requireActorStage(request);
-            if (isSessionRelocationSealed(frozenRecord)) {
-                try {
-                    target.stageSessionRoute(
-                            sessionRoute(
-                                    request,
-                                    serviceWire.decodeSessionRelocationSealed(frozenRecord)));
-                    return CompletableFuture.completedFuture(null);
-                } catch (RuntimeException failure) {
-                    return CompletableFuture.failedFuture(failure);
-                }
-            }
             return actorStaging.stageRelayedRecord(target.staged(), frozenRecord);
         }
         ZLinkActorAcceptedJournal.Record actorRecord;
@@ -317,80 +304,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 actorRecord == null ? request.spotId() : actorRecord.actorId(),
                 actorRecord != null,
                 frozenRecord);
-    }
-
-    private static boolean isSessionRelocationSealed(byte[] record) {
-        return record.length >= 4
-                && Byte.toUnsignedInt(record[0]) == ServiceWireConstants.MAGIC_0
-                && Byte.toUnsignedInt(record[1]) == ServiceWireConstants.MAGIC_1
-                && Byte.toUnsignedInt(record[2]) == ServiceWireConstants.WIRE_MAJOR
-                && Byte.toUnsignedInt(record[3])
-                        == ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEALED;
-    }
-
-    private static ZLinkSpotRetireControl.SessionRouteFence sessionRoute(
-            ZLinkSpotRetireControl.StageRequest request,
-            ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed) {
-        var relocation = sealed.relocation();
-        if (relocation.high() != request.fence().aggregateId().getMostSignificantBits()
-                || relocation.low() != request.fence().aggregateId().getLeastSignificantBits()) {
-            throw new IllegalArgumentException("Session relocation sealed relocation differs");
-        }
-        var coordinator = sealed.coordinator();
-        if (!coordinator.ownerId().equals(request.sourceOwnerId())
-                || coordinator.leaseGeneration() != request.sourceOwnerLeaseGeneration()
-                || !coordinator.nodeRid().equals(request.sourceNodeRid())
-                || coordinator.nodeGeneration() != request.sourceNodeGeneration()) {
-            throw new IllegalArgumentException("Session relocation sealed coordinator differs");
-        }
-        var actor = sealed.actor();
-        var participant = request.participants().getFirst();
-        if (!actor.actor().nodeRid().equals(request.sourceNodeRid())
-                || actor.targetNodeGeneration() != request.sourceNodeGeneration()
-                || actor.ownerLeaseGeneration() != request.sourceOwnerLeaseGeneration()
-                || !actor.actor().actorId().equals(participant.objectId())
-                || actor.actor().generation() != participant.objectGeneration()
-                || actor.authorityOwnerGeneration()
-                        != participant.sourceAuthorityOwnerGeneration()) {
-            throw new IllegalArgumentException("Session relocation sealed Actor fence differs");
-        }
-        var session = sealed.session();
-        var route =
-                new ZLinkSpotRetireControl.SessionRouteFence(
-                        actor.actor().actorId(),
-                        actor.actor().generation(),
-                        actor.authorityOwnerGeneration(),
-                        coordinator.expectedAuthorityStoreVersion(),
-                        session.nodeRid(),
-                        session.nodeGeneration(),
-                        session.ownerId(),
-                        session.ownerLeaseGeneration(),
-                        session.sessionRid(),
-                        session.bindingGeneration());
-        return route;
-    }
-
-    private static ZLinkSpotRetireControl.StageRequest withSessionRoute(
-            ZLinkSpotRetireControl.StageRequest request,
-            ZLinkSpotRetireControl.SessionRouteFence route) {
-        return new ZLinkSpotRetireControl.StageRequest(
-                request.fence(),
-                request.sourceNodeRid(),
-                request.sourceNodeGeneration(),
-                request.sourceOwnerId(),
-                request.sourceOwnerLeaseGeneration(),
-                request.targetNodeRid(),
-                request.targetNodeGeneration(),
-                request.targetOwnerId(),
-                request.targetOwnerLeaseGeneration(),
-                request.meshName(),
-                request.spotId(),
-                request.stableType(),
-                request.instanceSpot(),
-                request.restoreSpotSnapshot(),
-                request.relocationPayload(),
-                request.participants(),
-                List.of(route));
     }
 
     @Override
@@ -527,9 +440,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 && request.targetNodeGeneration() == route.targetNodeGeneration()
                 && request.spotId().equals(route.spotId())
                 && participant.objectGeneration() == route.spotGeneration()
-                && participant.sourceAuthorityOwnerGeneration() != Long.MAX_VALUE
-                && participant.sourceAuthorityOwnerGeneration() + 1
-                        == route.authorityOwnerGeneration()
+                && participant.sourceAuthorityOwnerGeneration() == route.authorityOwnerGeneration()
                 && request.targetOwnerLeaseGeneration() == route.ownerLeaseGeneration();
     }
 
@@ -557,9 +468,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 && request.targetNodeRid().equals(route.actor().nodeRid())
                 && request.targetNodeGeneration() == route.targetNodeGeneration()
                 && participant.objectGeneration() == route.actor().generation()
-                && participant.sourceAuthorityOwnerGeneration() != Long.MAX_VALUE
-                && participant.sourceAuthorityOwnerGeneration() + 1
-                        == route.authorityOwnerGeneration()
+                && participant.sourceAuthorityOwnerGeneration() == route.authorityOwnerGeneration()
                 && request.targetOwnerLeaseGeneration() == route.ownerLeaseGeneration();
     }
 
@@ -1020,7 +929,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             actorStaging.openAdmission(target.staged());
                             return actorStaging.drainDurableBacklog(backlog);
                         })
-                .thenCompose(ignored -> switchSessionRoutes(target.requestWithSessionRoute()))
+                .thenCompose(ignored -> switchSessionRoutes(target.request()))
                 .thenCompose(ignored -> normalizer.normalize(request))
                 .thenRun(() -> releasePublishedActor(request, target));
     }
@@ -1055,9 +964,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             actorJoin.releasePrewarm(request.fence().aggregateId());
                             actorStaging.publishDirectJoinHidden(replay, targetOwnerGeneration);
                             actorStaging.prepareDirectJoinBoundSession(
-                                    replay,
-                                    target.requestWithSessionRoute(),
-                                    targetOwnerGeneration);
+                                    replay, target.request(), targetOwnerGeneration);
                             target.published().set(true);
                             return ZLinkSerialExecutionQueue.yieldCurrent(
                                             actorJoin.notifyTargetJoined(
@@ -1103,7 +1010,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 .thenCompose(
                         ignored ->
                                 ZLinkSerialExecutionQueue.yieldCurrent(
-                                        switchSessionRoutes(target.requestWithSessionRoute())))
+                                        switchSessionRoutes(target.request())))
                 .thenCompose(
                         ignored ->
                                 ZLinkSerialExecutionQueue.yieldCurrent(
@@ -1316,10 +1223,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                             targetRequest,
                                             staged,
                                             new AtomicBoolean(),
-                                            new AtomicReference<>(
-                                                    request.sessionRoutes().isEmpty()
-                                                            ? null
-                                                            : request.sessionRoutes().getFirst()),
                                             directAdmission,
                                             previousMembership,
                                             new CompletableFuture<>(),
@@ -1463,36 +1366,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
             ZLinkStandaloneActorRelocationStagingOwner.Request targetRequest,
             ZLinkStandaloneActorRelocationStagingOwner.Staged staged,
             AtomicBoolean published,
-            AtomicReference<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute,
             ZLinkActorJoinRelocationPort.Admission directAdmission,
             ZLinkActorJoinCanonicalAdapter.PreviousMembership previousMembership,
             CompletableFuture<Void> publishRequested,
-            CompletableFuture<Void> joinPublished) {
-        ActorTargetStage {
-            Objects.requireNonNull(sessionRoute, "sessionRoute");
-        }
-
-        void stageSessionRoute(ZLinkSpotRetireControl.SessionRouteFence candidate) {
-            while (true) {
-                ZLinkSpotRetireControl.SessionRouteFence current = sessionRoute.get();
-                if (current != null) {
-                    if (!current.equals(candidate)) {
-                        throw new IllegalArgumentException(
-                                "Session relocation sealed fence changed");
-                    }
-                    return;
-                }
-                if (sessionRoute.compareAndSet(null, candidate)) {
-                    return;
-                }
-            }
-        }
-
-        ZLinkSpotRetireControl.StageRequest requestWithSessionRoute() {
-            ZLinkSpotRetireControl.SessionRouteFence route = sessionRoute.get();
-            return route == null ? request : withSessionRoute(request, route);
-        }
-    }
+            CompletableFuture<Void> joinPublished) {}
 
     private record CanonicalReply(
             long operationHigh,

@@ -126,7 +126,7 @@ sends it directly to the target, and until authority settles or the source-lease
 The direct-transfer payload is the schema's `relocation-envelope-v1`: a canonical
 big-endian field stream with no monolithic provider envelope. In schema declaration
 order, it contains `relocation`, `object`, `applicationVersion`, `applicationStates`,
-`savedWork`, `timerRegistrations`, and `pendingTimerTicks`. The target reconstructs the
+`savedWork`, `timerRegistrations`, `pendingTimerTicks`, and `sessionBindings`. The target reconstructs the
 canonical ordered participant inventory from the Location Store's authority keys, sorted
 by UTF-8 authority-key bytes. Participant identity is deliberately absent from the
 stream: `participantId` is that sorted inventory's zero-based index plus one, and every
@@ -142,6 +142,14 @@ schedule indices, and next scheduled Unix-millisecond cursor. `pendingTimerTicks
 carries the participant/order sequence, timer name, delivery and scheduled indices,
 scheduled timestamp, and skipped-tick count. Native timer handles and callback
 continuations are not part of this frozen saved-work record.
+
+`sessionBindings` carries, for each participant sealed under §4.1, the Session owner
+identity confirmed by command 43 (`sessionOwnerNodeRid`, `sessionOwnerNodeGeneration`,
+`sessionOwnerId`, `sessionOwnerLeaseGeneration`) together with `sessionRid` and
+`bindingGeneration`. A participant without a binding has no entry. The target builds the
+command 44 commit of
+[Session and Actor Binding §8.2](../04-session/02-session-actor-binding.en.md#82-control-messages-42-43-44)
+from this entry.
 
 Command 40, `relocationPrepare`, is the manifest for this stream. Its
 `payloadTotalLength`, `payloadChunkCount`, and `payloadChecksumCrc32c` describe the

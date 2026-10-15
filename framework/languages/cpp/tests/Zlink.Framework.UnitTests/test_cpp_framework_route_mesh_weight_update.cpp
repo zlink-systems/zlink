@@ -280,7 +280,8 @@ TEST (CppFrameworkRouteMeshWeightUpdate, SoleTargetStopsAndResumesAfterLiveWeigh
     source.expect_peer (target_descriptor);
     ASSERT_TRUE (source.connect_peer (target.endpoint (), target_descriptor));
     ASSERT_TRUE (pump_until (source, target, [&] {
-        return source.topology ().peer (target_descriptor.node_routing_id) != nullptr;
+        const auto peer = source.topology ().peer (target_descriptor.node_routing_id);
+        return peer && peer->ready;
     }));
 
     expect_successful_channel_request (source, target);
@@ -345,8 +346,9 @@ TEST (CppFrameworkRouteMeshWeightUpdate, ConcurrentWeightChangesReachPeerInRevis
     source.expect_peer (target_descriptor);
     ASSERT_TRUE (source.connect_peer (target.endpoint (), target_descriptor));
     ASSERT_TRUE (pump_until (source, target, [&] {
-        return source.topology ().peer (target_descriptor.node_routing_id) != nullptr
-               && target.topology ().peer (source_routing_id) != nullptr;
+        const auto source_peer = source.topology ().peer (target_descriptor.node_routing_id);
+        const auto target_peer = target.topology ().peer (source_routing_id);
+        return source_peer && source_peer->ready && target_peer && target_peer->ready;
     }));
 
     std::promise<void> first_published;

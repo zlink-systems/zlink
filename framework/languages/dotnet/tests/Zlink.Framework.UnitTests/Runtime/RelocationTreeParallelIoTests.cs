@@ -454,6 +454,7 @@ public sealed class RelocationTreeParallelIoTests
         WriteUInt32BigEndian(stream, 0); // Saved-work count.
         WriteUInt32BigEndian(stream, 0); // Timer count.
         WriteUInt32BigEndian(stream, 0); // Pending timer tick count.
+        WriteUInt32BigEndian(stream, 0); // Session-binding count.
         return stream.ToArray();
     }
 

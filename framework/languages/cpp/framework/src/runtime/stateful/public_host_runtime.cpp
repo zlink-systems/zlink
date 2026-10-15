@@ -2163,16 +2163,15 @@ stateful::relocation_reason_t classify_relocation_failure_reason (std::uint32_t 
     }
 }
 
-task_t<stateful::relocation_reason_t> public_host_runtime_t::prepare_relocation_remote (
-  const zlink::routing_id_t &target_node,
-  protocol::relocation_prepare_t prepare,
-  std::chrono::milliseconds timeout,
-  std::vector<protocol::session_relocation_route_t> session_routes)
+task_t<stateful::relocation_reason_t>
+public_host_runtime_t::prepare_relocation_remote (const zlink::routing_id_t &target_node,
+                                                  protocol::relocation_prepare_t prepare,
+                                                  std::chrono::milliseconds timeout)
 {
     if (timeout <= std::chrono::milliseconds::zero ())
         co_return stateful::relocation_reason_t::restore_failed;
-    const auto response = co_await _transport->request_relocation_prepare (
-      target_node.to_bytes (), prepare, timeout, std::move (session_routes));
+    const auto response =
+      co_await _transport->request_relocation_prepare (target_node.to_bytes (), prepare, timeout);
     if (response.failed) {
         // Exact-identity fencing already ran in request_relocation_prepare
         // — this is not a timeout, it is the target's own explicit,
@@ -4003,9 +4002,12 @@ void public_host_runtime_t::complete_relocation_assembly (const relocation_attem
                 if (!row.owner.node_id.empty ())
                     principal_row.owner.node_id = row.owner.node_id;
                 inventory.push_back (std::move (principal_row));
-            } else if (principal_kind == stateful::object_kind_t::user_spot
+            } else if ((principal_kind == stateful::object_kind_t::user_spot
+                        || principal_kind == stateful::object_kind_t::instance_spot)
                        && row.owner.kind == stateful::object_kind_t::actor && row.spot_membership
-                       && row.spot_membership->first == principal_identity.owner.key) {
+                       && row.spot_membership->first == principal_identity.owner.key
+                       && row.spot_membership->second
+                            == principal_identity.owner.object_generation) {
                 if (row.owner.mesh_name.empty ())
                     row.owner.mesh_name = principal_identity.owner.mesh_name;
                 if (row.owner.node_id.empty ())
@@ -4064,7 +4066,7 @@ void public_host_runtime_t::complete_relocation_assembly (const relocation_attem
         principal_found = principal_found || wire_object == pending.prepare.object;
         auto target = saved.owner;
         target.node_id = local.routing_id ().to_string ();
-        ++target.authority_owner_generation;
+        // Hidden staging has no target-issued generation until Store CAS.
         sources.push_back (saved.owner);
         targets.push_back (std::move (target));
         wire_objects.push_back (std::move (wire_object));
@@ -4086,46 +4088,34 @@ void public_host_runtime_t::complete_relocation_assembly (const relocation_attem
     const auto inventory_digest =
       stateful::maintenance_runtime_t::compute_inventory_digest (digest_owners);
 
-    /* Bound-session commit routes ride beside the Restore request (the
-     * schema payload has no session-route section). Validate each staged
-     * route against the reconstructed participants and this exact prepare
-     * before command 44 leaves this target after CAS and queue opening. */
-    auto &staged_session_routes = staging.session_routes;
-    for (std::size_t part = 1; part < pending.request.parts.size (); ++part) {
+    for (const auto &binding : envelope->session_bindings) {
+        if (binding.participant_id == 0 || binding.participant_id > frozen.size ()) {
+            reply_failure ();
+            return;
+        }
+        const auto &saved = frozen[binding.participant_id - 1];
+        if (saved.owner.kind != stateful::object_kind_t::actor) {
+            reply_failure ();
+            return;
+        }
         protocol::session_relocation_route_t route;
-        try {
-            route = protocol::decode_session_relocation_route (
-              protocol::message_bytes (pending.request.parts[part]));
-        }
-        catch (...) {
-            reply_failure ();
-            return;
-        }
-        const auto saved =
-          std::find_if (frozen.begin (), frozen.end (), [&route] (const auto &candidate) {
-              return candidate.owner.kind == stateful::object_kind_t::actor
-                     && candidate.owner.key == route.actor.actor_id
-                     && candidate.owner.object_generation == route.actor.object_generation;
-          });
-        const auto duplicate = std::find_if (
-          staged_session_routes.begin (), staged_session_routes.end (),
-          [&route] (const auto &candidate) { return candidate.actor == route.actor; });
-        if (saved == frozen.end () || duplicate != staged_session_routes.end ()
-            || route.relocation != pending.prepare.relocation
-            || route.coordinator != pending.prepare.coordinator
-            || route.sender_role != protocol::relocation_role_t::target
-            || route.route.action != protocol::session_relocation_route_action_t::commit
-            || route.route.previous_authority_owner_generation
-                 != saved->owner.authority_owner_generation
-            || route.route.target_authority_owner_generation
-                 != saved->owner.authority_owner_generation + 1
-            || route.route.target_node_routing_id != local.routing_id ().to_bytes ()
-            || route.route.target_node_generation != local.lifecycle_generation ()) {
-            trace_mesh_host ("relocation-assembly-failed", "stage=session-route");
-            reply_failure ();
-            return;
-        }
-        staged_session_routes.push_back (std::move (route));
+        route.relocation = pending.prepare.relocation;
+        route.coordinator = pending.prepare.coordinator;
+        route.sender_role = protocol::relocation_role_t::target;
+        route.actor = {saved.owner.key, saved.owner.object_generation};
+        route.session_owner_node_routing_id = binding.session_owner_node_rid;
+        route.session_owner_node_generation = binding.session_owner_node_generation;
+        route.session_owner_id = binding.session_owner_id;
+        route.session_owner_lease_generation = binding.session_owner_lease_generation;
+        route.session_routing_id = binding.session_rid;
+        route.binding_generation = binding.binding_generation;
+        route.route.action = protocol::session_relocation_route_action_t::commit;
+        route.route.previous_authority_owner_generation = saved.owner.authority_owner_generation;
+        route.route.target_node_routing_id = local.routing_id ().to_bytes ();
+        route.route.target_node_generation = local.lifecycle_generation ();
+        route.route.target_owner_lease_generation =
+          pending.prepare.target.target_owner_lease_generation;
+        staging.session_routes.push_back (std::move (route));
     }
 
     staging.restore_identity = {"direct:" + std::to_string (pending.prepare.relocation.high) + ":"

@@ -358,7 +358,6 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
                                              0,         owner.authority_owner_generation, 0};
         target.target_node_routing_id = target_routing_id;
         target.target_node_generation = target_generation;
-        ++target.authority_owner_generation;
         target.owner_lease_generation = target_lease_generation;
         std::optional<protocol::actor_message_header_t::bound_session_source_t> session;
         if (application.source_session_routing_id)
@@ -378,7 +377,6 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
                                             0,         owner.authority_owner_generation, 0};
         target.target_node_routing_id = target_routing_id;
         target.target_node_generation = target_generation;
-        ++target.authority_owner_generation;
         target.owner_lease_generation = target_lease_generation;
         if (application.reply_route_id.has_value ())
             sent = co_await _transport->request_to_spot (

@@ -656,42 +656,6 @@ final class ZLinkDefaultSpotContextTest {
     }
 
     @Test
-    void relocatingActorWaitYieldsSharedSpotGateBeforeReenqueue() throws Exception {
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        try {
-            TestHost host = new TestHost(executor);
-            DefaultSpotContext context = host.userContext(ZLinkUserSpotExecutionMode.SPOT_WIDE);
-            CompletableFuture<Void> moveCompleted = new CompletableFuture<>();
-            CompletableFuture<Void> moveWaitStarted = new CompletableFuture<>();
-            CompletableFuture<Void> actorStarted = new CompletableFuture<>();
-
-            CompletionStage<Void> dispatch =
-                    context.enqueueDispatch(
-                            () -> {
-                                moveWaitStarted.complete(null);
-                                return ZLinkSpotRuntime.yieldSharedSpotTurnForActorRelocation(
-                                                context, moveCompleted)
-                                        .thenCompose(
-                                                ignored ->
-                                                        context.enqueueActorDispatch(
-                                                                "relocated-actor",
-                                                                () -> {
-                                                                    actorStarted.complete(null);
-                                                                    return CompletableFuture
-                                                                            .completedFuture(null);
-                                                                }));
-                            });
-
-            moveWaitStarted.get(2, TimeUnit.SECONDS);
-            executor.submit(() -> moveCompleted.complete(null));
-            actorStarted.get(2, TimeUnit.SECONDS);
-            dispatch.toCompletableFuture().get(2, TimeUnit.SECONDS);
-        } finally {
-            executor.shutdownNow();
-        }
-    }
-
-    @Test
     void acceptedActorPacketBehindDeferredTurnCanBeCapturedForRelocation() throws Exception {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {

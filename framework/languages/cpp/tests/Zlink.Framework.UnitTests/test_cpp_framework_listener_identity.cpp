@@ -113,7 +113,9 @@ bool wait_for_ready_pair (mesh::raw_mesh_node_owner_t &source, mesh::raw_mesh_no
     const auto target_rid = target.topology ().local_descriptor ().node_routing_id;
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (std::chrono::steady_clock::now () < deadline) {
-        if (source.topology ().peer (target_rid) && target.topology ().peer (source_rid))
+        const auto source_peer = source.topology ().peer (target_rid);
+        const auto target_peer = target.topology ().peer (source_rid);
+        if (source_peer && source_peer->ready && target_peer && target_peer->ready)
             return true;
         pump (source);
         pump (target);

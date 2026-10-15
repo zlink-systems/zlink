@@ -14,7 +14,6 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Flow;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
@@ -81,8 +80,7 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
                 ignored -> SINGLE_SOURCE,
                 capacity,
                 ignored -> false,
-                ignored -> false,
-                ForkJoinPool.commonPool());
+                ignored -> false);
     }
 
     public static <T> ZLinkStatusPublisher<T> create(
@@ -96,8 +94,7 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
                 ignored -> SINGLE_SOURCE,
                 capacity,
                 terminal,
-                ignored -> false,
-                ForkJoinPool.commonPool());
+                ignored -> false);
     }
 
     public static <T> ZLinkStatusPublisher<T> create(
@@ -107,13 +104,7 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
             Predicate<T> terminal,
             Predicate<T> preserve) {
         return create(
-                snapshot,
-                fingerprint,
-                ignored -> SINGLE_SOURCE,
-                capacity,
-                terminal,
-                preserve,
-                ForkJoinPool.commonPool());
+                snapshot, fingerprint, ignored -> SINGLE_SOURCE, capacity, terminal, preserve);
     }
 
     public static <T> ZLinkStatusPublisher<T> create(
@@ -130,7 +121,7 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
                 capacity,
                 terminal,
                 preserve,
-                ForkJoinPool.commonPool());
+                Thread::startVirtualThread);
     }
 
     public static <T> ZLinkStatusPublisher<T> create(

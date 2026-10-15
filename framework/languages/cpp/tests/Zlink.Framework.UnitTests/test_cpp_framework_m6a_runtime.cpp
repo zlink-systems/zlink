@@ -133,6 +133,12 @@ bound_session_bind_request (const mesh::service_node_descriptor_t &target, std::
       {protocol::bound_session_binding_state_t::active, 1}};
 }
 
+bool peer_ready (mesh::raw_mesh_node_owner_t &node, const std::vector<std::uint8_t> &routing_id)
+{
+    const auto peer = node.topology ().peer (routing_id);
+    return peer && peer->ready;
+}
+
 void admit_pair (mesh::raw_mesh_node_owner_t &source,
                  mesh::raw_mesh_node_owner_t &target,
                  const mesh::service_node_descriptor_t &target_descriptor)
@@ -140,8 +146,11 @@ void admit_pair (mesh::raw_mesh_node_owner_t &source,
     source.expect_peer (target_descriptor);
     assert (source.connect_peer (target.endpoint (), target_descriptor));
     const auto deadline = std::chrono::steady_clock::now () + 2s;
-    while (!source.topology ().peer (target_descriptor.node_routing_id)
-           && std::chrono::steady_clock::now () < deadline) {
+    const auto ready = [&] {
+        return peer_ready (source, target_descriptor.node_routing_id)
+               && peer_ready (target, source.topology ().local_descriptor ().node_routing_id);
+    };
+    while (!ready () && std::chrono::steady_clock::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
         (void) target.observe_routes ();
@@ -149,7 +158,7 @@ void admit_pair (mesh::raw_mesh_node_owner_t &source,
         (void) await_task (target.pump_one (now));
         std::this_thread::sleep_for (1ms);
     }
-    assert (source.topology ().peer (target_descriptor.node_routing_id));
+    assert (ready ());
 }
 
 void complete_bound_session_bind (
@@ -462,20 +471,7 @@ void verify_actor_create_retries_until_route_is_admitted ()
       });
     assert (await_task (std::move (submitted)));
     assert (completion.wait_for (0ms) == std::future_status::timeout);
-
-    source.expect_peer (target_descriptor);
-    assert (source.connect_peer (target.endpoint (), target_descriptor));
-    const auto admission_deadline = std::chrono::steady_clock::now () + 2s;
-    while (!source.topology ().peer (target_descriptor.node_routing_id)
-           && std::chrono::steady_clock::now () < admission_deadline) {
-        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) source.observe_routes ();
-        (void) target.observe_routes ();
-        (void) await_task (source.pump_one (now));
-        (void) await_task (target.pump_one (now));
-        std::this_thread::sleep_for (1ms);
-    }
-    assert (source.topology ().peer (target_descriptor.node_routing_id));
+    admit_pair (source, target, target_descriptor);
 
     std::optional<mesh::service_mailbox_claim_t> claim;
     const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
@@ -840,12 +836,10 @@ void verify_stale_rid_disconnect_preserves_same_endpoint_replacement ()
     replacement->close ();
 }
 
-void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
+void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor (bool lower_first)
 {
-    /* Both nodes connect to each other, so two physical pipes carry the
-     * pair. Core selects one route per RID (RID duplicate policy); each side
-     * admits the route it observes, and late handshakes must not replace
-     * that admission. */
+    // Admit the first direction before creating the opposite pipe. Core keeps
+    // the lower RID's outbound route; only the higher-first case replaces it.
     mesh::raw_mesh_node_owner_t lower (mesh::raw_mesh_node_options_t{
       .descriptor = descriptor ("bilateral-aa"),
       .runtime_failures =
@@ -860,8 +854,10 @@ void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
     const auto higher_descriptor = higher.topology ().local_descriptor ();
     lower.expect_peer (higher_descriptor);
     higher.expect_peer (lower_descriptor);
-    assert (lower.connect_peer (higher.endpoint (), higher_descriptor));
-    assert (higher.connect_peer (lower.endpoint (), lower_descriptor));
+    auto &first = lower_first ? lower : higher;
+    auto &second = lower_first ? higher : lower;
+    assert (
+      first.connect_peer (second.endpoint (), lower_first ? higher_descriptor : lower_descriptor));
 
     const auto deadline = std::chrono::steady_clock::now () + 5s;
     while (std::chrono::steady_clock::now () < deadline) {
@@ -872,9 +868,8 @@ void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
         (void) await_task (higher.pump_one (now));
         const auto lower_peer = lower.topology ().peer (higher_descriptor.node_routing_id);
         const auto higher_peer = higher.topology ().peer (lower_descriptor.node_routing_id);
-        if (lower_peer && higher_peer)
+        if (lower_peer && lower_peer->ready && higher_peer && higher_peer->ready)
             break;
-        std::this_thread::sleep_for (1ms);
     }
 
     const auto lower_survivor = lower.topology ().peer (higher_descriptor.node_routing_id);
@@ -882,6 +877,27 @@ void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
     assert (lower_survivor);
     assert (higher_survivor);
 
+    assert (lower_survivor->ready && higher_survivor->ready);
+    assert (
+      second.connect_peer (first.endpoint (), lower_first ? lower_descriptor : higher_descriptor));
+    if (!lower_first) {
+        bool replaced = false;
+        while (!replaced && std::chrono::steady_clock::now () < deadline) {
+            const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+            (void) lower.observe_routes ();
+            (void) higher.observe_routes ();
+            (void) await_task (lower.pump_one (now));
+            (void) await_task (higher.pump_one (now));
+            const auto lp = lower.topology ().peer (higher_descriptor.node_routing_id);
+            const auto hp = higher.topology ().peer (lower_descriptor.node_routing_id);
+            replaced = lp && lp->ready && hp && hp->ready
+                       && lp->connection_id != lower_survivor->connection_id
+                       && hp->connection_id != higher_survivor->connection_id;
+        }
+        assert (replaced);
+    }
+    const auto lower_selected = lower.topology ().peer (higher_descriptor.node_routing_id);
+    const auto higher_selected = higher.topology ().peer (lower_descriptor.node_routing_id);
     const auto settle_deadline = std::chrono::steady_clock::now () + 100ms;
     while (std::chrono::steady_clock::now () < settle_deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
@@ -889,12 +905,23 @@ void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
         (void) higher.observe_routes ();
         (void) await_task (lower.pump_one (now));
         (void) await_task (higher.pump_one (now));
-        std::this_thread::sleep_for (1ms);
     }
     assert (lower.topology ().peer (higher_descriptor.node_routing_id)->connection_id
-            == lower_survivor->connection_id);
+            == lower_selected->connection_id);
     assert (higher.topology ().peer (lower_descriptor.node_routing_id)->connection_id
-            == higher_survivor->connection_id);
+            == higher_selected->connection_id);
+    assert (lower.topology ().peers ().size () == 1);
+    assert (higher.topology ().peers ().size () == 1);
+    if (lower_first) {
+        assert (lower_selected->connection_id == lower_survivor->connection_id);
+        assert (higher_selected->connection_id == higher_survivor->connection_id);
+    }
+}
+
+void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
+{
+    verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor (true);
+    verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor (false);
 }
 
 void verify_raw_admission_rejects_lifecycle_mismatch ()
@@ -1370,8 +1397,8 @@ void verify_completion_receipt_without_application_receive ()
     replier.expect_peer (source);
     assert (requester.connect_peer (replier.endpoint (), target));
     const auto admission_deadline = std::chrono::steady_clock::now () + 5s;
-    while ((!requester.topology ().peer (target.node_routing_id)
-            || !replier.topology ().peer (source.node_routing_id))
+    while ((!peer_ready (requester, target.node_routing_id)
+            || !peer_ready (replier, source.node_routing_id))
            && std::chrono::steady_clock::now () < admission_deadline) {
         (void) requester.observe_routes ();
         (void) replier.observe_routes ();
@@ -1379,8 +1406,8 @@ void verify_completion_receipt_without_application_receive ()
         (void) await_task (replier.pump_one (std::chrono::steady_clock::now ()));
         std::this_thread::yield ();
     }
-    assert (requester.topology ().peer (target.node_routing_id));
-    assert (replier.topology ().peer (source.node_routing_id));
+    assert (peer_ready (requester, target.node_routing_id));
+    assert (peer_ready (replier, source.node_routing_id));
     std::promise<foundation::operation_terminal_t> completion;
     auto terminal = completion.get_future ();
     const auto submitted_at = std::chrono::steady_clock::now ();
@@ -2171,8 +2198,8 @@ void verify_raw_owner_node_send_and_liveness (
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
     const auto deadline = now + 5s;
     assert (first.connect_peer (second.endpoint (), second_descriptor));
-    while ((!first.topology ().peer (second_descriptor.node_routing_id)
-            || !second.topology ().peer (first_descriptor.node_routing_id))
+    while ((!peer_ready (first, second_descriptor.node_routing_id)
+            || !peer_ready (second, first_descriptor.node_routing_id))
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto progress_now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) first.observe_routes ();
@@ -2181,8 +2208,8 @@ void verify_raw_owner_node_send_and_liveness (
         (void) await_task (second.pump_one (progress_now));
         std::this_thread::sleep_for (1ms);
     }
-    assert (first.topology ().peer (second_descriptor.node_routing_id));
-    assert (second.topology ().peer (first_descriptor.node_routing_id));
+    assert (peer_ready (first, second_descriptor.node_routing_id));
+    assert (peer_ready (second, first_descriptor.node_routing_id));
 
     // Each peer probes right after admission (05-transport-liveness.ko.md:95).
     // Finish that probe and ACK exchange here: until then the probe is due and
@@ -3598,8 +3625,133 @@ void verify_liveness_without_selected_route ()
     source.close ();
 }
 
+
+// Do not pump the sender: its selected route has not completed admission.
+// Let the operation deadline end the observation, rather than delaying a pump.
+void verify_durable_attempt_waits_for_admit (protocol::command kind)
+{
+    constexpr auto unadmitted_timeout = 300ms;
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("preadmit-source")}));
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("preadmit-target")}));
+    source.start ();
+    target.start ();
+    const auto local = source.topology ().local_descriptor ();
+    const auto remote = target.topology ().local_descriptor ();
+    using completion_t = foundation::operation_terminal_t;
+    std::promise<completion_t> promise;
+    auto completed = promise.get_future ();
+    std::optional<zlink::framework::task_t<mesh::actor_join_wire_outcome_t>> join;
+    const auto callback = [&promise] (completion_t terminal, zlink::message_t) {
+        promise.set_value (terminal);
+    };
+    if (kind == protocol::command::boundSessionBind)
+        assert (await_task (source.request_bound_session_bind (
+          remote.node_routing_id, bound_session_bind_request (remote, "preadmit-actor"),
+          unadmitted_timeout, callback)));
+    else if (kind == protocol::command::actorCreate)
+        assert (await_task (source.request_actor_create (
+          remote.node_routing_id, actor_create_request (local, remote, "preadmit-actor"),
+          unadmitted_timeout, callback)));
+    else {
+        assert (kind == protocol::command::actorJoin);
+        join.emplace (source.request_actor_join (
+          remote.node_routing_id, actor_join_request (local, remote, 81, "preadmit-actor", "spot"),
+          std::nullopt, unadmitted_timeout));
+    }
+    source.expect_peer (remote);
+    assert (source.connect_peer (target.endpoint (), remote));
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while ((join ? !join->await_ready () : completed.wait_for (0ms) != std::future_status::ready)
+           && std::chrono::steady_clock::now () < deadline) {
+        const auto pumped = await_task (target.pump_one (std::chrono::steady_clock::now ()));
+        assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+    }
+    if (join) {
+        assert (join->await_ready ());
+        assert (await_task (std::move (*join)).failure
+                == mesh::actor_join_wire_failure_t::unavailable);
+    } else {
+        assert (completed.wait_for (0ms) == std::future_status::ready);
+        assert (completed.get () == completion_t::route_unavailable);
+    }
+    // A new operation on the same unobserved route starts at the ADMIT transition.
+    std::promise<std::pair<completion_t, std::vector<std::uint8_t>>> ready_promise;
+    auto ready_completion = ready_promise.get_future ();
+    assert (await_task (source.request_bound_session_bind (
+      remote.node_routing_id, bound_session_bind_request (remote, "after-admit"), 2s,
+      [&ready_promise] (completion_t terminal, zlink::message_t payload) {
+          ready_promise.set_value ({terminal, payload.to_bytes ()});
+      })));
+    admit_pair (source, target, remote);
+    complete_bound_session_bind (source, target, ready_completion, "after-admit");
+    source.close ();
+    target.close ();
+}
+
+
+void verify_topology_ready_is_remote_admit_on_current_route ()
+{
+    mesh::service_topology_registry_t topology (descriptor ("ready-local"));
+    auto remote = descriptor ("ready-remote");
+    remote.state = mesh::service_node_state_t::serving;
+    auto observe = topology.observe_peer (remote.node_routing_id);
+    auto initial = observe ();
+    const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+    assert (topology.admit (remote, bytes ("route-one"), now, false)
+            == mesh::peer_admission_result_t::admitted);
+    assert (initial.changed.await_ready ());
+    auto hello = observe ();
+    assert (hello.peer && !hello.peer->ready);
+    assert (!topology.select ("alpha"));
+    assert (topology.multicast_targets ("alpha").empty ());
+    assert (topology.admit (remote, bytes ("route-one"), now, true)
+            == mesh::peer_admission_result_t::duplicate_connection);
+    assert (hello.changed.await_ready ());
+    auto ready = observe ();
+    assert (ready.peer && ready.peer->ready);
+    assert (ready.peer->admission_epoch == hello.peer->admission_epoch);
+    assert (topology.select ("alpha"));
+    assert (topology.multicast_targets ("alpha").size () == 1);
+    assert (topology.admit (remote, bytes ("route-one"), now, false)
+            == mesh::peer_admission_result_t::duplicate_connection);
+    assert (!ready.changed.await_ready ());
+    assert (topology.admit (remote, bytes ("route-two"), now, false)
+            == mesh::peer_admission_result_t::admitted);
+    assert (ready.changed.await_ready ());
+    assert (!observe ().peer->ready);
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 4 && std::string_view (argv[1]) == "--only") {
+        const std::string_view name (argv[2]);
+        for (int i = 0; i < std::stoi (argv[3]); ++i) {
+            if (name == "pre-bind")
+                verify_durable_attempt_waits_for_admit (protocol::command::boundSessionBind);
+            else if (name == "pre-create")
+                verify_durable_attempt_waits_for_admit (protocol::command::actorCreate);
+            else if (name == "pre-join")
+                verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
+            else if (name == "retries")
+                verify_bound_session_bind_retries_until_route_is_admitted ();
+            else if (name == "replay")
+                verify_bound_session_bind_replay_preserves_first_admission ();
+            else if (name == "create")
+                verify_actor_create_retries_until_route_is_admitted ();
+            else if (name == "bilateral")
+                verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ();
+            else if (name == "join")
+                verify_actor_join_durable_replay ();
+            else
+                return 2;
+        }
+        return 0;
+    }
+
     if (argc == 2 && std::string_view (argv[1]) == "--liveness-physical-close") {
         verify_liveness_without_selected_route ();
         verify_liveness_physical_close (true, false);
@@ -3645,6 +3797,10 @@ int main (int argc, char **argv)
             == zlink::request_result_t::not_connected);
     assert (map_submit_request_result (zlink::submit_result_t::not_connected, true)
             == zlink::request_result_t::not_connected);
+    verify_topology_ready_is_remote_admit_on_current_route ();
+    verify_durable_attempt_waits_for_admit (protocol::command::boundSessionBind);
+    verify_durable_attempt_waits_for_admit (protocol::command::actorCreate);
+    verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_exposes_only_accepted_attempt ();

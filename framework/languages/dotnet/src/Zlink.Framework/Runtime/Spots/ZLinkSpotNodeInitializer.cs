@@ -29,7 +29,7 @@ internal sealed class ZLinkSpotNodeInitializer(
             // Spec 27 §4: infrastructure relays on this node follow the live
             // diagnostics level when deciding whether to keep inbound flow
             // fields on re-encoded envelopes.
-            node.SetFlowCaptureGate(() => runtime.Flow.CaptureEnabled);
+            node.SetFlowTracer(runtime.Flow);
             node.SetLogicalMulticastDispatchErrors(dispatchErrors, meshName);
             // Spec 30 §14 step 1: once shutdown seals host admission, the
             // node starts no new peer admission. The host's drain gate is the

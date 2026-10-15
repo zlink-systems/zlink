@@ -51,7 +51,7 @@ final class ZLinkFrameworkShutdownTest {
     }
 
     @Test
-    void expiredHostDeadlineStartsAsyncResourcesAndRejectsNewStoreWork() {
+    void expiredHostDeadlineClosesAsyncResourcesInOrderAndRejectsNewStoreWork() {
         var shutdown = new ZLinkFrameworkShutdown(Instant.EPOCH);
         var resources = new ArrayList<String>();
         var stores = new ArrayList<String>();
@@ -75,19 +75,26 @@ final class ZLinkFrameworkShutdownTest {
                         return provider;
                     });
         }
-        var thrown =
-                assertThrows(
-                        CompletionException.class,
-                        () -> shutdown.closeAsync().toCompletableFuture().join());
+        // Resource close ordering remains mandatory after the deadline (execution gate §13).
+        var closing = shutdown.closeAsync().toCompletableFuture();
+        var order = List.of("stream_close", "instance_close", "auto_connect_stop", "spot_close");
+        assertEquals(order.subList(0, 1), resources);
+        assertFalse(closing.isDone());
+        for (int index = providers.size() - 1; index >= 0; index--) {
+            providers.get(index).complete(null);
+            assertEquals(
+                    order.subList(0, Math.min(order.size(), order.size() - index + 1)), resources);
+            if (index > 0) assertFalse(closing.isDone());
+        }
+        var thrown = assertThrows(CompletionException.class, closing::join);
         var failure = assertInstanceOf(ZLinkFrameworkShutdown.Failure.class, thrown.getCause());
-        assertEquals("stream_close", failure.stage());
+        assertEquals("descriptor_remove", failure.stage());
         assertInstanceOf(TimeoutException.class, failure.getCause());
-        assertEquals(
-                List.of("stream_close", "instance_close", "auto_connect_stop", "spot_close"),
-                resources);
+        assertEquals(order, resources);
         assertEquals(List.of(), stores);
         assertEquals(4, providers.size());
-        providers.forEach(provider -> assertFalse(provider.isDone()));
+        providers.forEach(
+                provider -> org.junit.jupiter.api.Assertions.assertTrue(provider.isDone()));
     }
 
     @Test

@@ -51,19 +51,15 @@ void connect (mesh::raw_mesh_node_owner_t &source, mesh::raw_mesh_node_owner_t &
     assert (source.connect_peer (target.endpoint (), remote));
     until (
       [&] {
-          return source.topology ().peers ().size () == 1
-                 && target.topology ().peers ().size () == 1;
+          const auto source_peers = source.topology ().peers ();
+          const auto target_peers = target.topology ().peers ();
+          return source_peers.size () == 1 && source_peers.front ().ready
+                 && target_peers.size () == 1 && target_peers.front ().ready;
       },
       [&] {
           pump (source);
           pump (target);
       });
-    // Consume both crossed Admit responses before testing a later transition.
-    for (int i = 0; i < 20; ++i) {
-        pump (source);
-        pump (target);
-        std::this_thread::sleep_for (1ms);
-    }
 }
 
 void verify_route_change_wakes_ingress_without_application_permit ()
@@ -168,10 +164,20 @@ void verify_inbound_hello (bool sealed)
     source.start ();
     target.start ();
     std::size_t target_changes = 0;
-    target.topology ().set_change_handler ([&] { ++target_changes; });
+    std::vector<bool> target_readiness;
+    target.topology ().set_change_handler ([&] {
+        ++target_changes;
+        const auto peer = target.topology ().peer ({'g'});
+        assert (peer);
+        target_readiness.push_back (peer->ready);
+        // HELLO records admission before its ADMIT is submitted; remote ADMIT
+        // publishes the separate send-ready transition on that same route.
+        assert (target_changes == (peer->ready ? 2 : 1));
+    });
     if (!sealed) {
         connect (source, target);
-        assert (target_changes == 1);
+        assert (target_changes == 2);
+        assert ((target_readiness == std::vector<bool>{false, true}));
         assert (target.topology ().peer ({'g'}));
         assert (source.topology ().peer ({'h'}));
     } else {
@@ -275,16 +281,32 @@ void verify_crossed_admission_diagnostics ()
     target.start ();
     std::size_t source_changes = 0;
     std::size_t target_changes = 0;
-    source.topology ().set_change_handler ([&] { ++source_changes; });
-    target.topology ().set_change_handler ([&] { ++target_changes; });
+    std::vector<bool> source_readiness;
+    std::vector<bool> target_readiness;
+    source.topology ().set_change_handler ([&] {
+        ++source_changes;
+        const auto peer = source.topology ().peer ({'f'});
+        assert (peer);
+        source_readiness.push_back (peer->ready);
+        assert (source_changes == (peer->ready ? 2 : 1));
+    });
+    target.topology ().set_change_handler ([&] {
+        ++target_changes;
+        const auto peer = target.topology ().peer ({'e'});
+        assert (peer);
+        target_readiness.push_back (peer->ready);
+        assert (target_changes == (peer->ready ? 2 : 1));
+    });
     std::ostringstream trace;
     auto *previous = std::cerr.rdbuf (trace.rdbuf ());
     connect (source, target);
     std::cerr.rdbuf (previous);
     source.topology ().set_change_handler ({});
     target.topology ().set_change_handler ({});
-    assert (source_changes == 1);
-    assert (target_changes == 1);
+    assert (source_changes == 2);
+    assert (target_changes == 2);
+    assert ((source_readiness == std::vector<bool>{false, true}));
+    assert ((target_readiness == std::vector<bool>{false, true}));
     const auto log = trace.str ();
     for (const auto *rid : {"65", "66"}) {
         const auto phase =

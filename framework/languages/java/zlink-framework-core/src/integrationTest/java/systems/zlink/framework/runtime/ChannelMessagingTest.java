@@ -1803,6 +1803,7 @@ final class ChannelMessagingTest {
                         .join();
             } catch (CompletionException ex) {
                 if (ex.getCause() instanceof ZLinkFrameworkException frameworkError
+                        && frameworkError.getMessage() != null
                         && frameworkError.getMessage().contains("HANDLER_MISSING")) {
                     return frameworkError;
                 }
