@@ -551,6 +551,9 @@ control transaction은 deadline까지 진행한다.
   non-replayable terminal은 그 실패로 즉시 끝난다 — 같은 입력을 다시 보내도 결과가 달라지지 않기
   때문이다. Terminal envelope(`Created`·`Existing`·`Rejected`·`Failed` 등)를 받은 operation은 다시
   보내지 않는다.
+- **Replay는 재전송이 필요하다는 사실과 target peer가 현재 route에서 ready라는 사실이 함께 성립할 때
+  제출한다.** 실패를 처리할 때 이미 ready이면 바로 제출하고, 아니면 ready가 되는 전이에서 제출한다.
+  별도 재시도 timer나 주기적 확인을 두지 않는다.
 - **각 attempt는 남은 deadline 전부를 사용하고 횟수 제한이 없다.** Deadline 소진의 종류는 원인이 정한다:
   한 번도 admission되지 못한 채 소진되면 [오류 모델](../00-foundation/07-framework-error-model.ko.md)의
   `Unavailable`, admission된 request의 reply를 받지 못한 채 소진되면 `DeadlineExceeded`다. 중복

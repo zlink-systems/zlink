@@ -359,6 +359,10 @@ sequenceDiagram
     end
 ```
 
+**The accepting side records the other side as an admitted peer and then submits the admission
+acceptance.** Records this node sends to that peer on the same Application lane as the admission acceptance
+(DATA and REQUEST) leave after the admission acceptance.
+
 ### 7.2 Channel Weight Update
 
 The handshake also carries per-Channel weight. When Channel weight is changed
