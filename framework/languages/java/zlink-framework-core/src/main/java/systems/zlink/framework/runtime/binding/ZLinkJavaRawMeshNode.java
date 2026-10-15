@@ -4598,25 +4598,25 @@ final class ZLinkJavaRawMeshNode
         long startedAt = System.nanoTime();
         long receivedBytes = 0;
         int count = 0;
-        // Spec 08 §4.1 I1: the rotation's first permit observes the FIFO. When a second record
-        // follows, the rest of the rotation's budget is what is free now, reserved in one lock.
+        // Spec 08 §4.1 I1/I2: the rotation's first permit observes the FIFO. After the first
+        // record, the rest of the rotation's budget is what is free now, reserved in one lock,
+        // and the rotation claims records until the socket has none (one readiness wait per
+        // rotation, no poll per record) or a budget, count, byte or time limit is reached.
         var budgetQueue = applicationJobQueue;
         int budget = 0;
         boolean budgetReserved = false;
         try {
             while (count < MAX_INGRESS_BATCH && !closed.get()) {
                 var queue = applicationJobQueue;
+                boolean budgeted = false;
                 if (grant == null && queue != null && queue == budgetQueue && count > 0) {
                     if (!budgetReserved) {
                         budgetReserved = true;
                         budget = queue.reserveRotationBudget(MAX_INGRESS_BATCH - count);
                     }
-                    if (budget > 0) {
-                        budget--;
-                        grant = queue.takeRotationPermit();
-                    }
+                    budgeted = budget > 0;
                 }
-                if (grant == null && queue != null) {
+                if (grant == null && !budgeted && queue != null) {
                     grant =
                             queue.acquireOrResume(
                                     pump,
@@ -4629,24 +4629,32 @@ final class ZLinkJavaRawMeshNode
                     }
                     if (grant == null) return;
                 }
-                var permit = grant;
+                // Each permit of this source posts the next child of a fanout it already
+                // received, or receives one record. A budgeted permit becomes a permit object
+                // only for work that exists.
+                RawMulticastFanout fanout = pendingRawMulticast;
+                ZLinkJavaRawServicePort.Inbound record = null;
+                if (fanout == null) {
+                    Optional<ZLinkJavaRawServicePort.Inbound> inbound =
+                            port.receiveNow(pumpSocket);
+                    if (inbound.isEmpty()) {
+                        return;
+                    }
+                    record = inbound.orElseThrow();
+                }
+                ZLinkApplicationJobQueue.Permit permit = grant;
                 grant = null;
+                if (budgeted) {
+                    budget--;
+                    permit = queue.takeRotationPermit();
+                }
                 try {
-                    // Each permit of this source posts the next child of a fanout it already
-                    // received, or receives one record.
-                    RawMulticastFanout fanout = pendingRawMulticast;
                     if (fanout != null) {
                         try (ZLinkApplicationJobContext.Scope ignored =
                                 ZLinkApplicationJobContext.enter(permit)) {
                             continueRawMulticast(fanout);
                         }
                     } else {
-                        Optional<ZLinkJavaRawServicePort.Inbound> inbound =
-                                port.receiveNow(pumpSocket);
-                        if (inbound.isEmpty()) {
-                            return;
-                        }
-                        ZLinkJavaRawServicePort.Inbound record = inbound.orElseThrow();
                         receivedBytes =
                                 Math.addExact(
                                         receivedBytes, retainedBytes(record.received().parts()));
@@ -4665,11 +4673,6 @@ final class ZLinkJavaRawMeshNode
                 count++;
                 if (receivedBytes >= MAX_INGRESS_BATCH_BYTES
                         || System.nanoTime() - startedAt >= MAX_INGRESS_BATCH_NANOS) {
-                    return;
-                }
-                if (count >= MAX_INGRESS_BATCH
-                        || (pendingRawMulticast == null
-                                && !port.waitForReadable(pumpSocket, Duration.ZERO))) {
                     return;
                 }
             }
