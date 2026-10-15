@@ -4624,9 +4624,24 @@ final class ZLinkJavaRawMeshNode
         long startedAt = System.nanoTime();
         long receivedBytes = 0;
         int count = 0;
+        // Spec 08 §4.1 I1: the rotation's first permit observes the FIFO. When a second record
+        // follows, the rest of the rotation's budget is what is free now, reserved in one lock.
+        var budgetQueue = applicationJobQueue;
+        int budget = 0;
+        boolean budgetReserved = false;
         try {
             while (count < MAX_INGRESS_BATCH && !closed.get()) {
                 var queue = applicationJobQueue;
+                if (grant == null && queue != null && queue == budgetQueue && count > 0) {
+                    if (!budgetReserved) {
+                        budgetReserved = true;
+                        budget = queue.reserveRotationBudget(MAX_INGRESS_BATCH - count);
+                    }
+                    if (budget > 0) {
+                        budget--;
+                        grant = queue.takeRotationPermit();
+                    }
+                }
                 if (grant == null && queue != null) {
                     grant =
                             queue.acquireOrResume(
@@ -4686,6 +4701,9 @@ final class ZLinkJavaRawMeshNode
             }
         } finally {
             if (grant != null) grant.abandonReservation();
+            if (budget > 0) {
+                budgetQueue.abandonRotationBudget(budget);
+            }
         }
     }
 
