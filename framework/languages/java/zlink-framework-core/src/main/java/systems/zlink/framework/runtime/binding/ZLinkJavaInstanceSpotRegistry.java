@@ -160,16 +160,17 @@ final class ZLinkJavaInstanceSpotRegistry {
                         // operation, before this caller observes the join
                         // (09-object-lifecycle.ko.md:134-137). Ready stays even when this
                         // operation's queue admission fails.
-                        CompletionStage<Void> admitted;
+                        CompletionStage<Void> admission;
                         try {
-                            admitted = restoreFirst.apply(value.spot());
+                            admission =
+                                    Objects.requireNonNull(
+                                            restoreFirst.apply(value.spot()),
+                                            "Instance Spot admission returned null");
                         } catch (RuntimeException | Error refusal) {
-                            candidate.complete(value);
-                            result.completeExceptionally(refusal);
-                            return;
+                            admission = CompletableFuture.failedFuture(refusal);
                         }
                         candidate.complete(value);
-                        admitted.whenComplete(
+                        admission.whenComplete(
                                 (ignored, terminalFailure) -> {
                                     if (terminalFailure == null) result.complete(value);
                                     else result.completeExceptionally(terminalFailure);

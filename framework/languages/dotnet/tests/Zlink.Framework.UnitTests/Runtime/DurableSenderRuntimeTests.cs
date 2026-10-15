@@ -161,8 +161,8 @@ public sealed partial class StatefulServiceRuntimeTests
         }
         else
         {
-            Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
-            deadlineTime.AdvanceMonotonic(TimeSpan.FromMilliseconds(10));
+            // Actor model §8.1: the ready transition submits replay without a
+            // retry timer. The controlled clock remains frozen throughout.
             var (completion, parts) = DrainCompletion(source, operation);
             ZLinkMessageParts.DisposeAll(parts);
             Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);

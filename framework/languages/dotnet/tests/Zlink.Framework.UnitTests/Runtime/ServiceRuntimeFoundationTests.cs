@@ -3055,13 +3055,13 @@ public sealed class ServiceRuntimeFoundationTests
                     lifecycleGeneration: 1,
                     descriptorRevision: 1,
                     new Dictionary<string, uint>(StringComparer.Ordinal),
-                    objectRole: (byte)ZLinkMeshNodeObjectRole.Client
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
                 )
             )
         )
             await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
 
-        await WaitUntilAsync(() => target.Peers().Length == 1);
+        await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
         var controlStatus = applicationJobQueue.GetStatus();
         Assert.Equal(1UL, controlStatus.PeakPermitsInUse);

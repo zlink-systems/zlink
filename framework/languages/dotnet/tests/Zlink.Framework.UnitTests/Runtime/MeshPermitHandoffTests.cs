@@ -30,8 +30,12 @@ public sealed class MeshPermitHandoffTests
         // retry before the records under test are submitted.
         using (var handshake = Message.From("handshake"))
             dealer.Send().Message(handshake).Submit();
+        ulong routeGeneration;
         using (var received = Received.Create())
+        {
             Assert.True(socket.Recv(received));
+            routeGeneration = received.RouteGeneration;
+        }
 
         using var queue = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, capacity, 1, capacity)
@@ -42,7 +46,7 @@ public sealed class MeshPermitHandoffTests
             applicationJobQueue: queue
         );
         using var stop = new CancellationTokenSource();
-        AddAdmittedPeer(node, sourceRid, sourceGeneration);
+        AddAdmittedPeer(node, sourceRid, sourceGeneration, routeGeneration);
         SetField(node, "_socket", socket);
         using var poller = CreateReceivePoller(socket);
         SetField(node, "_poller", poller);
@@ -221,7 +225,8 @@ public sealed class MeshPermitHandoffTests
     private static void AddAdmittedPeer(
         ZLinkManagedMeshNode node,
         RoutingId routingId,
-        ulong lifecycleGeneration
+        ulong lifecycleGeneration,
+        ulong routeGeneration
     )
     {
         var peer = new ZLinkMeshPeer(1)
@@ -229,6 +234,7 @@ public sealed class MeshPermitHandoffTests
             RoutingId = routingId,
             PhysicalRoutingId = routingId,
             LifecycleGeneration = lifecycleGeneration,
+            RouteGeneration = routeGeneration,
             Admission = new ZLinkServiceWireCodec.AdmissionRecord(
                 "permit-ingress",
                 ZLinkServiceSecurityIdentity.Plaintext,
