@@ -101,6 +101,7 @@ export interface ZLinkSpotActivationLifecycleOptions {
   readonly nodeRid?: RoutingId;
   readonly nodeRidProvider?: (meshName: string) => RoutingId | undefined;
   readonly actorCountProvider?: (spotId: RoutingId) => number;
+  readonly releaseActorMembers?: (meshName: string, spotId: RoutingId) => Promise<void>;
   readonly userSpotExecutionMode?: (
     meshName: string,
     spotType: Type<ZLinkSpot>
@@ -1058,10 +1059,12 @@ export class ZLinkSpotActivationLifecycle {
       } catch (error) {
         // An OnClosing failure is diagnostic and cleanup continues. It is
         // returned so host shutdown can classify its teardown outcome.
-        this.options.closeErrorSink?.reportRuntimeTaskException(
-          `spot ${String(activation.spotId)} onClosing`,
-          error
-        );
+        if (reason !== ZLinkSpotCloseReason.HostShutdown) {
+          this.options.closeErrorSink?.reportRuntimeTaskException(
+            `spot ${String(activation.spotId)} onClosing`,
+            error
+          );
+        }
         closingFailure = error;
       }
     }
@@ -1102,7 +1105,12 @@ export class ZLinkSpotActivationLifecycle {
     }
     if (!state.nativeDisposed) {
       await cleanup(
-        () => activation.nativeSpot?.dispose(),
+        async () => {
+          if (reason === ZLinkSpotCloseReason.HostShutdown) {
+            await this.options.releaseActorMembers?.(locationMeshName, activation.spotId);
+          }
+          await activation.nativeSpot?.dispose();
+        },
         () => {
           state.nativeDisposed = true;
         }
@@ -1130,8 +1138,9 @@ export class ZLinkSpotActivationLifecycle {
         }
       );
     }
-    if (errors.length === 1) throw errors[0];
-    if (errors.length > 1) {
+    if (errors.length > 0) {
+      if (closingFailure !== undefined) errors.unshift(closingFailure);
+      if (errors.length === 1) throw errors[0];
       throw new AggregateError(errors, `Spot '${activation.spotId}' cleanup failed.`);
     }
     return closingFailure;

@@ -333,6 +333,8 @@ export class ZLinkSpotRuntimeOptionsFactory {
         );
       },
       actorTransferRuntime,
+      releaseActorMembers: (meshName, spotId) =>
+        this.options.actorManager()?.releaseSpotActorMembers(meshName, spotId) ?? Promise.resolve(),
       boundSessionRuntime: this.options.boundSessionRelay.boundSessions,
       actorHandoffRuntime: this.options.actorHandoff,
       metrics: this.options.metrics,
