@@ -9181,9 +9181,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer.Admitted = false;
                 peer.State = MeshPeerState.NotRequired;
                 peer.LastChangedMs = checked((ulong)Environment.TickCount64);
-                if (command == ServiceWireConstants.Command.Hello)
-                    SendAdmission(peer, ServiceWireConstants.Command.Admit, admissionResponse);
                 _peersByRid[sourceRid] = peer;
+                if (command == ServiceWireConstants.Command.Hello)
+                    SubmitAdmissionResponseUnderLock(peer, admissionResponse);
                 if (
                     command == ServiceWireConstants.Command.Admit
                     && matchedIntent is not null
@@ -9240,18 +9240,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer.Admission = admission;
                 peer.LastChangedMs = checked((ulong)Environment.TickCount64);
                 _peersByRid[sourceRid] = peer;
-                // The RID index authenticates ingress as soon as Hello is
-                // validated. Outbound readiness waits for Admit acceptance
-                // (wire §4, liveness §5), so requests cannot overtake that reply.
-                if (command == ServiceWireConstants.Command.Hello)
-                {
-                    peer.Admitted = false;
-                    peer.State = MeshPeerState.Connecting;
-                    RebuildChannelSelectionPlansUnderLock();
-                }
             }
+            // MeshNode §7.1: accepting a Hello records the peer as admitted before this
+            // turn submits the Admit. Senders select a target in a later turn of this
+            // lane, so a record selected for the peer is submitted after the Admit.
             if (
-                command == ServiceWireConstants.Command.Admit
+                command == ServiceWireConstants.Command.Hello
+                || command == ServiceWireConstants.Command.Admit
                 || command == ServiceWireConstants.Command.Update && peer.Admitted
             )
             {
@@ -9265,7 +9260,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
 
         if (command == ServiceWireConstants.Command.Hello)
-            SendAdmission(peer, ServiceWireConstants.Command.Admit, admissionResponse);
+            SubmitAdmissionResponseUnderLock(peer, admissionResponse);
         if (admissionCompleted)
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"mesh_peer_admission_accepted local={_routingId} peer={sourceRid} command={command} endpoint={admission.AdvertisedEndpoint} lifecycle={admission.LifecycleGeneration} revision={admission.DescriptorRevision}"
@@ -11974,25 +11969,34 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void SendAdmission(
-        Peer peer,
-        ServiceWireConstants.Command command,
-        SendOperation? exactResponse = null
-    )
+    private void SendAdmission(Peer peer, ServiceWireConstants.Command command)
     {
         if (_lane.IsOnLane)
         {
-            SendAdmissionCore(peer, command, exactResponse);
+            SendAdmissionCore(peer, command);
             return;
         }
-        RunState(() => SendAdmissionCore(peer, command, exactResponse));
+        RunState(() => SendAdmissionCore(peer, command));
     }
 
-    private void SendAdmissionCore(
-        Peer peer,
-        ServiceWireConstants.Command command,
-        SendOperation? exactResponse
-    )
+    // The Admit answers the Hello on the physical source pair that delivered it, in the
+    // admission turn of that route. A failed submit leaves the next attempt to the source's
+    // Hello retry.
+    private void SubmitAdmissionResponseUnderLock(Peer peer, SendOperation? response)
+    {
+        if (response is null || _socket is null)
+            return;
+        ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} command={ServiceWireConstants.Command.Admit} endpoint={_advertisedEndpoint} lifecycle={_lifecycleGeneration} revision={_descriptorRevision}"
+        );
+        _ = TrySendExactControlAsync(
+            response,
+            EncodeLocalAdmission(ServiceWireConstants.Command.Admit),
+            _stop?.Token ?? CancellationToken.None
+        );
+    }
+
+    private void SendAdmissionCore(Peer peer, ServiceWireConstants.Command command)
     {
         if (_socket is null)
             return;
@@ -12003,7 +12007,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} command={command} endpoint={_advertisedEndpoint} lifecycle={_lifecycleGeneration} revision={_descriptorRevision}"
         );
-        SendControl(target, peer.RouteGeneration, command, descriptor, exactResponse);
+        SendControl(target, peer.RouteGeneration, command, descriptor);
     }
 
     private byte[] EncodeLocalAdmission(ServiceWireConstants.Command command) =>
@@ -12075,8 +12079,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId target,
         ulong routeGeneration,
         ServiceWireConstants.Command command,
-        byte[]? head,
-        SendOperation? exactFirstAttempt = null
+        byte[]? head
     )
     {
         if (
@@ -12104,7 +12107,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     // retain only the newest signal for this peer epoch and
                     // command. This bounds temporal amplification without
                     // moving retry or completion ownership out of Core.
-                    current.Pending = new ControlSendAttempt(head!, exactFirstAttempt);
+                    current.Pending = head!;
                     return (current, false);
                 }
 
@@ -12133,13 +12136,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
             if (
                 RunRoutedOperation(() =>
-                    DrainControlSendAsync(
-                        key,
-                        state,
-                        head,
-                        exactFirstAttempt,
-                        _stop?.Token ?? CancellationToken.None
-                    )
+                    DrainControlSendAsync(key, state, head, _stop?.Token ?? CancellationToken.None)
                 )
             )
             {
@@ -12166,7 +12163,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ControlSendKey key,
         ControlSendState state,
         byte[] head,
-        SendOperation? exactFirstAttempt,
         CancellationToken cancellationToken
     )
     {
@@ -12175,48 +12171,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             while (true)
             {
-                if (exactFirstAttempt is not null)
-                {
-                    // The exact operation snapshots the physical route, but
-                    // the admission decision is still scoped to the Core route
-                    // generation it was made on. Do not submit a queued
-                    // response after that route has been replaced.
-                    if (!HasCurrentControlTarget(key.Target, key.RouteGeneration, key.Command))
-                        return;
-                    accepted = await TrySendExactControlAsync(
-                            exactFirstAttempt,
-                            head,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    exactFirstAttempt = null;
-                    // A captured response belongs to one physical source pair.
-                    // If that pair has ended, a logical-RID retry could deliver
-                    // the old connection's Admit to its replacement. The source
-                    // handshake retry owns the next attempt instead.
-                }
-                else
-                    accepted = await SendControlAttemptAsync(
-                            key.Target,
-                            key.RouteGeneration,
-                            key.Command,
-                            head,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-
-                if (accepted && key.Command == ServiceWireConstants.Command.Admit)
-                    RunState(() =>
-                    {
-                        if (IsDisposing || cancellationToken.IsCancellationRequested)
-                            return;
-                        var peer = _peersByRid.Values.FirstOrDefault(candidate =>
-                            candidate.PhysicalRoutingId == key.Target
-                            && candidate.RouteGeneration == key.RouteGeneration
-                        );
-                        if (peer?.State == MeshPeerState.Connecting && !peer.Admitted)
-                            CompletePeerAdmissionUnderLock(peer);
-                    });
+                accepted = await SendControlAttemptAsync(
+                        key.Target,
+                        key.RouteGeneration,
+                        key.Command,
+                        head,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
 
                 var next = RunInboundOperationState(() =>
                 {
@@ -12240,8 +12202,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 });
                 if (next is null)
                     return;
-                head = next.Head;
-                exactFirstAttempt = next.ExactFirstAttempt;
+                head = next;
             }
         }
         finally
@@ -12381,10 +12342,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private sealed class ControlSendState
     {
-        internal ControlSendAttempt? Pending { get; set; }
+        internal byte[]? Pending { get; set; }
     }
-
-    private sealed record ControlSendAttempt(byte[] Head, SendOperation? ExactFirstAttempt);
 
     private void ClosePeerAfterControlSendFailure(
         RoutingId physicalRoutingId,

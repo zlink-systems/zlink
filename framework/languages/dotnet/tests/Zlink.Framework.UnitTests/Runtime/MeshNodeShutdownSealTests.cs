@@ -635,7 +635,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
-    public async Task QueuedAdmit_SurvivesConnectionReadyDeliveredAfterHello()
+    public async Task AdmittedPeer_SurvivesConnectionReadyDeliveredAfterHello()
     {
         var scheduler = new GatedTaskScheduler();
         DeferredReadyMonitor? transportMonitor = null;
@@ -674,10 +674,15 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             )
                 peer.Send().Message(hello).Submit();
 
-            // Hello validates ingress, but a queued Admit is not a ready route.
-            // A late transport READY must preserve this pending handshake.
-            await scheduler.Queued;
-            Assert.Equal(0U, node.Status().AdmittedPeerCount);
+            // MeshNode §7.1: accepting the Hello records the peer as admitted
+            // before the Admit is submitted. A late transport READY must preserve
+            // that admission.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => node.Status().AdmittedPeerCount == 1,
+                    TimeSpan.FromSeconds(5)
+                )
+            );
             var pending = Assert.Single(node.Peers());
             await transportMonitor!.ReadyCaptured;
             transportMonitor.ReleaseReady();
@@ -686,33 +691,21 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             Assert.Equal(pending.LifecycleGeneration, afterReady.LifecycleGeneration);
             Assert.Equal(pending.DescriptorRevision, afterReady.DescriptorRevision);
             Assert.Equal(pending.LastChangedMs, afterReady.LastChangedMs);
-            Assert.Equal(0U, node.Status().AdmittedPeerCount);
+            Assert.Equal(1U, node.Status().AdmittedPeerCount);
 
-            // Update follows the queued Admit on the same socket. It makes a
-            // discarded Admit observable as the wrong first record, without a
-            // receive deadline or waiting for an absent message.
+            // Update follows the Admit on the same socket. It makes a discarded
+            // Admit observable as the wrong first admission record. Admission
+            // starts liveness, so probes may arrive between them.
             node.PublishDraining();
             scheduler.Release();
-            foreach (
-                var expected in new[]
-                {
-                    ServiceWireConstants.Command.Admit,
-                    ServiceWireConstants.Command.Update,
-                }
-            )
-            {
-                using var received = Received.Create();
-                Assert.True(peer.Recv(received));
-                Assert.True(
-                    ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-                        received.FirstPart().AsSpan(),
-                        out var command,
-                        out _,
-                        out _
-                    )
-                );
-                Assert.Equal(expected, command);
-            }
+            Assert.Equal(
+                ServiceWireConstants.Command.Admit,
+                await ReceiveAdmissionCommandAsync(peer)
+            );
+            Assert.Equal(
+                ServiceWireConstants.Command.Update,
+                await ReceiveAdmissionCommandAsync(peer)
+            );
 
             Assert.True(
                 SpinWait.SpinUntil(
@@ -797,6 +790,60 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             Assert.Equal(1U, node.Status().AdmittedPeerCount);
             Assert.Equal(MeshPeerState.Admitted, Assert.Single(node.Peers()).State);
             Assert.Equal(1UL, monitor.Status().PeerAdmitted);
+        }
+    }
+
+    // MeshNode §7.1: the accepting side records the peer as admitted before it submits
+    // the Admit. A peer that has received its Admit is therefore already counted.
+    [Fact]
+    public async Task InboundHello_RecordsThePeerAsAdmittedBeforeItsAdmitArrives()
+    {
+        const int peerCount = 32;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        var suffix = Guid.NewGuid().ToString("N");
+        node.SetRoutingId(RoutingId.From($"admit-order-node-{suffix}"));
+        node.SetBind(EphemeralTcpEndpoint);
+        node.AddChannel(MeshName);
+        node.Start();
+        var endpoint = node.Status().LocalEndpoint;
+        var peers = new List<IDealerSocket>();
+        try
+        {
+            for (var index = 0; index < peerCount; index++)
+            {
+                var peer = context.CreateDealerSocket();
+                peers.Add(peer);
+                peer.SetRoutingId(RoutingId.From($"admit-order-peer-{index}-{suffix}"));
+                peer.Connect(endpoint);
+            }
+            await Task.WhenAll(
+                peers.Select(
+                    (peer, index) =>
+                        SendAsync(
+                            peer,
+                            ZLinkServiceWireCodec.EncodeRouteAdmission(
+                                ServiceWireConstants.Command.Hello,
+                                MeshName,
+                                $"inproc://admit-order-peer-{index}-{suffix}",
+                                lifecycleGeneration: 7,
+                                descriptorRevision: 3,
+                                new Dictionary<string, uint>(StringComparer.Ordinal),
+                                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                            )
+                        )
+                )
+            );
+            for (var received = 1; received <= peerCount; received++)
+            {
+                await ReceiveAdmitAsync(peers[received - 1]);
+                Assert.True(node.Status().AdmittedPeerCount >= (uint)received);
+            }
+        }
+        finally
+        {
+            foreach (var peer in peers)
+                peer.Dispose();
         }
     }
 
@@ -1069,6 +1116,15 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     // Skips liveness probes; returns once a route Admit arrives.
     private static async Task ReceiveAdmitAsync(IDealerSocket socket)
     {
+        while (await ReceiveAdmissionCommandAsync(socket) != ServiceWireConstants.Command.Admit) { }
+    }
+
+    // Skips records that are not route admission records (liveness probes) and returns
+    // the next admission command.
+    private static async Task<ServiceWireConstants.Command> ReceiveAdmissionCommandAsync(
+        IDealerSocket socket
+    )
+    {
         var deadlineTimeout = TimeSpan.FromSeconds(2);
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
@@ -1083,14 +1139,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                         out _,
                         out _
                     )
-                    && command == ServiceWireConstants.Command.Admit
                 )
-                    return;
+                    return command;
                 continue;
             }
             await Task.Delay(10);
         }
-        throw new TimeoutException("The route Admit reply was not received.");
+        throw new TimeoutException("No route admission record was received.");
     }
 
     private static async Task AssertNoAdmitAsync(IDealerSocket socket)
