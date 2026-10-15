@@ -316,18 +316,17 @@ internal sealed class ZLinkSessionActorBindingTable
 
     private readonly record struct CanonicalRelocationKey(
         ZLinkServiceWireCodec.RelocationWireId RelocationId,
-        ZLinkServiceWireCodec.RelocationCoordinatorFence Coordinator,
         ZLinkServiceWireCodec.SessionActorIdentityRecord Actor,
         ZLinkServiceWireCodec.SessionOwnerFenceRecord Session
     )
     {
         internal static CanonicalRelocationKey From(
             ZLinkServiceWireCodec.SessionRelocationSealRecord seal
-        ) => new(seal.RelocationId, seal.Coordinator, seal.Actor.Actor, seal.Session);
+        ) => new(seal.RelocationId, seal.Actor.Actor, seal.Session);
 
         internal static CanonicalRelocationKey From(
             ZLinkServiceWireCodec.SessionRelocationRouteRecord route
-        ) => new(route.RelocationId, route.Coordinator, route.Actor, route.Session);
+        ) => new(route.RelocationId, route.Actor, route.Session);
     }
 
     public ZLinkSessionActorBindingTable(
@@ -1080,7 +1079,8 @@ internal sealed class ZLinkSessionActorBindingTable
                 if (entry.AppliedCanonicalRelocationRoute is { } applied)
                 {
                     LogLateSessionRouteUpdate(request);
-                    return applied == request;
+                    return CanonicalRelocationKey.From(applied)
+                        == CanonicalRelocationKey.From(request);
                 }
 
                 if (entry.CanonicalRelocationSeal is not { } seal)
@@ -1090,7 +1090,6 @@ internal sealed class ZLinkSessionActorBindingTable
                 }
                 if (
                     seal.RelocationId != request.RelocationId
-                    || seal.Coordinator != request.Coordinator
                     || seal.Actor.Actor != request.Actor
                     || seal.Session != request.Session
                 )
@@ -1108,17 +1107,6 @@ internal sealed class ZLinkSessionActorBindingTable
                     == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
                 )
                 {
-                    if (
-                        request.Route.PreviousAuthorityOwnerGeneration
-                            != seal.Actor.AuthorityOwnerGeneration
-                        || authenticatedRoute.NodeRid != request.Route.TargetNodeRid
-                        || authenticatedRoute.NodeGeneration != request.Route.TargetNodeGeneration
-                        || authenticatedRoute.AuthorityOwnerGeneration
-                            != request.Route.TargetAuthorityOwnerGeneration
-                        || string.IsNullOrWhiteSpace(authenticatedRoute.MeshName)
-                    )
-                        return false;
-
                     var targetActor = new ActorRef(
                         request.Actor.ActorId,
                         request.Actor.ObjectGeneration,
@@ -1151,20 +1139,6 @@ internal sealed class ZLinkSessionActorBindingTable
                 }
                 else
                 {
-                    if (
-                        request.Route.CurrentAuthorityOwnerGeneration
-                            != entry.AuthorityOwnerGeneration
-                        || authenticatedRoute.NodeRid != seal.Coordinator.NodeRid
-                        || authenticatedRoute.NodeGeneration != seal.Coordinator.NodeGeneration
-                        || authenticatedRoute.AuthorityOwnerGeneration
-                            != seal.Actor.AuthorityOwnerGeneration
-                        || !string.Equals(
-                            authenticatedRoute.MeshName,
-                            entry.MeshName,
-                            StringComparison.Ordinal
-                        )
-                    )
-                        return false;
                     CancelCanonicalSealTimeout(key);
                     routedKey = key;
                     drainRuntime = ReleaseSealOnLane(
@@ -1183,41 +1157,6 @@ internal sealed class ZLinkSessionActorBindingTable
             await StartHeldDrainAsync(drainRuntime, routedKey).ConfigureAwait(false);
         return routed;
     }
-
-    internal ValueTask<bool> IsCanonicalRouteAppliedAsync(
-        ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
-        ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate
-    ) =>
-        _lane.RunAsync(() =>
-        {
-            if (
-                !TryFindCanonicalBinding(request.Actor, request.Session, out _, out var entry)
-                || entry.AppliedCanonicalRelocationRoute != request
-            )
-                return false;
-
-            var expectedNode =
-                request.Route.Action == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
-                    ? request.Route.TargetNodeRid
-                    : request.Coordinator.NodeRid;
-            var expectedGeneration =
-                request.Route.Action == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
-                    ? request.Route.TargetNodeGeneration
-                    : request.Coordinator.NodeGeneration;
-            var expectedAuthority =
-                request.Route.Action == ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit
-                    ? request.Route.TargetAuthorityOwnerGeneration
-                    : request.Route.CurrentAuthorityOwnerGeneration;
-            if (
-                authenticatedCandidate.NodeRid != expectedNode
-                || authenticatedCandidate.NodeGeneration != expectedGeneration
-                || authenticatedCandidate.AuthorityOwnerGeneration != expectedAuthority
-            )
-                throw new InvalidDataException(
-                    "A command 44 retry changed its authenticated route fingerprint."
-                );
-            return true;
-        });
 
     private bool TryFindCanonicalBinding(
         ZLinkServiceWireCodec.SessionActorIdentityRecord actor,
