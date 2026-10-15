@@ -28,6 +28,9 @@ supplied bytes, including their offset and length, without copying. The caller m
 the bytes after passing them in; doing so changes the payload contents. `view()` returns a
 read-only view of the stored bytes without copying. The caller must not modify the returned view
 or its backing buffer. `toBytes()` and `copy()` return copies.
+A codec receiving `view()` must ensure that the application value it returns does not reference
+the view or its backing buffer. [Payload Ownership And Codec §2](../../../01-execution/05-payload-ownership-and-codec.en.md#2-copies-that-can-be-eliminated)
+owns the common rules for ownership transfer and accessor copies.
 
 ## 1. Entry Spot And Classic Fanout
 
