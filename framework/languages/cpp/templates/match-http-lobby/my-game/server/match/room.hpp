@@ -39,9 +39,8 @@ class Room final : public fx::spot_t<Player>
         const auto request = payload.decode<JoinRoomRequest> ();
         if (request.playerId != id || request.roomId != context_.spot_id ())
             throw std::invalid_argument ("Room admission identity mismatch");
-        co_return state.admit (std::string (id))
-          ? fx::spot_actor_join_result_t::accept ()
-          : fx::spot_actor_join_result_t::reject (ActionRejected{Rejection::admission});
+        co_return state.admit (std::string (id)) ? fx::spot_actor_join_result_t::accept ()
+                                                 : fx::spot_actor_join_result_t::reject ();
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_await broadcast (view ()); }
     fx::task_t<void> on_leave_actor (Player &) override { co_return; }

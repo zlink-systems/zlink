@@ -30,8 +30,7 @@ public final class Room implements ZLinkSpot<Player> {
         return CompletableFuture.completedFuture(
                 state.admit(id)
                         ? ZLinkSpotActorJoinResult.accept()
-                        : ZLinkSpotActorJoinResult.reject(
-                                new ActionRejected(Rules.ADMISSION_REJECTED)));
+                        : ZLinkSpotActorJoinResult.reject());
     }
 
     void checkJoin(String id, JoinRoomRequest request) {

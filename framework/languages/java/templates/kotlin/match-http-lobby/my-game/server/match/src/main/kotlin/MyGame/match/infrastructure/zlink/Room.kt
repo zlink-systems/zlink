@@ -22,7 +22,7 @@ class Room(
     ): ZLinkSpotActorJoinResult {
         checkJoin(actorId, request.decode<JoinRoomRequest>())
         return if (state.admit(actorId)) ZLinkSpotActorJoinResult.accept()
-        else ZLinkSpotActorJoinResult.reject(ActionRejected(Rules.ADMISSION_REJECTED))
+        else ZLinkSpotActorJoinResult.reject()
     }
 
     fun checkJoin(id: String, request: JoinRoomRequest) {

@@ -53,7 +53,7 @@ Pure Room rule tests (admission, closed wall boundaries, exact range, sequence r
 
 ## Known issues
 
-- [#1792](https://github.com/zlink-systems/zlink/issues/1792): public 0.30.0 can deliver a rejected Actor join completion without a Room reply. The Player reports this failure instead of fabricating an application admission rejection.
+- [#1792](https://github.com/zlink-systems/zlink/issues/1792): public 0.30.0 reports a failed Actor join target as a rejected completion instead of a failed one, so the client receives `admission-rejected` for that failure.
 - [#1784](https://github.com/zlink-systems/zlink/issues/1784): a failed deferred Actor join can terminate the node process with `result has no Framework error` before the Player receives any completion.
 - [#1740](https://github.com/zlink-systems/zlink/issues/1740): public 0.30.0 lacks the required SafeToShutdown observation and can fail shutdown with TeardownFailed. The runner reports these failures and does not infer safety.
 - [#1785](https://github.com/zlink-systems/zlink/issues/1785): C++ Session has no public API for replying with a newly created typed value. `SessionInfoRequest` receives a typed `SessionInfo` push; the e2e client observes that push.
