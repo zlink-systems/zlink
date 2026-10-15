@@ -6938,21 +6938,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         frameworkOrigin ? ZLinkFrameworkErrorOrigin.frameworkMetadata() : Map.of());
         try {
             received.reply(reply);
-        } catch (RuntimeException ignored) {
         } finally {
-            reply.forEach(Message::close);
+            reportDispatchError(
+                    DispatchFailureReport.of(
+                                    ZLinkDispatchErrorSurface.SPOT_ROUTE,
+                                    ZLinkDispatchMessageKind.REQUEST,
+                                    reason,
+                                    ZLinkDispatchErrorAction.REPLY_ERROR)
+                            .packetName(packetName)
+                            .spotId(spotId)
+                            .sourceRid(received.routingId().orElse(null))
+                            .correlationId(received.requestSeq().map(Object::toString).orElse(null))
+                            .error(cause));
         }
-        reportDispatchError(
-                DispatchFailureReport.of(
-                                ZLinkDispatchErrorSurface.SPOT_ROUTE,
-                                ZLinkDispatchMessageKind.REQUEST,
-                                reason,
-                                ZLinkDispatchErrorAction.REPLY_ERROR)
-                        .packetName(packetName)
-                        .spotId(spotId)
-                        .sourceRid(received.routingId().orElse(null))
-                        .correlationId(received.requestSeq().map(Object::toString).orElse(null))
-                        .error(cause));
     }
 
     private static Throwable unwrapCompletion(Throwable error) {
