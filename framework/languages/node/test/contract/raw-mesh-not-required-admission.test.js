@@ -170,8 +170,8 @@ function createPair({ endpointOnly, hostAttached, notify }) {
       assert.equal(endpoint, descriptors[remote].advertisedEndpoint);
       connected = true;
       if (notify) {
-        queues.left.push({ sourceRid: 'right', routeGeneration, parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, descriptors.right)] });
-        queues.right.push({ sourceRid: 'left', routeGeneration, parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, descriptors.left)] });
+        queues.left.push({ sourceRid: 'right', routeGeneration, parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, right.topology.localDescriptor())] });
+        queues.right.push({ sourceRid: 'left', routeGeneration, parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, left.topology.localDescriptor())] });
       }
     };
     const router = {
