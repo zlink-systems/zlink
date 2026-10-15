@@ -184,7 +184,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         try (var context = Zlink.createContext();
                 var node = meshNode(context)) {
             var topology = new ZLinkServiceTopologyRegistry(descriptor(RoutingId.from("local")));
-            topology.admit(descriptor(peerRid), "pair");
+            topology.admit(descriptor(peerRid), "pair", ServiceWireConstants.COMMAND_HELLO);
             var topologyField = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
             topologyField.setAccessible(true);
             topologyField.set(node, topology);

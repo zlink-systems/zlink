@@ -30,7 +30,8 @@ final class ZLinkM6ARuntimeContractTest {
                         1,
                         List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 1)),
                         100),
-                "pipe");
+                "pipe",
+                ServiceWireConstants.COMMAND_HELLO);
         assertTrue(
                 topology.selectChannel(
                                 "orders",
@@ -67,7 +68,8 @@ final class ZLinkM6ARuntimeContractTest {
                         1,
                         List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 1)),
                         100),
-                "pipe");
+                "pipe",
+                ServiceWireConstants.COMMAND_HELLO);
         topology.selectChannel(
                 "orders",
                 peer -> {
@@ -117,12 +119,12 @@ final class ZLinkM6ARuntimeContractTest {
 
         assertEquals(
                 ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                topology.admit(first, "pipe-old"));
+                topology.admit(first, "pipe-old", ServiceWireConstants.COMMAND_HELLO));
         assertTrue(topology.selectChannel("orders").isEmpty());
         assertFalse(topology.hasSelectableChannel("orders"));
         assertEquals(
                 ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                topology.admit(updated, "pipe-current"));
+                topology.admit(updated, "pipe-current", ServiceWireConstants.COMMAND_UPDATE));
         assertEquals(
                 RoutingId.from("peer-a"),
                 topology.selectChannel("orders").orElseThrow().descriptor().nodeRoutingId());
@@ -175,10 +177,13 @@ final class ZLinkM6ARuntimeContractTest {
                             descriptor("mesh", "local", 1, 1, List.of(), 100));
             assertEquals(
                     ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                    topology.admit(peer, "pipe"));
+                    topology.admit(peer, "pipe", ServiceWireConstants.COMMAND_HELLO));
             assertEquals(
                     ZLinkServiceTopologyRegistry.AdmissionResult.INVALID_DESCRIPTOR,
-                    topology.admit(immutableMutation(peer, field), "pipe"),
+                    topology.admit(
+                            immutableMutation(peer, field),
+                            "pipe",
+                            ServiceWireConstants.COMMAND_UPDATE),
                     field);
             assertEquals(
                     peer, topology.peer(RoutingId.from("peer")).orElseThrow().descriptor(), field);
@@ -205,10 +210,10 @@ final class ZLinkM6ARuntimeContractTest {
 
         assertEquals(
                 ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                topology.admit(peer, "route-1"));
+                topology.admit(peer, "route-1", ServiceWireConstants.COMMAND_HELLO));
         assertEquals(
                 ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                topology.admit(peer, "route-2"));
+                topology.admit(peer, "route-2", ServiceWireConstants.COMMAND_HELLO));
         assertEquals("route-2", topology.peer(higher).orElseThrow().connectionId());
 
         assertFalse(topology.disconnect(higher, "route-1"));
@@ -237,7 +242,8 @@ final class ZLinkM6ARuntimeContractTest {
                         1,
                         List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
                         100),
-                "pipe-a");
+                "pipe-a",
+                ServiceWireConstants.COMMAND_HELLO);
         topology.admit(
                 descriptor(
                         "mesh",
@@ -246,7 +252,8 @@ final class ZLinkM6ARuntimeContractTest {
                         1,
                         List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 300)),
                         300),
-                "pipe-b");
+                "pipe-b",
+                ServiceWireConstants.COMMAND_HELLO);
         int selectedA = 0;
         int selectedB = 0;
         for (int index = 0; index < 400; index++) {
@@ -275,7 +282,8 @@ final class ZLinkM6ARuntimeContractTest {
                                 1,
                                 List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 0)),
                                 0),
-                        "stale-pipe"));
+                        "stale-pipe",
+                        ServiceWireConstants.COMMAND_HELLO));
         assertEquals(
                 ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
                 topology.admit(
@@ -286,7 +294,8 @@ final class ZLinkM6ARuntimeContractTest {
                                 2,
                                 List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 0)),
                                 0),
-                        "current-pipe"));
+                        "current-pipe",
+                        ServiceWireConstants.COMMAND_UPDATE));
         for (int index = 0; index < 16; index++) {
             assertEquals(
                     RoutingId.from("peer-a"),
@@ -296,9 +305,13 @@ final class ZLinkM6ARuntimeContractTest {
         var capacityTopology =
                 new ZLinkServiceTopologyRegistry(descriptor("mesh", "local", 1, 1, List.of(), 100));
         capacityTopology.admit(
-                descriptorWithCapacity("full", 10_000, 100, 10, 100, 10), "full-pipe");
+                descriptorWithCapacity("full", 10_000, 100, 10, 100, 10),
+                "full-pipe",
+                ServiceWireConstants.COMMAND_HELLO);
         capacityTopology.admit(
-                descriptorWithCapacity("eligible", 1, 100, 0, 100, 0), "eligible-pipe");
+                descriptorWithCapacity("eligible", 1, 100, 0, 100, 0),
+                "eligible-pipe",
+                ServiceWireConstants.COMMAND_HELLO);
         assertEquals(
                 RoutingId.from("eligible"),
                 capacityTopology.selectPlacement().orElseThrow().descriptor().nodeRoutingId());
@@ -482,8 +495,8 @@ final class ZLinkM6ARuntimeContractTest {
                         1,
                         List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
                         100);
-        topology.admit(peerA, "pipe-a");
-        topology.admit(peerB, "pipe-b");
+        topology.admit(peerA, "pipe-a", ServiceWireConstants.COMMAND_HELLO);
+        topology.admit(peerB, "pipe-b", ServiceWireConstants.COMMAND_HELLO);
 
         assertEquals(
                 RoutingId.from("peer-b"),
@@ -519,8 +532,8 @@ final class ZLinkM6ARuntimeContractTest {
                         1,
                         List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 300)),
                         100);
-        topology.admit(peerA, "pipe-a");
-        topology.admit(peerB, "pipe-b");
+        topology.admit(peerA, "pipe-a", ServiceWireConstants.COMMAND_HELLO);
+        topology.admit(peerB, "pipe-b", ServiceWireConstants.COMMAND_HELLO);
 
         assertTrue(topology.selectReadyChannel("orders").isEmpty());
         assertTrue(topology.setChannelReady(peerA.nodeRoutingId(), "pipe-a", true));
@@ -560,7 +573,7 @@ final class ZLinkM6ARuntimeContractTest {
                         1,
                         List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
                         100);
-        topology.admit(peer, "pipe-a");
+        topology.admit(peer, "pipe-a", ServiceWireConstants.COMMAND_HELLO);
 
         assertEquals(
                 peer.nodeRoutingId(),

@@ -189,8 +189,27 @@ final class ZLinkJavaRawMeshNode
     private final Map<RoutingId, String> admissionControlReadyConnections =
             new ConcurrentHashMap<>();
 
-    /** A HELLO submission, or a received ADMIT when submission is null. */
-    record HelloExchange(long routeGeneration, CompletableFuture<Void> submission) {}
+    /** Owns the first HELLO bytes until ADMIT; null submission records the received ADMIT. */
+    static final class HelloExchange {
+        private final long routeGeneration;
+        private final CompletableFuture<Void> submission;
+        // Written once in the descriptor lane, retained until the exchange ends.
+        private byte[] hello;
+
+        HelloExchange(long routeGeneration, CompletableFuture<Void> submission, byte[] hello) {
+            this.routeGeneration = routeGeneration;
+            this.submission = submission;
+            this.hello = hello;
+        }
+
+        long routeGeneration() {
+            return routeGeneration;
+        }
+
+        CompletableFuture<Void> submission() {
+            return submission;
+        }
+    }
 
     final Map<RoutingId, HelloExchange> helloExchanges = new ConcurrentHashMap<>();
     private volatile RoutingId routingId;
@@ -821,7 +840,10 @@ final class ZLinkJavaRawMeshNode
         signalStateChanged();
         byte[] update = wire.encodeAdmission(ServiceWireConstants.COMMAND_UPDATE, updated);
         for (ZLinkServiceTopologyRegistry.Peer peer : topology.peers()) {
-            trySendAdmissionControl(peer.descriptor().nodeRoutingId(), List.of(update));
+            var exchange = helloExchanges.get(peer.descriptor().nodeRoutingId());
+            if (exchange == null || exchange.submission() == null) {
+                trySendAdmissionControl(peer.descriptor().nodeRoutingId(), List.of(update));
+            }
         }
     }
 
@@ -6834,6 +6856,14 @@ final class ZLinkJavaRawMeshNode
     }
 
     private void dispatchAdmission(ZLinkJavaRawServicePort.Inbound inbound, int command) {
+        // Core can deliver buffered records from an ended pipe (ROUTER §10.1).
+        // Only the route observer's current selection can establish admission.
+        if ((command == ServiceWireConstants.COMMAND_HELLO
+                        || command == ServiceWireConstants.COMMAND_ADMIT)
+                && !Objects.equals(
+                        selectedRoutes.get(inbound.source()), inbound.routeGeneration())) {
+            return;
+        }
         if (command == ServiceWireConstants.COMMAND_HELLO && peerAdmissionSealed.getAsBoolean()) {
             return;
         }
@@ -6922,7 +6952,7 @@ final class ZLinkJavaRawMeshNode
             String connectionId = routeConnectionId(inbound.routeGeneration());
             var previousPeer = topology.peer(inbound.source());
             ZLinkServiceTopologyRegistry.AdmissionResult admitted =
-                    topology.admit(descriptor, connectionId);
+                    topology.admit(descriptor, connectionId, command);
             if (admitted != ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED) {
                 if (topology.peer(inbound.source()).isEmpty()) {
                     boolean newlyRejected = rejectedPeers.add(inbound.source());
@@ -6956,7 +6986,7 @@ final class ZLinkJavaRawMeshNode
             receipt.recordReceived(System.nanoTime());
             if (command == ServiceWireConstants.COMMAND_ADMIT) {
                 helloExchanges.put(
-                        inbound.source(), new HelloExchange(inbound.routeGeneration(), null));
+                        inbound.source(), new HelloExchange(inbound.routeGeneration(), null, null));
                 markAdmissionControlReady(inbound.source(), connectionId, command);
                 // HELLO and the host's SERVING transition can cross. In that
                 // race the peer admits the PREPARING descriptor carried by
@@ -6984,15 +7014,28 @@ final class ZLinkJavaRawMeshNode
     }
 
     /**
-     * Submits the current local descriptor in a descriptor lane turn. publishLocalDescriptor reads
-     * and submits a new revision in the same lane, so a route never receives a lower revision after
-     * a higher one (wire-protocol §4 DescriptorRevision ordering).
+     * Orders admission responses with descriptor publication. A crossing HELLO receives the
+     * outstanding exchange's snapshot; newer descriptor publication waits for ADMIT. The descriptor
+     * lane owns both snapshot creation and publication (wire-protocol §4).
      */
     private void sendLocalDescriptor(RoutingId target, int command) {
         inDescriptorStateLane(
-                () ->
-                        trySendAdmissionControl(
-                                target, List.of(wire.encodeAdmission(command, localDescriptor))));
+                () -> {
+                    var descriptor = localDescriptor;
+                    var exchange = helloExchanges.get(target);
+                    if (command == ServiceWireConstants.COMMAND_ADMIT
+                            && exchange != null
+                            && exchange.hello != null
+                            && exchange.submission() != null) {
+                        descriptor =
+                                wire.decodeAdmission(
+                                        exchange.hello,
+                                        ServiceWireConstants.COMMAND_HELLO,
+                                        localDescriptor.nodeRoutingId());
+                    }
+                    return trySendAdmissionControl(
+                            target, List.of(wire.encodeAdmission(command, descriptor)));
+                });
     }
 
     private CompletionStage<Void> trySendAdmissionControl(RoutingId target, List<byte[]> frames) {
@@ -7214,9 +7257,14 @@ final class ZLinkJavaRawMeshNode
                     if (notRequiredPeers.contains(peerRid) || rejectedPeers.contains(peerRid))
                         return;
                     HelloExchange current = helloExchanges.get(peerRid);
-                    if (current != null && current.routeGeneration() == generation) return;
+                    boolean sameRoute = current != null && current.routeGeneration() == generation;
+                    if (sameRoute
+                            && (current.submission() == null || !current.submission().isDone()))
+                        return;
                     var submission = new CompletableFuture<Void>();
-                    var exchange = new HelloExchange(generation, submission);
+                    var exchange =
+                            new HelloExchange(
+                                    generation, submission, sameRoute ? current.hello : null);
                     boolean installed =
                             current == null
                                     ? helloExchanges.putIfAbsent(peerRid, exchange) == null
@@ -7231,19 +7279,18 @@ final class ZLinkJavaRawMeshNode
                                                 || helloExchanges.get(peerRid) != exchange) {
                                             return CompletableFuture.<Void>completedStage(null);
                                         }
+                                        if (exchange.hello == null) {
+                                            exchange.hello =
+                                                    wire.encodeAdmission(
+                                                            ServiceWireConstants.COMMAND_HELLO,
+                                                            localDescriptor);
+                                        }
                                         return trySendAdmissionControl(
-                                                peerRid,
-                                                List.of(
-                                                        wire.encodeAdmission(
-                                                                ServiceWireConstants.COMMAND_HELLO,
-                                                                localDescriptor)));
+                                                peerRid, List.of(exchange.hello));
                                     })
                             .thenCompose(stage -> stage)
                             .whenComplete(
                                     (ignored, failure) -> {
-                                        // ADMIT replaces the entry. Retiring a submission cannot
-                                        // erase it.
-                                        helloExchanges.remove(peerRid, exchange);
                                         if (failure == null) submission.complete(null);
                                         else submission.completeExceptionally(failure);
                                     });
