@@ -6537,52 +6537,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     payloadCopy.close();
                     headerCopy.close();
                 };
-        CompletionStage<Void> queued;
-        if (actorSessions.isMoving(actor)) {
-            // A payload for a moving Actor is held until the move ends and then enters the
-            // Actor queue, so it runs after the Join completion callback (spec
-            // 03-spot-actor/05-spot-actor-membership §4). Entering this hold is the payload's
-            // source-local admission (spec 01-execution/01-submit-and-completion §2): a joined
-            // callback that awaits the send must not wait for the Join it belongs to.
-            if (requestAdmission != null) requestAdmission.complete(null);
-            queued =
-                    yieldSharedSpotTurnForActorRelocation(
-                                    dispatchLine,
-                                    actorSessions
-                                            .awaitMoveCompletion(actor)
-                                            .handle((ignored, moveFailure) -> null))
-                            .thenCompose(
-                                    ignored -> {
-                                        // The continuation that awaited the move is not a turn
-                                        // of the moving Actor, so the payload enters that
-                                        // Actor's queue instead of running in place.
-                                        try (var outsideActorTurn =
-                                                systems.zlink.framework.runtime.internal.handlers
-                                                        .ZLinkSuspendInvocationContext
-                                                        .enterActorDispatch(null)) {
-                                            return enqueueLocalActorPacket(
-                                                    dispatchLine,
-                                                    spotSurface,
-                                                    actor,
-                                                    packetHeader,
-                                                    handler,
-                                                    headerCopy,
-                                                    payloadCopy,
-                                                    null);
-                                        }
-                                    });
-        } else {
-            queued =
-                    enqueueLocalActorPacket(
-                            dispatchLine,
-                            spotSurface,
-                            actor,
-                            packetHeader,
-                            handler,
-                            headerCopy,
-                            payloadCopy,
-                            requestAdmission);
-        }
+        CompletionStage<Void> queued =
+                enqueueLocalActorPacket(
+                        dispatchLine,
+                        spotSurface,
+                        actor,
+                        packetHeader,
+                        handler,
+                        headerCopy,
+                        payloadCopy,
+                        requestAdmission);
         queued.whenComplete(
                 (ignored, error) -> {
                     release.run();

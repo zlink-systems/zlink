@@ -923,15 +923,18 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         // admitted: it fails with its own failure, or NotFound when it ended without one
         // (spec 00-foundation/07-framework-error-model §5).
         dispatched.whenComplete(
-                (ignored, failure) ->
+                (ignored, failure) -> {
+                    if (failure != null) {
+                        admission.completeExceptionally(failure);
+                    } else if (!admission.isDone()) {
                         admission.completeExceptionally(
-                                failure != null
-                                        ? failure
-                                        : systems.zlink.framework.runtime.messaging
-                                                .ZLinkFrameworkErrorOrigin.framework(
+                                systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin
+                                        .framework(
                                                 systems.zlink.framework.errors
                                                         .ZLinkFrameworkErrorKind.NOT_FOUND,
-                                                "No local Actor handler accepted the message")));
+                                                "No local Actor handler accepted the message"));
+                    }
+                });
         systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
                 admission, dispatched);
         return admission;

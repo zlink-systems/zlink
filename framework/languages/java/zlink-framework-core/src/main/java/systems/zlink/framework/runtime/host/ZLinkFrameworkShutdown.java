@@ -32,14 +32,7 @@ final class ZLinkFrameworkShutdown {
     }
 
     void deferCloseStage(String stage, Supplier<CompletionStage<Void>> action) {
-        actions.push(
-                () ->
-                        atStage(
-                                stage,
-                                () -> {
-                                    CompletionStage<Void> closing = action.get();
-                                    return withinDeadline(() -> closing);
-                                }));
+        actions.push(() -> atStage(stage, action));
     }
 
     void deferStage(String stage, Supplier<CompletionStage<Void>> action) {

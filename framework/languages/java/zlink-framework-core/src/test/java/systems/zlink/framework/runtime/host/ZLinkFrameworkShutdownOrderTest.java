@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -21,6 +22,31 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class ZLinkFrameworkShutdownOrderTest {
     private static final long OVERLAP_WINDOW_SECONDS = 2;
     private static final long WAIT_SECONDS = 10;
+
+    @Test
+    void expiredDeadlineWaitsForAnAsynchronousResourceClose() throws Exception {
+        var resourceStopped = new CompletableFuture<Void>();
+        var contextCloseStarted = new CompletableFuture<Void>();
+        var shutdown = new ZLinkFrameworkShutdown(Instant.now().minusSeconds(1));
+        shutdown.deferCloseStage(
+                "context_close",
+                () -> {
+                    contextCloseStarted.complete(null);
+                    return CompletableFuture.completedFuture(null);
+                });
+        shutdown.deferCloseStage("resource_close", () -> resourceStopped);
+        var closing = shutdown.closeAsync();
+        try {
+            assertFalse(contextCloseStarted.isDone(), "resource close has not completed");
+            assertFalse(closing.toCompletableFuture().isDone());
+        } finally {
+            resourceStopped.complete(null);
+            closing.handle((ignored, failure) -> null)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+        }
+        contextCloseStarted.get(WAIT_SECONDS, TimeUnit.SECONDS);
+    }
 
     @Test
     void expiredDeadlineClosesTheContextOnlyAfterTheMeshPumpStopped() throws Exception {
