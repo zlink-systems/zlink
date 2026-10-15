@@ -92,7 +92,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private long _deadlineTick;
     private PendingOperation? _deadlineCursor;
     private readonly Func<TimeSpan> _readOperationWaitBound;
-    private readonly Func<(PendingOperation? Expired, bool Visited)> _visitOperationDeadline;
+    private readonly Func<PendingOperation?> _takeExpiredOperation;
+
+    // Start of the receive owner's current deadline management turn.
+    private TimeSpan _deadlineVisitStartedAt;
     private readonly Dictionary<
         RelocationReplyTerminalKey,
         RelocationReplyTerminal
@@ -269,7 +272,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _deadlineClock = new ZLinkDeadlineClock(_deadlineTimeProvider);
         _deadlineOriginTicks = _deadlineClock.Elapsed.Ticks;
         _readOperationWaitBound = ReadOperationWaitBound;
-        _visitOperationDeadline = VisitOperationDeadline;
+        _takeExpiredOperation = TakeExpiredOperation;
         _applicationJobQueue = applicationJobQueue;
         NativeTerminalReplySubmitOverride = nativeTerminalReplySubmitOverride is null
             ? null
@@ -11343,55 +11346,60 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             : PollInterval;
     }
 
-    // One deadline visit: an expired operation taken from the registry, a
-    // rounds-only visit (no operation), or no due slot (Visited is false).
-    private (PendingOperation? Expired, bool Visited) VisitOperationDeadline()
+    // One operation-lane turn: rounds-only visits continue inside the turn
+    // while the management budget, counted from _deadlineVisitStartedAt,
+    // remains; the turn returns at the first expired operation.
+    private PendingOperation? TakeExpiredOperation()
     {
-        if (_deadlineCursor is null)
+        do
         {
-            var nowTick = (_deadlineClock.Elapsed.Ticks - _deadlineOriginTicks) / DeadlineTickTicks;
-            var next = NextOccupiedDeadlineTick();
-            if (next < 0)
-            {
-                _deadlineTick = Math.Max(_deadlineTick, nowTick + 1);
-                return (null, false);
-            }
-            if (next > nowTick)
-                return (null, false);
-            _deadlineTick = next;
-            _deadlineCursor = _deadlineHeads[(int)(next & (DeadlineSlotCount - 1))];
-        }
-        var current = _deadlineCursor!;
-        if (current.DeadlineRounds > 0)
-        {
-            current.DeadlineRounds--;
-            _deadlineCursor = current.DeadlineNext;
             if (_deadlineCursor is null)
-                _deadlineTick++;
-            return (null, true);
-        }
-        if (
-            !_operations.TryRemove(current.OperationId.Low, out var pending)
-            || !ReferenceEquals(current, pending)
-        )
-            throw new InvalidOperationException("Operation deadline has no pending owner.");
-        RemoveRelocationReplyOperationUnderLock(current, rememberTerminal: true);
-        return (current, true);
+            {
+                var nowTick =
+                    (_deadlineClock.Elapsed.Ticks - _deadlineOriginTicks) / DeadlineTickTicks;
+                var next = NextOccupiedDeadlineTick();
+                if (next < 0)
+                {
+                    _deadlineTick = Math.Max(_deadlineTick, nowTick + 1);
+                    return null;
+                }
+                if (next > nowTick)
+                    return null;
+                _deadlineTick = next;
+                _deadlineCursor = _deadlineHeads[(int)(next & (DeadlineSlotCount - 1))];
+            }
+            var current = _deadlineCursor!;
+            if (current.DeadlineRounds > 0)
+            {
+                current.DeadlineRounds--;
+                _deadlineCursor = current.DeadlineNext;
+                if (_deadlineCursor is null)
+                    _deadlineTick++;
+                continue;
+            }
+            if (
+                !_operations.TryRemove(current.OperationId.Low, out var pending)
+                || !ReferenceEquals(current, pending)
+            )
+                throw new InvalidOperationException("Operation deadline has no pending owner.");
+            RemoveRelocationReplyOperationUnderLock(current, rememberTerminal: true);
+            return current;
+        } while (!DeadlineBudgetSpent());
+        return null;
     }
+
+    private bool DeadlineBudgetSpent() =>
+        (_deadlineClock.Elapsed - _deadlineVisitStartedAt).TotalMilliseconds
+        >= ZLinkReceiveBatchBudget.MaximumMilliseconds;
 
     private void ExpireOperations()
     {
-        // §4.2: the budget counts from entry and bounds every slot visit, a
-        // rounds-only visit included; the cursor keeps the rest of the slot for
-        // the next receive-owner turn.
-        var startedAt = _deadlineClock.Elapsed;
-        do
+        // §4.2: the budget counts from entry and covers every slot visit, a
+        // rounds-only visit included, and each expiry's completion delivery;
+        // the cursor keeps the rest of the slot for the next receive-owner turn.
+        _deadlineVisitStartedAt = _deadlineClock.Elapsed;
+        while (RunOperation(_takeExpiredOperation) is { } pending)
         {
-            var (pending, visited) = RunOperation(_visitOperationDeadline);
-            if (!visited)
-                return;
-            if (pending is null)
-                continue;
             pending.Complete();
             var result = RequestResult.TimedOut;
             if (pending.AwaitedCompletion is { } awaitedCompletion)
@@ -11406,10 +11414,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     0,
                     Array.Empty<Message>()
                 );
-        } while (
-            (_deadlineClock.Elapsed - startedAt).TotalMilliseconds
-            < ZLinkReceiveBatchBudget.MaximumMilliseconds
-        );
+            if (DeadlineBudgetSpent())
+                return;
+        }
     }
 
     private void EnqueueCompletion(
