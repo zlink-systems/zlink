@@ -85,7 +85,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -190,7 +189,7 @@ final class ZLinkJavaRawMeshNode
     private volatile Map<RoutingId, Long> selectedRoutes = Map.of();
     private final Map<RoutingId, String> admissionControlReadyConnections =
             new ConcurrentHashMap<>();
-    final Map<RoutingId, Long> announcedRouteGenerations = new ConcurrentHashMap<>();
+    final Map<RoutingId, Long> acknowledgedRouteGenerations = new ConcurrentHashMap<>();
     private volatile RoutingId routingId;
     private volatile String bindEndpoint;
     private volatile String advertiseHost;
@@ -1004,13 +1003,6 @@ final class ZLinkJavaRawMeshNode
                         removed.expectedRoutingId(),
                         admittedConnectionId(removed.expectedRoutingId()));
                 forgetKnownPeerChannelsIfUntracked(removed.expectedRoutingId());
-            }
-            RoutingId announcementRid =
-                    removed.expectedRoutingId() != null
-                            ? removed.expectedRoutingId()
-                            : learnedRoutingId;
-            if (announcementRid != null) {
-                announcedRouteGenerations.remove(announcementRid);
             }
             if (disconnectEndpoint) {
                 router.disconnect(removed.endpoint());
@@ -4532,6 +4524,7 @@ final class ZLinkJavaRawMeshNode
         pendingReplyRelays.clear();
         knownPeerChannels.clear();
         admissionControlReadyConnections.clear();
+        acknowledgedRouteGenerations.clear();
         selectedRoutes = Map.of();
         operations.close();
         // Stop receiving queue transitions before the service port closes its
@@ -4571,7 +4564,6 @@ final class ZLinkJavaRawMeshNode
             observeSelectedRoutes();
         }
         drainPeerCloseRequests();
-        announceExpectedPeers();
         tickLiveness(now);
         if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0 || pendingRawMulticast != null) {
             drainIngressBatch(pumpSocket);
@@ -6996,6 +6988,7 @@ final class ZLinkJavaRawMeshNode
             topology.bindLiveness(inbound.source(), receipt);
             receipt.recordReceived(System.nanoTime());
             if (command == ServiceWireConstants.COMMAND_ADMIT) {
+                acknowledgedRouteGenerations.put(inbound.source(), inbound.routeGeneration());
                 markAdmissionControlReady(inbound.source(), connectionId, command);
                 // HELLO and the host's SERVING transition can cross. In that
                 // race the peer admits the PREPARING descriptor carried by
@@ -7169,13 +7162,13 @@ final class ZLinkJavaRawMeshNode
 
     /**
      * The selected route that established admission has ended. Core owns endpoint reconnect while
-     * the intent remains (transport-liveness §6). Clear the submitted generation so the next
-     * selected route receives HELLO once. Only the ended route loses admission; a replacing route
-     * may already have completed its handshake before this observation. An intent without an
-     * expected RID resolves it through the new handshake.
+     * the intent remains (transport-liveness §6). Clear the received ADMIT so the next selected
+     * route receives HELLO until it is acknowledged. Only the ended route loses admission; a
+     * replacing route may already have completed its handshake before this observation. An intent
+     * without an expected RID resolves it through the new handshake.
      */
     private void endRouteAdmission(RoutingId peerRid, long generation) {
-        announcedRouteGenerations.remove(peerRid, generation);
+        acknowledgedRouteGenerations.remove(peerRid, generation);
         if (!disconnectAdmitted(peerRid, routeConnectionId(generation))
                 && topology.peer(peerRid).isPresent()) {
             return;
@@ -7249,72 +7242,39 @@ final class ZLinkJavaRawMeshNode
                 });
     }
 
-    /** Submits HELLO once per selected route generation owned by an unadmitted intent. */
+    /** MeshNode §7.1: every selected route retries HELLO until its ADMIT is received. */
     private void announceExpectedPeers() {
-        if (peerAdmissionSealed.getAsBoolean()) {
-            return;
-        }
-        Map<RoutingId, Long> routes = selectedRoutes;
-        Set<RoutingId> owned = new HashSet<>();
-        Map.Entry<Long, PeerIntent> intentWithoutRoutingId = null;
-        for (Map.Entry<Long, PeerIntent> entry : peerIntents.entrySet()) {
-            RoutingId expected =
-                    entry.getValue().expectedRoutingId() != null
-                            ? entry.getValue().expectedRoutingId()
-                            : peerIntentRoutingIds.get(entry.getKey());
-            if (expected == null) {
-                if (!closeRequestedPeerIntents.contains(entry.getKey())
-                        && !closedPeerIntents.contains(entry.getKey())) {
-                    intentWithoutRoutingId = entry;
-                }
-                continue;
-            }
-            owned.add(expected);
-            announce(expected, routes, entry.getKey(), entry.getValue());
-        }
-        if (intentWithoutRoutingId == null) {
-            return;
-        }
-        // An endpoint-only intent cannot address its route before it knows
-        // the peer RID. It submits HELLO on selected routes no intent owns; the
-        // advertised endpoint in the reply identifies its own route.
-        for (RoutingId peerRid : routes.keySet()) {
-            if (!owned.contains(peerRid)) {
-                announce(
-                        peerRid,
-                        routes,
-                        intentWithoutRoutingId.getKey(),
-                        intentWithoutRoutingId.getValue());
-            }
-        }
-    }
-
-    private void announce(
-            RoutingId peerRid, Map<RoutingId, Long> routes, long intentId, PeerIntent intent) {
-        Long generation = routes.get(peerRid);
-        if (generation == null
-                || topology.peer(peerRid).isPresent()
-                || notRequiredPeers.contains(peerRid)
-                || generation.equals(announcedRouteGenerations.get(peerRid))) {
-            return;
-        }
-        CompletionStage<Void> submission =
-                port.send(
-                        requireStarted(),
-                        peerRid,
-                        List.of(
-                                wire.encodeAdmission(
-                                        ServiceWireConstants.COMMAND_HELLO, localDescriptor)));
-        if (ZLinkOneWayCalls.isImmediateAdmission(submission)
-                || !submission.toCompletableFuture().isCompletedExceptionally()) {
-            announcedRouteGenerations.compute(
-                    peerRid,
-                    (ignored, announced) ->
-                            peerIntents.get(intentId) == intent ? generation : announced);
-        }
+        descriptorStateLane
+                .runAsync(
+                        () -> {
+                            if (peerAdmissionSealed.getAsBoolean()) return null;
+                            selectedRoutes.forEach(
+                                    (peerRid, generation) -> {
+                                        if (!generation.equals(
+                                                        acknowledgedRouteGenerations.get(peerRid))
+                                                && !notRequiredPeers.contains(peerRid)
+                                                && !rejectedPeers.contains(peerRid)) {
+                                            trySendAdmissionControl(
+                                                    peerRid,
+                                                    List.of(
+                                                            wire.encodeAdmission(
+                                                                    ServiceWireConstants
+                                                                            .COMMAND_HELLO,
+                                                                    localDescriptor)),
+                                                    "hello-retry");
+                                        }
+                                    });
+                            return null;
+                        })
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null)
+                                LOGGER.log(Level.WARNING, "HELLO management turn failed", failure);
+                        });
     }
 
     private void tickLiveness(long nowNanos) {
+        announceExpectedPeers();
         ZLinkServiceLivenessRegistry.Tick tick = liveness.tick(nowNanos);
         for (ZLinkServiceLivenessRegistry.Probe probe : tick.probes()) {
             try {
@@ -7408,7 +7368,7 @@ final class ZLinkJavaRawMeshNode
     boolean targetLifecycleEnded(RoutingId target) {
         // Location owns logical removal. A physical disconnect still has an
         // expectation and must retain durable replay (routing §2, actor model §5).
-        return !hasPeerExpectation(target) && !isReadyPeer(target);
+        return !hasPeerExpectation(target) && (topology == null || topology.peer(target).isEmpty());
     }
 
     private PeerIntent findExpectedPeer(RoutingId peer, String advertisedEndpoint) {

@@ -41,7 +41,7 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                 assertTrue(liveness.acknowledge(peerRid, connectionId, probeId, 1));
                 Map<RoutingId, String> ready = mapField(node, "admissionControlReadyConnections");
                 ready.put(peerRid, connectionId);
-                Map<RoutingId, Long> announced = mapField(node, "announcedRouteGenerations");
+                Map<RoutingId, Long> announced = mapField(node, "acknowledgedRouteGenerations");
                 announced.put(peerRid, admittedGeneration);
                 setField(node, "selectedRoutes", Map.of(peerRid, endedGeneration));
 
