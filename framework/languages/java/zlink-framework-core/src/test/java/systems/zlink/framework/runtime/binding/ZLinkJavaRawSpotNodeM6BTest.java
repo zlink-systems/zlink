@@ -20,6 +20,7 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
@@ -40,6 +41,8 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
@@ -55,11 +58,13 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -67,6 +72,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkJavaRawSpotNodeM6BTest {
+    private static final Duration MULTICAST_TIMEOUT = Duration.ofSeconds(5);
+
     @Test
     void readyFrameWithoutIntentPassesFalseToClosingOwnerAdmission() throws Exception {
         try (var context = Zlink.createContext();
@@ -1988,6 +1995,133 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 }
             } while (placement.isPresent() && System.nanoTime() < placementUpdateDeadline);
             assertTrue(placement.isEmpty());
+        }
+    }
+
+    @Test
+    void remoteLogicalMulticastPostsEachChildWithItsOwnReceivePermit() throws Exception {
+        assertRemoteMulticastPermits(3, 1, node -> {});
+    }
+
+    @Test
+    void remoteLogicalMulticastAcceptsAdmittedSourceWithZeroWeight() throws Exception {
+        assertRemoteMulticastPermits(3, 1, node -> node.setChannelWeight("events", 0));
+    }
+
+    @Test
+    void remoteLogicalMulticastAcceptsAdmittedSourceBeforeDescriptorUpdate() throws Exception {
+        assertRemoteMulticastPermits(3, 1, ZLinkJavaRawMeshNode::deferServiceReadyPublication);
+    }
+
+    @Test
+    void remoteLogicalMulticastResumesPastBatchWithoutAnotherRecord() throws Exception {
+        int childCount = ZLinkJavaRawMeshNode.ingressBatchLimit() + 1;
+        assertRemoteMulticastPermits(childCount, childCount, node -> {});
+    }
+
+    private static void assertRemoteMulticastPermits(
+            int childCount,
+            int capacity,
+            java.util.function.Consumer<ZLinkJavaRawMeshNode> configureSource)
+            throws Exception {
+        // Spec 04 application job queue: a source has one outstanding permit waiter, and a 1:N
+        // fanout posts no more application jobs than the permits it holds. With one permit, the
+        // receiving node posts each child with its own permit, one after another.
+        String endpoint = "inproc://jvm-m6b-multicast-permit-" + System.nanoTime();
+        RoutingId leftRid = RoutingId.from("jvm-m6b-multicast-permit-left");
+        RoutingId rightRid = RoutingId.from("jvm-m6b-multicast-permit-right");
+        var queue =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(capacity),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
+        LinkedBlockingQueue<ZLinkApplicationJobContext.QueuedOwnership> children =
+                new LinkedBlockingQueue<>();
+        AtomicInteger childrenWithoutPermit = new AtomicInteger();
+        try (var context = Zlink.createContext();
+                var left = new ZLinkJavaRawMeshNode(context, "mesh");
+                var right = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            left.setApplicationJobQueue(queue);
+            left.setRoutingId(leftRid);
+            left.setBind(endpoint);
+            left.setObjectRole(ZLinkMeshNodeObjectRole.SERVER);
+            left.addChannel("events");
+            left.setChannelWeight("events", 10_000);
+            right.setRoutingId(rightRid);
+            right.setBind("inproc://jvm-m6b-multicast-permit-right-" + System.nanoTime());
+            right.addChannel("events");
+            configureSource.accept(right);
+            left.start();
+            right.start();
+            right.connectPeer(endpoint, leftRid);
+            for (int index = 0; index < childCount; index++) {
+                ZLinkBackendSpot target =
+                        left.spotNode().createSpot("jvm-m6b-multicast-permit-target-" + index);
+                target.setSubscription("orders");
+                target.onDispatchEvent(
+                        new ZLinkInternalAsyncSpotDispatchHandler() {
+                            @Override
+                            public CompletionStage<Void> handleAsync(
+                                    ZLinkBackendSpotDispatchInfo info) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+
+                            @Override
+                            public Boolean handleTopic(ZLinkBackendTopicMessage message) {
+                                message.parts().forEach(Message::close);
+                                // A child job takes the permit its poster holds for it.
+                                var ownership = ZLinkApplicationJobContext.transferToQueuedJob();
+                                if (ownership == null) {
+                                    childrenWithoutPermit.incrementAndGet();
+                                } else {
+                                    children.add(ownership);
+                                }
+                                return true;
+                            }
+                        });
+            }
+
+            awaitAdmitted(right, leftRid);
+            assertEquals(leftRid, awaitPlacementTarget(right));
+
+            var source = (ZLinkJavaRawSpot) right.spotNode().createSpot("jvm-m6b-permit-source");
+            try (Message packet = Message.from("Packet");
+                    Message payload = Message.from("multicast")) {
+                right.publishLogicalMulticast(
+                        source, "events", "orders", new byte[0], List.of(packet, payload));
+            }
+
+            for (int child = 0; child < childCount; child++) {
+                var ownership = children.poll(MULTICAST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                assertNotNull(ownership, "child " + child + " was not posted with a permit");
+                if (capacity == 1 && child < childCount - 1) {
+                    // The held permit is the only one, so the next child waits for its own
+                    // permit as the source's single waiter.
+                    awaitCapacityWaiters(queue, 1);
+                    assertNull(children.poll(), "a child was posted beyond the held permits");
+                }
+                assertEquals(0, childrenWithoutPermit.get(), "a child was posted without a permit");
+                assertTrue(queue.snapshot().capacityWaiters() <= 1, "more than one source waiter");
+                // Handler entry returns the child's permit.
+                ownership.close();
+            }
+            assertEquals(0, childrenWithoutPermit.get(), "a child was posted without a permit");
+        } finally {
+            queue.close();
+        }
+    }
+
+    private static void awaitCapacityWaiters(ZLinkApplicationJobQueue queue, long expected) {
+        long deadline = System.nanoTime() + MULTICAST_TIMEOUT.toNanos();
+        while (queue.snapshot().capacityWaiters() != expected) {
+            if (System.nanoTime() >= deadline) {
+                throw new AssertionError(
+                        "capacity waiters "
+                                + queue.snapshot().capacityWaiters()
+                                + ", expected "
+                                + expected);
+            }
+            Thread.onSpinWait();
         }
     }
 

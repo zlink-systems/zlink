@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.dispatch;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -154,6 +155,28 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
         ownership.close();
         assertEquals(1, queue.snapshot().permitsInUse());
         waiter.join().close();
+        assertEquals(0, queue.snapshot().permitsInUse());
+    }
+
+    @Test
+    void startedHandlerCannotTransferItsReturnedPermitToAnotherJob() {
+        // The handler keeps its permit in the context after entry, but the permit went back at
+        // entry, so a job the handler creates takes its own permit.
+        ZLinkApplicationJobQueue queue = queue(1);
+        ZLinkApplicationJobQueue.Permit permit =
+                queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture().join();
+        ZLinkApplicationJobContext.QueuedOwnership ownership;
+        try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+            ownership = ZLinkApplicationJobContext.transferToQueuedJob();
+        }
+
+        try (var ignored = ZLinkApplicationJobContext.enterQueued(ownership)) {
+            assertTrue(ZLinkApplicationJobContext.hasTransferableQueuedOwnership());
+            ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+            assertFalse(ZLinkApplicationJobContext.hasTransferableQueuedOwnership());
+            assertNull(ZLinkApplicationJobContext.transferToQueuedJob());
+        }
+        ownership.close();
         assertEquals(0, queue.snapshot().permitsInUse());
     }
 
