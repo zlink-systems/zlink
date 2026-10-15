@@ -208,7 +208,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 attemptCount(timedOutSource, "sources"),
                 "READY timeout must release the canonical source attempt");
 
-        AtomicReference<byte[]> overlappingPrepare = new AtomicReference<>();
+        CompletableFuture<byte[]> overlappingPrepare = new CompletableFuture<>();
         var overlappingSource =
                 new ZLinkCanonicalRelocationStateMachine(
                         droppingNode(sourceRid, 11, overlappingPrepare),
@@ -230,7 +230,9 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 1,
                 attemptCount(overlappingSource, "sources"),
                 "a duplicate waiter timeout must not remove the owner attempt");
-        var overlapping = ZLinkCanonicalRelocationProtocol.decodePrepare(overlappingPrepare.get());
+        var overlapping =
+                ZLinkCanonicalRelocationProtocol.decodePrepare(
+                        overlappingPrepare.get(3, TimeUnit.SECONDS));
         overlappingSource
                 .apply(
                         targetRid,
@@ -256,7 +258,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 "the CUTOVER submit terminal is not settlement: the source keeps its attempt"
                         + " until authority settles (spec 28 §4.4)");
 
-        AtomicReference<byte[]> failedPrepare = new AtomicReference<>();
+        CompletableFuture<byte[]> failedPrepare = new CompletableFuture<>();
         var failedSource =
                 new ZLinkCanonicalRelocationStateMachine(
                         droppingNode(sourceRid, 11, failedPrepare),
@@ -269,7 +271,9 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 failedSource
                         .stage(targetRid, request, Duration.ofMillis(500))
                         .toCompletableFuture();
-        var failed = ZLinkCanonicalRelocationProtocol.decodePrepare(failedPrepare.get());
+        var failed =
+                ZLinkCanonicalRelocationProtocol.decodePrepare(
+                        failedPrepare.get(3, TimeUnit.SECONDS));
         failedSource
                 .apply(
                         targetRid,
@@ -285,14 +289,14 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                         ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST)))
                 .toCompletableFuture()
                 .join();
-        assertTrue(
-                failedStage.isCompletedExceptionally(),
-                "an exact target failure reply must complete the source waiter");
         ExecutionException stageFailure =
                 assertThrows(
                         ExecutionException.class,
                         () -> failedStage.get(500, TimeUnit.MILLISECONDS),
                         "a pre-prepare target stage failure must terminate at the source");
+        assertTrue(
+                failedStage.isCompletedExceptionally(),
+                "an exact target failure reply must complete the source waiter");
         var typedRejection =
                 assertInstanceOf(
                         systems.zlink.framework.errors.ZLinkFrameworkException.class,
@@ -626,6 +630,13 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                         new Class<?>[] {ZLinkInternalMeshNode.class},
                         (proxy, method, args) ->
                                 switch (method.getName()) {
+                                    case "observePeerRoute" ->
+                                            new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
+                                    case "targetLifecycleEnded" -> false;
+                                    case "onStateChanged" -> {
+                                        ((Runnable) args[0]).run();
+                                        yield (AutoCloseable) () -> {};
+                                    }
                                     case "status" -> status;
                                     case "sendCanonicalRelocationControl" -> {
                                         byte[] encoded = (byte[]) args[1];
@@ -659,11 +670,11 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
     }
 
     private static ZLinkInternalMeshNode droppingNode(RoutingId localRid, long generation) {
-        return droppingNode(localRid, generation, new AtomicReference<>());
+        return droppingNode(localRid, generation, new CompletableFuture<>());
     }
 
     private static ZLinkInternalMeshNode droppingNode(
-            RoutingId localRid, long generation, AtomicReference<byte[]> submittedPrepare) {
+            RoutingId localRid, long generation, CompletableFuture<byte[]> submittedPrepare) {
         MeshNodeStatus status =
                 new MeshNodeStatus(
                         MeshNodeState.READY,
@@ -687,13 +698,20 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                         new Class<?>[] {ZLinkInternalMeshNode.class},
                         (proxy, method, args) ->
                                 switch (method.getName()) {
+                                    case "observePeerRoute" ->
+                                            new ZLinkInternalMeshNode.PeerRouteObservation(1, true);
+                                    case "targetLifecycleEnded" -> false;
+                                    case "onStateChanged" -> {
+                                        ((Runnable) args[0]).run();
+                                        yield (AutoCloseable) () -> {};
+                                    }
                                     case "status" -> status;
                                     case "sendCanonicalRelocationControl" -> {
                                         byte[] encoded = (byte[]) args[1];
                                         if (Byte.toUnsignedInt(encoded[3])
                                                 == ServiceWireConstants
                                                         .COMMAND_RELOCATION_PREPARE) {
-                                            submittedPrepare.set(encoded.clone());
+                                            submittedPrepare.complete(encoded.clone());
                                         }
                                         yield CompletableFuture.completedFuture(null);
                                     }

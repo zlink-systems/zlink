@@ -271,7 +271,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
               infrastructure_result ([&] { return _store->read_authority (key); }).value ();
             const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
             if (const auto settled = settlement_of (read, fence);
-                settled != relocation_authority_t::unsettled || snapshot == nullptr)
+                settled != relocation_authority_t::unsettled)
                 return settled;
             const auto source_live = owner_lease_live (fence.source_owner);
             if (!source_live)
@@ -473,8 +473,9 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                                  const relocation_authority_fence_t &fence)
     {
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+        // Location runtime §10: Missing has no source fence and ends the expired owner.
         if (snapshot == nullptr)
-            return relocation_authority_t::unsettled;
+            return relocation_authority_t::source_lease_expired;
         if (same_owner (snapshot->owner, fence.target_owner))
             return relocation_authority_t::target_committed;
         return snapshot->store_version == fence.expected_store_version

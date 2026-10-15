@@ -1187,6 +1187,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-m6-runtime;topology;mailbox;liveness;raw-binding"
     TIMEOUT 30)
   zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_pending_hello_liveness
+    COMMAND test_cpp_framework_m6a_runtime --only hello 1
+    LABELS "framework-unit;framework-contract;liveness;raw-binding"
+    TIER unit
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_owner_rejection_observability
     COMMAND test_cpp_framework_m6a_runtime
       --owner-rejection-observability

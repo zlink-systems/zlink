@@ -92,9 +92,9 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
 
     @Override
     public CompletionStage<Void> disconnect() {
-        return CompletableFuture.runAsync(
-                        () -> spotNode.closeActorBoundSession(currentActorRef(), timeout))
-                .thenRun(() -> actorRuntime.clearSessionBinding(actor, bindingToken));
+        return actorRuntime
+                .retireNativeSessionBinding(actor, bindingToken, spotNode, timeout)
+                .thenApply(ignored -> null);
     }
 
     private ZLinkBackendActorRef currentActorRef() {

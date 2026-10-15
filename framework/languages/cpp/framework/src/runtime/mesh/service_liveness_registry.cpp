@@ -121,6 +121,18 @@ service_liveness_registry_t::acknowledge_probe (const std::vector<std::uint8_t> 
       .get ();
 }
 
+void service_liveness_registry_t::set_admission_pending (bool pending)
+{
+    _lane
+      .run ([this, pending] {
+          if (pending)
+              _next_due.store (immediately_due, std::memory_order_release);
+          else
+              publish_next_due_on_lane ();
+      })
+      .get ();
+}
+
 bool service_liveness_registry_t::due (clock_t::time_point now) const noexcept
 {
     const auto next = _next_due.load (std::memory_order_acquire);

@@ -157,10 +157,16 @@ void from_json (const nlohmann::json &, quest_probe_t &)
 {
 }
 
-zlink::framework::task_t<std::vector<zlink::message_t>>
-await_native_reply (zlink::async_result_t<std::vector<zlink::message_t>> pending)
+zlink::framework::task_t<zlink::request_result_t>
+await_native_request_terminal (zlink::async_result_t<std::vector<zlink::message_t>> pending)
 {
-    co_return co_await std::move (pending);
+    try {
+        (void) co_await std::move (pending);
+        co_return zlink::request_result_t::ok;
+    }
+    catch (const zlink::request_error_t &error) {
+        co_return error.result ();
+    }
 }
 
 class actor_send_spot_resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
@@ -967,14 +973,14 @@ void verify_session_relocation_gateway_commit_is_atomic ()
       17,
       {stateful::object_kind_t::actor, "relocating-actor", 7, 11, "game", "source-node"},
       4,
-      13};
+      14};
     const stateful::stream_binding_t target{
       previous.connection,
       previous.binding_generation,
       {stateful::object_kind_t::actor, "relocating-actor", 7, 12, "game", "target-node"},
       23,
       29};
-    const protocol::session_relocation_route_t route{
+    protocol::session_relocation_route_t route{
       {31, 37},
       {"source-owner", 13, zlink::routing_id_t::from (std::string ("source-node")).to_bytes (), 4,
        "authority-v1"},
@@ -988,6 +994,8 @@ void verify_session_relocation_gateway_commit_is_atomic ()
       17,
       {protocol::session_relocation_route_action_t::commit, 11, 12,
        zlink::routing_id_t::from (std::string ("target-node")).to_bytes (), 23, 0, 37}};
+    route.coordinator.owner_id = "transport-coordinator";
+    route.route.previous_authority_owner_generation = 10;
     const auto target_ref = actor_ref_access_t::make (node_rid_t::from_string ("target-node"),
                                                       "game.actor", "relocating-actor", 7);
     assert (gateway.update_actor_ref (target_ref));
@@ -1496,7 +1504,7 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
     ++target.authority_owner_generation;
     const auto committed = session_owner->sessions ().commit_remote_route (
       connection.connection_id, binding.binding_generation, previous.key,
-      previous.object_generation, previous.authority_owner_generation, target, 19, 23);
+      previous.object_generation, target, 19, 23);
     assert (committed.error == stateful::stateful_error_t::none);
     assert (committed.binding && committed.binding->owner_lease_generation == 23);
 
@@ -2961,9 +2969,9 @@ void verify_session_route_supports_repeated_relocation ()
     auto remote = source;
     remote.node_id = "node-b";
     ++remote.authority_owner_generation;
-    const auto first_commit = sessions.commit_remote_route (
-      connection.connection_id, binding.binding_generation, source.key, source.object_generation,
-      source.authority_owner_generation, remote, 12, 23);
+    const auto first_commit =
+      sessions.commit_remote_route (connection.connection_id, binding.binding_generation,
+                                    source.key, source.object_generation, remote, 12, 23);
     assert (first_commit.error == stateful::stateful_error_t::none);
     assert (first_commit.binding);
     assert (first_commit.binding->actor == remote);
@@ -2982,9 +2990,9 @@ void verify_session_route_supports_repeated_relocation ()
     auto returned = remote;
     returned.node_id = source.node_id;
     ++returned.authority_owner_generation;
-    const auto return_commit = sessions.commit_remote_route (
-      connection.connection_id, binding.binding_generation, source.key, source.object_generation,
-      remote.authority_owner_generation, returned, 11, 31);
+    const auto return_commit =
+      sessions.commit_remote_route (connection.connection_id, binding.binding_generation,
+                                    source.key, source.object_generation, returned, 11, 31);
     assert (return_commit.error == stateful::stateful_error_t::none);
     assert (return_commit.binding);
     assert (return_commit.binding->actor == returned);
@@ -3014,8 +3022,7 @@ void verify_session_route_commit_stores_target_lease ()
     bool registry_reentry_rejected = false;
     const auto committed = sessions.commit_remote_route (
       connection.connection_id, binding.binding_generation, source.key, source.object_generation,
-      source.authority_owner_generation, target, 19, 23,
-      [&] (const stateful::stream_route_admission_t &projected) {
+      target, 19, 23, [&] (const stateful::stream_route_admission_t &projected) {
           projection_hook_called = true;
           assert (projected.binding);
           assert (projected.binding->owner_lease_generation == 23);
@@ -4195,7 +4202,7 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     assert (relocation_store->size () == 1);
 
     const auto target_authority_owner_generation = actor_object->authority_owner_generation + 7;
-    const protocol::session_relocation_route_t route{
+    protocol::session_relocation_route_t route{
       seal.relocation,
       seal.coordinator,
       protocol::relocation_role_t::target,
@@ -4209,6 +4216,8 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
       {protocol::session_relocation_route_action_t::commit,
        actor_object->authority_owner_generation, target_authority_owner_generation,
        status.routing_id ().to_bytes (), status.lifecycle_generation (), 0, 13}};
+    route.coordinator.owner_id = "transport-coordinator";
+    ++route.route.previous_authority_owner_generation;
     assert (local->route_session_remote (status.routing_id (), route).result ().value ());
     assert (local->wait_for_dispatch_activity (-1ms, false, std::nullopt));
     auto current = local->sessions ().current_binding (actor_object->key);
@@ -5206,7 +5215,7 @@ void verify_node_request_requires_remote_admission ()
     target.close ();
 }
 
-void verify_unadmitted_request_is_rejected_without_framework_queue ()
+void verify_unadmitted_request_is_dropped_without_framework_queue ()
 {
     mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
       .descriptor = descriptor ("overflow-target"),
@@ -5219,9 +5228,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     zlink::framework::test::completion_poller_driver_t completion_owner (source);
     source.set_routing_id (zlink::routing_id_t::from ("overflow-source"));
     source.connect (target.endpoint ());
-    std::this_thread::sleep_for (50ms);
 
-    using native_reply_t = std::vector<zlink::message_t>;
     const auto payload = protocol::encode_application_payload (
       {"DeferredRequest", "application/json", bytes ("request")});
     auto header = zlink::message_t::from (protocol::encode_node_request_header (1));
@@ -5237,7 +5244,7 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
         pumped =
           target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()).result ().value ();
     }
-    assert (pumped == mesh::raw_mesh_pump_result_t::protocol_error);
+    assert (pumped == mesh::raw_mesh_pump_result_t::infrastructure);
     assert (target.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application) == 0);
 
     zlink::received_t hello;
@@ -5246,14 +5253,9 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     assert (protocol::decode_header (hello.parts ().front ().to_bytes ()).kind
             == protocol::command::hello);
 
-    auto rejected_reply = await_native_reply (std::move (request)).result ().value ();
-    assert (rejected_reply.size () == 1);
-    const auto reply = protocol::decode_reply_header (rejected_reply.front ().to_bytes ());
-    assert (reply.correlation == 1);
-    assert (reply.terminal_result
-            == static_cast<std::uint32_t> (protocol::request_terminal_result::notConnected));
-    assert (reply.failure_code
-            == static_cast<std::uint32_t> (protocol::framework_error_code::none));
+    // MeshNode §7.1: admission rejection is silent; only the original native deadline ends it.
+    assert (await_native_request_terminal (std::move (request)).result ().value ()
+            == zlink::request_result_t::timed_out);
     target.close ();
 }
 
@@ -7528,12 +7530,21 @@ int main (int argc, char **argv)
 {
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    if (argc == 2 && std::string_view (argv[1]) == "--unadmitted-request") {
+        verify_unadmitted_request_is_dropped_without_framework_queue ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--owner-request-rejection") {
         verify_queued_owner_accepts_request_without_blocking_other_owner ();
         return 0;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--fifo-liveness") {
         verify_public_host_fifo_drains_before_liveness_probe ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--session-owner-route") {
+        verify_same_node_session_seal_waits_for_active_ingress ();
+        verify_session_relocation_gateway_commit_is_atomic ();
         return 0;
     }
     verify_actor_create_replays_after_reciprocal_handover ();
@@ -7591,7 +7602,7 @@ int main (int argc, char **argv)
     verify_atomic_raw_stateful_ingress_commit ();
     verify_relocated_source_reply_failure_keeps_terminal_record ();
     verify_node_request_requires_remote_admission ();
-    verify_unadmitted_request_is_rejected_without_framework_queue ();
+    verify_unadmitted_request_is_dropped_without_framework_queue ();
     verify_queued_owner_accepts_request_without_blocking_other_owner ();
     verify_raw_terminal_reply_relay ();
     verify_relocation_data_duplicates_are_distinct_arrivals ();

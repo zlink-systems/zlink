@@ -370,14 +370,14 @@ TEST (FrameworkRelocationSealContract, terminal_hook_failure_does_not_veto_commi
             target.node_id = "hook-target";
             target.authority_owner_generation = 13;
             EXPECT_THROW (owner->sessions ().commit_remote_route (
-                            connection.connection_id, binding.binding_generation, actor.key, 7, 11,
+                            connection.connection_id, binding.binding_generation, actor.key, 7,
                             target, 2, 19, throwing_hook),
                           std::runtime_error);
             EXPECT_EQ (owner->sessions ().current_binding (actor.key)->actor, target);
         } else {
-            EXPECT_THROW (owner->sessions ().acknowledge_remote_abort (
-                            connection.connection_id, binding.binding_generation, actor.key, 7, 11,
-                            throwing_hook),
+            EXPECT_THROW (owner->sessions ().acknowledge_remote_abort (connection.connection_id,
+                                                                       binding.binding_generation,
+                                                                       actor.key, 7, throwing_hook),
                           std::runtime_error);
             EXPECT_EQ (owner->sessions ().current_binding (actor.key)->actor, actor);
         }

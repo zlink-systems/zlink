@@ -1495,9 +1495,9 @@ still starts and completes as its chunks flow in order.
 ### Cutover Retransmission Window
 
 The period during which the source retains the pre-boundary relay batch and cutover copy
-and can retransmit the same batch after a connection failure. Under
-[common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover),
-the source keeps the copy until target commit, source `Preserve` settlement, or the source-lease-expiry terminal.
+and can retransmit the same batch after a connection failure. The source keeps the copy until
+[Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received)
+settles the source work.
 Neither the cutover-wait Warning nor Restore expiry alone ends this period.
 
 <a id="safe-to-shutdown"></a>

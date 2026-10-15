@@ -872,8 +872,6 @@ std::optional<std::string> actor_type_from_authority (runtime::live_location_rea
 {
     const auto read = runtime::infrastructure_result (
       [&] { return store.read_authority (runtime::actor_authority_key (actor_id)); });
-    if (!read)
-        return std::nullopt;
     const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
     if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
         || snapshot->allocation.object_kind != placement_object_kind_t::actor)
@@ -9582,10 +9580,8 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
                   settle (result_t<void>::success ());
                   return;
               }
-              settle (result_t<void>::failure (result.error_kind (),
-                                               result.error () != nullptr
-                                                 ? result.error ()->what ()
-                                                 : "Actor Join completion callback failed"));
+              settle (
+                detail::propagate_failure<void> (result, "Actor Join completion callback failed"));
           });
     }
     catch (const framework_exception_t &error) {
@@ -15395,18 +15391,31 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         })
         .get ();
     auto &actor_type = join_dispatch_snapshot.actor_type;
-    if (actor_type.empty ()) {
-        const auto actor_id = std::string (control.current_actor.actor_id ().value ());
-        const auto located = actor_type_from_authority (
-          services.get_required<runtime::live_location_reader_t> (), actor_id);
-        if (located && !located->empty ()) {
-            actor_type = *located;
-            _state->lane.run ([&] { _state->actor_types_by_id[actor_id] = actor_type; }).get ();
+    try {
+        if (actor_type.empty ()) {
+            const auto actor_id = std::string (control.current_actor.actor_id ().value ());
+            const auto located = actor_type_from_authority (
+              services.get_required<runtime::live_location_reader_t> (), actor_id);
+            if (located && !located->empty ()) {
+                actor_type = *located;
+                _state->lane.run ([&] { _state->actor_types_by_id[actor_id] = actor_type; }).get ();
+            }
         }
     }
+    catch (...) {
+        (void) service::actor_join_reply (
+          record.reply_token,
+          detail::result_access_t::failure<service::actor_join_result_t> (
+            std::current_exception ()),
+          {});
+        return true;
+    }
     if (actor_type.empty ()) {
-        (void) service::actor_join_reply (record.reply_token,
-                                          service::actor_join_result_t::rejected, {});
+        (void) service::actor_join_reply (
+          record.reply_token,
+          result_t<service::actor_join_result_t>::failure (
+            framework_error_kind_t::not_found, "Actor Join target Actor type was not found"),
+          {});
         return true;
     }
 
@@ -15421,17 +15430,21 @@ bool spot_node_runtime_t::dispatch_mesh_record (
       [reply_token = record.reply_token,
        deferred_terminal = std::move (deferred_terminal)] (result_t<actor_join_reply_t> joined) {
           if (!joined) {
-              (void) service::actor_join_reply (reply_token, service::actor_join_result_t::rejected,
-                                                {});
+              (void) service::actor_join_reply (
+                reply_token,
+                detail::propagate_failure<service::actor_join_result_t> (
+                  joined, "target Actor Join failed"),
+                {});
           } else {
               const std::vector<zlink::message_t> reply_parts =
                 joined.value ().reply.to_string ().empty ()
                   ? std::vector<zlink::message_t>{}
                   : std::vector<zlink::message_t>{joined.value ().reply};
               (void) service::actor_join_reply (reply_token,
-                                                joined.value ().result_code == 0
-                                                  ? service::actor_join_result_t::accepted
-                                                  : service::actor_join_result_t::rejected,
+                                                result_t<service::actor_join_result_t>::success (
+                                                  joined.value ().result_code == 0
+                                                    ? service::actor_join_result_t::accepted
+                                                    : service::actor_join_result_t::rejected),
                                                 reply_parts);
           }
           if (deferred_terminal)

@@ -332,7 +332,10 @@ export class ZLinkEntrySpotActivation {
     await cleanup(() => this.timers.dispose());
     await cleanup(() => this.spotSerialExecutor.close());
     await cleanup(() => disposeLifecycleHandlers(this.entrySpot, this.options.detachedTaskRunner));
-    await cleanup(() => this.options.nativeSpot.dispose());
+    await cleanup(async () => {
+      await this.options.entryActorRuntime?.releaseMembers?.(this.options.spotNodeName);
+      await this.options.nativeSpot.dispose();
+    });
     if (this.initialized) {
       this.lifecycleMetrics.closed('entry');
     }

@@ -453,9 +453,13 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
 
         @Override
         public boolean connect(ZLinkAutoConnectPlanner.Target target) {
-            boolean manual = manualEndpoints.contains(target.endpoint());
-            if (manual && !ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
-                return true;
+            // Channel topology §8: automatic discovery never adds a pipe for
+            // a selected inbound route or a peer already named by manual intent.
+            if (manualEndpoints.contains(target.endpoint())
+                    || ZLinkAutoConnectPlanner.hasRid(target.nodeRid())
+                            && (manualExpectedRids.containsValue(target.nodeRid())
+                                    || node.isPeerTransportConnected(target.nodeRid()))) {
+                return false;
             }
             long intent;
             try {
