@@ -461,7 +461,9 @@ received ones, processed in the following order.
    the listener.
    A reply that was submitted but not yet sent is sent until the remaining
    deadline and discarded after it. The linger of the listener socket is set to
-   the remaining deadline just before closing, leaving this to Core.
+   the remaining deadline just before closing, leaving this to Core; if no time
+   remains, it is set to 0. A stop call without a deadline uses the default
+   Shutdown deadline.
 
 A manual Client is notified of the same drain state via a connection control
 message.

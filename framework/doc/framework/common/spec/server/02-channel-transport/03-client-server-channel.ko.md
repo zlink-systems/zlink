@@ -405,7 +405,8 @@ Server drain은 새 요청을 막고 이미 받은 요청을 끝내는 절차이
 4. 모든 최종 결과가 확정되면 ClientServer Server descriptor와
    [owner lease](../00-foundation/02-glossary.ko.md#owner-lease)를 해제하고 listener를 닫는다.
    제출했지만 아직 송신되지 않은 reply는 남은 deadline까지 송신하고, deadline이 지나면 버린다.
-   Listener socket의 linger를 닫기 직전에 남은 deadline으로 두어 이를 Core에 맡긴다.
+   Listener socket의 linger를 닫기 직전에 남은 deadline으로 두어 이를 Core에 맡기며, 남은 deadline이
+   없으면 0으로 둔다. 정지 호출에 deadline이 없으면 Shutdown 기본 deadline을 쓴다.
 
 Manual Client에는 같은 drain state를 연결 control message로 알린다.
 
