@@ -189,7 +189,13 @@ final class ZLinkActorDispatchSerials {
         CompletionStage<Void> barrier = lifecycleBarriers.get(turn.actorId());
         if (barrier == null
                 && turn.incarnation() instanceof ZLinkActorRuntime.DefaultActorContext context) {
-            barrier = context.moveCompletion();
+            CompletionStage<Void> moving = context.moveCompletion();
+            if (!moving.toCompletableFuture().isDone()) {
+                CompletableFuture<Void> released = new CompletableFuture<>();
+                retainLifecycleBarrierOnRegistry(turn.actorId(), released);
+                moving.whenComplete((ignored, failure) -> released.complete(null));
+                barrier = released;
+            }
         }
         if (barrier != null) {
             // Both a restored activation and a retargeted activation accept payloads behind
@@ -198,6 +204,16 @@ final class ZLinkActorDispatchSerials {
             turn.activation().executeLifecycleNext(() -> lifecycle, null);
         }
         return turn;
+    }
+
+    private void retainLifecycleBarrierOnRegistry(
+            String actorId, CompletableFuture<Void> released) {
+        lifecycleBarriers.put(actorId, released);
+        released.whenComplete(
+                (ignored, failure) -> {
+                    if (stateLane.isOnLane()) lifecycleBarriers.remove(actorId, released);
+                    else onRegistry(() -> lifecycleBarriers.remove(actorId, released));
+                });
     }
 
     CompletionStage<ZLinkSerialExecutionQueue> relocationLaneAsync(String actorId) {
@@ -422,22 +438,16 @@ final class ZLinkActorDispatchSerials {
                                             QueuedTurn tracked =
                                                     actorTargets.computeIfAbsent(
                                                             actorId, ignored -> resolved);
-                                            lifecycleBarriers.put(actorId, released);
+                                            retainLifecycleBarrierOnRegistry(actorId, released);
                                             return tracked;
                                         }))
                 .thenCompose(
-                        turn -> {
-                            CompletableFuture<Void> admitted = new CompletableFuture<>();
-                            CompletionStage<Void> barrier =
-                                    turn.activation()
-                                            .executeLifecycleNext(
-                                                    () -> runTurn(turn, operation), admitted);
-                            return admitted.thenCompose(ignored -> barrier);
-                        })
+                        turn ->
+                                turn.activation()
+                                        .executeLifecycleNext(() -> runTurn(turn, operation), null))
                 .whenComplete(
                         (ignored, error) -> {
                             released.complete(null);
-                            onRegistry(() -> lifecycleBarriers.remove(actorId, released));
                         });
     }
 
