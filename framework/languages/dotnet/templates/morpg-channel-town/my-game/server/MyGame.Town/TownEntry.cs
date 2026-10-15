@@ -2,20 +2,34 @@ using MyGame.Shared;
 using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
+
 namespace MyGame.Town;
 
 public sealed class TownEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<PlayerActor>
 {
     public IZLinkEntrySpotContext Context { get; } = context;
-    public void Configure() => Context.Handlers.AddActorPacket<EnterTownHandler, PlayerActor>(nameof(JoinTownRequest));
-    public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct) => ValueTask.CompletedTask;
-    public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) => ValueTask.CompletedTask;
+
+    public void Configure() =>
+        Context.Handlers.AddActorPacket<EnterTownHandler, PlayerActor>(nameof(JoinTownRequest));
+
+    public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct) =>
+        ValueTask.CompletedTask;
+
+    public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) =>
+        ValueTask.CompletedTask;
 }
+
 [ZLinkSpotActorSendHandler(nameof(JoinTownRequest))]
-public sealed class EnterTownHandler : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, JoinTownRequest>
+public sealed class EnterTownHandler
+    : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, JoinTownRequest>
 {
-    public ValueTask HandleAsync(TownEntry entry, PlayerActor actor, IZLinkMessageContext context,
-        JoinTownRequest request, CancellationToken ct)
+    public ValueTask HandleAsync(
+        TownEntry entry,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        JoinTownRequest request,
+        CancellationToken ct
+    )
     {
         if (request.PlayerId != actor.Context.ActorId)
             throw new InvalidDataException("Player identity does not match the bound Actor.");
