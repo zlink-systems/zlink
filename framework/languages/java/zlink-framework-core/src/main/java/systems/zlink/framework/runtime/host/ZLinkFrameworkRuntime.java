@@ -85,7 +85,6 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
@@ -140,7 +139,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             new AtomicReference<>();
     private final AtomicReference<RelocationOperation> activeRelocation = new AtomicReference<>();
     private final AtomicReference<Instant> terminationDeadline = new AtomicReference<>();
-    private final AtomicLong terminationSequence = new AtomicLong();
     private final AtomicReference<ZLinkFrameworkRelocationResult> lastRelocationResult =
             new AtomicReference<>();
     private final AtomicReference<ZLinkFrameworkTerminationResult> lastTerminationResult =
@@ -155,11 +153,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     // options so every surface observes setMessageFlowMode live.
     private final AtomicReference<ZLinkMessageFlowLogMode> messageFlowMode;
     private final ZLinkRuntimeEventDispatcher eventDispatcher;
-    private final systems.zlink.framework.runtime.internal.monitoring.ZLinkStatusPublisher<
+    private static final String RUNTIME_STATUS_SOURCE = "host";
+    private final systems.zlink.framework.runtime.internal.monitoring.ZLinkTopologyStatusSource<
                     systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus>
-            runtimeStatusPublisher =
-                    systems.zlink.framework.runtime.internal.monitoring.ZLinkStatusPublisher.create(
-                            () -> runtimeStatus(terminationSequence.get()),
+            runtimeStatusSource =
+                    new systems.zlink.framework.runtime.internal.monitoring
+                            .ZLinkTopologyStatusSource<>(
+                            (key, previous) -> runtimeStatus(),
                             status ->
                                     List.of(
                                             status.state(),
@@ -170,8 +170,19 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                             status.relocationResult(),
                                             status.terminationResult(),
                                             status.safeToShutdown()),
-                            ignored -> runtimeState,
-                            64,
+                            (status, sequence) ->
+                                    new ZLinkFrameworkRuntimeStatus(
+                                            status.state(),
+                                            status.isReady(),
+                                            status.acceptingWork(),
+                                            status.deadline(),
+                                            status.relocationResult(),
+                                            status.terminationResult(),
+                                            status.safeToShutdown(),
+                                            status.capacity(),
+                                            sequence,
+                                            status.observedAt()),
+                            ZLinkFrameworkRuntimeStatus::sequence,
                             status ->
                                     status.state() == ZLinkFrameworkRuntimeState.STOPPED
                                             || status.state() == ZLinkFrameworkRuntimeState.ERROR,
@@ -486,6 +497,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         .options()
                                         .sessionRelocationSealTimeout())
                         : null;
+
+        if (this.spotRetire != null) {
+            this.spotRetire.onSourceQuiescenceChanged(
+                    () -> runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE));
+        }
 
         this.capacityMetricRegistration =
                 ZLinkRuntimeMetrics.registerHostCapacity(this::capacityStatus);
@@ -945,7 +961,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public ZLinkFrameworkRuntimeStatus status() {
-        return runtimeStatus(terminationSequence.get());
+        return runtimeStatusSource.snapshot(RUNTIME_STATUS_SOURCE);
     }
 
     public void resetCapacityMetrics() {
@@ -969,7 +985,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public Flow.Publisher<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> observe() {
-        return runtimeStatusPublisher;
+        return runtimeStatusSource.observe(RUNTIME_STATUS_SOURCE, 64);
     }
 
     public CompletionStage<ZLinkFrameworkRelocationResult> relocate(
@@ -1779,8 +1795,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                                 .ADMITTED));
     }
 
-    private systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus runtimeStatus(
-            long sequence) {
+    private systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus runtimeStatus() {
         ZLinkFrameworkRuntimeState state = runtimeState.get();
         return new systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus(
                 state,
@@ -1791,7 +1806,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 Optional.ofNullable(lastTerminationResult.get()),
                 safeToShutdown(state),
                 capacityStatus(),
-                sequence,
+                0,
                 Instant.now());
     }
 
@@ -1997,8 +2012,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 return null;
                             });
         }
-        long sequence = terminationSequence.incrementAndGet();
-        var status = runtimeStatus(sequence);
+        var status = status();
         if (eventDispatcher != null) {
             Throwable actual =
                     terminationFailure == null ? null : unwrapCompletionFailure(terminationFailure);
@@ -2009,7 +2023,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             }
             eventDispatcher.publishHostStatus(status, stage, actual);
         }
-        runtimeStatusPublisher.signal();
+        runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE);
         routeMeshRuntime.signalAll();
         channels.signalTopologyStatus();
     }
@@ -2023,12 +2037,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return publication
                 .thenRun(
                         () -> {
-                            long sequence = terminationSequence.incrementAndGet();
-                            var status = runtimeStatus(sequence);
+                            var status = status();
                             if (eventDispatcher != null) {
                                 eventDispatcher.publishHostStatus(status);
                             }
-                            runtimeStatusPublisher.signal();
+                            runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE);
                             routeMeshRuntime.signalAll();
                             channels.signalTopologyStatus();
                         })
