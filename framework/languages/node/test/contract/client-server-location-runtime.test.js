@@ -1209,7 +1209,7 @@ test('manual ClientServer reconnect fences a late admission from the previous ph
   await sockets.dispose();
 });
 
-test('ClientServer liveness ACK is fenced to the current probe and application traffic does not refresh it', async ( t ) => {
+test('ClientServer liveness ACK is fenced to the current probe and application traffic does not refresh it', async (t) => {
   const receivedAt = performance.now();
   t.mock.method(performance, 'now', () => receivedAt);
   const registration = internal.createFrameworkRegistration({
@@ -1971,7 +1971,7 @@ function readyWaitClient(t, channelTimeoutMs = 60_000, sendTimeoutMs) {
   };
 }
 
-test('ClientServer request readiness is bounded by its whole request budget', async ( t ) => {
+test('ClientServer request readiness is bounded by its whole request budget', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { request, dealer, sockets } = readyWaitClient(t);
   const submitted = t.mock.method(dealer, 'request');
@@ -1984,7 +1984,7 @@ test('ClientServer request readiness is bounded by its whole request budget', as
 });
 
 for (const state of ['serving', 'retiring']) {
-  test(`ClientServer ready ${state} weight-zero member fails immediately as Unavailable`, async ( t ) => {
+  test(`ClientServer ready ${state} weight-zero member fails immediately as Unavailable`, async (t) => {
     const { request, dealer, sockets } = readyWaitClient(t);
     sockets.admitClientServerConnection({ ...discoveryDescriptor('server-a', 0), state }, 'orders-a:7');
     const submitted = t.mock.method(dealer, 'request');
@@ -1994,7 +1994,7 @@ for (const state of ['serving', 'retiring']) {
   });
 }
 
-test('ClientServer readiness reduces the outbound request budget without moving the wire deadline', async ( t ) => {
+test('ClientServer readiness reduces the outbound request budget without moving the wire deadline', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = 0;
   t.mock.method(performance, 'now', () => now);
@@ -2018,7 +2018,7 @@ test('ClientServer readiness reduces the outbound request budget without moving 
   assert.equal(submittedTimeoutMs, 30);
 });
 
-test('ClientServer request uses the remaining reply budget and finishes once', async ( t ) => {
+test('ClientServer request uses the remaining reply budget and finishes once', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = 0;
   t.mock.method(performance, 'now', () => now);
