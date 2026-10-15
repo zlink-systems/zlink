@@ -74,6 +74,8 @@ export class ZLinkMeshDispatchPump {
   private yieldStartedAtMs = 0;
   /** Drains in progress; the batch budget begins when work starts on an idle pump. */
   private draining = 0;
+  /** The macrotask boundary every drain waits for once the shared budget is spent. */
+  private pendingYield?: Promise<void>;
 
   constructor(
     private readonly node: ZLinkBackendMeshNode,
@@ -468,7 +470,13 @@ export class ZLinkMeshDispatchPump {
     if (yieldTurn !== undefined) await yieldTurn;
   }
 
+  /**
+   * The batch budget is shared by every drain of this pump, so once it is
+   * spent every drain waits for the same macrotask boundary; one drain that
+   * keeps running would otherwise hold the event loop the yield was for.
+   */
   private yieldIfNeeded(): Promise<void> | undefined {
+    if (this.pendingYield !== undefined) return this.pendingYield;
     const nowMs = this.nowMs();
     if (
       this.recordsSinceYield < MESH_DISPATCH_YIELD_RECORDS &&
@@ -476,9 +484,12 @@ export class ZLinkMeshDispatchPump {
     )
       return undefined;
     this.recordsSinceYield = 0;
-    return yieldToTimers().then(() => {
+    const pendingYield = yieldToTimers().then(() => {
+      this.pendingYield = undefined;
       this.yieldStartedAtMs = this.nowMs();
     });
+    this.pendingYield = pendingYield;
+    return pendingYield;
   }
 
   private nowMs(): number {
