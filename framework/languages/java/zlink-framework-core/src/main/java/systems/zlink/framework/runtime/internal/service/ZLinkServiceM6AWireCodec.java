@@ -9,7 +9,6 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -451,8 +450,17 @@ public final class ZLinkServiceM6AWireCodec {
         if (reader.u32("bodyLength") != reader.remaining()) {
             throw protocol("application payload body length mismatch");
         }
-        String packetName = reader.text8("packetName");
-        String contentType = reader.text8("contentType");
+        String packetName;
+        String contentType;
+        // The generated profile's two text8 fields are fixed bytes; compare them in place and
+        // decode text only for any other profile, which the view check then rejects.
+        if (reader.skipIfEquals(FRAMEWORK_MULTIPART_PROFILE_FIELDS)) {
+            packetName = ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME;
+            contentType = ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE;
+        } else {
+            packetName = reader.text8("packetName");
+            contentType = reader.text8("contentType");
+        }
         if (reader.intU32("payloadLength") != reader.remaining()) {
             throw protocol("application payload length mismatch");
         }
@@ -873,7 +881,10 @@ public final class ZLinkServiceM6AWireCodec {
         }
 
         String text8(String field) {
-            int length = u8(field + ".length");
+            if (!input.hasRemaining()) {
+                throw protocol("truncated " + field + ".length");
+            }
+            int length = Byte.toUnsignedInt(input.get());
             if (length == 0) {
                 throw protocol(field + " must be non-empty");
             }
@@ -881,11 +892,29 @@ public final class ZLinkServiceM6AWireCodec {
         }
 
         String text16(String field) {
-            int length = u16(field + ".length");
+            if (input.remaining() < Short.BYTES) {
+                throw protocol("truncated " + field + ".length");
+            }
+            int length = Short.toUnsignedInt(input.getShort());
             if (length == 0 || length > MAX_ENDPOINT_BYTES) {
                 throw protocol(field + " has invalid length");
             }
             return decodeText(bytes(length, field), field);
+        }
+
+        /** Consumes {@code expected} when the next bytes equal it; otherwise reads nothing. */
+        boolean skipIfEquals(byte[] expected) {
+            int start = input.position();
+            if (input.remaining() < expected.length) {
+                return false;
+            }
+            for (int index = 0; index < expected.length; index++) {
+                if (input.get(start + index) != expected[index]) {
+                    return false;
+                }
+            }
+            input.position(start + expected.length);
+            return true;
         }
 
         byte[] bytes(int length, String field) {
@@ -927,13 +956,54 @@ public final class ZLinkServiceM6AWireCodec {
         }
 
         private static String decodeText(byte[] bytes, String field) {
-            String value = new String(bytes, StandardCharsets.UTF_8);
-            // Replacement of malformed input cannot round-trip to its original bytes.
-            if (value.indexOf('\0') >= 0
-                    || !Arrays.equals(value.getBytes(StandardCharsets.UTF_8), bytes)) {
+            if (!isCanonicalUtf8WithoutNul(bytes)) {
                 throw protocol(field + " is not canonical UTF-8");
             }
-            return value;
+            return new String(bytes, StandardCharsets.UTF_8);
+        }
+
+        /**
+         * Well-formed UTF-8 (RFC 3629: shortest form, no surrogates, at most U+10FFFF) and no NUL.
+         * These are exactly the inputs that decode and re-encode to the same bytes.
+         */
+        private static boolean isCanonicalUtf8WithoutNul(byte[] bytes) {
+            int index = 0;
+            while (index < bytes.length) {
+                int lead = bytes[index] & 0xff;
+                if (lead < 0x80) {
+                    if (lead == 0) return false;
+                    index++;
+                    continue;
+                }
+                int length;
+                int minimum;
+                if (lead >= 0xc2 && lead <= 0xdf) {
+                    length = 2;
+                    minimum = 0x80;
+                } else if (lead >= 0xe0 && lead <= 0xef) {
+                    length = 3;
+                    minimum = 0x800;
+                } else if (lead >= 0xf0 && lead <= 0xf4) {
+                    length = 4;
+                    minimum = 0x10000;
+                } else {
+                    return false;
+                }
+                if (index + length > bytes.length) return false;
+                int codePoint = lead & (0xff >> (length + 1));
+                for (int next = 1; next < length; next++) {
+                    int continuation = bytes[index + next] & 0xff;
+                    if ((continuation & 0xc0) != 0x80) return false;
+                    codePoint = (codePoint << 6) | (continuation & 0x3f);
+                }
+                if (codePoint < minimum
+                        || codePoint > 0x10ffff
+                        || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+                    return false;
+                }
+                index += length;
+            }
+            return true;
         }
     }
 }
