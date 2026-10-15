@@ -8,6 +8,7 @@ using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Streams;
@@ -16,6 +17,56 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class SharedAsyncDisposalTests
 {
+    [Fact]
+    public async Task FrameworkRuntimeState_Joins_Listener_Before_Closing_Server_Socket()
+    {
+        await using var services = new ServiceCollection().BuildServiceProvider();
+        var context = DispatchProxy.Create<IZLinkBackendRuntimeContext, BlockingContextProxy>();
+        ((BlockingContextProxy)(object)context).Release.TrySetResult();
+        using var errors = new ZLinkRuntimeErrorSink();
+        var reported = new List<Exception>();
+        errors.UnhandledCallbackException += reported.Add;
+        var state = new ZLinkFrameworkComponentState(
+            context,
+            new ZLinkFrameworkRegistration(),
+            services,
+            errors,
+            new object(),
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                8,
+                1
+            ),
+            new ZLinkListenerRecords()
+        );
+        var listenerFailure = new InvalidOperationException("receive loop failed");
+        state.ListenerTasks.Add(Task.FromException(listenerFailure));
+        var socket = new BlockingSocket();
+        state.ClientServerServerBundles.Add(
+            ZLinkChannelName.FromBoundary("work", "channelName"),
+            new ZLinkChannelRuntimeBundle(socket)
+        );
+        var disposal = state.DisposeAsync().AsTask();
+        bool listenerJoinedBeforeClose;
+        try
+        {
+            await socket.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            listenerJoinedBeforeClose = reported.Contains(listenerFailure);
+        }
+        finally
+        {
+            socket.Release.TrySetResult();
+        }
+        Assert.Same(
+            listenerFailure,
+            await Assert.ThrowsAsync<InvalidOperationException>(() => disposal)
+        );
+        Assert.True(
+            listenerJoinedBeforeClose,
+            "The listener must be joined before its socket closes."
+        );
+    }
+
     [Fact]
     public async Task FrameworkRuntimeState_Reports_Close_Failure_And_Retains_Context()
     {

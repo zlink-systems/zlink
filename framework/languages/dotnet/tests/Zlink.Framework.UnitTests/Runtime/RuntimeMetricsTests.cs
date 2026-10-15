@@ -179,8 +179,12 @@ public sealed class RuntimeMetricsTests
         Assert.Null(exception);
     }
 
-    [Fact]
-    public void Host_capacity_metrics_read_one_projection_with_only_exact_state_labels()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Host_capacity_metrics_read_one_projection_with_only_exact_state_labels(
+        bool otherHost
+    )
     {
         var core = default(ZLinkCoreHwmStatus) with
         {
@@ -211,12 +215,14 @@ public sealed class RuntimeMetricsTests
             PressureState: ZLinkApplicationJobQueuePressureState.Running,
             CurrentPauseDuration: TimeSpan.Zero
         );
-        using var registration = ZLinkRuntimeMetrics.RegisterHostCapacity(() =>
-            new ZLinkHostCapacityStatus(4, core, queue)
-        );
+        using var unrelatedHost = otherHost
+            ? ZLinkRuntimeMetrics.RegisterHostCapacity(() =>
+                new ZLinkHostCapacityStatus(1, default, queue)
+            )
+            : null;
         var longSamples =
             new List<(string Name, long Value, IReadOnlyDictionary<string, string> Tags)>();
-        var durationSamples = new List<double>();
+        var durationSamples = new List<(double Value, IReadOnlyDictionary<string, string> Tags)>();
         var names = new[]
         {
             "zlink.host.core_hwm.effective_budget",
@@ -235,11 +241,23 @@ public sealed class RuntimeMetricsTests
         );
         using var durationListener = Listen<double>(
             "zlink.host.application_job_queue.capacity_wait_duration",
-            (_, value, _) => durationSamples.Add(value)
+            (_, value, tags) => durationSamples.Add((value, Tags(tags)))
         );
 
         longListener.RecordObservableInstruments();
         durationListener.RecordObservableInstruments();
+        var baselineLongSamples = longSamples.ToArray();
+        var baselineDurationSamples = durationSamples.ToArray();
+        longSamples.Clear();
+        durationSamples.Clear();
+
+        using var registration = ZLinkRuntimeMetrics.RegisterHostCapacity(() =>
+            new ZLinkHostCapacityStatus(4, core, queue)
+        );
+        longListener.RecordObservableInstruments();
+        durationListener.RecordObservableInstruments();
+        RemoveLongBaseline(longSamples, baselineLongSamples);
+        RemoveDurationBaseline(durationSamples, baselineDurationSamples);
 
         Assert.Contains(
             longSamples,
@@ -266,7 +284,9 @@ public sealed class RuntimeMetricsTests
             longSamples,
             static sample => Assert.All(sample.Tags.Keys, static key => Assert.Equal("state", key))
         );
-        Assert.Equal(1.25, Assert.Single(durationSamples), precision: 3);
+        var duration = Assert.Single(durationSamples);
+        Assert.Equal(1.25, duration.Value, precision: 3);
+        Assert.Empty(duration.Tags);
     }
 
     [Fact]
@@ -352,52 +372,46 @@ public sealed class RuntimeMetricsTests
             durationSamples,
             sample => sample.Value == 9 && sample.Tags["state"] == "cumulative"
         );
-
-        static void RemoveDurationBaseline(
-            List<(double Value, IReadOnlyDictionary<string, string> Tags)> samples,
-            IEnumerable<(double Value, IReadOnlyDictionary<string, string> Tags)> baseline
-        )
-        {
-            foreach (var expected in baseline)
-            {
-                var index = samples.FindIndex(candidate =>
-                    candidate.Value == expected.Value && TagsEqual(candidate.Tags, expected.Tags)
-                );
-                if (index >= 0)
-                    samples.RemoveAt(index);
-            }
-        }
-
-        static void RemoveLongBaseline(
-            List<(string Name, long Value, IReadOnlyDictionary<string, string> Tags)> samples,
-            IEnumerable<(
-                string Name,
-                long Value,
-                IReadOnlyDictionary<string, string> Tags
-            )> baseline
-        )
-        {
-            foreach (var expected in baseline)
-            {
-                var index = samples.FindIndex(candidate =>
-                    candidate.Name == expected.Name
-                    && candidate.Value == expected.Value
-                    && TagsEqual(candidate.Tags, expected.Tags)
-                );
-                if (index >= 0)
-                    samples.RemoveAt(index);
-            }
-        }
-
-        static bool TagsEqual(
-            IReadOnlyDictionary<string, string> left,
-            IReadOnlyDictionary<string, string> right
-        ) =>
-            left.Count == right.Count
-            && left.All(entry =>
-                right.TryGetValue(entry.Key, out var value) && value == entry.Value
-            );
     }
+
+    private static void RemoveDurationBaseline(
+        List<(double Value, IReadOnlyDictionary<string, string> Tags)> samples,
+        IEnumerable<(double Value, IReadOnlyDictionary<string, string> Tags)> baseline
+    )
+    {
+        foreach (var expected in baseline)
+        {
+            var index = samples.FindIndex(candidate =>
+                candidate.Value == expected.Value && TagsEqual(candidate.Tags, expected.Tags)
+            );
+            if (index >= 0)
+                samples.RemoveAt(index);
+        }
+    }
+
+    private static void RemoveLongBaseline(
+        List<(string Name, long Value, IReadOnlyDictionary<string, string> Tags)> samples,
+        IEnumerable<(string Name, long Value, IReadOnlyDictionary<string, string> Tags)> baseline
+    )
+    {
+        foreach (var expected in baseline)
+        {
+            var index = samples.FindIndex(candidate =>
+                candidate.Name == expected.Name
+                && candidate.Value == expected.Value
+                && TagsEqual(candidate.Tags, expected.Tags)
+            );
+            if (index >= 0)
+                samples.RemoveAt(index);
+        }
+    }
+
+    private static bool TagsEqual(
+        IReadOnlyDictionary<string, string> left,
+        IReadOnlyDictionary<string, string> right
+    ) =>
+        left.Count == right.Count
+        && left.All(entry => right.TryGetValue(entry.Key, out var value) && value == entry.Value);
 
     [Fact]
     public void Disabled_Host_Operation_Remains_Safe()
