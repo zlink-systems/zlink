@@ -206,6 +206,8 @@ final class ZLinkJavaRawMeshNode
             receiveFlowRegistration = () -> {};
     private volatile ZLinkJavaRawSpotNode spotNode;
     private volatile ExecutorService pump;
+    // The pump's next rotation, built once per pump start.
+    private volatile Runnable pumpRotation;
     private final AtomicReference<CompletableFuture<ZLinkApplicationJobQueue.Permit>>
             pendingReceiveAcquire = new AtomicReference<>();
     // The pump executor alone reads and writes it; close reads it after the pump terminates.
@@ -4561,7 +4563,8 @@ final class ZLinkJavaRawMeshNode
         pump =
                 Executors.newSingleThreadExecutor(
                         Thread.ofPlatform().name("zlink-jvm-raw-mesh-" + meshName).factory());
-        pump.execute(() -> pumpTurn(pumpSocket));
+        pumpRotation = () -> pumpTurn(pumpSocket);
+        pump.execute(pumpRotation);
     }
 
     private void pumpTurn(RouterSocket pumpSocket) {
@@ -4585,7 +4588,7 @@ final class ZLinkJavaRawMeshNode
         }
         if (!closed.get()) {
             try {
-                pump.execute(() -> pumpTurn(pumpSocket));
+                pump.execute(pumpRotation);
             } catch (RejectedExecutionException stopped) {
                 if (!closed.get()) throw stopped;
             }
@@ -4639,8 +4642,7 @@ final class ZLinkJavaRawMeshNode
                 RawMulticastFanout fanout = pendingRawMulticast;
                 ZLinkJavaRawServicePort.Inbound record = null;
                 if (fanout == null) {
-                    Optional<ZLinkJavaRawServicePort.Inbound> inbound =
-                            port.receiveNow(pumpSocket);
+                    Optional<ZLinkJavaRawServicePort.Inbound> inbound = port.receiveNow(pumpSocket);
                     if (inbound.isEmpty()) {
                         return;
                     }
@@ -4690,8 +4692,8 @@ final class ZLinkJavaRawMeshNode
 
     /**
      * Spec 08 §4.2: liveness receive is recorded once per receive rotation for each source
-     * connection, not for every record. Consecutive records of the same connection share the
-     * first one's record; the pump alone calls this.
+     * connection, not for every record. Consecutive records of the same connection share the first
+     * one's record; the pump alone calls this.
      */
     private void recordRotationReceive(ZLinkServiceTopologyRegistry.Peer peer, long generation) {
         if (peer == rotationReceivePeer && generation == rotationReceiveGeneration) {
@@ -7313,13 +7315,9 @@ final class ZLinkJavaRawMeshNode
             return;
         }
         Map<RoutingId, Long> routes = selectedRoutes;
-        Set<RoutingId> owned = new HashSet<>();
         Map.Entry<Long, PeerIntent> intentWithoutRoutingId = null;
         for (Map.Entry<Long, PeerIntent> entry : peerIntents.entrySet()) {
-            RoutingId expected =
-                    entry.getValue().expectedRoutingId() != null
-                            ? entry.getValue().expectedRoutingId()
-                            : peerIntentRoutingIds.get(entry.getKey());
+            RoutingId expected = expectedRoutingId(entry);
             if (expected == null) {
                 if (!closeRequestedPeerIntents.contains(entry.getKey())
                         && !closedPeerIntents.contains(entry.getKey())) {
@@ -7327,11 +7325,16 @@ final class ZLinkJavaRawMeshNode
                 }
                 continue;
             }
-            owned.add(expected);
             announce(expected, routes, entry.getKey(), entry.getValue());
         }
         if (intentWithoutRoutingId == null) {
             return;
+        }
+        // Only an endpoint-only intent needs the set of routes the other intents own.
+        Set<RoutingId> owned = new HashSet<>();
+        for (Map.Entry<Long, PeerIntent> entry : peerIntents.entrySet()) {
+            RoutingId expected = expectedRoutingId(entry);
+            if (expected != null) owned.add(expected);
         }
         // An endpoint-only intent cannot address its route before it knows
         // the peer RID. It submits HELLO on selected routes no intent owns; the
@@ -7345,6 +7348,12 @@ final class ZLinkJavaRawMeshNode
                         intentWithoutRoutingId.getValue());
             }
         }
+    }
+
+    private RoutingId expectedRoutingId(Map.Entry<Long, PeerIntent> entry) {
+        return entry.getValue().expectedRoutingId() != null
+                ? entry.getValue().expectedRoutingId()
+                : peerIntentRoutingIds.get(entry.getKey());
     }
 
     private void announce(

@@ -23,6 +23,10 @@ public final class ZLinkServiceLivenessRegistry {
     private final ZLinkStateLane stateLane;
     private final Map<RoutingId, PeerState> peers = new HashMap<>();
     private long nextProbeId = 1;
+    // No peer is due before this instant (monotonic nanos). Written on the lane; a later receive
+    // only moves a peer's deadline later, so the value stays an early bound.
+    private volatile long nextDueNanos;
+    private volatile boolean nextDueKnown;
 
     public ZLinkServiceLivenessRegistry() {
         this(DEFAULT_PROBE_INTERVAL, DEFAULT_PEER_TIMEOUT);
@@ -64,6 +68,8 @@ public final class ZLinkServiceLivenessRegistry {
         PeerState admitted =
                 new PeerState(connectionId, nowNanos, probeIntervalNanos, peerTimeoutNanos);
         peers.put(nodeRoutingId, admitted);
+        // A new peer is due for its first probe at once.
+        nextDueKnown = false;
         return admitted;
     }
 
@@ -118,24 +124,47 @@ public final class ZLinkServiceLivenessRegistry {
         return state.acknowledge(probeId, nowNanos);
     }
 
+    /**
+     * Probes and timeouts due at {@code nowNanos}. Spec 08 §4.2: a rotation with nothing due does
+     * no liveness work; only a due rotation enters the lane and visits the peers.
+     */
     public Tick tick(long nowNanos) {
+        if (nextDueKnown && nowNanos - nextDueNanos < 0) {
+            return Tick.NONE;
+        }
         return inStateLane(() -> tickCore(nowNanos));
     }
 
     private Tick tickCore(long nowNanos) {
-        List<Probe> probes = new ArrayList<>();
-        List<RoutingId> timedOut = new ArrayList<>();
+        List<Probe> probes = null;
+        List<RoutingId> timedOut = null;
+        long nextDue = addExact(nowNanos, probeIntervalNanos);
         for (Map.Entry<RoutingId, PeerState> entry : peers.entrySet()) {
             PeerState state = entry.getValue();
             if (state.isExpired(nowNanos)) {
+                if (timedOut == null) timedOut = new ArrayList<>();
                 timedOut.add(entry.getKey());
                 continue;
             }
             long probeId = state.tryGetProbe(nowNanos, this::allocateProbeId);
-            if (probeId != 0) probes.add(new Probe(entry.getKey(), state.connectionId, probeId));
+            if (probeId != 0) {
+                if (probes == null) probes = new ArrayList<>();
+                probes.add(new Probe(entry.getKey(), state.connectionId, probeId));
+            }
+            nextDue = earlier(nextDue, state.nextDueNanos());
         }
-        timedOut.forEach(peers::remove);
-        return new Tick(List.copyOf(probes), List.copyOf(timedOut));
+        if (timedOut != null) timedOut.forEach(peers::remove);
+        nextDueNanos = nextDue;
+        nextDueKnown = true;
+        return probes == null && timedOut == null
+                ? Tick.NONE
+                : new Tick(
+                        probes == null ? List.of() : List.copyOf(probes),
+                        timedOut == null ? List.of() : List.copyOf(timedOut));
+    }
+
+    private static long earlier(long first, long second) {
+        return second - first < 0 ? second : first;
     }
 
     public int size() {
@@ -166,7 +195,9 @@ public final class ZLinkServiceLivenessRegistry {
 
     public record Probe(RoutingId nodeRoutingId, String connectionId, long probeId) {}
 
-    public record Tick(List<Probe> probes, List<RoutingId> timedOutNodes) {}
+    public record Tick(List<Probe> probes, List<RoutingId> timedOutNodes) {
+        static final Tick NONE = new Tick(List.of(), List.of());
+    }
 
     public static final class PeerState implements Runnable {
         private final String connectionId;
@@ -207,6 +238,11 @@ public final class ZLinkServiceLivenessRegistry {
 
         public boolean isExpired(long nowNanos) {
             return nowNanos >= deadlineNanos.get();
+        }
+
+        long nextDueNanos() {
+            long deadline = deadlineNanos.get();
+            return nextProbeNanos - deadline < 0 ? nextProbeNanos : deadline;
         }
 
         public long tryGetProbe(long nowNanos, LongSupplier allocateProbeId) {
