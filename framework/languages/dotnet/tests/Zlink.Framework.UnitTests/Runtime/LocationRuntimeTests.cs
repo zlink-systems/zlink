@@ -637,6 +637,30 @@ public sealed class LocationRuntimeTests
         await runtime.StopAsync();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FirstHeartbeat_IsDueFromTheInitialLeaseOperationStart(bool claimFails)
+    {
+        var options = new ZLinkLocationOptions
+        {
+            OwnerLeaseRenewInterval = TimeSpan.FromMilliseconds(100),
+        };
+        var time = new HeartbeatTimeProvider(options.OwnerLeaseRenewTimeout);
+        await using var runtime = new ZLinkLocationRuntime(
+            options,
+            new FlakyOwnerLeaseStore(new ZLinkInMemoryLocationStore(time)) { Fail = claimFails },
+            time
+        );
+        runtime.OwnerLeaseRenewed += _ => time.Timestamp = 50;
+        runtime.OwnerLeaseRenewalFailed += () => time.Timestamp = 50;
+
+        await runtime.StartAsync(RoutingId.From("first-heartbeat-node"));
+
+        var first = await time.FirstTimer.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(TimeSpan.FromMilliseconds(50), first.DueTime);
+    }
+
     [Fact]
     public async Task Heartbeat_UsesActualStartAfterLateTimer_AndWaitsForInFlightRenewal()
     {

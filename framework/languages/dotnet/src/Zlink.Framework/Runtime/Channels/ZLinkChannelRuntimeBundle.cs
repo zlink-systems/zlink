@@ -13,6 +13,8 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     private Task? _disposeTask;
     private IDisposable? _manualConnectionAttachment;
     private IAsyncDisposable? _receiveFlowRegistration;
+    private readonly ZLinkReceiveSocketOwner _socketOwner;
+    private long _listenerCloseDeadlineUtcTicks;
 
     public ZLinkChannelRuntimeBundle(
         IAsyncDisposable socket,
@@ -33,6 +35,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         ClientServerServer = clientServerServer;
         FanoutPublisher = fanoutPublisher;
         _receiveFlowRegistration = receiveFlowRegistration;
+        _socketOwner = new ZLinkReceiveSocketOwner(CloseSocketAsync);
     }
 
     public IAsyncDisposable Socket { get; }
@@ -44,8 +47,6 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     internal ZLinkClientServerServerIdentity? ClientServerServer { get; }
 
     internal ZLinkFanoutPublisherIdentity? FanoutPublisher { get; }
-
-    public SemaphoreSlim ReceiveGate { get; } = new(1, 1);
 
     public ValueTask DisposeAsync() =>
         new(ZLinkRuntimeTaskRunner.RunDisposal(ref _disposeTask, DisposeCoreAsync));
@@ -63,10 +64,41 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
             })
             .ConfigureAwait(false);
         failures.Capture(() => attachment?.Dispose());
+        await failures.CaptureAsync(_socketOwner.CloseAsync).ConfigureAwait(false);
+        failures.ThrowIfAny();
+    }
+
+    /// <summary>
+    /// Starts the receive loop that owns this bundle's socket. The loop's thread closes the socket
+    /// when the loop returns; disposal waits for that close.
+    /// </summary>
+    internal void StartReceiveLoop(
+        ZLinkRuntimeTaskRunner runner,
+        string name,
+        Action<CancellationToken> receive
+    ) => _socketOwner.Start(runner, name, receive);
+
+    // ClientServer channel section 6, step 4: a listener's replies that were submitted but
+    // not yet sent go out until the drain deadline. The linger is set right before the close.
+    internal void SetListenerCloseDeadline(DateTimeOffset deadline) =>
+        Volatile.Write(ref _listenerCloseDeadlineUtcTicks, deadline.UtcTicks);
+
+    // The receive-flow registration applies flow state to the socket from the job queue lane, so
+    // it leaves before the socket closes.
+    private async ValueTask CloseSocketAsync()
+    {
+        if (Volatile.Read(ref _listenerCloseDeadlineUtcTicks) is var deadlineTicks and not 0)
+        {
+            var remaining = TimeSpan.FromTicks(deadlineTicks - DateTimeOffset.UtcNow.UtcTicks);
+            // Core treats a negative linger as unbounded; an expired deadline lingers 0.
+            ((IRouterSocket)Socket)
+                .Options
+                .Linger = remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
+        var failures = new ZLinkFailureCollector();
         await failures.CaptureAsync(DetachReceiveFlowAsync).ConfigureAwait(false);
         await failures.CaptureAsync(Socket.DisposeAsync).ConfigureAwait(false);
         failures.ThrowIfAny();
-        ReceiveGate.Dispose();
     }
 
     internal void OwnManualConnectionAttachment(IDisposable attachment)
