@@ -14,11 +14,11 @@ import type {
 import { submitToRequestResult } from '../messaging/submission-result';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
+import { SERVICE_WIRE_PREFIX_SIZE } from './service-wire-binary-primitives';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liveness-registry';
 import { ServiceMailbox, type ServiceMailboxRecord } from './service-mailbox';
 import {
-  sameServiceNodeDescriptor,
   ServiceTopologyRegistry,
   validateDescriptor,
   type AdmittedServicePeer,
@@ -143,6 +143,14 @@ const livenessCodec = createServiceWireCodec({
   commands: M6aServiceWireCommand
 });
 
+interface ControlSendState {
+  task?: Promise<boolean>;
+  next?: () => boolean | Promise<boolean>;
+  current?: () => boolean;
+  // Admission owns the first HELLO until ADMIT or route termination.
+  hello?: Uint8Array;
+}
+
 /**
  * RouteMesh M6A runtime built only on the public raw binding package.
  * It owns protocol, admission, mailbox, request and liveness state.
@@ -179,14 +187,7 @@ export class RawServiceMeshRuntime {
   private receiveAcquisition?: Promise<ApplicationJobPermitPort>;
   private receivePermit?: ApplicationJobPermitPort;
   private receiveRotation?: ApplicationJobReceiveRotationPort;
-  private readonly controlSends = new Map<
-    string,
-    {
-      readonly task: Promise<boolean>;
-      next?: () => boolean | Promise<boolean>;
-      current?: () => boolean;
-    }
-  >();
+  private readonly controlSends = new Map<string, ControlSendState>();
   private infrastructureFailure?: { readonly error: unknown };
   private readonly onReceiveReady?: () => void;
   private readonly infrastructureTaskRunner?: RawServiceMeshRuntimeOptions['infrastructureTaskRunner'];
@@ -439,16 +440,23 @@ export class RawServiceMeshRuntime {
         this.peerAdmissionSealed?.() !== true
       );
     };
-    if (!current()) return Promise.resolve(false);
+    const key = controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello);
+    if (!current()) {
+      this.controlSends.delete(key);
+      return Promise.resolve(false);
+    }
+    const existing = this.controlSends.get(key);
+    const hello =
+      existing?.current?.() === true
+        ? existing.hello!
+        : encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
     return Promise.resolve(
       this.startControlSend(
         nodeRoutingId,
         M6aServiceWireCommand.hello,
-        () =>
-          this.submitControl(nodeRoutingId, [
-            encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
-          ]),
-        current
+        () => this.submitControl(nodeRoutingId, [hello]),
+        current,
+        hello
       )
     );
   }
@@ -503,12 +511,18 @@ export class RawServiceMeshRuntime {
     // placement and channel selectors therefore need the new mutable fields
     // on that same connection before the next request is selected; waiting for
     // a reconnect would leave a race where a drained node is selected again.
+    await this.publishLocalDescriptor(
+      this.topology.peers().map((peer) => peer.descriptor.nodeRoutingId)
+    );
+  }
+
+  private async publishLocalDescriptor(targets: readonly string[]): Promise<void> {
     const update = encodeRouteMeshAdmission(
       M6aServiceWireCommand.update,
       this.topology.localDescriptor()
     );
-    for (const peer of this.topology.peers()) {
-      await this.sendService(peer.descriptor.nodeRoutingId, [update]);
+    for (const target of targets) {
+      await this.sendService(target, [update]);
     }
   }
 
@@ -985,12 +999,15 @@ export class RawServiceMeshRuntime {
       ]);
       return 'infrastructure';
     }
+    const helloKey = controlSendKey(received.sourceRid, M6aServiceWireCommand.hello);
+    const exchange = this.controlSends.get(helloKey);
     const result = this.admitPeer(
       descriptor,
       received.routeGeneration,
       nowMs,
       expected,
-      header.command === M6aServiceWireCommand.admit
+      header.command,
+      received.parts[0]!.subarray(SERVICE_WIRE_PREFIX_SIZE)
     );
     if (result !== 'admitted' && result !== 'notRequired') {
       const detail =
@@ -1013,11 +1030,31 @@ export class RawServiceMeshRuntime {
       // Hello supplies only the sender's descriptor. Even NotRequired
       // peers must receive ours before the intent owner closes transport;
       // submitting a response does not guarantee delivery before close.
+      const local =
+        exchange?.current?.() === true && exchange.hello !== undefined
+          ? decodeRouteMeshAdmission(
+              exchange.hello,
+              M6aServiceWireCommand.hello,
+              this.descriptor.nodeRoutingId
+            )
+          : this.topology.localDescriptor();
       await this.sendControl(received.sourceRid, [
-        encodeRouteMeshAdmission(M6aServiceWireCommand.admit, this.topology.localDescriptor())
+        encodeRouteMeshAdmission(M6aServiceWireCommand.admit, local)
       ]);
-    } else if (result === 'notRequired') {
-      this.retireNotRequiredExpectedPeer(received.sourceRid, descriptor.advertisedEndpoint);
+    } else if (header.command === M6aServiceWireCommand.admit) {
+      this.controlSends.delete(helloKey);
+      if (result === 'notRequired') {
+        this.retireNotRequiredExpectedPeer(received.sourceRid, descriptor.advertisedEndpoint);
+      } else if (
+        exchange?.hello !== undefined &&
+        decodeRouteMeshAdmission(
+          exchange.hello,
+          M6aServiceWireCommand.hello,
+          this.descriptor.nodeRoutingId
+        ).descriptorRevision < this.descriptor.descriptorRevision
+      ) {
+        await this.publishLocalDescriptor([received.sourceRid]);
+      }
     }
     return 'infrastructure';
   }
@@ -1203,6 +1240,7 @@ export class RawServiceMeshRuntime {
     let changes = 0;
     for (const [nodeRoutingId, generation] of this.selectedRoutes) {
       if (observed.get(nodeRoutingId) === generation) continue;
+      this.controlSends.delete(controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello));
       changes++;
       const peer = this.topology.peer(nodeRoutingId);
       if (peer?.liveness?.connectionId === generation) {
@@ -1232,6 +1270,7 @@ export class RawServiceMeshRuntime {
     this.receivePermit?.releaseStorage?.();
     this.receivePermit = undefined;
     for (const send of this.controlSends.values()) delete send.next;
+    this.controlSends.clear();
     this.mailbox.close();
     this.operations.close('Raw service runtime closed.');
     this.serviceIngress = undefined;
@@ -1417,20 +1456,10 @@ export class RawServiceMeshRuntime {
       readonly securityIdentity?: string;
       readonly lifecycleGeneration?: bigint;
     },
-    remoteAdmitReceived = false
+    command: number = M6aServiceWireCommand.hello,
+    descriptorBytes?: Uint8Array
   ): PeerAdmissionResult {
     const previous = this.topology.peer(descriptor.nodeRoutingId);
-    if (
-      previous !== undefined &&
-      previous.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
-      (descriptor.descriptorRevision < previous.descriptor.descriptorRevision ||
-        (descriptor.descriptorRevision === previous.descriptor.descriptorRevision &&
-          !sameServiceNodeDescriptor(previous.descriptor, descriptor)))
-    ) {
-      throw new ServiceWireProtocolError(
-        `RouteMesh peer '${descriptor.nodeRoutingId}' descriptor revision is stale or conflicting.`
-      );
-    }
     const topologyConnectionId =
       typeof connectionId === 'bigint' ? routeConnectionId(connectionId) : connectionId;
     const result = this.topology.admit(
@@ -1442,8 +1471,14 @@ export class RawServiceMeshRuntime {
         this.liveness.recordReceived(admission, nowMs);
         return admission;
       },
-      remoteAdmitReceived
+      command,
+      descriptorBytes
     );
+    if (result === 'staleDescriptor') {
+      throw new ServiceWireProtocolError(
+        `RouteMesh peer '${descriptor.nodeRoutingId}' descriptor revision is stale or conflicting.`
+      );
+    }
     if (result === 'notRequired' && previous !== undefined) {
       this.liveness.disconnect(
         descriptor.nodeRoutingId,
@@ -1529,12 +1564,14 @@ export class RawServiceMeshRuntime {
     target: string,
     command: number,
     attempt: () => boolean | Promise<boolean>,
-    current?: () => boolean
+    current?: () => boolean,
+    hello?: Uint8Array
   ): boolean {
-    const key = JSON.stringify([target, command]);
+    const key = controlSendKey(target, command);
     const existing = this.controlSends.get(key);
     if (
       existing !== undefined &&
+      existing.task !== undefined &&
       (command !== M6aServiceWireCommand.hello || existing.current?.() === true)
     ) {
       if (command !== M6aServiceWireCommand.hello) {
@@ -1544,34 +1581,37 @@ export class RawServiceMeshRuntime {
       return true;
     }
     const first = attempt();
-    if (typeof first === 'boolean') return first;
+    if (typeof first === 'boolean') {
+      if (hello !== undefined) this.controlSends.set(key, { current, hello });
+      return first;
+    }
     const owner = this;
-    const state: {
-      task: Promise<boolean>;
-      next?: () => boolean | Promise<boolean>;
-      current?: () => boolean;
-    } = {
-      current,
-      task: first.then(function drain(accepted): boolean | Promise<boolean> {
-        if (!owner.closed && state.next !== undefined) {
-          const next = state.next;
-          delete state.next;
-          return Promise.resolve(next()).then(drain);
-        }
-        if (owner.controlSends.get(key) === state) owner.controlSends.delete(key);
-        return accepted;
-      })
+    const state: ControlSendState = { current, hello };
+    const completeSend = () => {
+      if (owner.controlSends.get(key) !== state) return;
+      if (hello !== undefined && current?.() === true) delete state.task;
+      else owner.controlSends.delete(key);
     };
+    const task = first.then(function drain(accepted): boolean | Promise<boolean> {
+      if (!owner.closed && state.next !== undefined) {
+        const next = state.next;
+        delete state.next;
+        return Promise.resolve(next()).then(drain);
+      }
+      completeSend();
+      return accepted;
+    });
+    state.task = task;
     this.controlSends.set(key, state);
-    state.task.then(
+    task.then(
       () => {},
       (error) => {
-        if (this.controlSends.get(key) === state) this.controlSends.delete(key);
+        completeSend();
         if (this.infrastructureTaskRunner === undefined) this.reportInfrastructureFailure(error);
       }
     );
     this.infrastructureTaskRunner?.runDetached('RouteMesh control SEND', async () => {
-      await state.task;
+      await task;
     });
     return true;
   }
@@ -1621,15 +1661,19 @@ export class RawServiceMeshRuntime {
   }
 }
 
+function controlSendKey(target: string, command: number): string {
+  return JSON.stringify([target, command]);
+}
+
+function routeConnectionId(generation: bigint): string {
+  return `route:${generation}`;
+}
+
 /**
  * Relocation and bound-Session controls are service-wire records themselves,
  * not application NodeSend(16) envelopes. Keep this list closed: a bare
  * record outside the frozen control vocabulary remains a protocol error.
  */
-function routeConnectionId(generation: bigint): string {
-  return `route:${generation}`;
-}
-
 function isBareInfrastructureControl(command: number): boolean {
   return [
     ServiceWireCommand.relocationReady,
