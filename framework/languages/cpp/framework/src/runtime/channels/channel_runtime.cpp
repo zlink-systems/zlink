@@ -1387,12 +1387,7 @@ task_t<void> route_send_call_t::async ()
                                      "route send call has already been submitted");
     }
     if (_async_submit) {
-        auto pending = _async_submit (_packet_name, _metadata);
-        if (auto turn_plan = detail::prepare_serial_turn_await (false)) {
-            pending =
-              detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
-        }
-        const auto submitted = co_await pending;
+        const auto submitted = co_await _async_submit (_packet_name, _metadata);
         if (!submitted)
             throw submitted.error ()
               ? *submitted.error ()

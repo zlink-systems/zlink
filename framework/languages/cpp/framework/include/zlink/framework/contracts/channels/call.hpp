@@ -87,7 +87,7 @@ template <typename TReply> class request_call_t
         return async ().result ().value ();
     }
 
-    task_t<TReply> yield () { return start (true); }
+    task_t<TReply> yield () { return detail::release_turn_on_suspend<TReply> (start (true)); }
 
   private:
     request_task_t<TReply> start (bool release_turn)
@@ -113,20 +113,31 @@ template <typename TReply> class request_call_t
               result_t<TReply>::failure (framework_error_kind_t::protocol_error,
                                          "request call is not bound to a channel client"));
         }
-        auto turn_plan = detail::prepare_serial_turn_await (release_turn);
-        if (!turn_plan) {
-            return submit_owned (_submit, _packet_name, _timeout, _metadata);
+        // The handler awaits in its held turn. A Yield handler re-enters through
+        // its queue instead, so only the submission it wraps resumes in that turn.
+        auto held = detail::held_serial_turn_await_scheduler ();
+        if (release_turn) {
+            return submit_owned (_submit, _packet_name, _timeout, _metadata, std::move (held));
         }
-        auto pending = submit_owned (_submit, _packet_name, _timeout, _metadata);
-        return detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
+        auto pending = submit_owned (_submit, _packet_name, _timeout, _metadata, {});
+        if (!held) {
+            return pending;
+        }
+        return detail::reschedule_task (std::move (pending), std::move (held));
     }
 
     static request_task_t<TReply> submit_owned (submit_fn_t submit,
                                                 std::string packet_name,
                                                 std::chrono::milliseconds timeout,
-                                                metadata_map_t metadata)
+                                                metadata_map_t metadata,
+                                                detail::task_scheduler_t submission_scheduler)
     {
-        co_return co_await detail::request_submission (submit (packet_name, timeout, metadata));
+        auto pending = submit (packet_name, timeout, metadata);
+        if (submission_scheduler) {
+            pending =
+              detail::reschedule_task (std::move (pending), std::move (submission_scheduler));
+        }
+        co_return co_await detail::request_submission (std::move (pending));
     }
 
     std::optional<result_t<TReply>> _immediate;
@@ -175,7 +186,10 @@ class channel_request_call_t
         return async<TReply> ().result ().value ();
     }
 
-    template <typename TReply> task_t<TReply> yield () { return start<TReply> (true); }
+    template <typename TReply> task_t<TReply> yield ()
+    {
+        return detail::release_turn_on_suspend<TReply> (start<TReply> (true));
+    }
 
   protected:
     template <typename TReply> request_task_t<TReply> start (bool release_turn)
@@ -204,11 +218,10 @@ class channel_request_call_t
                                                  "request call is not bound to a channel client");
         }
         zlink::message_t reply;
-        auto turn_plan = detail::prepare_serial_turn_await (release_turn);
+        auto held = detail::held_serial_turn_await_scheduler ();
         auto pending = submit (packet_name, timeout, metadata);
-        if (turn_plan) {
-            pending =
-              detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
+        if (held) {
+            pending = detail::reschedule_task (std::move (pending), std::move (held));
         }
         reply = co_await detail::request_submission (std::move (pending));
         co_return decode<TReply> (serializers, reply);
@@ -301,12 +314,7 @@ class send_call_t
             return detail::submit_one_way_task ([immediate = *_immediate] { return immediate; });
         }
         if (_async_submit) {
-            auto pending = _async_submit (_packet_name, _metadata);
-            if (auto turn_plan = detail::prepare_serial_turn_await (false)) {
-                pending =
-                  detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
-            }
-            return pending;
+            return _async_submit (_packet_name, _metadata);
         }
         if (!_submit) {
             return task_t<void> (

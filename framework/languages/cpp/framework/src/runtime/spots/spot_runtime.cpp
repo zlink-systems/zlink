@@ -5401,14 +5401,9 @@ task_t<spot_create_result_t> spot_create_call_t::async ()
         return task_t<spot_create_result_t> (result_t<spot_create_result_t>::failure (
           framework_error_kind_t::not_configured,
           "Spot manager is not connected to a Location runtime"));
-    auto task =
-      create_user_spot (_state->exclusive, _state->spot_id, std::move (_state->stable_type),
-                        std::move (_state->mesh_name), std::move (_state->request),
-                        _state->timeout.value_or (std::chrono::seconds (30)));
-    const auto turn_plan = detail::prepare_serial_turn_await (false);
-    if (!turn_plan)
-        return task;
-    return detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+    return create_user_spot (_state->exclusive, _state->spot_id, std::move (_state->stable_type),
+                             std::move (_state->mesh_name), std::move (_state->request),
+                             _state->timeout.value_or (std::chrono::seconds (30)));
 }
 
 task_t<spot_create_result_t> spot_create_call_t::yield ()
@@ -5416,12 +5411,7 @@ task_t<spot_create_result_t> spot_create_call_t::yield ()
     if (!detail::current_serial_turn_allows_yield ()) {
         return detail::unsupported_yield_task<spot_create_result_t> ();
     }
-    auto turn_plan = detail::prepare_serial_turn_await (true);
-    auto task = async ();
-    if (!turn_plan) {
-        return task;
-    }
-    return detail::reschedule_task (std::move (task), std::move (turn_plan->scheduler));
+    return detail::release_turn_on_suspend (async ());
 }
 
 spot_create_call_t spot_manager_t::create (std::string stable_type)
