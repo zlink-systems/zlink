@@ -11,6 +11,7 @@ import systems.zlink.framework.configuration.*;
 import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.monitoring.*;
 import systems.zlink.framework.runtime.host.*;
+import systems.zlink.framework.spots.*;
 
 public final class Hosting {
   private Hosting() {}
@@ -84,7 +85,7 @@ public final class Hosting {
       try {
         ready.get(Control.HOST_DEADLINE.toSeconds(), TimeUnit.SECONDS);
         if (config.townIds() != null) {
-          var spots = app.getBean(systems.zlink.framework.spots.ZLinkSpotManager.class);
+          var spots = app.getBean(ZLinkSpotManager.class);
           for (var id : config.townIds()) {
             var result =
                 spots
@@ -93,7 +94,7 @@ public final class Hosting {
                     .submit()
                     .toCompletableFuture()
                     .join();
-            if (result.state() == systems.zlink.framework.spots.ZLinkSpotCreateState.REJECTED)
+            if (result.state() == ZLinkSpotCreateState.REJECTED)
               throw new IllegalStateException("Town bootstrap rejected: " + result);
           }
         }

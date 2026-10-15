@@ -32,8 +32,7 @@ public final class Town implements ZLinkSpot<Player> {
   public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(String id, ZLinkMessage payload) {
     var join = payload.decode(JoinTownRequest.class);
     if (!id.equals(join.playerId()) || !Names.townId(join.channel()).equals(context.spotId()))
-      return CompletableFuture.completedFuture(
-          ZLinkSpotActorJoinResult.reject(new ActionRejected(Rules.INVALID_PARTY)));
+      return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject());
     state.players.add(id);
     return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
   }

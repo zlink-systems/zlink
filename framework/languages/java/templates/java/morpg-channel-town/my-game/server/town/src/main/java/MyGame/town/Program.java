@@ -3,6 +3,7 @@ package MyGame.town;
 import MyGame.*;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.spring.*;
 
@@ -34,9 +35,7 @@ public class Program {
               Town.class,
               b ->
                   b.stableTypeLimit(config.townCapacity())
-                      .executionMode(
-                          systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode
-                              .SPOT_WIDE)
+                      .executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
                       .preserveStateWith(TownTransfer.class));
     };
   }

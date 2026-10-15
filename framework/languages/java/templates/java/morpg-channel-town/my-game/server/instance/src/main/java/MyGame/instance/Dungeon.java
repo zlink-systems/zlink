@@ -35,7 +35,7 @@ public final class Dungeon implements ZLinkSpot<Player> {
                 && join.partyId().equals(state.partyId)
                 && state.members.contains(id)
             ? ZLinkSpotActorJoinResult.accept()
-            : ZLinkSpotActorJoinResult.reject(new ActionRejected(Rules.INVALID_PARTY)));
+            : ZLinkSpotActorJoinResult.reject());
   }
 
   public CompletionStage<Void> onJoinedActor(Player actor) {
