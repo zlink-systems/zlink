@@ -615,8 +615,9 @@ owned by
   in the Core socket contract means the application for application requests
   and the framework for durable operations.
 - **The only replay condition is a typed transient transport failure with no
-  terminal envelope received (a missing route, a change of the peer's selected
-  route after the attempt was submitted, a lost reply, a disconnect).** A protocol error, an encode or
+  terminal envelope received (a missing route, observing after submission a
+  selected route of the peer whose route generation differs from the one that was
+  ready at submission, a lost reply, a disconnect).** A protocol error, an encode or
   configuration failure, or a typed non-replayable terminal ends the operation
   with that failure at once — resending the same input wouldn't change the
   result. An operation whose terminal envelope (`Created`, `Existing`,
