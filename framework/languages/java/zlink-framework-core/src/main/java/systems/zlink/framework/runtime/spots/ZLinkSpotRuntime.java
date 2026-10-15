@@ -6537,65 +6537,52 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     payloadCopy.close();
                     headerCopy.close();
                 };
-        CompletionStage<Optional<Message>> captured = null;
+        CompletionStage<Void> queued;
         if (actorSessions.isMoving(actor)) {
-            ZLinkActorReplyRoute replyRoute =
-                    packetHeader.requestSeq().isPresent()
-                                    && headerCopy.sourceNodeRid() != null
-                                    && headerCopy.sourceSessionRid() != null
-                            ? new ZLinkActorReplyRoute(
-                                    headerCopy.actor(),
-                                    headerCopy.sourceNodeRid(),
-                                    headerCopy.sourceSessionRid(),
-                                    headerCopy.requestId() == 0
-                                            ? packetHeader.requestSeq().orElseThrow()
-                                            : headerCopy.requestId(),
-                                    headerCopy.flags())
-                            : null;
-            try {
-                captured =
-                        actorSessions.captureMoving(
-                                actor, packetHeader.toStreamHeader(), payloadCopy, replyRoute);
-            } catch (RuntimeException failure) {
-                release.run();
-                throw failure;
-            }
-        }
-        if (captured != null) {
-            CompletionStage<Void> replayed =
-                    yieldSharedSpotTurnForActorRelocation(dispatchLine, captured)
+            // A payload for a moving Actor is held until the move ends and then enters the
+            // Actor queue, so it runs after the Join completion callback (spec
+            // 03-spot-actor/05-spot-actor-membership §4). Entering this hold is the payload's
+            // source-local admission (spec 01-execution/01-submit-and-completion §2): a joined
+            // callback that awaits the send must not wait for the Join it belongs to.
+            if (requestAdmission != null) requestAdmission.complete(null);
+            queued =
+                    yieldSharedSpotTurnForActorRelocation(
+                                    dispatchLine,
+                                    actorSessions
+                                            .awaitMoveCompletion(actor)
+                                            .handle((ignored, moveFailure) -> null))
                             .thenCompose(
-                                    reply ->
-                                            replyCapturedActorPacket(
-                                                    actor, packetHeader, headerCopy, reply))
-                            .whenComplete((ignored, error) -> release.run());
-            return replayed;
+                                    ignored -> {
+                                        // The continuation that awaited the move is not a turn
+                                        // of the moving Actor, so the payload enters that
+                                        // Actor's queue instead of running in place.
+                                        try (var outsideActorTurn =
+                                                systems.zlink.framework.runtime.internal.handlers
+                                                        .ZLinkSuspendInvocationContext
+                                                        .enterActorDispatch(null)) {
+                                            return enqueueLocalActorPacket(
+                                                    dispatchLine,
+                                                    spotSurface,
+                                                    actor,
+                                                    packetHeader,
+                                                    handler,
+                                                    headerCopy,
+                                                    payloadCopy,
+                                                    null);
+                                        }
+                                    });
+        } else {
+            queued =
+                    enqueueLocalActorPacket(
+                            dispatchLine,
+                            spotSurface,
+                            actor,
+                            packetHeader,
+                            handler,
+                            headerCopy,
+                            payloadCopy,
+                            requestAdmission);
         }
-        boolean waitingForMove = actorSessions.isMoving(actor);
-        CompletionStage<Void> queued =
-                waitingForMove
-                        ? yieldSharedSpotTurnForActorRelocation(
-                                        dispatchLine, actorSessions.awaitMoveCompletion(actor))
-                                .thenCompose(
-                                        ignored ->
-                                                enqueueLocalActorPacket(
-                                                        dispatchLine,
-                                                        spotSurface,
-                                                        actor,
-                                                        packetHeader,
-                                                        handler,
-                                                        headerCopy,
-                                                        payloadCopy,
-                                                        requestAdmission))
-                        : enqueueLocalActorPacket(
-                                dispatchLine,
-                                spotSurface,
-                                actor,
-                                packetHeader,
-                                handler,
-                                headerCopy,
-                                payloadCopy,
-                                requestAdmission);
         queued.whenComplete(
                 (ignored, error) -> {
                     release.run();
@@ -6772,39 +6759,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     : CompletableFuture.<Void>failedFuture(cause);
                         })
                 .thenCompose(stage -> stage);
-    }
-
-    private CompletionStage<Void> replyCapturedActorPacket(
-            ZLinkActor actor,
-            ActorPacketFrames.Header packetHeader,
-            ZLinkBackendActorReceived headerPart,
-            Optional<Message> reply) {
-        if (reply.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        byte[] frameBytes;
-        try (Message payload = reply.get();
-                Message frame = ActorPacketFrames.encodeReply(packetHeader, payload)) {
-            frameBytes = frame.toByteArray();
-        }
-        if (isNoBindActorRequest(packetHeader, headerPart)) {
-            try (Message frame = Message.from(frameBytes)) {
-                primaryNode.replyActorNoBind(
-                        headerPart.actor(),
-                        headerPart.sourceNodeRid(),
-                        headerPart.sourceSessionRid(),
-                        headerPart.requestId(),
-                        headerPart.flags(),
-                        List.of(frame));
-            }
-            return CompletableFuture.completedFuture(null);
-        }
-        return sendActorBoundSessionWithRetry(
-                primaryNode,
-                actorSessions.messageFollowTargetActorRef(actor).orElse(headerPart.actor()),
-                actor.context().actorId(),
-                frameBytes,
-                "actor handoff reply failed");
     }
 
     static void closePendingActorHeader(

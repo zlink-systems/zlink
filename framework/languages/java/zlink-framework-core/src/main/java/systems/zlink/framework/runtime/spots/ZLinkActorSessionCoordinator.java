@@ -8,7 +8,6 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
-import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
@@ -271,14 +270,6 @@ final class ZLinkActorSessionCoordinator {
 
     CompletionStage<Void> dispatch(ZLinkActor actor, Supplier<CompletionStage<Void>> operation) {
         return requireActors().submitActorDispatch(actor.context().actorId(), operation);
-    }
-
-    CompletionStage<Optional<Message>> captureMoving(
-            ZLinkActor actor,
-            ZLinkStreamHeader header,
-            Message payload,
-            ZLinkActorReplyRoute replyRoute) {
-        return requireActors().captureMovingPacket(actor, header, payload, replyRoute);
     }
 
     Optional<ZLinkBackendActorRef> messageFollowTargetActorRef(ZLinkActor actor) {
