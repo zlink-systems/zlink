@@ -5374,7 +5374,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     }
 
                     const auto relocation_key = session_relocation_key (route);
-                    std::uint64_t sealed_authority = 0;
                     bool late_session_route_update = false;
                     const auto route_matches_seal =
                       _relocation_session_terminal_lane
@@ -5387,7 +5386,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             }
                             if (!sealed->second.ready
                                 || sealed->second.seal.relocation != route.relocation
-                                || sealed->second.seal.coordinator != route.coordinator
                                 || sealed->second.seal.actor.actor_id != route.actor.actor_id
                                 || sealed->second.seal.actor.object_generation
                                      != route.actor.object_generation
@@ -5403,15 +5401,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 || sealed->second.seal.binding_generation
                                      != route.binding_generation)
                                 return false;
-                            sealed_authority = sealed->second.seal.actor.authority_owner_generation;
-                            return !((route.route.action
-                                        == protocol::session_relocation_route_action_t::commit
-                                      && route.route.previous_authority_owner_generation
-                                           != sealed_authority)
-                                     || (route.route.action
-                                           == protocol::session_relocation_route_action_t::abort
-                                         && route.route.current_authority_owner_generation
-                                              != sealed_authority));
+                            return true;
                         })
                         .get ();
                     if (!route_matches_seal)
@@ -5454,15 +5444,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         }
                         admission = _sessions.commit_remote_route (
                           session_id, route.binding_generation, route.actor.actor_id,
-                          route.actor.object_generation,
-                          route.route.previous_authority_owner_generation, std::move (target),
+                          route.actor.object_generation, std::move (target),
                           route.route.target_node_generation,
                           route.route.target_owner_lease_generation, std::move (commit_projection));
                     } else {
                         admission = _sessions.acknowledge_remote_abort (
                           session_id, route.binding_generation, route.actor.actor_id,
-                          route.actor.object_generation,
-                          route.route.current_authority_owner_generation);
+                          route.actor.object_generation);
                     }
                     if (admission.error != stateful::stateful_error_t::none || !admission.binding) {
                         continue;
