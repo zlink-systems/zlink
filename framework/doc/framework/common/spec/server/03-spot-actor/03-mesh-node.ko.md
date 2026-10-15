@@ -271,6 +271,13 @@ Peer handshake에서는 다음 정보를 교환한다.
 하나를 선택하며([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)), Framework는 선택된 route에서 받은
 handshake만 admission한다.
 
+**수신 admission은 route가 아니라 상대의 identity에 붙는다.** 같은 RID의 선택 route가 다른 pipe로
+바뀌어도 그 RID의 admitted identity(RID·security identity·lifecycle generation)는 유지되며, 그 RID에서
+받은 record를 계속 처리한다. 새 route의 handshake는 identity를 다시 확인한다. 같으면 idempotent하게
+처리하고, 다르면 새 identity로 바꾸며, 거부되면 admission을 끝낸다. 수신 admission은 그 RID의 선택
+route가 사라졌을 때와 이 확인이 거부됐을 때만 끝난다. Admitted identity가 없는 RID에서 온 handshake
+밖의 record는 처리하지 않는다. 송신 대상의 ready는 [Transport liveness §5](../02-channel-transport/05-transport-liveness.ko.md#5-ready와-장애-판정)가 정한다.
+
 Lifecycle generation은 0이 아닌 opaque equality token이다. 숫자 크기로 어느
 lifecycle이 더 새로운지 판단하지 않는다.
 

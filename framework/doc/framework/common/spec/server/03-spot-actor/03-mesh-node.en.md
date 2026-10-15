@@ -292,6 +292,15 @@ If `MeshName` differs or the trust profiles differ, it isn't admitted. When more
 exists for the same RID, Core selects one ([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route)), and the framework
 admits only the handshake received on the selected route.
 
+**Receive admission belongs to the peer's identity, not to a route.** When the selected route of a
+RID moves to another pipe, the admitted identity of that RID (RID, security identity, lifecycle
+generation) stays, and records received from that RID continue to be processed. The handshake on the
+new route confirms the identity again: if it is the same, it is handled idempotently; if it differs,
+the new identity replaces it; if it is rejected, the admission ends. Receive admission ends only when
+the selected route of that RID disappears or this confirmation is rejected. Records other than the
+handshake from a RID with no admitted identity aren't processed. Ready for send targets is defined by
+[Transport liveness §5](../02-channel-transport/05-transport-liveness.en.md#5-ready-and-failure-determination).
+
 Lifecycle generation is a non-zero opaque equality token. Which lifecycle is
 newer isn't judged by numeric magnitude.
 
