@@ -159,3 +159,36 @@ test('observed registry terminals reach the observer exactly once on reply, time
     ['failed', closed, 'OperationCancelledError', 'close']
   ]);
 });
+
+// Spec 08 §4.2: the I0 wait bound is the nearest management deadline.
+test('registry and liveness report their next management deadline', () => {
+  const {
+    ServiceLivenessRegistry
+  } = require('../../packages/framework/dist/runtime/foundation/service-liveness-registry');
+  const now = { value: 0 };
+  const registry = new OperationRegistry({ now: () => now.value });
+  assert.equal(registry.nextDeadlineMs(), Number.POSITIVE_INFINITY);
+  const late = registry.register(500);
+  const early = registry.register(100);
+  void late.promise.catch(() => undefined);
+  void early.promise.catch(() => undefined);
+  assert.equal(registry.nextDeadlineMs(), 100);
+  registry.complete(early.id, 'done');
+  // A completed entry leaves a lower bound until the next full expiry pass.
+  assert.equal(registry.nextDeadlineMs(), 100);
+  now.value = 100;
+  assert.equal(registry.expire(100, Number.POSITIVE_INFINITY), 0);
+  assert.equal(registry.nextDeadlineMs(), 500);
+  registry.close();
+
+  const liveness = new ServiceLivenessRegistry(5_000, 15_000);
+  liveness.admit('peer', 'connection', 1_000);
+  assert.equal(liveness.nextDeadlineMs(), 1_000);
+  assert.equal(liveness.tick(1_000).probes.length, 1);
+  assert.equal(liveness.nextDeadlineMs(), 6_000);
+  const idle = liveness.tick(3_000);
+  assert.equal(idle.probes.length + idle.timedOutNodes.length, 0);
+  assert.equal(liveness.tick(6_000).probes.length, 1);
+  assert.deepEqual(liveness.tick(16_000).timedOutNodes, ['peer']);
+  assert.equal(liveness.nextDeadlineMs(), Number.POSITIVE_INFINITY);
+});

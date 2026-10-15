@@ -198,6 +198,9 @@ test('backend shared maintenance gives raw and stateful registries one divided b
   node.setBind(`inproc://${suffix}`);
   try {
     node.start();
+    // Maintenance runs at the nearest management deadline (spec 08 §4.2); a
+    // pending request gives this idle node one.
+    node.requestToNode('budget-missing-peer', [Buffer.from('budget')], { timeoutMs: 5 });
     await observed;
     await new Promise(setImmediate);
     assert.equal(observations[0].now, observations[1].now);

@@ -660,6 +660,10 @@ export class ServiceTerminalOperationRegistry<T, Context = unknown> {
     return this.operations.size;
   }
 
+  nextDeadlineMs(): number {
+    return this.operations.nextDeadlineMs();
+  }
+
   expire(nowMs: number, turnDeadlineMs: number): number {
     return this.operations.expire(nowMs, turnDeadlineMs);
   }

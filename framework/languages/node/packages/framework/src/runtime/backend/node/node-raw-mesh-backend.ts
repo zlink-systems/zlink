@@ -147,9 +147,12 @@ const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
-// Preserve the existing route observation/admission/liveness cadence. Only the binding
-// readable handler admits receive work; this timer never probes the socket.
+// The maintenance timer runs at the nearest management deadline and never
+// sooner than this. Only the binding readable handler admits receive work;
+// this timer never probes the socket.
 const MESH_BACKEND_MAINTENANCE_INTERVAL_MS = 1;
+/** The longest single timer delay Node accepts. */
+const MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS = 2 ** 31 - 1;
 // Spec 08 §4.2 bounds the combined turn. Raw gets one equal share; stateful
 // can use the remaining turn, including time the raw registry did not consume.
 const MESH_BACKEND_RAW_MAINTENANCE_SHARE = 1 / 2;
@@ -186,6 +189,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private stateful?: ServiceStatefulRuntime;
   private readyHandler?: (domains: number) => number;
   private maintenanceTimer?: NodeJS.Timeout;
+  private maintenanceDueMs = Number.POSITIVE_INFINITY;
   private pumping = false;
   private readable = 0;
   private readonly onReadable = (receiveReady: boolean, routeReady: boolean): void => {
@@ -195,6 +199,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   };
   private readonly onMaintenance = (): void => {
     this.maintenanceTimer = undefined;
+    this.maintenanceDueMs = Number.POSITIVE_INFINITY;
     if (this.closed) return;
     const nowMs = performance.now();
     const turnDeadlineMs = nowMs + RAW_MESH_RECEIVE_TIME_BUDGET_MS;
@@ -1551,9 +1556,35 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return result;
   }
 
+  /**
+   * Arms the one maintenance timer for the nearest management deadline
+   * (spec 08 §4.2): request expiry, liveness, or a pending peer handshake.
+   * An earlier deadline re-arms it; a later one keeps the armed time.
+   */
   private scheduleMaintenance(): void {
     if (this.closed) return;
-    this.maintenanceTimer ??= setTimeout(this.onMaintenance, MESH_BACKEND_MAINTENANCE_INTERVAL_MS);
+    const nowMs = performance.now();
+    const dueMs = Math.max(
+      nowMs + MESH_BACKEND_MAINTENANCE_INTERVAL_MS,
+      Math.min(
+        this.runtime?.nextMaintenanceDeadlineMs(nowMs) ?? Number.POSITIVE_INFINITY,
+        this.stateful?.nextMaintenanceDeadlineMs() ?? Number.POSITIVE_INFINITY
+      )
+    );
+    if (dueMs === Number.POSITIVE_INFINITY) {
+      if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+      this.maintenanceTimer = undefined;
+      this.maintenanceDueMs = dueMs;
+      return;
+    }
+    if (this.maintenanceTimer === undefined || dueMs < this.maintenanceDueMs) {
+      if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+      this.maintenanceTimer = setTimeout(
+        this.onMaintenance,
+        Math.min(MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS, Math.ceil(dueMs - nowMs))
+      );
+      this.maintenanceDueMs = dueMs;
+    }
     const pending =
       (this.runtime?.pendingOperationCount ?? 0) + (this.stateful?.pendingOperationCount ?? 0) > 0;
     if (pending === this.maintenanceTimer.hasRef()) return;

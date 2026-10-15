@@ -218,3 +218,28 @@ async function waitUntilImmediate(predicate) {
   }
   assert.fail('Condition did not become true.');
 }
+
+// Spec 08 §4.2: management work runs at its deadline, at most once per
+// receive rotation, and the idle wait lasts until the nearest deadline. An
+// idle connected pair arms no fixed-interval maintenance timer.
+test('an idle connected node waits for its next management deadline', async (t) => {
+  const pair = await startPair({ request: (value) => value, send: () => undefined });
+  const { setTimeout: originalSetTimeout } = globalThis;
+  let maintenanceTimers = 0;
+  t.mock.method(globalThis, 'setTimeout', function (callback, delay, ...args) {
+    if (typeof callback === 'function' && callback.name === 'onMaintenance') maintenanceTimers++;
+    return originalSetTimeout.call(this, callback, delay, ...args);
+  });
+  try {
+    assert.deepEqual(await pair.request({ value: 'ready' }), { value: 'ready' });
+    maintenanceTimers = 0;
+    await new Promise((resolve) => originalSetTimeout(resolve, 200));
+    t.diagnostic(`maintenance timers armed in 200 ms idle: ${maintenanceTimers}`);
+    // Liveness probes run every 5 s; nothing else is due in this window.
+    assert.ok(maintenanceTimers <= 4, `maintenance timers in 200 ms idle: ${maintenanceTimers}`);
+    assert.deepEqual(await pair.request({ value: 'after-idle' }), { value: 'after-idle' });
+  } finally {
+    t.mock.restoreAll();
+    await pair.stop();
+  }
+});

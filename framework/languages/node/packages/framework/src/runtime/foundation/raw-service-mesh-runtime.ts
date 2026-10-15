@@ -1223,6 +1223,20 @@ export class RawServiceMeshRuntime {
     return this.operations.size;
   }
 
+  /**
+   * The next management deadline of this node (spec 08 §4.2): request expiry,
+   * liveness probe or timeout, or an expected peer that still needs its
+   * handshake, which keeps the existing announce cadence.
+   */
+  nextMaintenanceDeadlineMs(nowMs: number): number {
+    if (!this.closed) {
+      for (const nodeRoutingId of this.expectedPeers.keys()) {
+        if (this.topology.peer(nodeRoutingId) === undefined) return nowMs;
+      }
+    }
+    return Math.min(this.operations.nextDeadlineMs(), this.liveness.nextDeadlineMs());
+  }
+
   tickLiveness(nowMs = performance.now()): ServiceLivenessTick {
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
