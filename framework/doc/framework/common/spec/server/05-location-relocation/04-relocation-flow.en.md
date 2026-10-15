@@ -255,9 +255,10 @@ also arrived, so this comparison always succeeds on the normal path; a compariso
 failure is an Error signaling an implementation defect.
 
 The server setting `RelocationCutoverWaitTimeout` (**default 1,000 ms**) is only a
-Warning threshold measured from the ready-to-receive-relay reply until cutover arrives. If the connection breaks, or the source observes a
-selected route of the target whose route generation differs from the one the
-pre-boundary relay was sent on so that cutover may have been lost, and the source
+Warning threshold measured from the ready-to-receive-relay reply until cutover arrives. If the connection breaks, or the source later observes a
+selected route of the target whose route generation differs from the one that was
+ready when it submitted pre-boundary relay or cutover, so that cutover may have
+been lost, and the source
 process is still running, the source resends the whole pre-boundary relay batch and
 the cutover over a new connection (the new selected route). The target discards the partially received
 pre-boundary relay span and replaces it wholly with the retransmitted batch — a whole
