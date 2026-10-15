@@ -759,12 +759,12 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         );
         if (parts.Count == 0)
             return;
+        // The record's permit carries its origin. Without a Framework queue the
+        // record has no permit, and binding ingress is remote.
+        var origin =
+            batch.GetApplicationJobAdmission(index)?.Origin ?? ZLinkApplicationJobOrigin.Remote;
         ObserveDispatchResult(
-            state.RaiseActor(
-                ZLinkApplicationJobOrigin.Remote,
-                parts,
-                batch.TakePayloadOwner(index)
-            ),
+            state.RaiseActor(origin, parts, batch.TakePayloadOwner(index)),
             pending
         );
     }
