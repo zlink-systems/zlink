@@ -801,7 +801,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
                                                  std::vector<zlink::message_t> &&parts);
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
-                                                    const std::vector<zlink::message_t> &parts,
+                                                    std::vector<zlink::message_t> parts,
                                                     pending_operation_t &operation,
                                                     std::chrono::milliseconds timeout);
     task_t<zlink::submit_result_t> send_to_channel (const std::string &channel_name,

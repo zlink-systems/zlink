@@ -2850,7 +2850,7 @@ public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
 
 task_t<zlink::submit_result_t>
 public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
-                                        const std::vector<zlink::message_t> &parts,
+                                        std::vector<zlink::message_t> parts,
                                         pending_operation_t &operation,
                                         std::chrono::milliseconds timeout)
 {
@@ -2858,7 +2858,7 @@ public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
     operation.id = next_operation ();
     const auto host = shared_from_this ();
     const auto accepted = co_await _transport->request_to_node (
-      target.to_bytes (), encode_application (parts), timeout,
+      target.to_bytes (), encode_application (std::move (parts)), timeout,
       [host, operation] (foundation::operation_terminal_t terminal,
                          std::vector<std::uint8_t> payload) mutable {
           host->complete_operation (operation, operation_kind_t::none, terminal,

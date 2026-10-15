@@ -384,15 +384,6 @@ class raw_mesh_node_owner_t
     take_reply_route_id_locked (std::optional<std::uint64_t> requested = std::nullopt);
     std::uint64_t take_operation_sequence_locked ();
     std::uint64_t next_operation_sequence ();
-    task_t<bool> request_to_target (std::vector<std::uint8_t> target_routing_id,
-                                    const protocol::application_payload_t &application_payload,
-                                    std::chrono::milliseconds timeout,
-                                    foundation::operation_registry_t::callback_t callback,
-                                    const std::optional<std::string> &channel_name,
-                                    std::optional<std::uint64_t> correlation,
-                                    bool target_claimed,
-                                    mesh_request_metric_t request_metric,
-                                    service_liveness_registry_t::connection_t admission = {});
     task_t<bool> send_with_header (const std::vector<std::uint8_t> &target_routing_id,
                                    std::vector<std::uint8_t> header,
                                    const protocol::application_payload_t &application_payload);
@@ -449,7 +440,7 @@ class raw_mesh_node_owner_t
         &decode_reply,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback);
-    task_t<bool>
+    bool
     observe_request (foundation::call_id_t operation,
                      std::uint64_t correlation,
                      std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running);

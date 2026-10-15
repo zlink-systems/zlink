@@ -4305,7 +4305,7 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
 
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
-                                      const std::vector<zlink::message_t> &parts,
+                                      std::vector<zlink::message_t> parts,
                                       host::pending_operation_t &operation_id,
                                       std::chrono::milliseconds timeout,
                                       std::vector<std::uint8_t> metadata)
@@ -4316,7 +4316,7 @@ mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
     if (const auto classified = co_await classify_node_direct_target (target))
         co_return *classified;
     (void) metadata;
-    co_return co_await _node->request_to_node (target, parts, operation_id, timeout);
+    co_return co_await _node->request_to_node (target, std::move (parts), operation_id, timeout);
 }
 
 task_t<zlink::submit_result_t>

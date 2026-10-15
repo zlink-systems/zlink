@@ -933,9 +933,13 @@ raw_mesh_node_owner_t::request_to_node (const std::vector<std::uint8_t> &target_
                                         foundation::operation_registry_t::callback_t callback,
                                         std::optional<std::uint64_t> correlation)
 {
-    co_return co_await request_to_target (
-      target_routing_id, application_payload, timeout, std::move (callback), std::nullopt,
-      correlation, false, mesh_request_metric_t (_request_metrics, mesh_request_surface_t::node));
+    co_return co_await request_with_header (
+      target_routing_id,
+      [] (std::uint64_t request_correlation) {
+          return protocol::encode_node_request_header (request_correlation);
+      },
+      application_payload, timeout, std::move (callback), correlation, false,
+      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::node));
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_to_channel (
@@ -951,40 +955,23 @@ task_t<bool> raw_mesh_node_owner_t::request_to_channel (
     if (!selected) {
         throw *selected.error ();
     }
-    co_return co_await request_to_target (std::move (selected.value ()), application_payload,
-                                          timeout, std::move (callback), channel_name, correlation,
-                                          true, std::move (request_metric), std::move (admission));
-}
-
-task_t<bool> raw_mesh_node_owner_t::request_to_target (
-  std::vector<std::uint8_t> target_routing_id,
-  const protocol::application_payload_t &application_payload,
-  std::chrono::milliseconds timeout,
-  foundation::operation_registry_t::callback_t callback,
-  const std::optional<std::string> &channel_name,
-  std::optional<std::uint64_t> correlation,
-  bool target_claimed,
-  mesh_request_metric_t request_metric,
-  service_liveness_registry_t::connection_t admission)
-{
     co_return co_await request_with_header (
-      std::move (target_routing_id),
-      [channel_name] (std::uint64_t correlation) {
-          return channel_name ? protocol::encode_channel_request_header (correlation, *channel_name)
-                              : protocol::encode_node_request_header (correlation);
+      std::move (selected.value ()),
+      [&channel_name] (std::uint64_t request_correlation) {
+          return protocol::encode_channel_request_header (request_correlation, channel_name);
       },
-      application_payload, timeout, std::move (callback), correlation, target_claimed,
+      application_payload, timeout, std::move (callback), correlation, true,
       std::move (request_metric), std::move (admission));
 }
 
-task_t<bool> raw_mesh_node_owner_t::observe_request (
+bool raw_mesh_node_owner_t::observe_request (
   foundation::call_id_t operation,
   std::uint64_t correlation,
   std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running)
 {
     if (!running) {
         (void) _operations->fail (operation, foundation::operation_terminal_t::transport_failed);
-        co_return false;
+        return false;
     }
     const auto operations = _operations;
     detail::observe_task_terminal (
@@ -1064,7 +1051,7 @@ task_t<bool> raw_mesh_node_owner_t::observe_request (
                     protocol::framework_error_code::requestProtocolError)));
           }
       });
-    co_return true;
+    return true;
 }
 
 void raw_mesh_node_owner_t::trace_admission_phase (const std::vector<std::uint8_t> &node_routing_id,
@@ -1171,9 +1158,15 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
                                      "raw mesh request registry is closed");
     }
     auto admitted = start->admitted->task ();
-    (void) co_await observe_request (start->operation, start->correlation,
-                                     std::move (start->running));
-    co_return co_await await_request_admission (std::move (admitted));
+    (void) observe_request (start->operation, start->correlation, std::move (start->running));
+    try {
+        co_await admitted;
+    }
+    catch (const framework_exception_t &) {
+        // The native reply observer completes the operation failure.
+        co_return false;
+    }
+    co_return true;
 }
 
 struct raw_mesh_node_owner_t::send_completion_state_t
