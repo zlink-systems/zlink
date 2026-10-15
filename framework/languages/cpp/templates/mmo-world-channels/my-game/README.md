@@ -63,7 +63,7 @@ Public C++ Framework 0.30.0 exposes `stream_t::reply_packet(message_t)` but no t
 
 Public 0.30.0 also has registered host shutdown and SafeToShutdown limitations (#1740), relocation handoff waiting (#1771), new Actor placement without Entry Spots (#1772), and bound Session send-route availability (#1775). The runner preserves failures and returns a nonzero exit status; it does not compensate with retries or longer deadlines. These issues require candidate package validation before deployment.
 
-Validation on Windows and WSL with public 0.30.0 currently stops at the first `EnterWorldRequest`: message-flow reaches `field@1`'s Actor `location_committed`, but the client receives no initial `PlayerView`. The remaining game scenarios are blocked at this shared prerequisite. The candidate package must resolve or classify this failure as well as the typed reply gap.
+Validation with public 0.30.0 currently stops during initial world setup. Local Actor placement reaches `field@1`'s `location_committed` but returns no initial `PlayerView`; a Windows run with cross-node placement receives the initial view, then times out after `EarnRequest`. The remaining game scenarios are blocked at this shared prerequisite. The candidate package must resolve or classify these failures as well as the typed reply gap.
 
 ## Deployment sequence
 
