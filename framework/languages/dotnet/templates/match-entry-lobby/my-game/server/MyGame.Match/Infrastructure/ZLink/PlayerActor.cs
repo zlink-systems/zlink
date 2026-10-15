@@ -13,7 +13,9 @@ public sealed class PlayerActor(IZLinkActorContext context) : IZLinkActor
     )
     {
         if (completion is ZLinkActorJoinCompletion.Rejected)
-            await Context.BoundSession.Send(new ActionRejected(Rejection.AdmissionRejected)).Async();
+            await Context
+                .BoundSession.Send(new ActionRejected(Rejection.AdmissionRejected))
+                .Async();
         else if (completion is ZLinkActorJoinCompletion.Failed failed)
             throw new InvalidOperationException($"Spot join failed: {failed.Kind}.");
     }

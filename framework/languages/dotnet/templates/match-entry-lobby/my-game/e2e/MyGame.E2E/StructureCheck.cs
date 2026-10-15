@@ -142,7 +142,10 @@ internal static class StructureCheck
         {
             Require(spotIds.Add(Text(spot, "id")), "Duplicate Spot ID.");
             var owner = Text(spot, "owner");
-            Require(settings.ContainsKey(owner) && roles[owner] == "match", "Spot owner must reference a match node.");
+            Require(
+                settings.ContainsKey(owner) && roles[owner] == "match",
+                "Spot owner must reference a match node."
+            );
             var kind = Text(spot, "kind");
             if (kind == "entry")
             {
@@ -158,8 +161,12 @@ internal static class StructureCheck
                 "Spot kind or type differs from server registration."
             );
             if (type == GameNames.MatchmakingType)
-                Require(spot!["dynamic"] is null && Text(spot, "logicalId") == GameNames.MatchmakingId
-                    && settings[owner].BootstrapMatchmaking, "Matchmaking must declare its bootstrap owner and fixed logical ID.");
+                Require(
+                    spot!["dynamic"] is null
+                        && Text(spot, "logicalId") == GameNames.MatchmakingId
+                        && settings[owner].BootstrapMatchmaking,
+                    "Matchmaking must declare its bootstrap owner and fixed logical ID."
+                );
             var dynamic = false;
             if (spot!["dynamic"] is JsonNode dynamicNode)
             {

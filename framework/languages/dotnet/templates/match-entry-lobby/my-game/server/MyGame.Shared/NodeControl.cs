@@ -7,11 +7,16 @@ namespace MyGame.Shared;
 
 public static class NodeControl
 {
-    public static async Task RunAsync(IHost host, NodeSettings settings, Func<CancellationToken, Task>? initialize = null)
+    public static async Task RunAsync(
+        IHost host,
+        NodeSettings settings,
+        Func<CancellationToken, Task>? initialize = null
+    )
     {
         using var lifetime = new CancellationTokenSource();
         await host.StartAsync(lifetime.Token);
-        if (initialize is not null) await initialize(lifetime.Token);
+        if (initialize is not null)
+            await initialize(lifetime.Token);
         var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
         var mesh = runtime.GetListenerStatus(ZLinkListenerKind.RouteMesh, GameNames.WorldMesh);
         var stream = settings.StreamEndpoint is null
@@ -19,7 +24,10 @@ public static class NodeControl
             : runtime.GetListenerStatus(ZLinkListenerKind.Stream, GameNames.SessionStream).Endpoint;
         Console.WriteLine(
             NodeProtocol.ReadyPrefix
-                + JsonSerializer.Serialize(new NodeReady(settings.Id, mesh.Endpoint, stream), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
+                + JsonSerializer.Serialize(
+                    new NodeReady(settings.Id, mesh.Endpoint, stream),
+                    new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
+                )
         );
         while (await Console.In.ReadLineAsync(lifetime.Token) is { } command)
         {

@@ -4,7 +4,8 @@ namespace MyGame.Match.Domain;
 
 public sealed class MatchmakingState
 {
-    public Dictionary<string, List<QueueRequest>> Waiting { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, List<QueueRequest>> Waiting { get; set; } =
+        new(StringComparer.Ordinal);
     public long RoomSequence { get; set; }
 
     public void Enqueue(QueueRequest request)

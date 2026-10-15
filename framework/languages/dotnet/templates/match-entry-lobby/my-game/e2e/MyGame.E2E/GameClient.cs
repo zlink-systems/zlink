@@ -98,6 +98,7 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
         Connector.Send(message).Async(ct).AsTask();
 
     public Task QueueAsync(CancellationToken ct) => SendAsync(new QueueRequest(PlayerId), ct);
+
     public async Task<RoomView> ViewAsync(Func<RoomView, bool> predicate, CancellationToken ct)
     {
         var response = WaitAsync<RoomView>(predicate, ct);
