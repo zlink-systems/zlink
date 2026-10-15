@@ -1075,28 +1075,35 @@ void public_host_runtime_t::close () noexcept
 bool public_host_runtime_t::connect_peer (const std::string &endpoint,
                                           std::optional<zlink::routing_id_t> expected,
                                           std::uint64_t expected_lifecycle_generation,
-                                          std::string security_identity)
+                                          std::string security_identity,
+                                          bool automatic)
 {
-    bool connected = false;
-    if (expected) {
-        auto descriptor = _options.mesh.descriptor;
-        descriptor.node_routing_id = expected->to_bytes ();
-        descriptor.advertised_endpoint = endpoint;
-        descriptor.lifecycle_generation = expected_lifecycle_generation;
-        descriptor.security_identity = std::move (security_identity);
-        connected = _transport->connect_peer (endpoint, std::move (descriptor));
-    } else {
-        connected = _transport->connect_peer (endpoint);
-    }
-    if (connected) {
-        _peer_endpoint_lane
-          .run ([&] {
-              _peer_endpoints.insert_or_assign (endpoint,
-                                                expected ? expected->to_string () : std::string{});
-          })
-          .get ();
-    }
-    return connected;
+    return _peer_endpoint_lane
+      .run ([&] {
+          auto expected_key = expected ? expected->to_string () : std::string{};
+          if (automatic && expected
+              && (_transport->peer_route (expected->to_bytes ()).first != 0
+                  || std::any_of (
+                    _peer_endpoints.begin (), _peer_endpoints.end (), [&] (const auto &intent) {
+                        return intent.first == endpoint || intent.second == expected_key;
+                    })))
+              return false;
+          bool connected = false;
+          if (expected) {
+              auto descriptor = _options.mesh.descriptor;
+              descriptor.node_routing_id = expected->to_bytes ();
+              descriptor.advertised_endpoint = endpoint;
+              descriptor.lifecycle_generation = expected_lifecycle_generation;
+              descriptor.security_identity = std::move (security_identity);
+              connected = _transport->connect_peer (endpoint, std::move (descriptor));
+          } else {
+              connected = _transport->connect_peer (endpoint);
+          }
+          if (connected)
+              _peer_endpoints.insert_or_assign (endpoint, std::move (expected_key));
+          return connected;
+      })
+      .get ();
 }
 
 void public_host_runtime_t::expect_peer (const std::string &endpoint,

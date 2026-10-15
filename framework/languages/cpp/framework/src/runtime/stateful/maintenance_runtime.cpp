@@ -216,7 +216,7 @@ struct maintenance_runtime_t::relocation_terminal_state_t
     std::optional<std::vector<protocol::relocation_data_t>> records;
     std::optional<relocation_result_t> result;
     std::optional<protocol::relocation_cutover_t> cutover_record;
-    bool cutover_enqueued = false;
+    std::uint64_t submitted_route_generation = 0;
     /* S1 (cutover submit terminal), on the source clock. Used as the start
      * of the route_convergence window (25 §"zlink.relocation"), which ends
      * at S4 (Message Follow route removable). */
@@ -355,51 +355,14 @@ maintenance_runtime_t::build_boundary_records (
             for (const auto &turn : batch_participant.records) {
                 if (!turn.application_record)
                     return std::nullopt;
-                const auto &input = *turn.application_record;
-                protocol::frozen_record_t record{
-                  .kind = input.kind,
-                  .source_kind = input.source_kind,
-                  .source = input.source,
-                  .source_spot_id = input.source_spot_id,
-                  .source_actor = input.source_actor,
-                  .source_session_routing_id = input.source_session_routing_id,
-                  .source_binding_generation = input.source_binding_generation,
-                  .source_session_sequence = input.source_session_sequence,
-                  .has_metadata = !input.metadata.empty (),
-                  .operation = input.operation,
-                  .operation_kind = input.operation_kind,
-                  .reply_route_id = input.reply_route_id};
-                if (const auto *spot =
-                      std::get_if<protocol::frozen_spot_application_body_t> (&input.body)) {
-                    record.target = protocol::frozen_target_identity_t{
-                      to_wire_object_kind (object_kind_t::user_spot),
-                      spot->target.spot_id,
-                      spot->target.object_generation,
-                      spot->target.target_node_routing_id,
-                      spot->target.target_node_generation,
-                      spot->target.authority_owner_generation,
-                      spot->expected_owner_lease_generation};
-                    record.application = spot->application;
-                } else {
-                    const auto &actor =
-                      std::get<protocol::frozen_actor_application_body_t> (input.body);
-                    record.target =
-                      protocol::frozen_target_identity_t{to_wire_object_kind (object_kind_t::actor),
-                                                         actor.target.actor_id,
-                                                         actor.target.object_generation,
-                                                         actor.target.target_node_routing_id,
-                                                         actor.target.target_node_generation,
-                                                         actor.target.authority_owner_generation,
-                                                         actor.target.owner_lease_generation};
-                    record.application = actor.application;
-                }
+                auto record = protocol::encode_frozen_application_record (*turn.application_record);
                 records.push_back ({context.relocation, context.target_attempt_generation,
                                     context.coordinator, protocol::relocation_role_t::source,
                                     object, std::move (record)});
             }
         }
     }
-    catch (...) {
+    catch (const protocol::service_wire_error_t &) {
         return std::nullopt;
     }
     return records;
@@ -620,38 +583,23 @@ maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_st
                              static_cast<std::int64_t> (coordinator.lease_generation)},
       state->target_owner,
       state->context.relocation};
-    bool connected = true;
     for (;;) {
         if (state->context.source_stopped && state->context.source_stopped ())
             co_return relocation_authority_t::source_lease_expired;
         const auto preserve = std::chrono::steady_clock::now () >= state->context.restore_deadline;
-        auto settled = relocation_authority_t::unsettled;
-        try {
-            settled = preserve ? _authority->preserve_relocation (fence)
-                               : _authority->observe_relocation (fence);
-        }
-        catch (...) {
-        }
+        const auto settled = preserve ? _authority->preserve_relocation (fence)
+                                      : _authority->observe_relocation (fence);
         if (settled != relocation_authority_t::unsettled)
             co_return settled;
-        /* 28 §4.4: a cutover that never reached the connection, or a
-         * connection that came back after a break, gets the whole
-         * pre-boundary batch followed by the cutover again. */
-        const auto now_connected =
-          !state->context.target_connected || state->context.target_connected ();
-        if (!preserve && now_connected && (!state->cutover_enqueued || !connected)) {
-            try {
-                if (co_await state->context.send_relocation_data (*state->records, state->batch)) {
-                    state->cutover_enqueued =
-                      co_await state->context.send_cutover (*state->cutover_record)
-                      == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::
-                        enqueued;
-                }
-            }
-            catch (...) {
-            }
+        // Relocation flow §4.4: only a different selected route can
+        // require another complete boundary batch. Wait for its admission.
+        const auto route = state->context.target_route ? state->context.target_route ()
+                                                       : std::pair<std::uint64_t, bool>{0, false};
+        if (!preserve && route.second && route.first != state->submitted_route_generation) {
+            state->submitted_route_generation = route.first;
+            if (co_await send_boundary_records (state->context, *state->records, state->batch))
+                (void) co_await state->context.send_cutover (*state->cutover_record);
         }
-        connected = now_connected;
         co_await ::zlink::framework::detail::delay (dispatch_limits::management_retry_interval);
     }
 }
@@ -910,6 +858,10 @@ task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
     }
     state->records = build_boundary_records ({state->seal_attempt.seal.participants.front ()},
                                              state->context, state->batch, state->failure);
+    if (state->context.target_route) {
+        const auto route = state->context.target_route ();
+        state->submitted_route_generation = route.second ? route.first : 0;
+    }
     bool records_sent = false;
     if (state->records)
         records_sent =
@@ -937,15 +889,13 @@ maintenance_runtime_t::relocate_cutover (std::shared_ptr<relocation_terminal_sta
       state->context.coordinator, protocol::relocation_role_t::source, object};
     cutover.boundary_record_count = state->records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*state->records);
-    const auto outcome = co_await state->context.send_cutover (cutover);
+    (void) co_await state->context.send_cutover (cutover);
     const auto terminal_now = std::chrono::steady_clock::now ();
     state->cutover_terminal_at = terminal_now;
     const auto stall = state->sealed_at != std::chrono::steady_clock::time_point{}
                          ? terminal_now - state->sealed_at
                          : std::chrono::steady_clock::duration::zero ();
     state->cutover_record = cutover;
-    state->cutover_enqueued =
-      outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued;
     // The relocation execution permit ends at the cutover submit terminal.
     state->permit.reset ();
     const std::vector<object_ref_t> participants{state->source};
@@ -1147,6 +1097,10 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
       boundary_error == stateful_error_t::none
         ? build_boundary_records (seal.participants, *canonical_wire, batch, failure)
         : std::nullopt;
+    if (canonical_wire->target_route) {
+        const auto route = canonical_wire->target_route ();
+        state->submitted_route_generation = route.second ? route.first : 0;
+    }
     bool records_sent = false;
     if (records)
         records_sent = co_await send_boundary_records (*canonical_wire, *records, batch);
@@ -1191,14 +1145,12 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
        root.owner.object_generation, root.owner.authority_owner_generation}};
     cutover.boundary_record_count = records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*records);
-    const auto outcome = co_await canonical_wire->send_cutover (cutover);
+    (void) co_await canonical_wire->send_cutover (cutover);
     state->cutover_terminal_at = std::chrono::steady_clock::now ();
     state->target_owner = target_owner;
     state->batch = batch;
     state->records = *records;
     state->cutover_record = cutover;
-    state->cutover_enqueued =
-      outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued;
     const auto settled = co_await settle_relocation (state, sources);
     const auto applied = apply_relocation_settlement (state, sources, settled);
     const auto terminal = applied.first;

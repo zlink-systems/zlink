@@ -1716,6 +1716,67 @@ void verify_public_runtime_surface ()
     node->stop ();
 }
 
+void verify_automatic_intent_respects_manual_peer ()
+{
+    auto local_state = make_node ("tcp://127.0.0.1:0", "A-auto-local");
+    auto remote_state = make_node ("tcp://127.0.0.1:0", "Z-auto-remote");
+    zlink::framework::detail::mesh_node_runtime_t local (local_state), remote (remote_state);
+    remote.start ();
+    const auto rid = remote.status ().routing_id ();
+    local_state->peer_connections.push_back ({1, rid, "tcp://127.0.0.1:1"});
+    local.start ();
+    // A manual intent at another endpoint owns the direction even before admission.
+    assert (
+      !local.native_node ().connect_peer (remote.listen_endpoint (), rid, 0, "default", true));
+    local.disconnect_peer (rid, remote.listen_endpoint (), true);
+    local.disconnect_peer (rid, "tcp://127.0.0.1:1", true);
+    assert (
+      !local.native_node ().connect_peer (remote.listen_endpoint (), rid, 0, "default", true));
+    local_state->lane.run ([&] { local_state->peer_connections.clear (); }).get ();
+    local.disconnect_peer (rid, "tcp://127.0.0.1:1");
+    // Removing the manual intent permits the existing RID-order discovery direction.
+    assert (local.native_node ().connect_peer (remote.listen_endpoint (), rid, 0, "default", true));
+    local.stop ();
+    remote.stop ();
+
+    auto inbound_state = make_node ("tcp://127.0.0.1:0", "A-auto-inbound");
+    auto outbound_state = make_node ("tcp://127.0.0.1:0", "Z-auto-outbound");
+    zlink::framework::detail::mesh_node_runtime_t inbound (inbound_state),
+      outbound (outbound_state);
+    inbound.start ();
+    outbound.start ();
+    const auto outbound_rid = outbound.status ().routing_id ();
+    assert (outbound.native_node ().connect_peer (inbound.listen_endpoint (),
+                                                  inbound.status ().routing_id ()));
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    std::size_t observed = 0;
+    while (!observed && std::chrono::steady_clock::now () < deadline)
+        observed += inbound.native_node ().transport ().observe_routes ();
+    assert (observed != 0);
+    // An inbound Core route suffices before its Framework admission completes.
+    assert (!inbound.native_node ().connect_peer (outbound.listen_endpoint (), outbound_rid, 0,
+                                                  "default", true));
+    auto &inbound_transport = inbound.native_node ().transport ();
+    auto &outbound_transport = outbound.native_node ().transport ();
+    const auto inbound_rid = inbound.status ().routing_id ();
+    const auto both_ready = [&] {
+        return inbound_transport.peer_route (outbound_rid.to_bytes ()).second
+               && outbound_transport.peer_route (inbound_rid.to_bytes ()).second;
+    };
+    while (!both_ready () && std::chrono::steady_clock::now () < deadline) {
+        const auto now = std::chrono::steady_clock::now ();
+        (void) inbound_transport.pump_one (now).result ().value ();
+        (void) outbound_transport.pump_one (now).result ().value ();
+        (void) inbound_transport.tick_liveness (now).result ().value ();
+        (void) outbound_transport.tick_liveness (now).result ().value ();
+    }
+    assert (both_ready ());
+    inbound.disconnect_peer (outbound_rid, outbound.listen_endpoint (), true);
+    assert (both_ready ());
+    inbound.stop ();
+    outbound.stop ();
+}
+
 void verify_manual_peer_public_status ()
 {
     auto local_registration = make_node ("tcp://127.0.0.1:0", "manual-status-local");
@@ -2750,6 +2811,16 @@ int run_cross_process_delivery ()
 
 int main (int argc, char **argv)
 {
+    if ((argc == 2 || argc == 3) && std::string_view (argv[1]) == "--automatic-intent") {
+        const int repetitions = argc == 3 ? std::stoi (argv[2]) : 1;
+        if (repetitions <= 0)
+            return 2;
+        for (int i = 0; i < repetitions; ++i) {
+            verify_automatic_intent_respects_manual_peer ();
+            std::fprintf (stderr, "automatic %d/%d passed\n", i + 1, repetitions);
+        }
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--manual-peer-status") {
         verify_manual_peer_public_status ();
         return 0;
@@ -2779,6 +2850,7 @@ int main (int argc, char **argv)
     verify_automatic_identity_and_port_builder ();
     verify_observation_starts_with_weight_changed_before_subscription ();
     verify_public_runtime_surface ();
+    verify_automatic_intent_respects_manual_peer ();
     verify_manual_peer_public_status ();
     verify_location_store_blocks_placement ();
     verify_slow_observer_does_not_block_stop ();
