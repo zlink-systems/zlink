@@ -1,3 +1,4 @@
+import { durableRequestCanReplay } from '../foundation/durable-service-request';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes } from 'node:crypto';
 import {
@@ -44,7 +45,7 @@ import {
   type ZLinkRemoteBoundSessionTarget
 } from '../actors/actor-runtime-state';
 import type { ZLinkBackendMeshNode, ZLinkMeshCompletionTable } from '../backend';
-import { RequestResult, SubmitResult } from '../backend/runtime-values';
+import { RequestResult, SubmitResult, ZLinkBackendResultError } from '../backend/runtime-values';
 import type { ZLinkFrameworkRegistration } from '../configuration';
 import {
   type ZLinkRuntimeEventPublisher,
@@ -191,7 +192,6 @@ import {
   type ZLinkServiceRelocationControlRequest,
   type ZLinkServiceRelocationControlResponse
 } from './service-relocation-control';
-const RELOCATION_ATTEMPT_TIMEOUT_MS = 250;
 
 const RELOCATION_AUTHORITY_RETRY_DELAY_MS = 25;
 
@@ -216,6 +216,7 @@ const RELOCATION_PARTICIPANT_STATE_LIMIT_BYTES = 64 * 1024 * 1024;
 const RELOCATION_TARGET_TOMBSTONE_LIMIT = 1024;
 const RELOCATION_OPERATION_RETENTION_MS = 5 * 60_000;
 const SERVICE_CONTROL_TERMINAL_CAPACITY = 4096;
+const INITIAL_MEMBERSHIP_EPOCH = 1n;
 
 interface ZLinkHostRelocationOptions {
   readonly registration: ZLinkFrameworkRegistration;
@@ -223,6 +224,7 @@ interface ZLinkHostRelocationOptions {
   readonly locationStore: () => ZLinkLocationStore | undefined;
   readonly currentOwner: () => ZLinkLocationOwnerToken | undefined;
   readonly targetAdmissionSealed?: () => boolean;
+  readonly sourceQuiescenceChanged?: () => void;
   readonly liveDescriptors: (
     meshName: string,
     signal?: AbortSignal
@@ -295,8 +297,8 @@ interface SourceCutoverWindow {
   readonly targetNodeRid: RoutingId;
   /** Boundary batch frames plus the cutover frame, retained until authority settlement. */
   frames?: readonly Buffer[];
-  /** A failed submit or a lost target connection requires the whole batch again. */
-  resendPending: boolean;
+  /** The ready route used to submit the retained batch. */
+  submittedRouteGeneration?: bigint;
   readonly cutoverSubmittedAtMs: number;
   followTimer?: ReturnType<typeof setTimeout>;
   windowClosed: boolean;
@@ -501,7 +503,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         },
         input.relocationId,
         true,
-        input.advertisedReceiveChunkLimitBytes
+        input.advertisedReceiveChunkLimitBytes,
+        input.deadlineAtMs
       );
       resolveReady();
     } catch (error) {
@@ -543,7 +546,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     for (const window of this.sourceCutoverWindows.values()) {
       if (window.followTimer !== undefined) clearTimeout(window.followTimer);
     }
+    const hadSourceWindows = this.sourceCutoverWindows.size !== 0;
     this.sourceCutoverWindows.clear();
+    if (hadSourceWindows) this.options.sourceQuiescenceChanged?.();
     const stopped = new Error('Relocation runtime stopped.');
     stopped.name = 'AbortError';
     this.targetPrepareOperations.clear();
@@ -1484,7 +1489,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const status = this.requireMeshNode(meshName).status();
     const owner = this.options.currentOwner();
     if (
-      String(status.routingId) !== session.sessionOwnerNodeRid ||
+      !routingIdsEqual(status.routingId, session.sessionOwnerNodeRid) ||
       status.lifecycleGeneration !== session.sessionOwnerNodeGeneration ||
       owner?.ownerId !== session.sessionOwnerId ||
       owner.leaseGeneration !== session.sessionOwnerLeaseGeneration
@@ -1844,7 +1849,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     aggregateIdOverride?: string,
     retainSourceForActorJoin = false,
     /** Target's advertised relocation state chunk cap (Actor Join only; spec 15 §4.2). */
-    advertisedReceiveChunkLimitBytes?: number
+    advertisedReceiveChunkLimitBytes?: number,
+    deadlineAtMs?: number
   ): Promise<void> {
     if (isRelocationDebugEnabled()) {
       relocationDebug('standalone_actor.begin', { actorId: state.actorId });
@@ -1933,7 +1939,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         new Map([[measuredUnit.authorityKey, authority]]),
         signal,
         sessions,
-        advertisedReceiveChunkLimitBytes
+        advertisedReceiveChunkLimitBytes,
+        deadlineAtMs
       );
     } catch (error) {
       outcome = 'failed';
@@ -2263,7 +2270,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     signal?: AbortSignal,
     sessions: readonly SourceActorSession[] = [],
     /** Target's advertised relocation state chunk cap (Actor Join only; spec 15 §4.2). */
-    advertisedReceiveChunkLimitBytes?: number
+    advertisedReceiveChunkLimitBytes?: number,
+    controlDeadlineAtMs = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS
   ): Promise<void> {
     if (isRelocationDebugEnabled()) {
       relocationDebug('coordinator.begin', {
@@ -2272,10 +2280,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       });
     }
     const localStatus = this.requireMeshNode(meshName).status();
-    const controlDeadlineAtMs =
-      signal === undefined
-        ? performance.now() + RELOCATION_OPERATION_TIMEOUT_MS
-        : Number.MAX_SAFE_INTEGER;
     const coordinator = {
       ownerId: primary.ownerId,
       leaseGeneration: primary.ownerLeaseGeneration,
@@ -2360,28 +2364,31 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // queue and the assembly on the target), then stream the payload chunks
       // on the same ordered connection. The Ready reply arrives only after
       // the target assembled, verified, and restored the payload.
-      const readyOperation = this.sendControl(
+      const ready = await this.sendControl(
         meshName,
         target.rid,
         prepare,
         signal,
-        controlDeadlineAtMs
-      );
-      try {
-        if (isRelocationDebugEnabled()) {
-          relocationDebug('coordinator.state_transfer_begin', {
-            aggregateId: captured.envelope.aggregateId
-          });
+        controlDeadlineAtMs,
+        async (attemptSignal) => {
+          if (isRelocationDebugEnabled())
+            relocationDebug('coordinator.state_transfer_begin', {
+              aggregateId: captured.envelope.aggregateId
+            });
+          await this.sendRelocationStateChunks(
+            meshName,
+            target,
+            prepare,
+            encoded,
+            plan,
+            attemptSignal
+          );
+          if (isRelocationDebugEnabled())
+            relocationDebug('coordinator.await_ready', {
+              aggregateId: captured.envelope.aggregateId
+            });
         }
-        await this.sendRelocationStateChunks(meshName, target, prepare, encoded, plan, signal);
-      } catch (chunkError) {
-        readyOperation.catch(() => undefined);
-        throw chunkError;
-      }
-      if (isRelocationDebugEnabled()) {
-        relocationDebug('coordinator.await_ready', { aggregateId: captured.envelope.aggregateId });
-      }
-      const ready = await readyOperation;
+      );
       if (isRelocationDebugEnabled()) {
         relocationDebug('coordinator.ready_received', {
           aggregateId: captured.envelope.aggregateId
@@ -2446,14 +2453,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // The cutover submit result is not the authority result. The memory
       // copy of the boundary batch and cutover stays until the authority
       // settlement below (spec 28 §4.4).
-      let submitFailure: unknown;
+      const submittedRouteGeneration = this.requireMeshNode(meshName).observePeerRoute?.(
+        target.rid
+      ).generation;
       try {
         for (const record of boundaryBatch) {
           await this.submitControlFrame(meshName, target.rid, record.frame, 'relay');
         }
         await this.submitControlFrame(meshName, target.rid, cutoverFrame, 'cutover');
       } catch (error) {
-        submitFailure = error;
+        if (!durableRequestCanReplay(error)) throw error;
         console.warn('[zlink.runtime.relocation.cutover_submit_failed]', relayAuthorityId, error);
       }
       const window = this.beginSourceCutoverWindow(
@@ -2461,7 +2470,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         target.rid,
         relayAuthorityId,
         [...boundaryBatch.map((value) => value.frame), cutoverFrame],
-        submitFailure !== undefined,
+        submittedRouteGeneration,
         limits
       );
       try {
@@ -2494,7 +2503,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         // pending request without a terminal gets one Unavailable.
         const unavailable = createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-          `Relocation '${relayAuthorityId}' source owner lease ended before its authority settled.`,
+          `Relocation '${relayAuthorityId}' source authority ended (source owner lease expired, authority Missing, or owner changed).`,
           true
         );
         await captured.discardSource(unavailable);
@@ -2551,6 +2560,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         signal
       );
       try {
+        signal?.throwIfAborted();
         await this.sendControlOneWay(meshName, target.rid, {
           kind: 'state',
           relocation: identity.relocation,
@@ -2630,7 +2640,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetNodeRid: RoutingId,
     relocationKey: string,
     frames: readonly Buffer[],
-    initialSubmitFailed: boolean,
+    submittedRouteGeneration: bigint | undefined,
     limits: ReturnType<ZLinkHostServiceRelocationRuntime['relocationLimits']>
   ): SourceCutoverWindow {
     const submittedAt = performance.now();
@@ -2638,12 +2648,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       meshName,
       targetNodeRid,
       frames,
-      resendPending: initialSubmitFailed,
+      submittedRouteGeneration,
       cutoverSubmittedAtMs: submittedAt,
       windowClosed: false,
       followExpired: false
     };
+    const wasQuiescent = this.isSafeToShutdown();
     this.sourceCutoverWindows.set(relocationKey, window);
+    if (wasQuiescent) this.options.sourceQuiescenceChanged?.();
     window.followTimer = setTimeout(() => {
       window.followExpired = true;
       // S1→S4 route convergence: the span the source must keep its Message
@@ -2673,27 +2685,17 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       this.sourceCutoverWindows.get(relocationKey) === window
     ) {
       this.sourceCutoverWindows.delete(relocationKey);
+      if (this.isSafeToShutdown()) this.options.sourceQuiescenceChanged?.();
     }
   }
 
-  /**
-   * Sends the whole boundary batch and cutover again after a failed submit
-   * or an observed loss of the target connection (spec 28 §4.4). The target
-   * replaces its partial span with the whole batch.
-   */
+  /** Relocation flow §4.4: replay the whole batch on a different ready route. */
   private async resendSourceCutover(window: SourceCutoverWindow): Promise<void> {
     const frames = window.frames;
     if (frames === undefined) return;
-    const peers = this.requireMeshNode(window.meshName).peers();
-    const peer = peers.find(
-      (value) =>
-        value.routingId !== null && String(value.routingId) === String(window.targetNodeRid)
-    );
-    if (peer !== undefined && peer.state !== MeshPeerRuntimeState.Serving) {
-      window.resendPending = true;
-      return;
-    }
-    if (!window.resendPending) return;
+    const route = this.requireMeshNode(window.meshName).observePeerRoute?.(window.targetNodeRid);
+    if (route?.ready !== true || route.generation === window.submittedRouteGeneration) return;
+    window.submittedRouteGeneration = route.generation;
     try {
       for (const frame of frames) {
         await this.submitControlFrame(
@@ -2703,9 +2705,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           'cutover retransmission'
         );
       }
-      window.resendPending = false;
-    } catch {
-      // The next settlement round retries the whole batch.
+    } catch (error) {
+      if (!durableRequestCanReplay(error)) throw error;
     }
   }
 
@@ -2717,8 +2718,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
    * excludes a late target commit. `target`: the
    * target committed. `source`: Preserve fenced the target out while the
    * source owner lease was valid. `lost`: the source owner lease ended first
-   * or another authority owns the object. An uncertain Store or lease result
-   * keeps the work retained and repeats the same decision.
+   * or authority is Missing or another authority owns the object. An uncertain
+   * Store or lease result keeps the work retained and repeats the same decision.
    */
   private async settleSourceAuthority(
     envelope: ServiceRelocationEnvelope,
@@ -2905,7 +2906,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     const envelope = decodeServiceRelocationEnvelope(payload, request.targetAttemptGeneration);
     const inventoryEnvelope = attachCanonicalBoundSessions(
-      await this.resolveTargetParticipantInventory(request, envelope, signal),
+      await this.resolveTargetParticipantInventory(meshName, request, envelope, signal),
       request,
       meshName
     );
@@ -3327,7 +3328,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): Promise<void> {
     const submitted = await this.sendInfrastructureControl(meshName, targetNodeRid, frame);
     if (submitted !== SubmitResult.Ok) {
-      throw new Error(`Relocation ${kind} was not accepted by RouteMesh.`);
+      throw new ZLinkBackendResultError('submit', submitted, undefined, {
+        cause: new Error(`Relocation ${kind} was not accepted by RouteMesh.`)
+      });
     }
   }
 
@@ -3644,67 +3647,40 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetNodeRid: RoutingId,
     request: ZLinkServiceRelocationControlRequest,
     signal?: AbortSignal,
-    deadlineAtMs: number = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS
+    deadlineAtMs: number = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS,
+    onSubmitted?: (signal: AbortSignal) => Promise<void>
   ): Promise<ReturnType<typeof decodeServiceRelocationControlResponse>> {
     const key = controlAckKey(request);
     const frames = [encodeServiceRelocationControlRequest(request)];
-    let lastRequestError: unknown;
-    for (;;) {
-      signal?.throwIfAborted();
-      const remainingMs = deadlineAtMs - performance.now();
-      if (remainingMs <= 0) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-          `Relocation control ACK '${key}' timed out.`,
-          true,
-          lastRequestError
-        );
-      }
-      const attemptTimeoutMs = Math.max(
-        1,
-        Math.min(RELOCATION_ATTEMPT_TIMEOUT_MS, Math.ceil(remainingMs))
+    signal?.throwIfAborted();
+    const remainingMs = Math.ceil(deadlineAtMs - performance.now());
+    if (remainingMs <= 0) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+        `Relocation control ACK '${key}' timed out.`,
+        true
       );
-      const startedAtMs = performance.now();
-      try {
-        const replyFrames = await this.requestInfrastructureControl(
-          meshName,
-          targetNodeRid,
-          frames,
-          attemptTimeoutMs
-        );
-        if (replyFrames.length !== 1) {
-          throw new ServiceWireProtocolError(
-            `Relocation control '${key}' reply must contain exactly one frame.`
-          );
-        }
-        const response = decodeServiceRelocationControlResponse(Buffer.from(replyFrames[0]!));
-        if (response.kind === 'failed') {
-          validateControlFailureResponse(request, response);
-          throw relocationFailureException(response);
-        }
-        validateControlResponse(request, response);
-        return response;
-      } catch (error) {
-        if (error instanceof ServiceWireProtocolError || error instanceof ZLinkFrameworkException) {
-          throw error;
-        }
-        lastRequestError = error;
-        if (isRelocationDebugEnabled()) {
-          relocationDebug('control.request_retry', {
-            key,
-            kind: request.kind,
-            targetRid: String(targetNodeRid)
-          });
-        }
-        const retryDelayMs = Math.min(
-          Math.max(0, attemptTimeoutMs - (performance.now() - startedAtMs)),
-          Math.max(0, deadlineAtMs - performance.now())
-        );
-        if (retryDelayMs > 0) {
-          await waitForRelocationRetry(retryDelayMs, signal);
-        }
-      }
     }
+    const replyFrames = await this.requestInfrastructureControl(
+      meshName,
+      targetNodeRid,
+      frames,
+      remainingMs,
+      signal,
+      onSubmitted
+    );
+    if (replyFrames.length !== 1) {
+      throw new ServiceWireProtocolError(
+        `Relocation control '${key}' reply must contain exactly one frame.`
+      );
+    }
+    const response = decodeServiceRelocationControlResponse(Buffer.from(replyFrames[0]!));
+    if (response.kind === 'failed') {
+      validateControlFailureResponse(request, response);
+      throw relocationFailureException(response);
+    }
+    validateControlResponse(request, response);
+    return response;
   }
 
   private async selectTarget(
@@ -3791,7 +3767,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const publication = relocationPublication(prepare, envelope);
     const participants = envelope.participants.map((participant) => {
       const expected = authorities.get(participant.key)!;
-      const membership = actorMembershipTarget(envelope, participant.key);
+      const membership = actorMembershipTarget(
+        envelope.memberships.find((value) => value.actorKey === participant.key),
+        this.options.localDescriptor?.(meshName)
+      );
       const entrySpotId =
         expected.allocation.objectKind === 'actor' && membership === undefined
           ? this.options.spotManager()?.entrySpotIdForMesh(meshName)
@@ -3818,18 +3797,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           objectGeneration: expected.objectGeneration,
           targetAttemptGeneration: prepare.targetAttemptGeneration,
           coordinatorExpectedStoreVersion: expected.storeVersion.value,
-          ...(membership === undefined
-            ? expected.allocation.objectKind === 'actor'
+          ...(membership ??
+            (expected.allocation.objectKind === 'actor'
               ? {
                   actorSpotId: entrySpotId!,
                   actorSpotGeneration: prepare.target.nodeGeneration,
                   actorSpotKind: ZLinkSpotKind.Entry as const
                 }
-              : {}
-            : {
-                ...membership,
-                actorSpotKind: ZLinkSpotKind.User as const
-              })
+              : {}))
         }),
         membershipMutation: encodeMembershipMutation(envelope.memberships, participant.key)
       };
@@ -4128,6 +4103,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
 
   /** Maps schema ordinals to the authoritative Location Store inventory. */
   private async resolveTargetParticipantInventory(
+    meshName: string,
     request: ServiceMaintenanceRelocationPrepare,
     envelope: ServiceRelocationEnvelope,
     signal?: AbortSignal
@@ -4217,21 +4193,23 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         authorityOwnerGeneration: snapshot.authorityOwnerGeneration
       };
     });
-    // Actor-root saved work is admitted against the destination membership.
-    // The canonical root intentionally omits a membership vector; meanwhile
-    // Location Store still names the source Spot until target cutover. Rebuild
-    // the Actor lane from the already accepted ActorJoin admission, preserving
-    // the target queue boundary for decoded saved-work.
+    // Join recovery uses its accepted target membership. Maintenance Actor
+    // roots restore into the target's startup Entry incarnation (§10.1).
     const memberships =
       request.object.kind === 'actor'
-        ? actorJoinTargetMembership(manager, envelope.aggregateId, participants)
+        ? actorRootTargetMembership(
+            manager,
+            envelope.aggregateId,
+            participants,
+            this.options.localDescriptor?.(meshName)
+          )
         : entries
             .filter((entry) => entry.snapshot.allocation.objectKind === 'actor')
             .map((entry) => ({
               actorKey: entry.key.value,
               spotKey: primaryKey.value,
               spotObjectGeneration: primary.objectGeneration,
-              membershipEpoch: 1n
+              membershipEpoch: INITIAL_MEMBERSHIP_EPOCH
             }));
     return {
       ...envelope,
@@ -4515,14 +4493,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     meshName: string,
     targetNodeRid: RoutingId,
     frames: readonly Uint8Array[],
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal,
+    onSubmitted?: (signal: AbortSignal) => Promise<void>
   ): Promise<readonly Uint8Array[]> {
     const node = this.requireMeshNode(meshName);
     const request = node.requestInfrastructureControlFrames;
     if (request === undefined) {
       throw new Error('RouteMesh backend cannot submit bare infrastructure requests.');
     }
-    return await request.call(node, targetNodeRid, frames, { timeoutMs });
+    return await request.call(node, targetNodeRid, frames, { timeoutMs, signal, onSubmitted });
   }
 }
 
@@ -4547,13 +4527,28 @@ function actorJoinAdmissionIdentity(envelope: ServiceRelocationEnvelope): string
   );
 }
 
-function actorJoinTargetMembership(
+function actorRootTargetMembership(
   manager: DefaultZLinkSpotManager | undefined,
   relocationId: string,
-  participants: readonly ServiceRelocationParticipant[]
+  participants: readonly ServiceRelocationParticipant[],
+  localDescriptor: ZLinkMeshNodeDescriptor | undefined
 ): readonly ServiceRelocationMembership[] {
   const recovery = canonicalActorJoinRecovery(participants);
-  const admissionId = recovery?.request.handoffId ?? relocationId;
+  const actor = participants.find((value) => value.objectKind === 'actor');
+  if (recovery === undefined) {
+    if (actor === undefined || localDescriptor?.entrySpotId === undefined) {
+      throw new Error(`Actor relocation '${relocationId}' has no target Entry membership.`);
+    }
+    return [
+      {
+        actorKey: actor.key,
+        spotKey: encodeAuthorityKey('user_spot', localDescriptor.entrySpotId).value,
+        spotObjectGeneration: localDescriptor.lifecycleGeneration,
+        membershipEpoch: INITIAL_MEMBERSHIP_EPOCH
+      }
+    ];
+  }
+  const admissionId = recovery.request.handoffId;
   const admission = (
     manager as unknown as
       | {
@@ -4571,7 +4566,6 @@ function actorJoinTargetMembership(
         }
       | undefined
   )?.formalRemoteActorAdmissions?.get(admissionId);
-  const actor = participants.find((value) => value.objectKind === 'actor');
   if (admission === undefined || actor === undefined) {
     throw new Error(`Actor relocation '${relocationId}' has no accepted target membership.`);
   }
@@ -4603,18 +4597,19 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       );
       if (membership === undefined)
         throw new Error(`Actor '${identity}' relocation membership is missing.`);
-      const spotIdentity = decodeAuthorityKey({
-        value: membership.spotKey
-      } as ZLinkAuthorityKey).globalId;
-      const localDescriptor = this.options.localDescriptor?.(this.meshName);
-      const nativeEntrySpot = localDescriptor?.entrySpotId === spotIdentity;
+      const targetMembership = actorMembershipTarget(
+        membership,
+        this.options.localDescriptor?.(this.meshName)
+      )!;
       const actor = await this.requireActorManager().prepareRelocationActor(
         identity,
         participant.stableType,
         participant.objectGeneration,
         participant.authorityOwnerGeneration,
-        nativeEntrySpot ? undefined : (spotIdentity as RoutingId),
-        membership.spotObjectGeneration,
+        targetMembership.actorSpotKind === ZLinkSpotKind.Entry
+          ? undefined
+          : (targetMembership.actorSpotId as RoutingId),
+        targetMembership.actorSpotGeneration,
         membership.membershipEpoch,
         signal
       );
@@ -4687,9 +4682,11 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   ): Promise<void> {
     for (const membership of memberships) {
       const actor = hidden.get(membership.actorKey)?.actor;
-      const spotIdentity = decodeAuthorityKey({
-        value: membership.spotKey
-      } as ZLinkAuthorityKey).globalId;
+      const targetMembership = actorMembershipTarget(
+        membership,
+        this.options.localDescriptor?.(this.meshName)
+      )!;
+      const spotIdentity = targetMembership.actorSpotId;
       const spot =
         hidden.get(membership.spotKey)?.activation ??
         this.requireSpotManager().resolveRelocationActivation(
@@ -4698,9 +4695,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         );
       if (actor === undefined) throw new Error('Relocation membership Actor staging is missing.');
       const state = this.requireActorManager().getState(actor.context.actorId)!;
-      const localDescriptor = this.options.localDescriptor?.(this.meshName);
-      const isEntryMembership = localDescriptor?.entrySpotId === spotIdentity;
-      if (isEntryMembership) {
+      if (targetMembership.actorSpotKind === ZLinkSpotKind.Entry) {
         // Entry Spot identity is published as a Location membership key, but
         // it is not a User Spot activation in the Actor runtime. The native
         // restore already received the target MeshNode RID as its Entry
@@ -4708,7 +4703,12 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         // local Entry Spot path after the target commit.
         state.clearJoinedSpot();
       } else {
-        state.setJoinedSpot(spotIdentity as RoutingId, spot?.spot, membership.membershipEpoch);
+        state.setJoinedSpot(
+          spotIdentity as RoutingId,
+          spot?.spot,
+          membership.membershipEpoch,
+          membership.spotObjectGeneration
+        );
       }
       spot?.commitActorJoin(actor);
     }
@@ -4977,14 +4977,22 @@ function rewriteAuthorityApplicationRoute(
 }
 
 function actorMembershipTarget(
-  envelope: ServiceRelocationEnvelope,
-  actorKey: string
-): { readonly actorSpotId: string; readonly actorSpotGeneration: bigint } | undefined {
-  const membership = envelope.memberships.find((value) => value.actorKey === actorKey);
+  membership: ServiceRelocationMembership | undefined,
+  localDescriptor: ZLinkMeshNodeDescriptor | undefined
+):
+  | {
+      readonly actorSpotId: string;
+      readonly actorSpotGeneration: bigint;
+      readonly actorSpotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
+    }
+  | undefined {
   if (membership === undefined) return undefined;
+  const spotId = decodeAuthorityKey({ value: membership.spotKey } as ZLinkAuthorityKey).globalId;
   return {
-    actorSpotId: decodeAuthorityKey({ value: membership.spotKey } as ZLinkAuthorityKey).globalId,
-    actorSpotGeneration: membership.spotObjectGeneration
+    actorSpotId: spotId,
+    actorSpotGeneration: membership.spotObjectGeneration,
+    actorSpotKind:
+      spotId === localDescriptor?.entrySpotId ? ZLinkSpotKind.Entry : ZLinkSpotKind.User
   };
 }
 
@@ -6053,7 +6061,7 @@ function attachCanonicalBoundSessions(
       };
       const target: ZLinkRemoteBoundSessionTarget = {
         routerChannelId: meshName,
-        targetNodeRid: request.sourceNodeRid as RoutingId,
+        targetNodeRid: sessionNodeRid,
         spotId:
           request.object.kind === 'actor'
             ? ((participant.rootSpotId ?? '') as RoutingId)

@@ -13,7 +13,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     internal ref ZlinkMsg Handle
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => ref _msg;
+        get => ref NativeMsg;
     }
 
     internal bool IsValid { get; private set; }
@@ -26,7 +26,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     internal void ReplaceNativeOwned(ref ZlinkMsg source)
     {
         Close();
-        _msg = source;
+        NativeMsg = source;
         _knownSize = -1;
         IsValid = true;
         source = default;
@@ -36,7 +36,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     {
         if (IsValid)
             return;
-        var rc = NativeMethods.zlink_msg_init(ref _msg);
+        var rc = NativeMethods.zlink_msg_init(ref NativeMsg);
         if (rc != 0)
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
         IsValid = true;
@@ -48,13 +48,13 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         EnsureValid();
         if (_knownSize >= 0)
             return _knownSize;
-        return GetNativeSize(ref _msg);
+        return GetNativeSize(ref NativeMsg);
     }
 
     private int GetRefCountCore()
     {
         EnsureValid();
-        var refcount = NativeMethods.zlink_msg_refcnt(ref _msg, out var error);
+        var refcount = NativeMethods.zlink_msg_refcnt(ref NativeMsg, out var error);
         ZlinkException.ThrowConfigIfError(error);
         return refcount;
     }
@@ -63,7 +63,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     {
         if (data.Length == 0)
             return;
-        var dest = NativeMethods.zlink_msg_data(ref _msg);
+        var dest = NativeMethods.zlink_msg_data(ref NativeMsg);
         if (dest == IntPtr.Zero)
             throw new InvalidOperationException("Message data is null.");
         data.CopyTo(new Span<byte>((void*)dest, data.Length));
@@ -80,7 +80,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         }
         catch
         {
-            message.TryReturnToPool();
+            message.ReturnToPoolOrRelease();
             throw;
         }
     }
@@ -90,10 +90,10 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         EnsureValid();
         var size = _knownSize >= 0
             ? _knownSize
-            : GetNativeSize(ref _msg);
+            : GetNativeSize(ref NativeMsg);
         if (size == 0)
             return Span<byte>.Empty;
-        var data = NativeMethods.zlink_msg_data(ref _msg);
+        var data = NativeMethods.zlink_msg_data(ref NativeMsg);
         if (data == IntPtr.Zero)
             return Span<byte>.Empty;
         return new Span<byte>((void*)data, size);
@@ -104,10 +104,10 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         EnsureValid();
         var size = _knownSize >= 0
             ? _knownSize
-            : GetNativeSize(ref _msg);
+            : GetNativeSize(ref NativeMsg);
         if (size == 0)
             return ReadOnlySpan<byte>.Empty;
-        var data = NativeMethods.zlink_msg_data(ref _msg);
+        var data = NativeMethods.zlink_msg_data(ref NativeMsg);
         if (data == IntPtr.Zero)
             return ReadOnlySpan<byte>.Empty;
         return new ReadOnlySpan<byte>((void*)data, size);
@@ -124,7 +124,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         EnsureValid();
         var size = _knownSize >= 0
             ? (nuint)_knownSize
-            : NativeMethods.zlink_msg_size(ref _msg);
+            : NativeMethods.zlink_msg_size(ref NativeMsg);
         if (size == 0)
         {
             bytesWritten = 0;
@@ -137,7 +137,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
             return false;
         }
 
-        var data = NativeMethods.zlink_msg_data(ref _msg);
+        var data = NativeMethods.zlink_msg_data(ref NativeMsg);
         if (data == IntPtr.Zero)
         {
             bytesWritten = 0;
@@ -154,12 +154,12 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     {
         if (!IsValid)
         {
-            TryReturnToPool();
+            ReturnToPoolOrRelease();
             return;
         }
 
         Close();
-        TryReturnToPool();
+        ReturnToPoolOrRelease();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -167,7 +167,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     // wrapper; keep the native allocation path free of duplicate checks.
     internal void InitSizeOnInvalidMessage(int size)
     {
-        var rc = NativeMethods.zlink_msg_init_size(ref _msg, (nuint)size);
+        var rc = NativeMethods.zlink_msg_init_size(ref NativeMsg, (nuint)size);
         if (rc != 0)
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
         IsValid = true;
@@ -179,14 +179,14 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         var moved = RentFromPool();
         try
         {
-            MoveTo(ref moved._msg);
+            MoveTo(ref moved.NativeMsg);
             moved._knownSize = _knownSize;
             moved.IsValid = true;
             return moved;
         }
         catch
         {
-            moved.TryReturnToPool();
+            moved.ReturnToPoolOrRelease();
             throw;
         }
     }
@@ -199,7 +199,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     {
         EnsureValid();
         var copy = new Message(false);
-        CopyTo(ref copy._msg);
+        CopyTo(ref copy.NativeMsg);
         copy._knownSize = _knownSize;
         copy.IsValid = true;
         return copy;
@@ -225,7 +225,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         dest.EnsureValid();
 
         var knownSize = _knownSize;
-        var rc = NativeMethods.zlink_msg_move(ref dest._msg, ref _msg);
+        var rc = NativeMethods.zlink_msg_move(ref dest.NativeMsg, ref NativeMsg);
         if (rc != 0)
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
 
@@ -244,7 +244,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
         try
         {
-            rc = NativeMethods.zlink_msg_move(ref dest, ref _msg);
+            rc = NativeMethods.zlink_msg_move(ref dest, ref NativeMsg);
             if (rc != 0)
                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
 
@@ -271,12 +271,12 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
                 "RestoreFrom requires an invalid message state.");
 
         _knownSize = -1;
-        var rc = NativeMethods.zlink_msg_init(ref _msg);
+        var rc = NativeMethods.zlink_msg_init(ref NativeMsg);
         if (rc != 0)
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
         try
         {
-            rc = NativeMethods.zlink_msg_move(ref _msg, ref src);
+            rc = NativeMethods.zlink_msg_move(ref NativeMsg, ref src);
             if (rc != 0)
                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
             IsValid = true;
@@ -286,7 +286,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         {
             try
             {
-                NativeMethods.zlink_msg_close(ref _msg);
+                NativeMethods.zlink_msg_close(ref NativeMsg);
             }
             catch
             {
@@ -304,7 +304,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
         try
         {
-            rc = NativeMethods.zlink_msg_copy(ref dest, ref _msg);
+            rc = NativeMethods.zlink_msg_copy(ref dest, ref NativeMsg);
             if (rc != 0)
                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
         }
@@ -356,7 +356,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     internal void ConsumeAfterSuccessfulSubmit()
     {
         EnsureValid();
-        NativeMethods.zlink_msg_close(ref _msg);
+        NativeMethods.zlink_msg_close(ref NativeMsg);
         Invalidate(clearHandle: true);
     }
 
@@ -365,20 +365,20 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     {
         if (!IsValid)
         {
-            TryReturnToPool();
+            ReturnToPoolOrRelease();
             return;
         }
 
-        NativeMethods.zlink_msg_close(ref _msg);
+        NativeMethods.zlink_msg_close(ref NativeMsg);
         Invalidate(clearHandle: true);
-        TryReturnToPool();
+        ReturnToPoolOrRelease();
     }
 
     private void Close()
     {
         if (!IsValid)
             return;
-        NativeMethods.zlink_msg_close(ref _msg);
+        NativeMethods.zlink_msg_close(ref NativeMsg);
         Invalidate(clearHandle: true);
     }
 
@@ -386,7 +386,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     private void Invalidate(bool clearHandle = false)
     {
         if (clearHandle)
-            _msg = default;
+            NativeMsg = default;
         IsValid = false;
         _knownSize = -1;
     }

@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -31,6 +32,10 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -394,6 +399,39 @@ final class ZLinkCanonicalRelocationSettlementTest {
         assertArrayEquals(R1, relayed.get(0));
         assertArrayEquals(R2, relayed.get(1));
         assertEquals(fixture.targetOwner.ownerId(), fixture.authority().ownerId());
+    }
+
+    @RepeatedTest(20)
+    void targetCommitThenAuthorityRemovalEndsSourceWithoutPreserve() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.stageAndRelay(R1);
+        fixture.publish();
+        fixture.endpoint.publishedEvent.get(3, TimeUnit.SECONDS);
+        var committed = fixture.authority();
+        assertEquals(fixture.targetOwner.ownerId(), committed.ownerId());
+        assertInstanceOf(
+                ZLinkAuthorityDeleted.class,
+                fixture.locations
+                        .compareExchange(
+                                fixture.authorityKey,
+                                new ZLinkAuthorityExpectFound(committed.storeVersion()),
+                                new ZLinkAuthorityDelete(),
+                                OPEN)
+                        .toCompletableFuture()
+                        .join());
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.SOURCE_LEASE_EXPIRED,
+                fixture.source
+                        .settle(
+                                fixture.targetRid,
+                                fixture.request.fence(),
+                                Instant.now().plusSeconds(30))
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS));
+        assertInstanceOf(
+                ZLinkAuthorityMissing.class,
+                fixture.locations.read(fixture.authorityKey, OPEN).toCompletableFuture().join());
+        assertEquals(1, fixture.commits.get());
     }
 
     @Test

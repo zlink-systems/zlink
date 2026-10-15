@@ -293,6 +293,14 @@ final class ZLinkFrameworkActorSubsystem {
             actors.setRemoteAddressResolver(remoteAddressResolver);
         }
         spots.attachActorRuntime(actors);
+        java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of(spots.primaryNode()),
+                        meshNodes.values().stream().map(node -> node.spotNode()))
+                .distinct()
+                .forEach(
+                        node ->
+                                node.setRemoteSessionBindingOwner(
+                                        actors::applyRemoteSessionBinding));
         // Canonical service-wire actorJoin(28) is decoded by the raw mesh
         // boundary, while admission remains in the Spot runtime so it shares
         // the S3 Location Store fence/type resolution with routed joins.

@@ -6,12 +6,15 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <condition_variable>
 #include <cstdio>
 #include <optional>
+#include <stdexcept>
 #include <thread>
+#include <tuple>
 
 namespace
 {
@@ -33,6 +36,11 @@ constexpr auto maintenance_spot = "maintenance";
 constexpr auto source_spot = "source";
 constexpr auto local_spot = "local";
 constexpr auto current_spot = "current";
+constexpr auto failed_spot = "failed";
+constexpr auto factory_failed_spot = "factory-failed";
+constexpr auto framework_failed_spot = "framework-failed";
+constexpr auto rejected_spot = "rejected";
+constexpr auto rejection_reply = "room is full";
 struct observations_t
 {
     std::mutex mutex;
@@ -41,6 +49,8 @@ struct observations_t
     std::vector<std::string> completion_owners;
     bool leave_entered = false;
     int instances = 0;
+    bool fail_remote_factory = false;
+    int remote_factory_failure_count = 0;
     std::vector<int> destroyed;
     std::vector<std::pair<fw::spot_close_reason_t, std::size_t>> closings;
     int destroy_callbacks = 0;
@@ -112,6 +122,14 @@ class factory_t final : public fw::actor_factory_t<actor_t>
     fw::task_t<std::shared_ptr<actor_t>> create (fw::actor_context_t context,
                                                  std::stop_token) override
     {
+        if (observations->fail_remote_factory
+            && context.actor_ref ().node_rid ().value () == second_rid) {
+            {
+                std::lock_guard lock (observations->mutex);
+                ++observations->remote_factory_failure_count;
+            }
+            throw std::runtime_error ("target Actor factory failed");
+        }
         co_return std::make_shared<actor_t> (std::move (context));
     }
 };
@@ -126,9 +144,9 @@ class entry_t final : public fw::entry_spot_t<actor_t>
         _context.handlers ().add_actor_send<&entry_t::move> ();
         _context.handlers ().add_actor_request<&entry_t::probe> ();
     }
-    probe_t probe (actor_t &actor, fw::message_context_t &, const probe_t &)
+    probe_t probe (actor_t &actor, fw::message_context_t &, const probe_t &request)
     {
-        return probe_t{actor.instance};
+        return request.value == instance_probe ? probe_t{actor.instance} : request;
     }
     void move (actor_t &actor, fw::message_context_t &, const move_t &request)
     {
@@ -178,6 +196,13 @@ class room_t final : public fw::spot_t<actor_t>
     fw::task_t<fw::spot_actor_join_result_t> on_actor_join (std::string_view,
                                                             const fw::message_t &) override
     {
+        if (_context.spot_id () == failed_spot)
+            throw std::runtime_error ("target admission failed");
+        if (_context.spot_id () == framework_failed_spot)
+            throw fw::framework_exception_t (fw::framework_error_kind_t::unavailable,
+                                             "target is unavailable");
+        if (_context.spot_id () == rejected_spot)
+            co_return fw::spot_actor_join_result_t::reject (std::string (rejection_reply));
         co_return _context.spot_id () == maintenance_spot ? fw::spot_actor_join_result_t::reject ()
                                                           : fw::spot_actor_join_result_t::accept ();
     }
@@ -796,4 +821,123 @@ TEST (ActorMaintenanceJoin, SameNodeMembershipPreservesReturnedActorUntilSourceC
         std::this_thread::yield ();
     } while (std::chrono::steady_clock::now () < deadline);
 }
+}
+
+class ActorDeferredJoinFailure : public testing::TestWithParam<std::tuple<bool, const char *>>
+{
+};
+TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
+{
+    observations_t evidence;
+    evidence.fail_remote_factory =
+      std::string_view (std::get<1> (GetParam ())) == factory_failed_spot;
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t first, second;
+    release_callbacks_t release{evidence};
+    configure (first, first_rid, store, relocations);
+    first.start ();
+    ASSERT_TRUE (ready (first));
+    auto services = first.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .timeout (wait_budget)
+                   .async ()
+                   .result ());
+    configure (second, second_rid, store, relocations);
+    second.start ();
+    ASSERT_TRUE (ready (second));
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
+    auto second_services = second.app.advanced ().services ().build_provider ();
+    const auto [remote, target] = GetParam ();
+    auto &target_services = remote ? second_services : services;
+    auto &other_services = remote ? services : second_services;
+    other_services.get_required<fw::route_mesh_runtime_options_t> ()
+      .mesh (mesh_name)
+      .placement_weight (0);
+    auto &spots = target_services.get_required<fw::spot_manager_t> ();
+    ASSERT_TRUE (spots.get_or_create (fw::spot_id_t (target), room_type)
+                   .timeout (wait_budget)
+                   .async ()
+                   .result ());
+    auto &client = services.get_required<fw::actor_client_t> ();
+    std::size_t initial;
+    {
+        std::lock_guard lock (evidence.mutex);
+        initial = evidence.completions.size ();
+    }
+    ASSERT_TRUE (move_to (client, evidence, target, initial + 1));
+    {
+        std::lock_guard lock (evidence.mutex);
+        EXPECT_EQ (evidence.completion_owners.back (), first_rid);
+        if (evidence.fail_remote_factory)
+            EXPECT_GT (evidence.remote_factory_failure_count, 0);
+        if (std::string_view (target) == rejected_spot) {
+            const auto *rejected =
+              std::get_if<fw::actor_join_rejected_t> (&evidence.completions.back ());
+            ASSERT_NE (rejected, nullptr);
+            ASSERT_TRUE (rejected->reply);
+            EXPECT_EQ (rejected->reply->decode<std::string> (), rejection_reply);
+        } else {
+            const auto *failed =
+              std::get_if<fw::actor_join_failed_t> (&evidence.completions.back ());
+            ASSERT_NE (failed, nullptr)
+              << "completion variant=" << evidence.completions.back ().index ();
+            EXPECT_EQ (failed->error_kind, std::string_view (target) == framework_failed_spot
+                                             ? fw::framework_error_kind_t::unavailable
+                                             : fw::framework_error_kind_t::internal_failure);
+        }
+    }
+    auto probe = client.request (fw::actor_id_t (actor_id), probe_t{17})
+                   .timeout (wait_budget)
+                   .async<probe_t> ()
+                   .result ();
+    ASSERT_TRUE (probe);
+    EXPECT_EQ (probe.value ().value, 17);
+}
+
+INSTANTIATE_TEST_SUITE_P (LocalAndRemote,
+                          ActorDeferredJoinFailure,
+                          testing::Values (std::make_tuple (false, failed_spot),
+                                           std::make_tuple (false, framework_failed_spot),
+                                           std::make_tuple (false, rejected_spot),
+                                           std::make_tuple (true, failed_spot),
+                                           std::make_tuple (true, framework_failed_spot),
+                                           std::make_tuple (true, rejected_spot),
+                                           std::make_tuple (true, factory_failed_spot)));
+
+TEST (ActorMaintenanceJoin, CompletionCallbackPreservesStandardException)
+{
+    auto node =
+      fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> (first_rid);
+    fw::detail::spot_node_runtime_t runtime (node);
+    const auto actor = fw::detail::actor_ref_access_t::make (
+      fw::node_rid_t::from_string (first_rid), actor_type, actor_id, 1);
+    node->actor_instances.emplace (std::string (actor_type) + ":" + actor_id,
+                                   std::make_shared<int> (0));
+    fw::detail::spot_node_builder_state_t::actor_factory_registration_t factory;
+    auto release = std::make_shared<fw::task_completion_source_t<void>> ();
+    factory.on_join_completed = [release] (void *, auto, auto, auto, const auto *, const auto &,
+                                           auto, bool) -> fw::task_t<void> {
+        co_await release->task ();
+        throw std::runtime_error ("completion callback failed");
+    };
+    node->actor_factories.emplace (actor_type, std::move (factory));
+    auto delivery = runtime.deliver_actor_join_completion (
+      actor, fw::actor_join_failed_t{1, 2, fw::framework_error_kind_t::unavailable}, std::nullopt);
+    release->complete (fw::result_t<void>::success ());
+    const auto result = delivery.result ().value ();
+    ASSERT_FALSE (result);
+    ASSERT_TRUE (result.exception ());
+    try {
+        std::rethrow_exception (result.exception ());
+        FAIL () << "callback exception was lost";
+    }
+    catch (const fw::framework_exception_t &) {
+        FAIL () << "callback exception was replaced";
+    }
+    catch (const std::runtime_error &error) {
+        EXPECT_STREQ (error.what (), "completion callback failed");
+    }
 }

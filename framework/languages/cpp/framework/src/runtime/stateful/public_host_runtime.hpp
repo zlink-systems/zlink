@@ -905,7 +905,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool complete_local_actor_join (pending_operation_t operation,
                                     std::string actor_type,
                                     stateful::membership_token_t membership,
-                                    actor_join_result_t result,
+                                    const actor_join_operation_result_t &result,
                                     const std::vector<zlink::message_t> &parts);
     zlink::submit_result_t enqueue_local_actor_message (
       const actor_ref_t &target,
@@ -1195,7 +1195,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
 zlink::submit_result_t reply (const reply_token_t &token,
                               const std::vector<zlink::message_t> &parts);
 bool actor_join_reply (const reply_token_t &token,
-                       actor_join_result_t result,
+                       result_t<actor_join_result_t> result,
                        const std::vector<zlink::message_t> &parts);
 
 using mesh_node_t = public_host_runtime_t;
