@@ -1290,12 +1290,12 @@ public final class ZLinkSerialExecutionQueue {
         }
         submitWorker(
                 () -> {
-                    Entry entry;
+                    Entry next;
                     synchronized (this) {
                         drainScheduled = false;
-                        entry = takeNextForDrainLocked();
+                        next = takeNextForDrainLocked();
                     }
-                    if (entry != null) drainBatch(entry);
+                    if (next != null) drainBatch(next);
                 },
                 this::rejectDrain);
     }
