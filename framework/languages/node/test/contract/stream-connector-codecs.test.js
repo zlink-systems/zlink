@@ -233,15 +233,32 @@ test('framework protobuf serializer preserves bytes bodies', () => {
   }
 });
 
-test('framework protobuf and MessagePack serializers decode through the byte view', () => {
-  for (const serializer of [
-    protobufFramework.createProtobufMessageSerializer(),
-    msgpackFramework.createMessagePackSerializer()
-  ]) {
-    const encoded = serializer.serialize({ value: 7 });
-    encoded.data = () => { throw new Error('deserialize copied the payload'); };
-    assert.deepEqual(serializer.deserialize(encoded), { value: 7 });
-  }
+test('framework dynamic protobuf deserializer decodes through the byte view', () => {
+  const serializer = protobufFramework.createProtobufMessageSerializer();
+  const encoded = serializer.serialize({ value: 7 });
+  encoded.data = () => { throw new Error('deserialize copied the payload'); };
+  assert.deepEqual(serializer.deserialize(encoded), { value: 7 });
+});
+
+test('framework MessagePack deserialization isolates each binary result', () => {
+  const serializer = msgpackFramework.createMessagePackSerializer();
+  const encoded = serializer.serialize({ bin: Uint8Array.from([1, 2, 3]) });
+  const first = serializer.deserialize(encoded);
+  first.bin[0] = 9;
+  const second = serializer.deserialize(encoded);
+  assert.deepEqual([...second.bin], [1, 2, 3]);
+});
+
+test('framework protobuf envelope deserialization isolates returned byte subarrays', () => {
+  const serializer = protobufFramework.createProtobufEnvelopeMessageSerializer({
+    encode: (value) => ({ codec: connector.ZlinkStreamCodec.Protobuf, payload: value }),
+    decode: (payload) => payload.payload.subarray(1, 3)
+  });
+  const encoded = serializer.serialize(Uint8Array.from([0, 1, 2, 0]));
+  const first = serializer.deserialize(encoded);
+  first[0] = 9;
+  const second = serializer.deserialize(encoded);
+  assert.deepEqual([...second], [1, 2]);
 });
 
 test('stream connector protobuf codec dispatches typed payloads through connector', async () => {
@@ -319,7 +336,7 @@ test('protobuf envelope extension registers the schema-backed envelope serialize
   assert.equal(calls[0].context, Join);
 
   assert.deepEqual(serializer.deserialize(encoded), { decoded: true });
-  assert.equal(calls[1].payload.payload.buffer, encoded.view().buffer);
+  assert.notEqual(calls[1].payload.payload.buffer, encoded.view().buffer);
   assert.equal(calls[1].direction, 'decode');
   assert.equal(calls[1].payload.codec, connector.ZlinkStreamCodec.Protobuf);
   assert.deepEqual([...calls[1].payload.payload], [...encodedBytes]);

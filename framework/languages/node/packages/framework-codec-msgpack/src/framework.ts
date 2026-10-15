@@ -33,7 +33,7 @@ export function createMessagePackSerializer(): ZLinkMessageSerializer {
       return ZLinkEncodedPayload.fromOwned(encodeMessagePack(value));
     },
     deserialize<T>(payload: ZLinkEncodedPayload): T {
-      return decodeMessagePack(payload.view()) as T;
+      return decodeMessagePack(payload.data()) as T;
     }
   };
 }

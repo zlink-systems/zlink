@@ -89,7 +89,7 @@ export function createProtobufEnvelopeMessageSerializer(
     deserialize<T>(payload: ZLinkEncodedPayload): T {
       return options.decode<T>({
         codec: ZlinkStreamCodec.Protobuf,
-        payload: payload.view()
+        payload: payload.data()
       });
     }
   };
