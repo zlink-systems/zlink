@@ -237,9 +237,15 @@ std::shared_ptr<operation_completion_dispatcher_t> shared_completion_dispatcher 
 
 } // namespace
 
-operation_registry_t::operation_registry_t () :
+operation_registry_t::operation_registry_t () : operation_registry_t (&clock_t::now)
+{
+}
+
+operation_registry_t::operation_registry_t (now_t now) :
     _completion_dispatcher (shared_completion_dispatcher ()),
-    _drain_state (std::make_shared<operation_registry_drain_state_t> ())
+    _drain_state (std::make_shared<operation_registry_drain_state_t> ()),
+    _now (now),
+    _deadline_origin (now ())
 {
 }
 
@@ -492,15 +498,16 @@ std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &
 std::size_t operation_registry_t::expire (clock_t::time_point now)
 {
     operation_completion_chain_t completions;
-    clock_t::time_point started;
+    // §4.2: the budget counts from entry and bounds every slot visit, a rounds-only visit
+    // included; the cursor keeps the rest of the slot for the next management turn.
+    const auto started = _now ();
     const auto now_tick =
       now <= _deadline_origin
         ? std::uint64_t{0}
         : static_cast<std::uint64_t> (
             std::chrono::duration_cast<std::chrono::milliseconds> (now - _deadline_origin)
               .count ());
-    while (completions.size == 0
-           || clock_t::now () - started < runtime::dispatch_limits::receive_batch_time) {
+    while (_now () - started < runtime::dispatch_limits::receive_batch_time) {
         std::lock_guard lock (_mutex);
         if (!_deadline_cursor) {
             const auto next = next_occupied_tick ();
@@ -521,8 +528,6 @@ std::size_t operation_registry_t::expire (clock_t::time_point now)
                 ++_deadline_tick;
             continue;
         }
-        if (completions.size == 0)
-            started = clock_t::now ();
         const auto entry = _pending.find (current->id);
         completions.append (std::move (entry->second.completion), operation_terminal_t::timed_out);
         unindex_deadline (entry->second);

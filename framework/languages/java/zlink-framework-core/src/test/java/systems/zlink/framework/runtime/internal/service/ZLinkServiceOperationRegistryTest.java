@@ -107,6 +107,43 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
+    void roundsOnlyVisitsYieldAtTheManagementBudgetAndResumeFromTheCursor() {
+        long budget =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
+                        .DEFAULT_MAX_ELAPSED_NANOS;
+        AtomicLong clock = new AtomicLong();
+        AtomicLong step = new AtomicLong();
+        try (var scheduler = new CountingScheduler();
+                var registry =
+                        new ZLinkServiceOperationRegistry(
+                                scheduler,
+                                new IllegalStateException("closed"),
+                                () -> clock.getAndAdd(step.get()))) {
+            scheduler.shutdownNow();
+            List<ZLinkServiceOperationRegistry.Operation<Object>> later = new ArrayList<>();
+            for (int index = 0; index < 8; index++)
+                later.add(registry.register(Duration.ofMillis(257)));
+            var due = registry.register(Duration.ofMillis(1));
+            // §4.2: every slot visit, a rounds-only one included, reads the management budget
+            // counted from entry; four reads exhaust it.
+            step.set(budget / 4);
+            long tick = TimeUnit.MILLISECONDS.toNanos(1);
+
+            assertEquals(0, registry.expire(tick));
+            assertFalse(due.completion().isDone());
+            int turns = 1;
+            while (registry.expire(tick) == 0) assertTrue(++turns < 9);
+            assertThrows(CompletionException.class, due.completion()::join);
+            assertEquals(8, registry.pendingCount());
+            for (var operation : later) assertFalse(operation.completion().isDone());
+
+            step.set(0);
+            assertEquals(8, registry.expire(TimeUnit.MILLISECONDS.toNanos(257)));
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    @Test
     void oneMaintenanceTaskServesEveryPendingDeadlineAndExpiresAtTheBoundary() {
         AtomicLong clock = new AtomicLong(100);
         try (var scheduler = new CountingScheduler();

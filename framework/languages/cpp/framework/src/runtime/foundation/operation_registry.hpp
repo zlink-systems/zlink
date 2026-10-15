@@ -32,8 +32,11 @@ class operation_registry_t
     using clock_t = std::chrono::steady_clock;
     using callback_t = std::function<void (operation_terminal_t, std::vector<std::uint8_t>)>;
     using before_dispatch_t = std::function<void ()>;
+    // The management budget reads this clock; tests inject a deterministic one.
+    using now_t = clock_t::time_point (*) ();
 
     operation_registry_t ();
+    explicit operation_registry_t (now_t now);
     ~operation_registry_t () noexcept;
 
     bool register_operation (call_id_t id,
@@ -94,7 +97,8 @@ class operation_registry_t
     std::shared_ptr<operation_registry_drain_state_t> _drain_state;
     mutable std::mutex _mutex;
     std::unordered_map<call_id_t, pending_t, id_hash_t> _pending;
-    const clock_t::time_point _deadline_origin = clock_t::now ();
+    const now_t _now;
+    const clock_t::time_point _deadline_origin;
     std::array<pending_t *, deadline_slot_count> _deadline_heads{};
     std::array<pending_t *, deadline_slot_count> _deadline_tails{};
     std::array<std::uint64_t, deadline_slot_count / deadline_bitmap_word_bits> _deadline_occupied{};

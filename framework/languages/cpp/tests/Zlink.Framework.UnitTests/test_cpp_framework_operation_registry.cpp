@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
 
@@ -37,6 +38,17 @@ const nlohmann::json &completion_terminal_fixture ()
 foundation::call_id_t id (std::uint8_t value)
 {
     return foundation::call_id_t{0, value};
+}
+
+foundation::operation_registry_t::clock_t::time_point injected_now{};
+foundation::operation_registry_t::clock_t::duration injected_step{};
+
+// Each read advances the injected clock by the configured step.
+foundation::operation_registry_t::clock_t::time_point read_injected_clock ()
+{
+    const auto now = injected_now;
+    injected_now += injected_step;
+    return now;
 }
 
 template <typename Predicate> bool wait_until (Predicate predicate)
@@ -150,6 +162,38 @@ int main ()
         assert (wheel.expire (deadline - std::chrono::nanoseconds (1)) == 0);
         assert (wheel.expire (expiry_tick) == 1);
         assert (!wheel.next_deadline ());
+    }
+    {
+        injected_now = {};
+        injected_step = {};
+        foundation::operation_registry_t yielding (&read_injected_clock);
+        const auto origin = injected_now;
+        for (std::size_t index = 0; index < 8; ++index)
+            assert (yielding.register_operation (foundation::call_id_t{3, index + 1},
+                                                 origin + std::chrono::milliseconds (257),
+                                                 [] (auto, auto) {}));
+        assert (yielding.register_operation (
+          foundation::call_id_t{3, 9}, origin + std::chrono::milliseconds (1),
+          [] (auto terminal, auto) {
+              assert (terminal == foundation::operation_terminal_t::timed_out);
+          }));
+        // §4.2: every slot visit, a rounds-only one included, reads the management budget
+        // counted from entry; four reads exhaust it.
+        injected_step =
+          std::chrono::duration_cast<foundation::operation_registry_t::clock_t::duration> (
+            runtime::dispatch_limits::receive_batch_time)
+          / 4;
+        const auto tick = origin + std::chrono::milliseconds (1);
+        assert (yielding.expire (tick) == 0);
+        assert (yielding.contains (foundation::call_id_t{3, 9}));
+        std::size_t turns = 1;
+        while (yielding.expire (tick) == 0)
+            assert (++turns < 9);
+        assert (!yielding.contains (foundation::call_id_t{3, 9}));
+        assert (yielding.size () == 8);
+        injected_step = {};
+        assert (yielding.expire (origin + std::chrono::milliseconds (257)) == 8);
+        assert (yielding.size () == 0);
     }
     {
         foundation::operation_registry_t budgeted;

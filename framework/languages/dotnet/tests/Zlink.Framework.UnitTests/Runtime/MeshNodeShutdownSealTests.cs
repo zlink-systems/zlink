@@ -146,7 +146,12 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         var first = firstRegistration[2]!;
         var token = (CancellationToken)
             first.GetType().GetProperty("Token", flags)!.GetValue(first)!;
-        using var slowTerminal = token.Register(() => Thread.Sleep(3));
+        // The first terminal spends the whole management budget on the injected clock.
+        using var slowTerminal = token.Register(() =>
+            clock.Timestamp +=
+                Zlink.Framework.Runtime.Dispatch.ZLinkReceiveBatchBudget.MaximumMilliseconds
+                * TimeSpan.TicksPerMillisecond
+        );
         for (var index = 0; index < 2; index++)
             Assert.True(
                 (bool)
@@ -162,12 +167,73 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.Equal(0, count.GetValue(operations));
     }
 
+    [Fact]
+    public async Task OperationDeadline_RoundsOnlyVisitsYieldAtTheBudgetAndResumeFromTheCursor()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkManagedMeshNode);
+        var begin = type.GetMethods(flags)
+            .Single(method =>
+                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+            );
+        var expire = type.GetMethod("ExpireOperations", flags)!;
+        var operations = type.GetField("_operations", flags)!.GetValue(node)!;
+        var count = operations.GetType().GetProperty("Count")!;
+        for (var index = 0; index < 8; index++)
+            Assert.True(
+                (bool)
+                    begin.Invoke(
+                        node,
+                        [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(257), null]
+                    )!
+            );
+        Assert.True(
+            (bool)
+                begin.Invoke(
+                    node,
+                    [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(1), null]
+                )!
+        );
+        // §4.2: every slot visit, a rounds-only one included, reads the management budget
+        // counted from entry; four reads exhaust it.
+        clock.Timestamp = TimeSpan.TicksPerMillisecond;
+        clock.Step = TimeSpan.TicksPerMillisecond / 4;
+        expire.Invoke(node, null);
+        Assert.Equal(9, count.GetValue(operations));
+        var turns = 1;
+        while ((int)count.GetValue(operations)! == 9)
+        {
+            Assert.True(++turns < 9);
+            expire.Invoke(node, null);
+        }
+        Assert.Equal(8, count.GetValue(operations));
+        clock.Step = 0;
+        clock.Timestamp = 257 * TimeSpan.TicksPerMillisecond;
+        expire.Invoke(node, null);
+        Assert.Equal(0, count.GetValue(operations));
+    }
+
     private sealed class OperationDeadlineClock : TimeProvider
     {
         internal long Timestamp;
+        internal long Step;
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
-        public override long GetTimestamp() => Timestamp;
+        // Each read advances the clock by Step.
+        public override long GetTimestamp()
+        {
+            var timestamp = Timestamp;
+            Timestamp += Step;
+            return timestamp;
+        }
 
         public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch;
     }

@@ -314,11 +314,12 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         Entry<?> expiredHead = null;
         Entry<?> expiredTail = null;
         int expired = 0;
-        long startedNanos = 0;
+        long startedNanos = nanoTime.getAsLong();
         long nowTick = (nowNanos - deadlineOrigin) / DEADLINE_TICK_NANOS;
-        while (expired == 0
-                || nanoTime.getAsLong() - startedNanos
-                        < ZLinkReceiveBatchBudget.DEFAULT_MAX_ELAPSED_NANOS) {
+        // §4.2: the budget counts from entry and bounds every slot visit, a rounds-only visit
+        // included; the cursor keeps the rest of the slot for the next maintenance turn.
+        while (nanoTime.getAsLong() - startedNanos
+                < ZLinkReceiveBatchBudget.DEFAULT_MAX_ELAPSED_NANOS) {
             Entry<?> current;
             synchronized (gate) {
                 if (deadlineCursor == null) {
@@ -338,7 +339,6 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                     if (deadlineCursor == null) deadlineTick++;
                     continue;
                 }
-                if (expired == 0) startedNanos = nanoTime.getAsLong();
                 takeLocked(current.id);
             }
             current.completeWithFailure(
