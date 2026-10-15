@@ -189,7 +189,13 @@ test('location runtime renews owner lease, records store failure, and recovers',
   assert.equal(runtime.lastError, undefined);
 });
 
-test('location runtime completes startup without a lease after the initial claim times out', async () => {
+test('location runtime completes startup without a lease after the initial claim times out', async t => {
+  const renewIntervalMs = 25;
+  const renewTimeoutMs = 5;
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];
   const leaseStore = {
@@ -207,19 +213,20 @@ test('location runtime completes startup without a lease after the initial claim
     ownerLeaseStore: leaseStore,
     timers,
     locationOptions: {
-      ownerLeaseRenewIntervalMs: 25,
-      ownerLeaseRenewTimeoutMs: 5
+      ownerLeaseRenewIntervalMs: renewIntervalMs,
+      ownerLeaseRenewTimeoutMs: renewTimeoutMs
     }
   });
-  const keepAlive = setTimeout(() => {}, 100);
 
-  await runtime.start(rid('node-startup-timeout'));
-  clearTimeout(keepAlive);
+  const startup = runtime.start(rid('node-startup-timeout'));
+  now += renewTimeoutMs;
+  t.mock.timers.tick(renewTimeoutMs);
+  await startup;
 
   assert.equal(runtime.isStarted, true);
   assert.equal(runtime.currentOwnerToken, undefined);
   assert.equal(runtime.ownerLeaseUsable, false);
-  assert.ok(timers[0].delayMs > 0 && timers[0].delayMs <= 25);
+  assert.equal(timers[0].delayMs, renewIntervalMs - renewTimeoutMs);
   await runtime.stop();
 });
 
