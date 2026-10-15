@@ -149,9 +149,9 @@ application types to add; the Framework calls shown already exist in this templa
   uses `SpotWide`; its common gate already serializes member Actor handlers, Spot handlers,
   timers, and lifecycle callbacks. Do not add a second lock or queue for the same state.
   Read [Execution model](https://docs.zlink.systems/dotnet/guide/server/32-execution-model/).
-- Await short public asynchronous calls as the template does. Suspension can retain the
-  current turn; do not wait for work requiring that same turn to finish. Consult the
-  execution guide and pinned API before introducing long-running work.
+- Await public asynchronous calls (Actor client sends, Session sends) as the template does.
+  A handler that awaits can keep its turn held, so do not await work that needs the same
+  turn, such as a request back to the same Spot. Move long-running work out of handlers.
 - Keep registration and per-instance callbacks in their defined phases. `DungeonSpot`
   remains a User Spot even though its process is named Instance. Read
   [Activation and lifetime](https://docs.zlink.systems/dotnet/guide/server/34-activation-lifetime/).
@@ -192,9 +192,8 @@ failure is a defect; a subsequent pass does not invalidate it.
 - `GameHosting` configures standard console logging to stderr. Read message-flow records
   in node `.err.log` files; this template does not create a separate `.flow` file.
   Use `flow` to follow a message across nodes and `corr` to connect request/reply records.
-  The generic failure notation is `message_flow_outcome=error`; the .NET console format
-  uses `zlink flow:` with `outcome=failed`, `error_type`, and `error_message` instead.
-  Inspect those fields and the preceding transition. Preserve the full category output.
+  Records start with `zlink flow:`; a failure has `outcome=failed` with `error_type` and
+  `error_message`. Inspect those fields and the preceding transition. Do not filter categories out.
 - Compare passing and failing runs by logical operation, Actor ID, and transition order;
   flow IDs differ between runs. Find the first missing or failed transition rather than
   comparing only final timeouts. Startup failures can precede message flow; retain the

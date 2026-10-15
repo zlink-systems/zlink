@@ -13,7 +13,7 @@
 - Initializr가 치환하는 `my-game`·`MyGame` 토큰을 유지한다.
 - node 역할별 진입점을 분리하고 공통 hosting·설정·제어 protocol은 한 곳에 둔다.
 - README와 AGENTS는 영어로 작성한다. README 마지막에만 짧은 한국어 실행 안내를 둔다.
-  코드 주석은 영어로 작성한다.
+  코드 주석은 영어로 작성한다. 제작 job의 보고서는 격식 있는 기술 문체 한국어로 쓴다.
 - 로그, 빌드 결과, package cache, 검증용 사본, 자격 증명과 license 파일을 커밋하지 않는다.
 - 포매터·lint·설치 명령은 대상 템플릿 디렉터리 안에서 실행한다. 파일 목록에서 로그와
   검증·빌드 결과를 제외하고, 커밋 전에 템플릿 밖 변경이 없는지 확인한다.
@@ -38,6 +38,7 @@
 - reply·event·lifecycle observation을 실제로 받아 판정한다. 명령 수락만으로 relocation 완료나
   safe shutdown을 판정하지 않는다. 고정 sleep·retry·deadline 확대·assertion 완화로 통과시키지 않는다.
 - 간헐 실패는 한 번이라도 결함으로 기록한다. 재실행 통과를 근거로 첫 실패를 제외하지 않는다.
+- message-flow 기록은 dispatch diagnostics `Normal` 로거가 node stderr에 남긴다. 별도 listener를 더하지 않는다.
 - 첫 재현부터 node stdout·stderr와 message-flow 기록을 보존한다. 임시 로깅이나 재실행 전에
   이미 있는 로그의 첫 실패를 읽고, 통과 실행과 transition을 대조한다.
 - 실행마다 고유 Redis key prefix와 Compose project 이름, OS가 배정하는 포트를 사용한다.
