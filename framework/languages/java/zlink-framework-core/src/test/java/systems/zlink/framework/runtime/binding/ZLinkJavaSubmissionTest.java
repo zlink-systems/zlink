@@ -518,6 +518,38 @@ final class ZLinkJavaSubmissionTest {
         ROUTER
     }
 
+    @Test
+    void standaloneSendOwnersDoNotStartDeadlineMaintenanceOnConstruction() throws Exception {
+        try (var binding = new BindingProbe();
+                var dealer =
+                        new ZLinkJavaDealerSocket(
+                                (systems.zlink.contracts.sockets.DealerSocket)
+                                        Proxy.newProxyInstance(
+                                                systems.zlink.contracts.sockets.DealerSocket.class
+                                                        .getClassLoader(),
+                                                new Class<?>[] {
+                                                    systems.zlink.contracts.sockets.DealerSocket
+                                                            .class
+                                                },
+                                                (proxy, method, args) -> {
+                                                    if (method.getName().equals("close"))
+                                                        return null;
+                                                    throw new AssertionError(method);
+                                                }));
+                var router = new ZLinkJavaRouterSocket(binding.router);
+                var port = new ZLinkJavaRawServicePort(binding.context, binding.lane)) {
+            for (Object owner : List.of(dealer, router, port)) {
+                var registryField = owner.getClass().getDeclaredField("operations");
+                registryField.setAccessible(true);
+                var registry = (ZLinkServiceOperationRegistry) registryField.get(owner);
+                var maintenanceField =
+                        ZLinkServiceOperationRegistry.class.getDeclaredField("maintenance");
+                maintenanceField.setAccessible(true);
+                assertNull(maintenanceField.get(registry), owner.getClass().getSimpleName());
+            }
+        }
+    }
+
     @ParameterizedTest
     @EnumSource(SocketLifetime.class)
     void standaloneSocketCloseOwnsPendingSendAndDoesNotWaitForCallback(SocketLifetime lifetime)

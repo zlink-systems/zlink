@@ -19,7 +19,8 @@ import java.util.function.Supplier;
 
 /** Owns operation correlation, request deadlines, and terminal-once completion. */
 public final class ZLinkServiceOperationRegistry implements AutoCloseable {
-    private final ScheduledFuture<?> maintenance;
+    private final ScheduledExecutorService scheduler;
+    private ScheduledFuture<?> maintenance;
     private final LongSupplier nanoTime;
     private final Supplier<? extends Throwable> timeoutFailure;
     private final ZLinkServiceCompletionDispatcher completions =
@@ -67,13 +68,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Throwable closeFailure,
             Supplier<? extends Throwable> timeoutFailure,
             LongSupplier nanoTime) {
-        Objects.requireNonNull(scheduler, "scheduler");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
         this.closeFailure = Objects.requireNonNull(closeFailure, "closeFailure");
         this.timeoutFailure = Objects.requireNonNull(timeoutFailure, "timeoutFailure");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
         growSlots();
-        this.maintenance =
-                scheduler.scheduleAtFixedRate(this::expireMaintenance, 1, 1, TimeUnit.MILLISECONDS);
     }
 
     public <T> Operation<T> register(Duration timeout) {
@@ -236,7 +235,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             }
         }
         try {
-            maintenance.cancel(false);
+            if (maintenance != null) maintenance.cancel(false);
         } finally {
             completions.postChain(detachedHead, detachedTail);
         }
@@ -345,12 +344,21 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 || findEntry(id) != null) {
             throw new IllegalArgumentException("operation identity is zero or already pending");
         }
+        long deadlineNanos = 0;
+        if (kind == Kind.REQUEST) {
+            if (maintenance == null) {
+                maintenance =
+                        scheduler.scheduleAtFixedRate(
+                                this::expireMaintenance, 1, 1, TimeUnit.MILLISECONDS);
+            }
+            deadlineNanos = nanoTime.getAsLong() + timeoutNanos;
+        }
         @SuppressWarnings("unchecked")
         Entry<T> entry = (Entry<T>) claimSlot();
         completions.register(entry);
         entry.id = id;
         entry.kind = kind;
-        if (kind == Kind.REQUEST) entry.deadlineNanos = nanoTime.getAsLong() + timeoutNanos;
+        entry.deadlineNanos = deadlineNanos;
         entry.generation++;
         Operation<T> operation =
                 new Operation<>(

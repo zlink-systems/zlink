@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +34,53 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkServiceOperationRegistryTest {
+    @Test
+    void sendOnlyRegistryNeverSchedulesMaintenance() {
+        var scheduler = new MaintenanceScheduler();
+        try (var registry = new ZLinkServiceOperationRegistry(scheduler.executor)) {
+            assertEquals(0, scheduler.schedules);
+            var binding = new CompletableFuture<Void>();
+            var send = registry.submitSend(() -> binding);
+            assertEquals(1, registry.pendingCount());
+            assertEquals(0, scheduler.schedules);
+            binding.complete(null);
+            assertNull(send.toCompletableFuture().join());
+            assertEquals(0, scheduler.schedules);
+        }
+        assertEquals(0, scheduler.schedules);
+        assertFalse(scheduler.cancelled);
+    }
+
+    @Test
+    void firstRequestStartsMaintenanceOnceAndCloseCancelsIt() {
+        var scheduler = new MaintenanceScheduler();
+        AtomicLong clock = new AtomicLong(100);
+        var registry =
+                new ZLinkServiceOperationRegistry(
+                        scheduler.executor, new IllegalStateException("closed"), clock::get);
+        try (registry) {
+            assertEquals(0, scheduler.schedules);
+            var first = registry.register(Duration.ofNanos(10));
+            assertEquals(1, scheduler.schedules);
+            clock.set(109);
+            scheduler.command.run();
+            assertFalse(first.isDone());
+            clock.set(110);
+            scheduler.command.run();
+            assertTrue(
+                    assertThrows(CompletionException.class, first::join).getCause()
+                            instanceof TimeoutException);
+            var second = registry.register(Duration.ofNanos(10));
+            assertEquals(1, scheduler.schedules);
+            assertFalse(scheduler.cancelled);
+            assertTrue(registry.discard(second.id()));
+        }
+        assertTrue(scheduler.cancelled);
+        assertEquals(1, scheduler.schedules);
+        assertThrows(IllegalStateException.class, () -> registry.register(Duration.ofSeconds(1)));
+        assertEquals(1, scheduler.schedules);
+    }
+
     @Test
     void sendIgnoresRequestDeadlineAndCallerCancellation() {
         AtomicLong clock = new AtomicLong(100);
@@ -792,6 +840,39 @@ final class ZLinkServiceOperationRegistryTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(interrupted);
         }
+    }
+
+    private static final class MaintenanceScheduler {
+        private int schedules;
+        private boolean cancelled;
+        private Runnable command;
+        private final ScheduledFuture<?> future =
+                (ScheduledFuture<?>)
+                        Proxy.newProxyInstance(
+                                ScheduledFuture.class.getClassLoader(),
+                                new Class<?>[] {ScheduledFuture.class},
+                                (proxy, method, args) -> {
+                                    if (method.getName().equals("cancel")) {
+                                        assertEquals(false, args[0]);
+                                        cancelled = true;
+                                        return true;
+                                    }
+                                    throw new AssertionError(method);
+                                });
+        private final ScheduledExecutorService executor =
+                (ScheduledExecutorService)
+                        Proxy.newProxyInstance(
+                                ScheduledExecutorService.class.getClassLoader(),
+                                new Class<?>[] {ScheduledExecutorService.class},
+                                (proxy, method, args) -> {
+                                    assertEquals("scheduleAtFixedRate", method.getName());
+                                    schedules++;
+                                    command = (Runnable) args[0];
+                                    assertEquals(1L, args[1]);
+                                    assertEquals(1L, args[2]);
+                                    assertEquals(TimeUnit.MILLISECONDS, args[3]);
+                                    return future;
+                                });
     }
 
     private static final class CountingScheduler extends ScheduledThreadPoolExecutor {
