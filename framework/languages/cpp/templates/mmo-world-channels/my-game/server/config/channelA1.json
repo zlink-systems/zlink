@@ -1,0 +1,11 @@
+{
+  "Id": "channelA1",
+  "WorldId": "A",
+  "RedisEndpoint": "localhost:6379",
+  "KeyPrefix": "my-game-world-a:",
+  "MeshEndpoint": "tcp://127.0.0.1:0",
+  "ZoneIds": [
+    "field@1"
+  ],
+  "ZoneCapacity": 2
+}
