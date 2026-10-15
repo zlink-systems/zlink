@@ -529,6 +529,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                         {
                             ZLinkMessageParts.DisposeAll(admissionParts);
                         }
+                        var requestAdmission = new ZLinkRequestAdmission();
                         var replyParts = await ZLinkDurableRequest
                             .RequestAsync(
                                 wire,
@@ -549,10 +550,13 @@ internal sealed class ZLinkActorRemoteJoiner(
                                         snapshot.OwnerLeaseGeneration,
                                         frames.Select(Message.From).ToArray(),
                                         remaining,
-                                        token
+                                        token,
+                                        requestAdmission: requestAdmission
                                     );
                                 },
-                                cancellationToken
+                                cancellationToken,
+                                () => sourceNode.Node.ObservePeerRoute(snapshot.NodeRid),
+                                requestAdmission: requestAdmission
                             )
                             .ConfigureAwait(false);
                         ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -1001,7 +1005,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                             token
                         ),
                     registration.Locations.Options.PollingInterval,
-                    cancellationToken
+                    cancellationToken,
+                    () => sourceNode.Node.ObservePeerRoute(targetNodeRid)
                 )
                 .ConfigureAwait(false);
             //  Relocation flow §4.4: a confirmed Preserve returns the retained

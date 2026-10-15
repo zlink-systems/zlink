@@ -257,8 +257,11 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                         continue;
                     }
                     ZLinkActor actor = localActor.get();
-                    if (host.dispatchActorControlPacket(
-                            packetHeader, headerPart, actor, pendingHeader)) {
+                    var control =
+                            host.dispatchActorControlPacket(
+                                    packetHeader, headerPart, actor, pendingHeader);
+                    if (control != null) {
+                        dispatches.add(control);
                         continue;
                     }
                     // Admit every Actor packet to its own Actor queue before waiting
@@ -782,11 +785,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(
                         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(
                                 requestHeader));
-        try {
-            received.reply(List.of(replyHeader, reply));
-        } finally {
-            replyHeader.close();
-        }
+        received.reply(List.of(replyHeader, reply));
     }
 
     final void closeActiveRouteReceives() {
