@@ -7799,13 +7799,11 @@ bool spot_node_runtime_t::consume_actor_join_recovery (
             && recovery->actor_id == frozen.owner.key && recovery->actor_type == frozen.stable_type
             && recovery->actor_generation == frozen.owner.object_generation
             && recovery->actor_authority_owner_generation == frozen.owner.authority_owner_generation
-            && recovery->actor_authority_owner_generation
-                 != std::numeric_limits<std::uint64_t>::max ()
             && recovery->target_authority_owner_generation
-                 == recovery->actor_authority_owner_generation + 1
+                 == recovery->actor_authority_owner_generation
             && target.key == recovery->actor_id
             && target.object_generation == recovery->actor_generation
-            && target.authority_owner_generation == recovery->target_authority_owner_generation
+            && target.authority_owner_generation == frozen.owner.authority_owner_generation
             && recovery->target_node_routing_id == local_node
             && recovery->target_node_generation == prepare.target.target_node_generation
             && recovery->target_spot_id == std::string (admission->target_spot_id)
@@ -8182,7 +8180,7 @@ task_t<bool> spot_node_runtime_t::materialize_actor_relocation_state (
                         || followed->target_fence.authority_owner_generation
                              != frozen.owner.authority_owner_generation
                         || frozen.owner.authority_owner_generation
-                             >= target.authority_owner_generation
+                             > target.authority_owner_generation
                         || (current_fence != _state->actor_authority_fences.end ()
                             && current_fence->second != cleanup->source_fence)) {
                         return false;
@@ -10522,7 +10520,7 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
                                                  std::string (actor_ref.node_rid ().value ())};
     const runtime::stateful::object_ref_t target{
       runtime::stateful::object_kind_t::actor, source.key,       source.object_generation,
-      source.authority_owner_generation + 1,   target_mesh_name, target_node_id};
+      source.authority_owner_generation,       target_mesh_name, target_node_id};
     const auto target_actor = ::zlink::framework::detail::actor_ref_access_t::make (
       node_rid_t::from_string (target_node_id),
       std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),

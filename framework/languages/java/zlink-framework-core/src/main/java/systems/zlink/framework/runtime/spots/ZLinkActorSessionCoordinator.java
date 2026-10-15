@@ -141,6 +141,13 @@ final class ZLinkActorSessionCoordinator {
         requireActors().refreshRelocationMessageFollow(source, target);
     }
 
+    CompletionStage<Void> confirmRelocationMessageFollow(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .ActorRouteFence
+                    source) {
+        return requireActors().confirmRelocationMessageFollow(source);
+    }
+
     void abortRelocationMessageFollow(
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .ActorRouteFence

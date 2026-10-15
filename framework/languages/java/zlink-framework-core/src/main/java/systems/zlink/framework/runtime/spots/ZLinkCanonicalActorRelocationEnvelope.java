@@ -1,13 +1,12 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -16,6 +15,8 @@ import java.util.UUID;
 
 /** Projects one independent Actor onto relocation-envelope-v1. */
 public final class ZLinkCanonicalActorRelocationEnvelope {
+    static final long PARTICIPANT_ID = 1;
+
     private ZLinkCanonicalActorRelocationEnvelope() {}
 
     public static byte[] encode(
@@ -93,6 +94,32 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
             List<ZLinkSerialExecutionQueue.QueuedRecord> journal,
             byte[] timerEnvelope,
             byte[] actorJoinRecovery) {
+        return encode(
+                relocationId,
+                actorId,
+                objectGeneration,
+                expectedAuthorityOwnerGeneration,
+                applicationVersion,
+                restoreSnapshot,
+                state,
+                journal,
+                timerEnvelope,
+                actorJoinRecovery,
+                List.of());
+    }
+
+    static byte[] encode(
+            UUID relocationId,
+            String actorId,
+            long objectGeneration,
+            long expectedAuthorityOwnerGeneration,
+            long applicationVersion,
+            boolean restoreSnapshot,
+            byte[] state,
+            List<ZLinkSerialExecutionQueue.QueuedRecord> journal,
+            byte[] timerEnvelope,
+            byte[] actorJoinRecovery,
+            List<ServiceWirePilotCodec.RelocationSessionBinding> bindings) {
         Objects.requireNonNull(relocationId, "relocationId");
         Objects.requireNonNull(actorId, "actorId");
         byte[] applicationState = Objects.requireNonNull(state, "state").clone();
@@ -129,82 +156,72 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
             }
         }
 
-        Writer writer = new Writer();
-        writer.u64(relocationId.getMostSignificantBits());
-        writer.u64(relocationId.getLeastSignificantBits());
-        Writer object = new Writer();
-        object.text8(actorId);
-        object.u64(objectGeneration);
-        object.u64(expectedAuthorityOwnerGeneration);
-        writer.u8(1);
-        writer.body16(object);
-        writer.u64(applicationVersion);
-        writer.u32(1);
-        writer.u64(1);
-        writer.u8(restoreSnapshot ? 1 : 0);
-        Writer stateBody = new Writer();
-        if (restoreSnapshot) {
-            stateBody.bytes64(applicationState);
-        }
-        writer.body64(stateBody);
-        //  Only a canonical service-wire-v1 frozen record can be replayed:
-        //  `ZLinkActorAcceptedJournal.decode` rejects everything else. Turns
-        //  whose accepted-journal bytes are not canonical - an empty array
-        //  when the backend had no record, or a local dispatch that carries
-        //  its stream header and payload instead - therefore have nothing to
-        //  replay, and encoding them corrupts the envelope: the reader takes
-        //  the first byte of every journal record as its `kind`, so a
-        //  non-canonical entry makes it read the following field and reject
-        //  the whole envelope with "journal record kind". The accepted
-        //  boundary above still counts those turns; only the encoded journal
-        //  drops them.
-        List<ZLinkSerialExecutionQueue.QueuedRecord> encodedRecords =
-                records.stream()
-                        .filter(
-                                record ->
-                                        systems.zlink.framework.runtime.internal.service
-                                                .ZLinkServiceFrozenRecordCodec.isCanonical(
-                                                record.payload()))
-                        .toList();
-        writer.u32(encodedRecords.size() + (hasActorJoinRecovery ? 1 : 0));
-        for (var record : encodedRecords) {
-            writer.u64(1);
-            writer.u64(record.sequence());
-            writer.raw(record.payload());
+        List<ServiceWirePilotCodec.RelocationSavedWork> work = new ArrayList<>();
+        for (var record : records) {
+            if (systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec
+                    .isCanonical(record.payload())) {
+                work.add(
+                        new ServiceWirePilotCodec.RelocationSavedWork(
+                                PARTICIPANT_ID, record.sequence(), record.payload()));
+            }
         }
         if (hasActorJoinRecovery) {
-            writer.u64(1);
-            writer.u64(actorJoinRecoverySequence);
-            writer.raw(recovery);
+            work.add(
+                    new ServiceWirePilotCodec.RelocationSavedWork(
+                            PARTICIPANT_ID, actorJoinRecoverySequence, recovery));
         }
-        writer.u32(timers.size());
-        for (var timer : timers) {
-            writer.u64(1);
-            writer.text8(timer.name());
-            writer.text8(timer.handlerType());
-            writer.u64(timer.periodMilliseconds());
-            writer.u8(timer.overrunPolicy());
-            writer.u64(timer.maxCatchUpTicks());
-            writer.u8(timer.stopOnUnhandledException() ? 1 : 0);
-            writer.u64(timer.lastCompletedDeliveryIndex());
-            writer.u64(timer.lastCompletedScheduledIndex());
-            writer.u64(timer.nextScheduledAtUnixMilliseconds());
+        var registrations =
+                timers.stream()
+                        .map(
+                                timer ->
+                                        new ServiceWirePilotCodec.RelocationTimerRegistration(
+                                                PARTICIPANT_ID,
+                                                timer.name(),
+                                                timer.handlerType(),
+                                                timer.periodMilliseconds(),
+                                                timer.overrunPolicy(),
+                                                timer.maxCatchUpTicks(),
+                                                timer.stopOnUnhandledException(),
+                                                timer.lastCompletedDeliveryIndex(),
+                                                timer.lastCompletedScheduledIndex(),
+                                                timer.nextScheduledAtUnixMilliseconds()))
+                        .toList();
+        var pending =
+                pendingTimers.stream()
+                        .map(
+                                value -> {
+                                    var timer = value.timer();
+                                    var tick = timer.pending();
+                                    return new ServiceWirePilotCodec.RelocationPendingTimerTick(
+                                            PARTICIPANT_ID,
+                                            value.sequence(),
+                                            timer.name(),
+                                            tick.deliveryIndex(),
+                                            tick.scheduledIndex(),
+                                            tick.scheduledAtUnixMilliseconds(),
+                                            tick.skippedTicks());
+                                })
+                        .toList();
+        try {
+            return ServiceWirePilotCodec.encodeRelocationEnvelopeV1(
+                    new ServiceWirePilotCodec.RelocationEnvelopeV1(
+                            relocationId.getMostSignificantBits(),
+                            relocationId.getLeastSignificantBits(),
+                            new ServiceWirePilotCodec.RelocationActorIdentity(
+                                    actorId, objectGeneration, expectedAuthorityOwnerGeneration),
+                            applicationVersion,
+                            List.of(
+                                    new ServiceWirePilotCodec.RelocationApplicationState(
+                                            PARTICIPANT_ID,
+                                            restoreSnapshot,
+                                            restoreSnapshot ? applicationState : new byte[0])),
+                            work,
+                            registrations,
+                            pending,
+                            bindings));
+        } catch (IOException failure) {
+            throw new IllegalArgumentException("canonical Actor relocation envelope", failure);
         }
-        writer.u32(pendingTimers.size());
-        for (PendingTimer pending : pendingTimers) {
-            var timer = pending.timer();
-            var tick = timer.pending();
-            writer.u64(1);
-            writer.u64(pending.sequence());
-            writer.text8(timer.name());
-            writer.u64(tick.deliveryIndex());
-            writer.u64(tick.scheduledIndex());
-            writer.u64(tick.scheduledAtUnixMilliseconds());
-            writer.u64(tick.skippedTicks());
-        }
-        byte[] encoded = writer.bytes();
-        ZLinkServiceRelocationEnvelopeCodec.decode(encoded);
-        return encoded;
     }
 
     static Decoded decode(
@@ -212,14 +229,14 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
         var root = ZLinkServiceRelocationEnvelopeCodec.decode(encoded);
         if (root.relocationHigh() != relocationId.getMostSignificantBits()
                 || root.relocationLow() != relocationId.getLeastSignificantBits()
-                || root.object().kind() != 1
+                || root.object().kind() != ZLinkPlacementObjectKind.ACTOR.value()
                 || !root.object().objectId().equals(actorId)
                 || root.applicationStates().size() != 1) {
             throw new IllegalArgumentException(
                     "canonical Actor relocation identity or inventory differs");
         }
         var state = root.applicationStates().getFirst();
-        if (state.participantId() != 1 || state.hasState() != restoreSnapshot) {
+        if (state.participantId() != PARTICIPANT_ID || state.hasState() != restoreSnapshot) {
             throw new IllegalArgumentException("canonical Actor relocation state policy differs");
         }
         List<ZLinkSerialExecutionQueue.QueuedRecord> journal =
@@ -230,7 +247,7 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
                                                 value.frozenRecord()))
                         .map(
                                 value -> {
-                                    if (value.participantId() != 1) {
+                                    if (value.participantId() != PARTICIPANT_ID) {
                                         throw new IllegalArgumentException(
                                                 "Actor journal references another participant");
                                     }
@@ -312,71 +329,4 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
 
     private record PendingTimer(
             long sequence, ZLinkSpotTimerRelocationEnvelope.CanonicalTimer timer) {}
-
-    private static final class Writer {
-        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        private final DataOutputStream output = new DataOutputStream(bytes);
-
-        void u8(long value) {
-            write(() -> output.writeByte((int) value));
-        }
-
-        void u32(long value) {
-            write(() -> output.writeInt((int) value));
-        }
-
-        void u64(long value) {
-            write(() -> output.writeLong(value));
-        }
-
-        void raw(byte[] value) {
-            write(() -> output.write(value));
-        }
-
-        void text8(String value) {
-            byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
-            if (encoded.length < 1 || encoded.length > 255 || value.indexOf('\0') >= 0) {
-                throw new IllegalArgumentException("text8");
-            }
-            u8(encoded.length);
-            raw(encoded);
-        }
-
-        void bytes64(byte[] value) {
-            u64(value.length);
-            raw(value);
-        }
-
-        void body16(Writer body) {
-            byte[] encoded = body.bytes();
-            if (encoded.length > 0xffff) {
-                throw new IllegalArgumentException("body16");
-            }
-            write(() -> output.writeShort(encoded.length));
-            raw(encoded);
-        }
-
-        void body64(Writer body) {
-            byte[] encoded = body.bytes();
-            u64(encoded.length);
-            raw(encoded);
-        }
-
-        byte[] bytes() {
-            return bytes.toByteArray();
-        }
-
-        private void write(IoAction action) {
-            try {
-                action.run();
-            } catch (IOException failure) {
-                throw new IllegalStateException(failure);
-            }
-        }
-    }
-
-    @FunctionalInterface
-    private interface IoAction {
-        void run() throws IOException;
-    }
 }

@@ -4188,6 +4188,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken
     )
     {
+        const int MaximumProjectionReadAttempts = 8;
         var metaKey = AuthorityMetaKey(key);
         // The authority record is one opaque row (checklist C-2b): a single
         // read is already byte-atomic, so the old read-verify-retry loop
@@ -4195,7 +4196,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         // key's version is gone. Retry here exists only for the aggregate
         // participant-projection race noted below, not for payload/meta
         // consistency.
-        for (var attempt = 0; attempt < 8; attempt++)
+        for (var attempt = 0; attempt < MaximumProjectionReadAttempts; attempt++)
         {
             var first = knownMeta is null
                 ? await _provider.ReadAsync(metaKey, cancellationToken).ConfigureAwait(false)
@@ -4213,10 +4214,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-                if (
-                    aggregate?.Record.Status == AggregateStatus.Committed
-                    && !aggregate.Record.ParticipantsNormalized
-                )
+                // Normalization can finish between the authority and aggregate reads.
+                // The captured participant row still needs its committed projection.
+                if (aggregate?.Record.Status == AggregateStatus.Committed)
                 {
                     if (meta.AggregateParticipantIndex is not { } index)
                         throw new ZLinkRelocationDataLostException(

@@ -154,7 +154,6 @@ internal sealed record ZLinkRemoteSessionPushRelay(
     ulong TargetNodeGeneration,
     ulong AuthorityOwnerGeneration,
     ulong OwnerLeaseGeneration,
-    string BindingToken,
     ulong BindingGeneration,
     ulong SessionOwnerNodeGeneration,
     string SessionRid,

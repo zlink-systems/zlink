@@ -122,12 +122,11 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         ZLinkSpotRelocationActorQueueReservation? queueReservation,
         CancellationToken cancellationToken
     ) =>
+        // A validated replay reservation reaches this submitter only from
+        // ZLinkActorRuntimeState.ExecuteDispatchAsync, which already runs
+        // the replay inside that reserved queue turn.
         queueReservation is not null
-            ? queueReservation.ExecuteAsync(
-                actorId,
-                ct => dispatch(null!, state, ct),
-                cancellationToken
-            )
+            ? dispatch(null!, state, cancellationToken)
         : relocationSeal is not null
             ? serial.ExecuteRelocationActorAsync(
                 relocationSeal,

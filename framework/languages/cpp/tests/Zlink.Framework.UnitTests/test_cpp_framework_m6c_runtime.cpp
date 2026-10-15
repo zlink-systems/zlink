@@ -1897,9 +1897,11 @@ class memory_authority_store_t final : public authority_relocation_port_t
             throw std::runtime_error ("authority store response lost before commit");
         if (force_conflict || (conflict_on_publish != 0 && publish_count == conflict_on_publish))
             return {authority_publish_status_t::conflict, read_locked (source.kind, source.key)};
+        auto issued_target = target;
+        issued_target.authority_owner_generation = source.authority_owner_generation + 1;
         authority_relocation_reference_t reference{
           .source = source,
-          .target = target,
+          .target = issued_target,
           .relocation_reference = std::move (relocation_reference),
           .checksum_crc32c = checksum_crc32c,
           .inventory_digest = inventory_digest,
@@ -2302,6 +2304,16 @@ void test_envelope_round_trip (test_context_t &test)
       .timers = {{11, 100, 50, 3}}};
 
     const protocol::relocation_id_t relocation{0, 9};
+    bool unmatched_binding_rejected = false;
+    try {
+        const relocation_session_binding_t binding{{"missing-actor", 1}, {}};
+        (void) maintenance_runtime_t::encode_envelope ({frozen}, relocation, 1, {binding});
+    }
+    catch (const protocol::service_wire_error_t &) {
+        unmatched_binding_rejected = true;
+    }
+    test.require (unmatched_binding_rejected,
+                  "an unmatched Session binding must report a protocol error");
     const auto encoded = maintenance_runtime_t::encode_envelope ({frozen}, relocation);
     test.require (!encoded.empty (), "the schema relocation envelope must encode");
     const auto envelope = maintenance_runtime_t::decode_envelope (encoded);
@@ -2351,6 +2363,15 @@ void test_envelope_round_trip (test_context_t &test)
                     && aggregate_envelope->saved_work.size () == 1
                     && aggregate_envelope->saved_work.front ().participant_id == 2,
                   "participant ids must follow the sorted authority-key inventory");
+    const relocation_session_binding_t binding{{actor.owner.key, actor.owner.object_generation},
+                                               {0, {'s'}, 7, "session-owner", 9, {'r'}, 11}};
+    const auto bound_envelope = maintenance_runtime_t::decode_envelope (
+      maintenance_runtime_t::encode_envelope ({frozen, actor}, relocation, 1, {binding}));
+    auto expected_binding = binding.second;
+    expected_binding.participant_id = 1;
+    test.require (
+      bound_envelope && bound_envelope->session_bindings == std::vector{expected_binding},
+      "Session binding fields use the Actor's canonical participant id without a route");
     const auto aggregate_materialized = maintenance_runtime_t::materialize_envelope (
       *aggregate_envelope,
       {relocation_participant_identity_t{frozen.owner, frozen.stable_type, std::nullopt},
@@ -3066,7 +3087,6 @@ void test_public_authority_store_adapter (test_context_t &test)
     auto target = source;
     target.mesh_name = "mesh-b";
     target.node_id = "node-b";
-    ++target.authority_owner_generation;
     const auto relocated_application_payload =
       zlink::framework::runtime::encode_actor_authority_payload (
         {.state = zlink::framework::runtime::actor_authority_state_t::ready,
@@ -3793,8 +3813,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       .target_node_generation = 7,
       .application_version = 1,
       .prepare_target = [&] (const std::vector<frozen_object_state_t> &,
-                             const relocation_payload_manifest_t &manifest,
-                             const std::vector<protocol::session_relocation_route_t> &)
+                             const relocation_payload_manifest_t &manifest)
         -> framework::task_t<relocation_reason_t> {
           planned_chunks = manifest.chunk_count;
           co_return co_await target_terminal->task ();
@@ -3940,7 +3959,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
     const auto actor = create_actor (objects, "late-reply", "late-source");
     auto relocated = actor;
     relocated.node_id = "late-target";
-    ++relocated.authority_owner_generation;
+    // Relocation-flow §4.3: the temporary queue is fenced by the captured source.
     const auto resolver = [] (const accepted_record_authority_query_t &query)
       -> std::optional<accepted_record_authority_t> {
         return accepted_record_authority_t{
@@ -4200,8 +4219,7 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
           .target_node_generation = 7,
           .application_version = 1,
           .prepare_target = [] (const std::vector<frozen_object_state_t> &,
-                                const relocation_payload_manifest_t &,
-                                const std::vector<protocol::session_relocation_route_t> &)
+                                const relocation_payload_manifest_t &)
             -> framework::task_t<relocation_reason_t> { co_return relocation_reason_t::none; },
           .send_state_chunk = [] (const protocol::relocation_state_t &) -> framework::task_t<bool> {
               co_return true;
@@ -5060,12 +5078,18 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
                   "production aggregate timers must be registered");
     object_ref_t expected_spot = *spot;
     expected_spot.node_id = target.status ().routing_id ().to_string ();
-    ++expected_spot.authority_owner_generation;
     object_ref_t expected_actor = joined_actor;
     expected_actor.node_id = target.status ().routing_id ().to_string ();
-    ++expected_actor.authority_owner_generation;
-    aggregate_materialized_spot_t::authority_commit_count = [aggregates] {
+    // Relocation-flow §4.3: hidden staging keeps the source fence until Store CAS.
+    aggregate_materialized_spot_t::authority_commit_count = [aggregates, authority,
+                                                             &expected_actor] {
         std::lock_guard lock (aggregates->mutex);
+        if (aggregates->commit_count != 0) {
+            const auto committed = authority->read (expected_actor.kind, expected_actor.key);
+            if (committed)
+                expected_actor.authority_owner_generation =
+                  committed->target.authority_owner_generation;
+        }
         return aggregates->commit_count;
     };
     aggregate_materialized_spot_t::target_objects = &target.native_node ().objects ();
@@ -5173,6 +5197,16 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     source_dispatch.join ();
     target_dispatch.join ();
 
+    const auto published_spot = authority->read (expected_spot.kind, expected_spot.key);
+    const auto published_actor = authority->read (expected_actor.kind, expected_actor.key);
+    test.require (published_spot && published_actor,
+                  "target fences must come from the committed Store rows");
+    if (published_spot)
+        expected_spot.authority_owner_generation =
+          published_spot->target.authority_owner_generation;
+    if (published_actor)
+        expected_actor.authority_owner_generation =
+          published_actor->target.authority_owner_generation;
     const auto restored_spot =
       target.native_node ().objects ().find (object_kind_t::user_spot, expected_spot.key);
     const auto restored_actor =

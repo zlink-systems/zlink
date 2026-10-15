@@ -265,6 +265,7 @@ internal sealed class ZLinkAutoConnectReconciler
                     {
                         DescriptorRevision = ++_localRevision,
                     };
+                    _localPublished = false;
                     return (Continue: true, NoLocalRow: false);
                 })
                 .ConfigureAwait(false);
@@ -274,24 +275,7 @@ internal sealed class ZLinkAutoConnectReconciler
                 return true;
 
             await PublishLocalAsync(cancellationToken).ConfigureAwait(false);
-            var row = await _lane
-                .RunAsync(() => _localPublished && _localGeneration != 0 ? _localRow : null)
-                .ConfigureAwait(false);
-            if (row is null)
-                return false;
-
-            var result = await _runtime
-                .WriteDescriptorAsync(row, ZLinkLocationWriteIntent.Renew, cancellationToken)
-                .ConfigureAwait(false);
-            return await _lane
-                .RunAsync(() =>
-                {
-                    _localPublished = result.Status == ZLinkLocationWriteStatus.Stored;
-                    if (_localPublished)
-                        _localGeneration = result.Generation;
-                    return _localPublished;
-                })
-                .ConfigureAwait(false);
+            return await _lane.RunAsync(() => _localPublished).ConfigureAwait(false);
         }
         finally
         {

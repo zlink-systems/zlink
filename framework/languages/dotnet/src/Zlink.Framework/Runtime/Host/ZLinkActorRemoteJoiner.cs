@@ -595,18 +595,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             || admissionReply.TargetSpotGeneration != (ulong)admission.Snapshot.Generation
             || actorAuthorityOwnerGeneration is 0 or > long.MaxValue
             || admissionReply.TargetAuthorityOwnerGeneration is 0 or > long.MaxValue
-            // The canonical path self-composes TargetAuthorityOwnerGeneration
-            // as actorAuthorityOwnerGeneration + 1 (see
-            // TryRequestCanonicalAdmissionAsync); checking it against the same
-            // value here is tautological for that path. The legacy
-            // router-channel admission reply carries the target's own
-            // independently computed value and spec 51 §9 requires exact
-            // equality, not merely "advanced" ordering.
-            || (
-                canonicalAdmission is null
-                && admissionReply.TargetAuthorityOwnerGeneration
-                    != checked(actorAuthorityOwnerGeneration + 1)
-            )
+            || admissionReply.TargetAuthorityOwnerGeneration != actorAuthorityOwnerGeneration
             || admissionReply.TargetSpotAuthorityOwnerGeneration
                 != admission.Snapshot.AuthorityOwnerGeneration
         )
@@ -1212,7 +1201,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 TargetNodeRid: request.TargetNodeRid.ToBytes().ToArray(),
                 TargetNodeGeneration: request.TargetNodeGeneration,
                 TargetSpotGeneration: join.JoinedSpotGeneration,
-                TargetAuthorityOwnerGeneration: checked(request.ActorAuthorityOwnerGeneration + 1),
+                TargetAuthorityOwnerGeneration: request.ActorAuthorityOwnerGeneration,
                 TargetSpotAuthorityOwnerGeneration: request.TargetAuthorityOwnerGeneration,
                 ReceiveChunkLimitBytes: join.Flags,
                 // The ZLJR saved-work row (command 40) fences this as the

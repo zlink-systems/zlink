@@ -9,11 +9,11 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 {
     ValueTask ForceStopAsync(CancellationToken cancellationToken) => DisposeAsync();
 
-    // Observation-only: the live diagnostics gate for spec 27 §4. Backends
-    // that re-encode relayed envelopes consult it so an Off host neither
+    // Observation-only: the existing tracer owns the live gate (spec 26/27).
+    // Backends that re-encode relayed envelopes consult it so an Off host neither
     // validates nor copies inbound flow fields forward. Default keeps fakes
     // and gate-less standalone nodes on the historical always-on behavior.
-    void SetFlowCaptureGate(Func<bool> flowCaptureEnabled) { }
+    void SetFlowTracer(ZLinkMessageFlowTracer flow) { }
 
     // Logical Multicast target failures are observed at the MeshNode, where
     // the target RID and Core submit result are still available. Backends
