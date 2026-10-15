@@ -787,6 +787,58 @@ test('location runtime bounds fixed routing-id owner lease renewal by the config
   await runtime.stop();
 });
 
+for (const failClaim of [false, true]) {
+  test(`first heartbeat uses the initial claim start (claim failure: ${failClaim})`, async () => {
+    let monotonicMs = 0;
+    const timers = [];
+    let storeUnavailable = failClaim;
+    const store = new internal.ZLinkInMemoryLocationStore(() => new Date(0));
+    const ownerLeaseStore = {
+      async claimOwnerLease(...args) {
+        const result = await store.claimOwnerLease(...args);
+        monotonicMs += 50;
+        if (storeUnavailable) throw new Error('Store unavailable');
+        return result;
+      },
+      async readOwnerLease(...args) {
+        if (storeUnavailable) throw new Error('Store unavailable');
+        return store.readOwnerLease(...args);
+      },
+      releaseOwnerLease: (...args) => store.releaseOwnerLease(...args),
+      removeAllByOwner: (...args) => store.removeAllByOwner(...args)
+    };
+    const runtime = new internal.ZLinkLocationRuntime({
+      stores: {
+        locationStore: store,
+        authorityStore: store,
+        peerStore: store,
+        spotStore: store,
+        actorStore: store,
+        routeStore: store,
+        ownerLeaseStore
+      },
+      options: {
+        ownerLeaseRenewIntervalMs: 100,
+        ownerLeaseRenewTimeoutMs: 1000
+      },
+      monotonicNowMs: () => monotonicMs,
+      setTimer(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return timers.length;
+      },
+      clearTimer() {}
+    });
+    try {
+      await runtime.start(rid('node-a'));
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].delayMs, 50);
+    } finally {
+      storeUnavailable = false;
+      await runtime.stop();
+    }
+  });
+}
+
 test('location runtime schedules heartbeats from the actual monotonic start after a late renewal', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];
