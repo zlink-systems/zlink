@@ -24,11 +24,22 @@ export interface PendingOperation<T> {
   readonly promise: Promise<T>;
 }
 
+/**
+ * Receives an operation's terminal at the place it is taken from the
+ * registry. One long-lived observer serves every observed operation, so an
+ * observed registration creates no Promise or per-operation callback.
+ */
+export interface OperationObserver<T, Context> {
+  operationCompleted(id: bigint, value: T, context: Context | undefined): void;
+  operationFailed(id: bigint, reason: unknown, context: Context | undefined): void;
+}
+
 interface Entry<T, Context> {
   readonly context: Context | undefined;
   readonly deadlineMs?: number;
-  readonly resolve: (value: T | PromiseLike<T>) => void;
-  readonly reject: (reason: unknown) => void;
+  readonly resolve?: (value: T | PromiseLike<T>) => void;
+  readonly reject?: (reason: unknown) => void;
+  readonly observer?: OperationObserver<T, Context>;
 }
 
 const systemClock: OperationClock = {
@@ -74,17 +85,35 @@ export class OperationRegistry<T, Context = unknown> {
     return { id, promise };
   }
 
+  /** Registers an operation whose terminal goes to `observer` instead of a Promise. */
+  registerObserved(
+    timeoutMs: number,
+    observer: OperationObserver<T, Context>,
+    context?: Context
+  ): bigint {
+    if (this.closed) throw new Error('Operation registry is closed.');
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+      throw new RangeError('timeoutMs must be a non-negative finite number.');
+    }
+    const id = this.nextId++;
+    this.entries.set(id, { context, deadlineMs: this.clock.now() + timeoutMs, observer });
+    if (this.entries.size === 1) this.onPendingChanged?.();
+    return id;
+  }
+
   complete(id: bigint, value: T): boolean {
     const entry = this.take(id);
     if (entry === undefined) return false;
-    entry.resolve(value);
+    if (entry.observer !== undefined) entry.observer.operationCompleted(id, value, entry.context);
+    else entry.resolve!(value);
     return true;
   }
 
   fail(id: bigint, reason: unknown): boolean {
     const entry = this.take(id);
     if (entry === undefined) return false;
-    entry.reject(reason);
+    if (entry.observer !== undefined) entry.observer.operationFailed(id, reason, entry.context);
+    else entry.reject!(reason);
     return true;
   }
 

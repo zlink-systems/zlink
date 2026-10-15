@@ -47,6 +47,8 @@ import {
 import {
   RawServiceMeshRuntime,
   RAW_MESH_RECEIVE_TIME_BUDGET_MS,
+  type RawServiceObservedRequest,
+  type RawServiceRequestObserver,
   type RawServiceRequestResult
 } from '../../foundation/raw-service-mesh-runtime';
 import type { ServiceInstanceActivationRecoveryEnvelope } from '../../foundation/service-instance-activation-recovery-codec';
@@ -698,9 +700,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       String(targetRid),
       encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options?.onAdmitted
+      options?.onAdmitted,
+      this.requestObserver,
+      OperationKind.NodeRequest
     );
-    return this.observeCompletion(pending.id, OperationKind.NodeRequest, pending.promise);
+    return this.observedOperation(pending, OperationKind.NodeRequest);
   }
 
   async sendToChannel(
@@ -719,9 +723,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       channelName,
       encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options?.onAdmitted
+      options?.onAdmitted,
+      this.requestObserver,
+      OperationKind.ChannelRequest
     );
-    return this.observeCompletion(pending.id, OperationKind.ChannelRequest, pending.promise);
+    return this.observedOperation(pending, OperationKind.ChannelRequest);
   }
 
   status() {
@@ -1593,6 +1599,26 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       domains |= ReadyDomain.Application;
     }
     if (domains !== ReadyDomain.None) this.readyHandler?.(domains);
+  }
+
+  /**
+   * The raw registry takes a remote request's terminal and hands it here,
+   * where the Framework completion owner receives it in the same turn.
+   */
+  private readonly requestObserver: RawServiceRequestObserver = {
+    operationCompleted: (id, result, operationKind) =>
+      this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result),
+    operationFailed: (id, error, operationKind) =>
+      this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, requestFailureResult(error))
+  };
+
+  private observedOperation(
+    pending: RawServiceObservedRequest,
+    operationKind: number
+  ): MeshOperationId {
+    return pending.promise === undefined
+      ? { high: 1n, low: pending.id }
+      : this.observeCompletion(pending.id, operationKind, pending.promise);
   }
 
   private observeCompletion(
