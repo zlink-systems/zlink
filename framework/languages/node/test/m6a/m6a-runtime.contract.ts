@@ -445,7 +445,12 @@ test('RouteMesh admission classifies stale and conflicting descriptor revisions 
     descriptorRevision: 2n,
     state: 'serving' as const
   };
-  assert.equal(runtime.topology.admit(current, 'route:7'), 'admitted');
+  assert.equal(
+    runtime.topology.admit(current, 'route:7', undefined, () =>
+      runtime.liveness.admit(current.nodeRoutingId, 7n, 0)
+    ),
+    'admitted'
+  );
   (runtime as unknown as { selectedRoutes: Map<string, bigint> }).selectedRoutes.set(
     current.nodeRoutingId,
     7n
@@ -1116,7 +1121,9 @@ test('remote request is not rejected by legacy mailbox limits after shared admis
         ...descriptor('peer'),
         state: 'serving'
       },
-      'peer-connection'
+      'peer-connection',
+      undefined,
+      () => runtime.liveness.admit('peer', 1n, 0)
     ),
     'admitted'
   );
@@ -1133,6 +1140,7 @@ test('remote request is not rejected by legacy mailbox limits after shared admis
     processReceived(
       received: {
         sourceRid: string;
+        routeGeneration: bigint;
         requestSeq: bigint;
         parts: readonly Buffer[];
         reply(parts: readonly Uint8Array[]): void;
@@ -1145,6 +1153,7 @@ test('remote request is not rejected by legacy mailbox limits after shared admis
   const result = await internals.processReceived(
     {
       sourceRid: 'peer',
+      routeGeneration: 1n,
       requestSeq: 19n,
       parts: [
         encodeNodeRequestHeader(7n),
@@ -1226,6 +1235,7 @@ test('raw protocol errors reply when correlation is recoverable and always repor
 test('unsequenced canonical actorJoin(28) drops with ProtocolError observation and no reply', async () => {
   type UnsequencedReceived = {
     readonly sourceRid: string;
+    readonly routeGeneration: bigint;
     readonly parts: readonly Buffer[];
     reply(parts: readonly Uint8Array[]): void;
   };
@@ -1239,7 +1249,12 @@ test('unsequenced canonical actorJoin(28) drops with ProtocolError observation a
     descriptor: descriptor('local'),
     onProtocolError: (record) => observed.push(record)
   });
-  runtime.topology.admit({ ...descriptor('peer'), state: 'serving' }, 'peer-connection');
+  runtime.topology.admit(
+    { ...descriptor('peer'), state: 'serving' },
+    'peer-connection',
+    undefined,
+    () => runtime.liveness.admit('peer', 1n, 0)
+  );
   const stateful = new ServiceStatefulRuntime(runtime, 'local', 1n);
   const frames = encodeActorJoin28({
     correlation: 17n,
@@ -1264,6 +1279,7 @@ test('unsequenced canonical actorJoin(28) drops with ProtocolError observation a
   let replyAttempts = 0;
   const received: UnsequencedReceived = {
     sourceRid: 'peer',
+    routeGeneration: 1n,
     parts: frames,
     reply(_parts) {
       replyAttempts++;
@@ -1426,6 +1442,7 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
+      await left.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1511,6 +1528,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
+      await left.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1638,6 +1656,7 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
+      await left.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1771,6 +1790,7 @@ test('normal receive pump carries application and liveness traffic on one route'
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
+      await left.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1868,6 +1888,7 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
       await client.pumpOne();
       await provider.tickLiveness();
       await client.tickLiveness();
+      await client.observeSelectedRoutes();
       await client.announceExpectedPeers();
       return (
         client.isPeerRouteReady(providerDescriptor.nodeRoutingId) &&
@@ -1950,7 +1971,10 @@ async function verifyBilateralEndpointRequests(
   const left = rawServiceRuntime({ descriptor: leftDescriptor });
   const right = rawServiceRuntime({ descriptor: rightDescriptor });
   const progress = async (): Promise<void> => {
-    for (const runtime of [right, left]) await runtime.announceExpectedPeers();
+    for (const runtime of [right, left]) {
+      await runtime.observeSelectedRoutes();
+      await runtime.announceExpectedPeers();
+    }
     for (const runtime of [right, left]) await runtime.observeSelectedRoutes();
     for (const runtime of [right, left]) await runtime.pumpOne();
     for (const runtime of [left, right]) await runtime.tickLiveness();
@@ -2047,6 +2071,7 @@ test('remote channel requests preserve successful and failed terminal results', 
     const peerDescriptor = peer.topology.localDescriptor();
     source.connectPeer(peerDescriptor.advertisedEndpoint, peerDescriptor);
     await pollUntil(async () => {
+      await source.observeSelectedRoutes();
       await source.announceExpectedPeers();
       await peer.pumpOne();
       await source.pumpOne();

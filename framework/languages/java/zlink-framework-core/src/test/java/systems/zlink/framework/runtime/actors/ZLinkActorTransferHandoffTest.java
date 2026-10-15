@@ -617,6 +617,7 @@ final class ZLinkActorTransferHandoffTest {
                         new ActorRef("actor", 7, "mesh", targetNode),
                         ZLinkSpotKind.USER,
                         "spot",
+                        7,
                         "mesh",
                         targetNode,
                         11,

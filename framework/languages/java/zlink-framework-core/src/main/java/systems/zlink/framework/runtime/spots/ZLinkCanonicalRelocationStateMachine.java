@@ -89,6 +89,11 @@ final class ZLinkCanonicalRelocationStateMachine
     private final Map<Fence, TargetAttempt> targets = new HashMap<>();
     private final Map<Fence, TerminalTarget> terminalTargets = new HashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
+    private Runnable sourceQuiescenceChanged = () -> {};
+
+    void onSourceQuiescenceChanged(Runnable listener) {
+        sourceQuiescenceChanged = Objects.requireNonNull(listener, "listener");
+    }
 
     CompletionStage<Void> awaitAcceptedTargetRelocations() {
         return inStateLane(
@@ -341,14 +346,16 @@ final class ZLinkCanonicalRelocationStateMachine
         Fence key = Fence.from(fence);
         SourceAttempt attempt = requireSource(key, targetNodeRid);
         long settleNanos = System.nanoTime();
-        openSourceQuiescenceWindows.incrementAndGet();
+        if (openSourceQuiescenceWindows.incrementAndGet() == 1) {
+            sourceQuiescenceChanged.run();
+        }
         CompletableFuture<Settlement> result = new CompletableFuture<>();
         settleSource(attempt, preserveAt, true, result);
         return result.whenComplete(
                 (settlement, failure) -> {
                     inStateLane(() -> sources.remove(key, attempt));
                     if (settlement != Settlement.TARGET_COMMITTED) {
-                        openSourceQuiescenceWindows.decrementAndGet();
+                        releaseSourceQuiescenceWindow();
                         return;
                     }
                     //  Source quiescence (SafeToShutdown component) stays open for the
@@ -356,13 +363,19 @@ final class ZLinkCanonicalRelocationStateMachine
                     retentionScheduler.schedule(
                             Instant.now().plus(transferOptions.messageFollowDuration()),
                             () -> {
-                                openSourceQuiescenceWindows.decrementAndGet();
+                                releaseSourceQuiescenceWindow();
                                 ZLinkRuntimeMetrics.record(
                                         "zlink.relocation.route_convergence",
                                         Duration.ofNanos(System.nanoTime() - settleNanos),
                                         Map.of());
                             });
                 });
+    }
+
+    private void releaseSourceQuiescenceWindow() {
+        if (openSourceQuiescenceWindows.decrementAndGet() == 0) {
+            sourceQuiescenceChanged.run();
+        }
     }
 
     private void settleSource(
@@ -474,15 +487,16 @@ final class ZLinkCanonicalRelocationStateMachine
 
     /**
      * Classifies one read of the primary authority record against the source fence: target owner
-     * means the target commit is confirmed; any other StoreVersion means the target commit can no
-     * longer succeed, so the source keeps authority.
+     * means the target commit is confirmed; Missing ends the expired owner without Preserve. Any
+     * other StoreVersion means the target commit can no longer succeed, so the source keeps
+     * authority.
      */
     private static Optional<Settlement> settlementOf(
             ZLinkAuthorityReadResult read,
             ZLinkSpotRetireControl.StageRequest request,
             String expectedStoreVersion) {
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-            return Optional.empty();
+            return Optional.of(Settlement.SOURCE_LEASE_EXPIRED);
         }
         if (snapshot.ownerId().equals(request.targetOwnerId())
                 && snapshot.ownerLeaseGeneration() == request.targetOwnerLeaseGeneration()) {

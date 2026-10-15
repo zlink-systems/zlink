@@ -1526,7 +1526,7 @@ The source decides Restore validity (the deadline of the operation that started 
 by the target's `NewOwner` CAS. A confirmed source `Preserve` success proves the target's
 late CAS cannot commit; the source remains owner and resumes its retained work under
 [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
-If the target with this `RelocationId` is already owner, the source adopts its route. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). The source may resume dispatch only
+If the target with this `RelocationId` is already owner, the source adopts its route. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry, or an authority that the source rereads as absent (`Missing`), ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). On `Missing` the source fence no longer holds, so the source does not attempt `Preserve`. The source may resume dispatch only
 while its owner lease remains valid under §5.
 
 During `StoreFailureGrace`, the last fully-read descriptor list is kept. The connection

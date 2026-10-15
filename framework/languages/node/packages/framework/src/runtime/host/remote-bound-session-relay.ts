@@ -845,43 +845,22 @@ function validateSessionRelocationRouteAgainstSeal(
   route: ServiceSessionRelocationRoute,
   sealed: ServiceSessionRelocationSealed
 ): void {
-  const sameCoordinator =
-    route.coordinator.ownerId === sealed.coordinator.ownerId &&
-    route.coordinator.leaseGeneration === sealed.coordinator.leaseGeneration &&
-    route.coordinator.nodeRid === sealed.coordinator.nodeRid &&
-    route.coordinator.nodeGeneration === sealed.coordinator.nodeGeneration &&
-    route.coordinator.expectedAuthorityStoreVersion ===
-      sealed.coordinator.expectedAuthorityStoreVersion;
   const sameSession =
-    route.session.sessionOwnerNodeRid === sealed.session.sessionOwnerNodeRid &&
+    routingIdsEqual(route.session.sessionOwnerNodeRid, sealed.session.sessionOwnerNodeRid) &&
     route.session.sessionOwnerNodeGeneration === sealed.session.sessionOwnerNodeGeneration &&
     route.session.sessionOwnerId === sealed.session.sessionOwnerId &&
     route.session.sessionOwnerLeaseGeneration === sealed.session.sessionOwnerLeaseGeneration &&
-    route.session.sessionRid === sealed.session.sessionRid &&
+    routingIdsEqual(route.session.sessionRid, sealed.session.sessionRid) &&
     route.session.bindingGeneration === sealed.session.bindingGeneration;
   if (
     route.relocation.high !== sealed.relocation.high ||
     route.relocation.low !== sealed.relocation.low ||
-    !sameCoordinator ||
     !sameSession ||
     route.actor.actorId !== sealed.actor.actor.actorId ||
     route.actor.generation !== sealed.actor.actor.generation
   ) {
     throw new ServiceWireProtocolError(
       `Session relocation '${serviceWireBarrierKey(route)}' changed its command 42 fence.`
-    );
-  }
-  if (route.route.action === 'commit') {
-    if (route.route.previousAuthorityOwnerGeneration !== sealed.actor.authorityOwnerGeneration) {
-      throw new ServiceWireProtocolError(
-        `Session relocation '${serviceWireBarrierKey(route)}' changed its source authority fence.`
-      );
-    }
-    return;
-  }
-  if (route.route.currentAuthorityOwnerGeneration !== sealed.actor.authorityOwnerGeneration) {
-    throw new ServiceWireProtocolError(
-      `Session relocation '${serviceWireBarrierKey(route)}' abort changed its authority fence.`
     );
   }
 }
