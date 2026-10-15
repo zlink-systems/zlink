@@ -235,17 +235,13 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     return current;
   };
   private readonly replyParts = (
-    targetRid: string | Uint8Array,
-    replyToken: unknown,
+    targetRid: BindingRoutingId,
+    replyToken: ReplyToken,
     parts: readonly Uint8Array[]
   ) => {
-    appendReplyParts(
-      this.socket.reply(
-        this.preparedRoutingId(targetRid),
-        replyToken as Parameters<RouterSocket['reply']>[1]
-      ),
-      parts
-    ).submit();
+    // The receive record keeps the binding RoutingId it was delivered with,
+    // so the reply addresses that route without rebuilding the identity.
+    appendReplyParts(this.socket.reply(targetRid, replyToken), parts).submit();
   };
 
   private preparedRoutingId(routingId: string | Uint8Array): BindingRoutingId {
@@ -463,10 +459,60 @@ function requireParts(parts: readonly Uint8Array[]): [Uint8Array, ...Uint8Array[
 }
 
 type RawReceivedReply = (
-  targetRid: Uint8Array,
+  targetRid: BindingRoutingId,
   replyToken: ReplyToken,
   parts: readonly Uint8Array[]
 ) => void;
+
+const EMPTY_SOURCE_ROUTE = Buffer.alloc(0);
+
+/**
+ * One received binding record. The payload Buffers are the binding's own
+ * `data()` storage, retained under the runtime payload policy instead of a
+ * second Framework copy; closing the record releases the binding handles.
+ */
+class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
+  readonly sourceRid: string;
+  readonly sourceRoute: Uint8Array;
+  readonly routeGeneration: bigint;
+  readonly requestSeq?: bigint;
+  readonly reply?: (parts: readonly Uint8Array[]) => void;
+  readonly parts: readonly Buffer[];
+  private closed = false;
+
+  constructor(
+    private readonly received: Received,
+    nextRequestSequence: (() => bigint) | undefined,
+    reply: RawReceivedReply | undefined
+  ) {
+    const routingId = received.routingId;
+    this.sourceRid = routingId?.toString() ?? '';
+    this.sourceRoute = routingId?.toBytes() ?? EMPTY_SOURCE_ROUTE;
+    this.routeGeneration = received.routeGeneration;
+    const replyToken = received.replyToken;
+    if (replyToken !== null) {
+      this.requestSeq = nextRequestSequence?.();
+      if (reply === undefined) {
+        const operation = received.reply();
+        this.reply = (parts) => appendReplyParts(operation, parts).submit();
+      } else {
+        const target = routingId ?? bindingRoutingId(EMPTY_SOURCE_ROUTE);
+        this.reply = (parts) => reply(target, replyToken, parts);
+      }
+    }
+    const parts = received.parts;
+    const retained = new Array<Buffer>(parts.length);
+    for (let index = 0; index < parts.length; index++)
+      retained[index] = ZLinkBufferMessage.retainPayload(parts[index]!);
+    this.parts = retained;
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.received.close();
+  }
+}
 
 function receiveRecord(
   socket: Pick<RouterSocket | DealerSocket, 'recv'>,
@@ -479,41 +525,8 @@ function receiveRecord(
     received.close();
     return undefined;
   }
-  let closed = false;
   try {
-    const sourceRid = received.routingId?.toString() ?? '';
-    const sourceRoute = received.routingId?.toBytes() ?? Buffer.alloc(0);
-    const requestSeq = received.replyToken === null ? undefined : nextRequestSequence?.();
-    const replyToken = received.replyToken;
-    const receivedReply =
-      replyToken === null
-        ? undefined
-        : reply === undefined
-          ? received.reply()
-          : (parts: readonly Uint8Array[]) => reply(sourceRoute, replyToken, parts);
-    return {
-      sourceRid,
-      sourceRoute,
-      routeGeneration: received.routeGeneration,
-      ...(requestSeq === undefined ? {} : { requestSeq }),
-      ...(receivedReply === undefined
-        ? {}
-        : {
-            reply: (parts: readonly Uint8Array[]) => {
-              if (typeof receivedReply === 'function') {
-                receivedReply(parts);
-                return;
-              }
-              appendReplyParts(receivedReply, parts).submit();
-            }
-          }),
-      parts: received.parts.map((part) => part.toBytes()),
-      close: () => {
-        if (closed) return;
-        closed = true;
-        received.close();
-      }
-    };
+    return new NodeRawReceivedRecord(received, nextRequestSequence, reply);
   } catch (error) {
     received.close();
     throw error;

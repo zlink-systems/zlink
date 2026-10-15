@@ -1062,12 +1062,7 @@ export class RawServiceMeshRuntime {
       if (
         header.flags !== 0 ||
         received.parts.length !== 2 ||
-        ![
-          M6aServiceWireCommand.nodeSend,
-          M6aServiceWireCommand.nodeRequest,
-          M6aServiceWireCommand.channelSend,
-          M6aServiceWireCommand.channelRequest
-        ].includes(header.command as never)
+        !isApplicationEnvelopeCommand(header.command)
       ) {
         return 'protocolError';
       }
@@ -1106,9 +1101,9 @@ export class RawServiceMeshRuntime {
       parts: received.parts,
       sourceRoutingId: received.sourceRid,
       sourceRoute: received.sourceRoute,
-      ...(received.reply === undefined ? {} : { reply: received.reply }),
+      reply: received.reply,
       requestSequence: received.requestSeq,
-      ...(correlation === undefined ? {} : { correlation }),
+      correlation,
       applicationJob
     });
     if (accepted) return 'application';
@@ -1601,20 +1596,31 @@ export class RawServiceMeshRuntime {
  * not application NodeSend(16) envelopes. Keep this list closed: a bare
  * record outside the frozen control vocabulary remains a protocol error.
  */
+const BARE_INFRASTRUCTURE_CONTROLS: ReadonlySet<number> = new Set<number>([
+  ServiceWireCommand.relocationReady,
+  ServiceWireCommand.relocationData,
+  ServiceWireCommand.replyRelay,
+  ServiceWireCommand.relocationCutover,
+  ServiceWireCommand.relocationPrepare,
+  ServiceWireCommand.sessionRelocationSeal,
+  ServiceWireCommand.sessionRelocationSealed,
+  ServiceWireCommand.sessionRelocationRoute,
+  ServiceWireCommand.replyRelayAck,
+  ServiceWireCommand.relocationState,
+  ServiceWireCommand.relocationFailed
+]);
+
 function isBareInfrastructureControl(command: number): boolean {
-  return [
-    ServiceWireCommand.relocationReady,
-    ServiceWireCommand.relocationData,
-    ServiceWireCommand.replyRelay,
-    ServiceWireCommand.relocationCutover,
-    ServiceWireCommand.relocationPrepare,
-    ServiceWireCommand.sessionRelocationSeal,
-    ServiceWireCommand.sessionRelocationSealed,
-    ServiceWireCommand.sessionRelocationRoute,
-    ServiceWireCommand.replyRelayAck,
-    ServiceWireCommand.relocationState,
-    ServiceWireCommand.relocationFailed
-  ].includes(command as never);
+  return BARE_INFRASTRUCTURE_CONTROLS.has(command);
+}
+
+function isApplicationEnvelopeCommand(command: number): boolean {
+  return (
+    command === M6aServiceWireCommand.nodeSend ||
+    command === M6aServiceWireCommand.nodeRequest ||
+    command === M6aServiceWireCommand.channelSend ||
+    command === M6aServiceWireCommand.channelRequest
+  );
 }
 
 function protocolCommand(parts: readonly Uint8Array[]): { readonly command?: number } {

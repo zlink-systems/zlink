@@ -2300,7 +2300,7 @@ function decodeMultipartRecord(
       : kind === ReceiveKind.ChannelRequest
         ? OperationKind.ChannelRequest
         : 0;
-  const ingressLifecycle = receiveIngressLifecycle(record);
+  const applicationJob = record.applicationJob;
   return {
     kind,
     domain: readyDomain(record.domain),
@@ -2318,15 +2318,31 @@ function decodeMultipartRecord(
     kindData: null,
     terminalResult: 0,
     failureErrno: 0,
-    ...ingressLifecycle,
+    applicationJobPermit: applicationJob,
+    releaseRetainedIngress: applicationJob === undefined ? undefined : releaseRecordApplicationJob,
     parts: decodeMultipart(application.payload),
     reply(parts) {
       if (record.correlation === undefined) return SubmitResult.InvalidState;
       runtime.reply(record, encodeMultipartApplicationFrame(parts));
       return SubmitResult.Ok;
     },
-    replyActorJoin: () => SubmitResult.NotSupported
+    replyActorJoin: replyActorJoinNotSupported
   };
+}
+
+/** Shared by every ordinary record: the record's own permit lease is its retained ingress. */
+function releaseRecordApplicationJob(this: {
+  readonly applicationJobPermit?: import('../../application-jobs/contracts').ApplicationJobPermitPort;
+}): void {
+  (
+    this.applicationJobPermit as
+      | import('../../application-jobs/application-ingress-record-owner').ApplicationJobRecordLease
+      | undefined
+  )?.close();
+}
+
+function replyActorJoinNotSupported(): SubmitResultValue {
+  return SubmitResult.NotSupported;
 }
 
 function decodeStatefulRecord(
