@@ -79,8 +79,7 @@ final class ZLinkJsonMessageSerializerTest {
 
         ZLinkEncodedPayload encoded = serializer.serialize(expected);
         assertEquals(
-                "{\"reasonId\":\"profile\"}",
-                new String(encoded.bytes(), StandardCharsets.UTF_8));
+                "{\"reasonId\":\"profile\"}", new String(encoded.bytes(), StandardCharsets.UTF_8));
         assertEquals(expected, serializer.deserialize(encoded, EnumPayload.class));
 
         for (String json : List.of("{\"reasonId\":1}", "{\"reasonId\":\"1\"}")) {

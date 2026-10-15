@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
@@ -238,6 +239,7 @@ final class ZLinkSpotActivationFactory {
                 backendSpot,
                 activation::handleDispatchEvent,
                 activation::admitRoute,
+                activation::admitTopic,
                 activation::admitActor);
         return CompletableFuture.completedFuture(activation);
     }
@@ -315,10 +317,12 @@ final class ZLinkSpotActivationFactory {
                             var activation =
                                     new ZLinkInstanceSpotActivation(
                                             host, handlerInvoker, spot, backendSpot, context);
+                            // Instance Spots do not register Logical Multicast handlers.
                             registerDispatchHandler(
                                     backendSpot,
                                     activation::handleDispatchEvent,
                                     activation::admitRoute,
+                                    message -> null,
                                     activation::admitActor);
                             return activation;
                         })
@@ -379,6 +383,7 @@ final class ZLinkSpotActivationFactory {
             Function<ZLinkBackendSpotDispatchInfo, CompletionStage<Void>> handler,
             BiFunction<ZLinkBackendReceived, CompletableFuture<Void>, CompletionStage<Void>>
                     routeHandler,
+            Function<ZLinkBackendTopicMessage, Boolean> topicHandler,
             BiFunction<
                             java.util.List<
                                     systems.zlink.framework.runtime.internal.backend
@@ -397,6 +402,11 @@ final class ZLinkSpotActivationFactory {
                     public CompletionStage<Void> handleRoute(
                             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
                         return routeHandler.apply(received, admission);
+                    }
+
+                    @Override
+                    public Boolean handleTopic(ZLinkBackendTopicMessage message) {
+                        return topicHandler.apply(message);
                     }
 
                     @Override
