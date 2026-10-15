@@ -1,7 +1,7 @@
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage } from '../backend/runtime-message';
 import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-values';
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import {
   ZLinkFrameworkErrorKind,
@@ -98,8 +98,19 @@ const CHANNEL_FLOW_FIELD = ',"flowId":';
 const PREPARED_CHANNEL_FLOW = '00000000-0000-7000-8000-000000000000';
 const CHANNEL_FLOW_TEXT = /^[0-9a-f-]{36}$/;
 
+// A per-process random 64-bit prefix followed by a per-process counter, both
+// as lowercase hex: unique among the runtime's pending requests (spec 06-obs/04
+// §3) without drawing random bytes for every request — the shape Java
+// ZLinkServiceOperationIds uses.
+const CHANNEL_CORRELATION_PREFIX = randomBytes(CHANNEL_CORRELATION_TEXT_LENGTH / 4).toString('hex');
+let channelCorrelationCounter = 0;
+
 export function newChannelCorrelationId(): string {
-  return randomUUID().replaceAll('-', '');
+  channelCorrelationCounter += 1;
+  return (
+    CHANNEL_CORRELATION_PREFIX +
+    channelCorrelationCounter.toString(16).padStart(CHANNEL_CORRELATION_TEXT_LENGTH / 2, '0')
+  );
 }
 
 export function encodeChannelEnvelopeParts(
