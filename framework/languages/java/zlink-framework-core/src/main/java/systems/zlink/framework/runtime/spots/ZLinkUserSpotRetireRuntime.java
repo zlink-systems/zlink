@@ -195,8 +195,8 @@ public final class ZLinkUserSpotRetireRuntime {
                                                             request.targetOwnerId(),
                                                             request.targetOwnerLeaseGeneration()),
                                                     () -> false)
-                                            .thenRun(
-                                                    () ->
+                                            .thenCompose(
+                                                    ignored ->
                                                             restoreBoundSessions(
                                                                     actors, node, request)),
                             spots,
@@ -279,10 +279,11 @@ public final class ZLinkUserSpotRetireRuntime {
         }
     }
 
-    private static void restoreBoundSessions(
+    private static CompletionStage<Void> restoreBoundSessions(
             ZLinkActorRuntime actors,
             ZLinkInternalMeshNode node,
             ZLinkSpotRetireControl.StageRequest request) {
+        List<CompletableFuture<Long>> restored = new ArrayList<>();
         for (ZLinkSpotRetireControl.SessionRouteFence route : request.sessionRoutes()) {
             ZLinkActor actor =
                     actors.localActor(route.actorId())
@@ -292,13 +293,17 @@ public final class ZLinkUserSpotRetireRuntime {
                                                     "relocated Actor is unavailable while restoring"
                                                             + " its bound Session: "
                                                             + route.actorId()));
-            actors.bindNativeSession(
-                    actor,
-                    node.spotNode(),
-                    actors.currentRef(actor),
-                    route.sessionOwnerNodeRid(),
-                    route.sessionRid());
+            restored.add(
+                    actors.bindNativeSession(
+                                    actor,
+                                    node.spotNode(),
+                                    actors.currentRef(actor),
+                                    route.sessionOwnerNodeRid(),
+                                    route.sessionRid(),
+                                    route.bindingGeneration())
+                            .toCompletableFuture());
         }
+        return CompletableFuture.allOf(restored.toArray(CompletableFuture[]::new));
     }
 
     /**

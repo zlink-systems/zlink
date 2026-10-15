@@ -78,8 +78,13 @@ final class ZLinkCanonicalRelocationSettlementTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({
-        "false,0,true", "false,1,true", "false,2,true",
-        "true,1,true", "true,2,true", "false,2,false"
+        "false,0,true",
+        "false,1,true",
+        "false,2,true",
+        "true,1,true",
+        "true,2,true",
+        "false,2,false",
+        "false,3,true"
     })
     void selectedRouteReplacementResendsTheWholeBoundaryWithoutDisconnect(
             boolean emptyBatch, int replaceAt, boolean readyAtObservation) throws Exception {
@@ -87,11 +92,16 @@ final class ZLinkCanonicalRelocationSettlementTest {
         fixture.silentlyDrop.set(true);
         fixture.dropCutover.set(true);
         fixture.stage();
+        if (replaceAt == 3) {
+            fixture.routeGeneration.set(2);
+            fixture.connected.set(false);
+        }
         if (!emptyBatch) {
             fixture.dropData.set(record -> true);
             fixture.relay(R1, R2);
         }
         if (replaceAt == 0) fixture.routeGeneration.set(2);
+        if (replaceAt == 3) fixture.connected.set(true);
         fixture.publish();
         if (replaceAt == 1) fixture.routeGeneration.set(2);
         fixture.management.clear();

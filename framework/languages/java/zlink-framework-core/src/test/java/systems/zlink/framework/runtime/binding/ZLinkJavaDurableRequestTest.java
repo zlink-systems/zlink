@@ -560,9 +560,11 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     private static final class Source {
-        PeerRouteObservation route = new PeerRouteObservation(1, true);
+        volatile PeerRouteObservation route = new PeerRouteObservation(1, true);
+        private final systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane =
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane();
         private final java.util.function.LongSupplier nanoTime;
-        private Runnable listener;
+        private volatile Runnable listener;
 
         Source() {
             this(System::nanoTime);
@@ -579,7 +581,8 @@ final class ZLinkJavaDurableRequestTest {
         }
 
         void signal() {
-            if (listener != null) listener.run();
+            var callback = listener;
+            if (callback != null) callback.run();
         }
 
         java.util.concurrent.CompletionStage<List<byte[]>> request(
@@ -604,7 +607,16 @@ final class ZLinkJavaDurableRequestTest {
                     this::observe,
                     action -> {
                         try {
-                            action.run();
+                            if (stateLane.isOnLane()) action.run();
+                            else
+                                stateLane
+                                        .runNowOrQueue(
+                                                () -> {
+                                                    action.run();
+                                                    return null;
+                                                })
+                                        .toCompletableFuture()
+                                        .join();
                             return CompletableFuture.completedStage(null);
                         } catch (RuntimeException failure) {
                             return CompletableFuture.failedStage(failure);

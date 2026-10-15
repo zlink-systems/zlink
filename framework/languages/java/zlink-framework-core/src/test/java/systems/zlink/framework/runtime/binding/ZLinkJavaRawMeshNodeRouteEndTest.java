@@ -41,8 +41,10 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                 assertTrue(liveness.acknowledge(peerRid, connectionId, probeId, 1));
                 Map<RoutingId, String> ready = mapField(node, "admissionControlReadyConnections");
                 ready.put(peerRid, connectionId);
-                Map<RoutingId, Long> announced = mapField(node, "acknowledgedRouteGenerations");
-                announced.put(peerRid, admittedGeneration);
+                Map<RoutingId, ZLinkJavaRawMeshNode.HelloExchange> announced =
+                        mapField(node, "helloExchanges");
+                var exchange = new ZLinkJavaRawMeshNode.HelloExchange(admittedGeneration, null);
+                announced.put(peerRid, exchange);
                 setField(node, "selectedRoutes", Map.of(peerRid, endedGeneration));
 
                 var observe = ZLinkJavaRawMeshNode.class.getDeclaredMethod("observeSelectedRoutes");
@@ -54,8 +56,7 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                 // 05-transport-liveness.ko.md:228 (§5): ACK does not own Ready.
                 assertEquals(retained, liveness.connection(peerRid) != null);
                 assertEquals(retained ? connectionId : null, ready.get(peerRid));
-                assertEquals(
-                        retained ? Long.valueOf(admittedGeneration) : null, announced.get(peerRid));
+                assertEquals(retained ? exchange : null, announced.get(peerRid));
                 setField(node, "router", null);
             }
         }

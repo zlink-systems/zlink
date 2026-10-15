@@ -3,7 +3,7 @@ package systems.zlink.framework.runtime.binding;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -20,9 +20,9 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
     private static final Duration IO_DEADLINE = Duration.ofSeconds(2);
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void eachLivenessTurnResendsHelloUntilAdmitIncludingInboundRoutes(boolean withIntent)
-            throws Exception {
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void eachLivenessTurnResendsHelloUntilAdmitIncludingInboundRoutes(
+            boolean withIntent, boolean pausePublication) throws Exception {
         var localRid = RoutingId.from("hello-retry-local");
         var remoteRid = RoutingId.from("hello-retry-remote");
         var wire = new ZLinkServiceM6AWireCodec();
@@ -52,10 +52,56 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 port.waitForReady(router, IO_DEADLINE);
             }
             invoke(node, "observeSelectedRoutes");
+            if (pausePublication) {
+                var lane =
+                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                                field(node, "descriptorStateLane");
+                var entered = new java.util.concurrent.CompletableFuture<Void>();
+                var release = new java.util.concurrent.CompletableFuture<Void>();
+                lane.runAsync(
+                        () -> {
+                            entered.complete(null);
+                            release.join();
+                            return null;
+                        });
+                try {
+                    entered.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                    tick(node, 0);
+                    var queued = node.helloExchanges.get(remoteRid).submission();
+                    tick(node, 1);
+                    release.complete(null);
+                    queued.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                    lane.runAsync(() -> null)
+                            .toCompletableFuture()
+                            .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                    assertEquals(ServiceWireConstants.COMMAND_HELLO, receive(peerPort, peer, wire));
+                    port.send(
+                                    router,
+                                    remoteRid,
+                                    List.of(
+                                            wire.encodeAdmission(
+                                                    ServiceWireConstants.COMMAND_UPDATE,
+                                                    descriptor(localRid))))
+                            .toCompletableFuture()
+                            .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                    assertEquals(
+                            ServiceWireConstants.COMMAND_UPDATE,
+                            receive(peerPort, peer, wire),
+                            "a queued HELLO must not be submitted twice before its completion");
+                } finally {
+                    release.complete(null);
+                }
+            }
             // No receive pump or wall-clock retry runs. These are explicit management turns.
             tick(node, 0);
+            var first = node.helloExchanges.get(remoteRid);
+            if (first != null && first.submission() != null)
+                first.submission().get(2, java.util.concurrent.TimeUnit.SECONDS);
             assertEquals(ServiceWireConstants.COMMAND_HELLO, receive(peerPort, peer, wire));
             tick(node, 1);
+            var second = node.helloExchanges.get(remoteRid);
+            if (second != null && second.submission() != null)
+                second.submission().get(2, java.util.concurrent.TimeUnit.SECONDS);
             assertEquals(ServiceWireConstants.COMMAND_HELLO, receive(peerPort, peer, wire));
 
             peerPort.send(

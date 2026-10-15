@@ -46,6 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -295,8 +296,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                 ZLinkCanonicalRelocationProtocol.SOURCE,
                                 prepare.object(),
                                 frozenRecord));
-        attempt.batch().append(frozenRecord, encoded);
-        attempt.batch().observeSubmission(node.observePeerRoute(targetNodeRid));
+        attempt.batch().append(frozenRecord, encoded, node.observePeerRoute(targetNodeRid));
         return send(targetNodeRid, encoded);
     }
 
@@ -2071,32 +2071,43 @@ final class ZLinkCanonicalRelocationStateMachine
         private final List<byte[]> encodedFrames = new ArrayList<>();
         private final java.util.zip.CRC32C checksum = new java.util.zip.CRC32C();
         private long recordCount;
-        private long submittedRoute;
+        private OptionalLong submittedRoute = OptionalLong.empty();
 
         void observeSubmission(ZLinkInternalMeshNode.PeerRouteObservation route) {
             inStateLane(
                     () -> {
-                        if (submittedRoute == 0 && route.ready())
-                            submittedRoute = route.selectedGeneration();
+                        captureFirstRoute(route);
                         return null;
                     });
         }
 
         long submittedRoute() {
-            return inStateLane(() -> submittedRoute);
+            return inStateLane(() -> submittedRoute.orElse(0));
         }
 
         void resubmitted(long generation) {
             inStateLane(
                     () -> {
-                        submittedRoute = generation;
+                        submittedRoute = OptionalLong.of(generation);
                         return null;
                     });
         }
 
-        void append(byte[] frozenRecord, byte[] encodedFrame) {
+        private void captureFirstRoute(ZLinkInternalMeshNode.PeerRouteObservation route) {
+            if (submittedRoute.isEmpty()) {
+                // An attempted boundary with no ready route is distinct from no attempt.
+                // Cutover cannot overwrite that pending delivery with its later ready route.
+                submittedRoute = OptionalLong.of(route.ready() ? route.selectedGeneration() : 0);
+            }
+        }
+
+        void append(
+                byte[] frozenRecord,
+                byte[] encodedFrame,
+                ZLinkInternalMeshNode.PeerRouteObservation route) {
             inStateLane(
                     () -> {
+                        captureFirstRoute(route);
                         checksum.update(frozenRecord, 0, frozenRecord.length);
                         recordCount++;
                         encodedFrames.add(encodedFrame.clone());
