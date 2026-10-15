@@ -1100,7 +1100,8 @@ public final class Message implements AutoCloseable {
         }
 
         static NativeMessageSlot acquire() {
-            NativeMessageSlot slot = POOL.get().acquire();
+            NativeMessageSlot slot =
+                Thread.currentThread().isVirtual() ? null : POOL.get().acquire();
             if (slot == null) {
                 slot = SHARED.poll();
             }
@@ -1115,7 +1116,11 @@ public final class Message implements AutoCloseable {
             if (slot == null) {
                 return;
             }
-            if (slot.ownerThreadId == Thread.currentThread().threadId()
+            // A virtual thread usually ends with its task; a slot kept in its
+            // thread-local pool would be neither reused nor closed.
+            Thread current = Thread.currentThread();
+            if (!current.isVirtual()
+                && slot.ownerThreadId == current.threadId()
                 && POOL.get().release(slot)) {
                 return;
             }
@@ -1175,12 +1180,14 @@ public final class Message implements AutoCloseable {
         private MessageWrapperPool() {
         }
 
+        // Virtual threads do not pool wrappers: the pool would end with the
+        // thread and keep each wrapper's native slot unreachable.
         static Message acquire() {
-            return POOL.get().acquire();
+            return Thread.currentThread().isVirtual() ? null : POOL.get().acquire();
         }
 
         static boolean release(Message message) {
-            return POOL.get().release(message);
+            return !Thread.currentThread().isVirtual() && POOL.get().release(message);
         }
 
         private static final class Pool {

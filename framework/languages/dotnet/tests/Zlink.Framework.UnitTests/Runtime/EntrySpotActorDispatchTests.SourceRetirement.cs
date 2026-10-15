@@ -137,16 +137,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         if (deferred)
         {
-            var header = new ZlinkStreamHeader(
-                ZlinkStreamMessageKind.Send,
-                ZlinkStreamCodec.Json,
-                ZlinkStreamHeaderFlags.None,
-                null,
-                "source-retirement",
-                ZlinkStreamMetadata.Empty
-            );
             await state.ExecuteDispatchAsync(
-                header,
                 token =>
                 {
                     CommitSource();

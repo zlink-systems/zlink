@@ -42,7 +42,6 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
                         prepare,
                         envelope,
                         authenticatedSourceNodeRid,
-                        checked(prepare.Object.ExpectedAuthorityOwnerGeneration + 1),
                         cancellationToken
                     )
                     .ConfigureAwait(false);

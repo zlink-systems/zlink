@@ -72,17 +72,17 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             );
         }
 
-        Assert.Equal(116, cases.Count);
+        Assert.Equal(121, cases.Count);
         var operationCases = index
             .RootElement.GetProperty("operationCases")
             .EnumerateArray()
             .ToArray();
         Assert.Equal(
-            33,
+            34,
             operationCases.Count(item => item.GetProperty("expect").GetString() == "accept")
         );
         Assert.Equal(
-            60,
+            64,
             operationCases.Count(item => item.GetProperty("expect").GetString() == "reject")
         );
         Assert.Equal(

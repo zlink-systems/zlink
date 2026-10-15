@@ -287,11 +287,12 @@ internal static class ZLinkTraceFormat
     internal const string MessageSizeBytesField = "message_size_bytes";
     internal const string DurationSecondsField = "duration_seconds";
     internal const string ErrorTypeField = "error_type";
+    internal const string DetailField = "detail";
     internal const string ErrorMessageField = "error_message";
     internal const string MessageFlowEventName = "zlink.message_flow";
     internal const string DispatchErrorEventName = "zlink.dispatch_error";
 
-    private const int MessageFlowFieldCapacity = 23;
+    private const int MessageFlowFieldCapacity = 26;
     private const int DispatchErrorFieldCapacity = 21;
     internal const int ErrorMessageMaxLength = 512;
     private static readonly (Regex Pattern, string Replacement)[] CredentialPatterns =
@@ -484,6 +485,9 @@ internal static class ZLinkTraceFormat
         Add(fields, OutcomeField, ResultKey(flow));
         Add(fields, ReasonField, MessageReasonKey(flow.Reason));
         Add(fields, SizeField, size);
+        Add(fields, DetailField, flow.Detail);
+        Add(fields, ErrorTypeField, flow.ErrorType);
+        Add(fields, ErrorMessageField, flow.ErrorMessage);
         return fields;
     }
 

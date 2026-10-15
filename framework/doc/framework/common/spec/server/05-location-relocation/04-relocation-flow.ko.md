@@ -117,7 +117,7 @@ Source는 payload 전체를 memory에 유지한 채 target에 직접 전송하�
 직접 전송 payload는 schema의 `relocation-envelope-v1`이다. Provider 전체 envelope 없이
 canonical big-endian field stream으로 encoding한다. Schema 선언 순서는 `relocation`, `object`,
 `applicationVersion`, `applicationStates`, `savedWork`, `timerRegistrations`,
-`pendingTimerTicks`다. Target은 Location Store의 authority key를 UTF-8 authority-key byte
+`pendingTimerTicks`, `sessionBindings`다. Target은 Location Store의 authority key를 UTF-8 authority-key byte
 순서로 정렬해 canonical participant inventory를 재구성한다. Participant identity는 stream에
 의도적으로 넣지 않는다. `participantId`는 이 정렬된 inventory의 zero-based index에 1을 더한
 값이고, 모든 participant vector는 schema가 선언한 key로 정렬되고 unique해야 한다.
@@ -131,6 +131,13 @@ delivery·schedule index, 다음 Unix-millisecond schedule cursor가 들어간�
 participant/order sequence, timer name, delivery·scheduled index, scheduled timestamp,
 skipped-tick count가 들어간다. Native timer handle과 callback continuation은 이 frozen
 saved-work record에 넣지 않는다.
+
+`sessionBindings`에는 §4.1에서 seal한 participant마다 command 43이 확인한 Session owner
+identity(`sessionOwnerNodeRid`, `sessionOwnerNodeGeneration`, `sessionOwnerId`,
+`sessionOwnerLeaseGeneration`)와 `sessionRid`, `bindingGeneration`이 들어간다. Bind되지 않은
+participant는 항목이 없다. Target은 이 항목으로
+[Session과 Actor binding §8.2](../04-session/02-session-actor-binding.ko.md#82-control-message-424344)의
+command 44 commit을 만든다.
 
 Command 40 `relocationPrepare`가 이 stream의 manifest다. `payloadTotalLength`,
 `payloadChunkCount`, `payloadChecksumCrc32c`가 complete encoded logical stream을 설명한다.

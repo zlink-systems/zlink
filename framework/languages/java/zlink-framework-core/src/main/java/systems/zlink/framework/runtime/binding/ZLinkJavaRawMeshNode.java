@@ -206,6 +206,8 @@ final class ZLinkJavaRawMeshNode
     private volatile ExecutorService pump;
     private final AtomicReference<CompletableFuture<ZLinkApplicationJobQueue.Permit>>
             pendingReceiveAcquire = new AtomicReference<>();
+    // The pump executor alone reads and writes it; close reads it after the pump terminates.
+    private RawMulticastFanout pendingRawMulticast;
     private RouterSocketConfig routerSocketConfig = new RouterSocketConfig();
     private volatile Duration routerReceiveTimeout;
     private volatile int placementWeight = 100;
@@ -1866,7 +1868,6 @@ final class ZLinkJavaRawMeshNode
         currentSpots.enqueueLogicalMulticast(
                 selectedChannel,
                 topic,
-                source == null ? routingId.toString() : source.spotId(),
                 routingId,
                 metadata,
                 ZLinkChannelContentTypeFrame.decode(parts),
@@ -4512,7 +4513,13 @@ final class ZLinkJavaRawMeshNode
         ExecutorService currentPump = pump;
         if (currentPump != null) {
             currentPump.shutdownNow();
-            awaitExecutorTermination(currentPump);
+            currentPump.close();
+        }
+        // The pump has stopped, so the children of its unfinished fanout end here.
+        RawMulticastFanout fanout = pendingRawMulticast;
+        pendingRawMulticast = null;
+        if (fanout != null) {
+            fanout.close();
         }
         pendingReplyRelays
                 .values()
@@ -4536,22 +4543,6 @@ final class ZLinkJavaRawMeshNode
         signalLifecycleEnded();
     }
 
-    private static void awaitExecutorTermination(ExecutorService executor) {
-        boolean interrupted = false;
-        try {
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
-                executor.awaitTermination(5, TimeUnit.SECONDS);
-            }
-        } catch (InterruptedException interruption) {
-            interrupted = true;
-            executor.shutdownNow();
-        }
-        if (interrupted) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
     private void startPump() {
         RouterSocket pumpSocket = requireStarted();
         // 수신 pump는 platform thread다. 가상 thread로 두면 blocking 수신에서 지연이 쌓인다.
@@ -4568,7 +4559,12 @@ final class ZLinkJavaRawMeshNode
 
     private void pumpTurn(RouterSocket pumpSocket) {
         if (closed.get()) return;
-        int ready = port.waitForReady(pumpSocket, ingressWaitTimeout);
+        int ready =
+                port.waitForReady(
+                        pumpSocket,
+                        pendingRawMulticast != null && pendingReceiveAcquire.get() == null
+                                ? Duration.ZERO
+                                : ingressWaitTimeout);
         long now = System.nanoTime();
         // The existing pump remains this ROUTER's one route observer.
         if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
@@ -4577,7 +4573,7 @@ final class ZLinkJavaRawMeshNode
         drainPeerCloseRequests();
         announceExpectedPeers();
         tickLiveness(now);
-        if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0) {
+        if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0 || pendingRawMulticast != null) {
             drainIngressBatch(pumpSocket);
         }
         if (!closed.get()) {
@@ -4617,29 +4613,44 @@ final class ZLinkJavaRawMeshNode
                 var permit = grant;
                 grant = null;
                 try {
-                    Optional<ZLinkJavaRawServicePort.Inbound> inbound = port.receiveNow(pumpSocket);
-                    if (inbound.isEmpty()) {
-                        return;
-                    }
-                    ZLinkJavaRawServicePort.Inbound record = inbound.orElseThrow();
-                    receivedBytes =
-                            Math.addExact(receivedBytes, retainedBytes(record.received().parts()));
-                    try (ZLinkApplicationJobContext.Scope ignored =
-                            permit == null ? () -> {} : ZLinkApplicationJobContext.enter(permit)) {
-                        dispatch(record);
+                    // Each permit of this source posts the next child of a fanout it already
+                    // received, or receives one record.
+                    RawMulticastFanout fanout = pendingRawMulticast;
+                    if (fanout != null) {
+                        try (ZLinkApplicationJobContext.Scope ignored =
+                                ZLinkApplicationJobContext.enter(permit)) {
+                            continueRawMulticast(fanout);
+                        }
+                    } else {
+                        Optional<ZLinkJavaRawServicePort.Inbound> inbound =
+                                port.receiveNow(pumpSocket);
+                        if (inbound.isEmpty()) {
+                            return;
+                        }
+                        ZLinkJavaRawServicePort.Inbound record = inbound.orElseThrow();
+                        receivedBytes =
+                                Math.addExact(
+                                        receivedBytes, retainedBytes(record.received().parts()));
+                        try (ZLinkApplicationJobContext.Scope ignored =
+                                permit == null
+                                        ? () -> {}
+                                        : ZLinkApplicationJobContext.enter(permit)) {
+                            dispatch(record);
+                        }
                     }
                 } finally {
                     if (permit != null) {
                         permit.abandonReservation();
                     }
                 }
+                count++;
                 if (receivedBytes >= MAX_INGRESS_BATCH_BYTES
                         || System.nanoTime() - startedAt >= MAX_INGRESS_BATCH_NANOS) {
                     return;
                 }
-                count++;
                 if (count >= MAX_INGRESS_BATCH
-                        || !port.waitForReadable(pumpSocket, Duration.ZERO)) {
+                        || (pendingRawMulticast == null
+                                && !port.waitForReadable(pumpSocket, Duration.ZERO))) {
                     return;
                 }
             }
@@ -5711,36 +5722,100 @@ final class ZLinkJavaRawMeshNode
         if (frames.size() != payloadOffset + 1 || inbound.requestSequence() != null) {
             return;
         }
+        RawMulticastFanout fanout = null;
         try {
             ZLinkServiceM6BWireCodec.LogicalMulticast header =
                     statefulWire.decodeLogicalMulticastHeader(frames.getFirst());
-            boolean admitted =
-                    topology != null
-                            && topology.peer(inbound.source())
-                                    .map(peer -> peer.descriptor().serves(header.channelName()))
-                                    .orElse(false);
-            if (!admitted) {
-                return;
-            }
             byte[] metadata = payloadOffset == 2 ? frames.get(1).clone() : new byte[0];
             ZLinkServiceM6AWireCodec.ApplicationPayload payload =
                     wire.decodeApplicationPayload(frames.get(payloadOffset));
             List<Message> messages = decodeApplicationMessages(payload);
             try {
-                ((ZLinkJavaRawSpotNode) spotNode())
-                        .enqueueLogicalMulticast(
+                fanout =
+                        new RawMulticastFanout(
+                                ((ZLinkJavaRawSpotNode) spotNode())
+                                        .logicalMulticastTargets(header.topic()),
                                 header.channelName(),
                                 header.topic(),
-                                header.sourceSpotId(),
                                 inbound.source(),
                                 metadata,
                                 applicationContentType(messages),
                                 messages);
             } finally {
-                messages.forEach(Message::close);
+                if (fanout == null) {
+                    messages.forEach(Message::close);
+                }
             }
         } catch (RuntimeException invalid) {
             return;
+        }
+        // The first child takes this record's receive permit.
+        continueRawMulticast(fanout);
+    }
+
+    // Spec 04 application job queue: a 1:N fanout posts no more children than the permits it
+    // holds. With an application job queue, each permit of this source posts one child. The rest
+    // stay here while the source's single waiter obtains its next permit, and the source receives
+    // nothing else until the last child is posted.
+    private void continueRawMulticast(RawMulticastFanout fanout) {
+        pendingRawMulticast = null;
+        try {
+            while (fanout.hasNext()) {
+                fanout.postNext();
+                if (applicationJobQueue != null) break;
+            }
+        } catch (RuntimeException | Error failed) {
+            fanout.close();
+            throw failed;
+        }
+        if (fanout.hasNext()) {
+            pendingRawMulticast = fanout;
+        } else {
+            fanout.close();
+        }
+    }
+
+    // A received Logical Multicast whose children are not all posted yet. It owns the decoded
+    // payload until the last child is posted or the node closes.
+    private static final class RawMulticastFanout implements AutoCloseable {
+        private final List<ZLinkJavaRawSpot> targets;
+        private final String channelName;
+        private final String topic;
+        private final RoutingId source;
+        private final byte[] metadata;
+        private final String contentType;
+        private final List<Message> parts;
+        private int next;
+
+        private RawMulticastFanout(
+                List<ZLinkJavaRawSpot> targets,
+                String channelName,
+                String topic,
+                RoutingId source,
+                byte[] metadata,
+                String contentType,
+                List<Message> parts) {
+            this.targets = targets;
+            this.channelName = channelName;
+            this.topic = topic;
+            this.source = source;
+            this.metadata = metadata;
+            this.contentType = contentType;
+            this.parts = parts;
+        }
+
+        private boolean hasNext() {
+            return next < targets.size();
+        }
+
+        private void postNext() {
+            ZLinkJavaRawSpotNode.enqueueLogicalMulticast(
+                    targets.get(next++), channelName, topic, source, metadata, contentType, parts);
+        }
+
+        @Override
+        public void close() {
+            parts.forEach(Message::close);
         }
     }
 

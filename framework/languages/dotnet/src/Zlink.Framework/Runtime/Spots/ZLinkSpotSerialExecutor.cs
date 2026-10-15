@@ -230,7 +230,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                         : null
                 )
                 .AsTask();
-            reservation.BindExecution(execution, lane.NotifyReadiness);
+            reservation.BindExecution(execution, lane);
             return reservation;
         }
         catch

@@ -320,16 +320,10 @@ class raw_mesh_node_owner_t
                                       const protocol::message_follow_notice_t &notice);
     task_t<bool> send_relocation_control (const std::vector<std::uint8_t> &target_routing_id,
                                           const protocol::relocation_control_t &control);
-    /* session_routes ride as additional request frames after the schema
-     * relocationPrepare(40) record: prebuilt bound-session command-44
-     * commit records the target stages and sends after CAS and queue
-     * opening (20 §5). The schema direct-transfer payload itself carries
-     * no session-route section. */
-    task_t<relocation_prepare_response_t> request_relocation_prepare (
-      const std::vector<std::uint8_t> &target_routing_id,
-      const protocol::relocation_prepare_t &prepare,
-      std::chrono::milliseconds timeout,
-      std::vector<protocol::session_relocation_route_t> session_routes = {});
+    task_t<relocation_prepare_response_t>
+    request_relocation_prepare (const std::vector<std::uint8_t> &target_routing_id,
+                                const protocol::relocation_prepare_t &prepare,
+                                std::chrono::milliseconds timeout);
     bool reply_relocation_ready (const service_mailbox_record_t &request,
                                  const protocol::relocation_ready_t &ready);
     bool reply_relocation_failed (const service_mailbox_record_t &request,

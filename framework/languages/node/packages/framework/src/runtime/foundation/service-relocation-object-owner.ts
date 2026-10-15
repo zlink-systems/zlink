@@ -17,6 +17,7 @@ const DEFAULT_RELOCATION_CALLBACK_CONCURRENCY = 8;
 
 export interface ServiceRelocationSealedWork {
   readonly boundSessionState: Uint8Array;
+  readonly sessionBinding?: ServiceRelocationParticipant['sessionBinding'];
   readonly queuedMessages: readonly ServiceRelocationQueuedMessage[];
   readonly timers: readonly ServiceRelocationTimer[];
 }
@@ -185,6 +186,7 @@ export class ServiceRelocationObjectCaptureOwner {
           authorityOwnerGeneration: unit.authorityOwnerGeneration,
           applicationState: Buffer.from(await unit.captureApplicationState(signal)),
           boundSessionState: Buffer.from(work.boundSessionState),
+          ...(work.sessionBinding === undefined ? {} : { sessionBinding: work.sessionBinding }),
           queuedMessages: work.queuedMessages.map((message) => ({
             sequence: message.sequence,
             payload: Buffer.from(message.payload)
