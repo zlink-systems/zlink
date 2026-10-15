@@ -14,9 +14,13 @@ class Player final : public fx::actor_t
     const fx::actor_context_t &context () const noexcept override { return context_; }
     fx::task_t<void> on_join_completed (const fx::actor_join_completion_t &completion) override
     {
-        if (std::holds_alternative<fx::actor_join_rejected_t> (completion))
-            co_await context_.bound_session ().send (ActionRejected{Rejection::admission}).async ();
-        else if (!std::holds_alternative<fx::actor_join_accepted_t> (completion))
+        if (const auto *rejected = std::get_if<fx::actor_join_rejected_t> (&completion)) {
+            if (!rejected->reply)
+                throw std::runtime_error ("Room join rejected without a Room reply (#1792)");
+            co_await context_.bound_session ()
+              .send (rejected->reply->decode<ActionRejected> ())
+              .async ();
+        } else if (!std::holds_alternative<fx::actor_join_accepted_t> (completion))
             throw std::runtime_error ("Room join failed");
     }
 };

@@ -53,9 +53,9 @@ Pure Room rule tests (admission, closed wall boundaries, exact range, sequence r
 
 ## Known issues
 
-- #1785: C++ Session has no public API for replying with a newly created typed value. `SessionInfoRequest` receives a typed `SessionInfo` push; the e2e client observes that push instead of using a request/reply correlation workaround.
-- #1740: public 0.30.0 lacks the required SafeToShutdown observation / termination behavior. The runner reports the missing observation and does not infer safety.
-- Public 0.30.0 validation may also stop at the registered handoff and binding defects #1771, #1772 and #1775. Use the 0.30.1 release/candidate to complete execution validation; no transport or lifecycle workaround is included.
+- [#1792](https://github.com/zlink-systems/zlink/issues/1792): public 0.30.0 can deliver a rejected Actor join completion without a Room reply. The Player reports this failure instead of fabricating an application admission rejection.
+- [#1740](https://github.com/zlink-systems/zlink/issues/1740): public 0.30.0 lacks the required SafeToShutdown observation and can fail shutdown with TeardownFailed. The runner reports these failures and does not infer safety.
+- [#1785](https://github.com/zlink-systems/zlink/issues/1785): C++ Session has no public API for replying with a newly created typed value. `SessionInfoRequest` receives a typed `SessionInfo` push; the e2e client observes that push.
 
 ## Deployment sequence
 
