@@ -480,6 +480,12 @@ included) is no connection intent created ([§13 Peer connection](#13-verificati
 owns this judgment). For every other pair, the RID-order rule applies, so there's one
 connect initiator.
 
+Automatic discovery creates no connection intent for a peer that already has a selected route
+for its RID (whichever side connected) or that a manual connection intent targets. This doesn't
+change the direction of a manual connection; it only keeps automatic discovery from adding an
+opposite-direction pipe to the same peer. When that route is gone and no manual intent remains,
+an intent is created by the RID-order rule above.
+
 In manual topology, the application can register only one endpoint or both endpoints.
 If both sides start the connection at the same time and two pipes exist for the same RID,
 Core's routing ID duplicate policy decides which pipe is used. The framework verifies only the

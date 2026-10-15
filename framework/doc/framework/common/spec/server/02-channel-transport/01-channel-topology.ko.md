@@ -452,6 +452,11 @@ Automatic discovery는 먼저 local과 remote descriptor를 확인한다. 양쪽
 만들지 않는다([§13 Peer 연결](#13-검증-요구)이 이 판정을 소유한다). 그 밖의 pair에는 RID 순서를
 적용하므로 connect initiator가 하나다.
 
+Automatic discovery는 상대 RID에 이미 선택 route가 있거나(어느 쪽이 연결했든) 같은 상대를 가리키는
+manual connection intent가 있으면 그 상대에 connection intent를 만들지 않는다. Manual 연결의 방향은
+바꾸지 않으며, 같은 상대에 반대 방향 pipe를 하나 더 만들지 않는 것만 정한다. 그 route가 사라지고
+manual intent도 없으면 위 RID 순서 규칙대로 intent를 만든다.
+
 Manual topology에서는 application이 한쪽 endpoint만 등록하거나 양쪽 endpoint를 모두 등록할
 수 있다. 양쪽이 동시에 연결을 시작해 같은 RID의 pipe가 둘 생기면 어느 pipe를 쓸지는 Core의
 RID 중복 정책이 정한다. Framework는 Core가 선택한 route([Core ROUTER §10.1](../../../../../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰))에서
