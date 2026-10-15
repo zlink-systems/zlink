@@ -1209,7 +1209,9 @@ test('manual ClientServer reconnect fences a late admission from the previous ph
   await sockets.dispose();
 });
 
-test('ClientServer liveness ACK is fenced to the current probe and application traffic does not refresh it', async () => {
+test('ClientServer liveness ACK is fenced to the current probe and application traffic does not refresh it', async ( t ) => {
+  const receivedAt = performance.now();
+  t.mock.method(performance, 'now', () => receivedAt);
   const registration = internal.createFrameworkRegistration({
     channels: { orders: { client: { manualConnections: [] } } },
     locations: { useInMemoryStores: true }
