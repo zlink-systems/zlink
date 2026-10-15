@@ -111,16 +111,15 @@ test('RouteMesh admission follows the observed Core selected route (FW01)', asyn
   const routes = new Map([['peer', 11n]]);
   const harness = selectedRouteRuntime(routes);
   const { runtime, sent, processReceived } = harness;
-  const hello = (routeGeneration) =>
+  const admit = (routeGeneration) =>
     processReceived({
       sourceRid: 'peer',
       routeGeneration,
-      parts: [Buffer.from(wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, peer))]
+      parts: [Buffer.from(wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, peer))]
     });
   try {
     runtime.connectPeerByRoutingId(peer.advertisedEndpoint, 'peer');
-    await runtime.pumpBatch(false, true);
-    for (let round = 0; round < 3; round++) await runtime.pumpBatch(false, true);
+    await runtime.observeSelectedRoutes();
     assert.equal(
       sent.filter(
         ([target, command]) => target === 'peer' && command === wire.M6aServiceWireCommand.hello
@@ -129,7 +128,7 @@ test('RouteMesh admission follows the observed Core selected route (FW01)', asyn
     );
 
     // Core delivers the handshake of the selected route.
-    assert.equal(await hello(11n), 'infrastructure');
+    assert.equal(await admit(11n), 'infrastructure');
     assert.equal(runtime.topology.peer('peer')?.connectionId, 'route:11');
     for (let round = 0; round < 3; round++) await runtime.pumpBatch(false, true);
     assert.equal(
@@ -142,14 +141,14 @@ test('RouteMesh admission follows the observed Core selected route (FW01)', asyn
     // Core replaces the route: the admission ends and the new route handshakes.
     routes.set('peer', 12n);
     sent.length = 0;
-    await runtime.pumpBatch(false, true);
+    await runtime.observeSelectedRoutes();
     assert.equal(runtime.topology.peer('peer'), undefined);
     assert.ok(
       sent.some(
         ([target, command]) => target === 'peer' && command === wire.M6aServiceWireCommand.hello
       )
     );
-    assert.equal(await hello(12n), 'infrastructure');
+    assert.equal(await admit(12n), 'infrastructure');
     assert.equal(runtime.topology.peer('peer')?.connectionId, 'route:12');
     for (let round = 0; round < 3; round++) await runtime.pumpBatch(false, true);
     assert.equal(
@@ -366,6 +365,8 @@ for (const admittedGeneration of [undefined, 11n]) {
       if (admittedGeneration !== undefined)
         h.runtime.admitPeer(descriptor('peer'), admittedGeneration, 0);
       for (const parts of [
+        [],
+        [Buffer.alloc(0)],
         [
           Buffer.from(
             wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.update, descriptor('peer'))
@@ -390,5 +391,63 @@ for (const admittedGeneration of [undefined, 11n]) {
     } finally {
       h.runtime.close();
     }
+  });
+}
+
+test('inbound selected route sends HELLO without an outbound intent', async () => {
+  const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+  try {
+    await h.runtime.observeSelectedRoutes();
+    assert.equal(h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length, 1);
+  } finally { h.runtime.close(); }
+});
+test('liveness maintenance resends HELLO until the selected route receives ADMIT', async () => {
+  const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+  try {
+    h.runtime.connectPeerByRoutingId(descriptor('peer').advertisedEndpoint, 'peer');
+    await h.runtime.observeSelectedRoutes();
+    const initial = h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length;
+    h.runtime.tickLiveness(0);
+    await turn();
+    assert.equal(h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length, initial + 1);
+  } finally { h.runtime.close(); }
+});
+
+for (const beforeSnapshot of [false, true]) {
+  test(`remote ADMIT stops HELLO and resets only on route replacement (beforeSnapshot=${beforeSnapshot})`, async () => {
+    const routes = new Map([['peer', 11n]]);
+    const h = selectedRouteRuntime(routes);
+    const receive = (command, routeGeneration) => h.processReceived({
+      sourceRid: 'peer', routeGeneration,
+      parts: [wire.encodeRouteMeshAdmission(command, descriptor('peer'))]
+    });
+    const hellos = () => h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length;
+    try {
+      if (!beforeSnapshot) await h.runtime.observeSelectedRoutes();
+      await receive(wire.M6aServiceWireCommand.admit, 11n);
+      await h.runtime.observeSelectedRoutes();
+      const accepted = hellos();
+      await receive(wire.M6aServiceWireCommand.hello, 11n);
+      await receive(wire.M6aServiceWireCommand.update, 11n);
+      h.runtime.tickLiveness();
+      await turn();
+      assert.equal(hellos(), accepted, 'HELLO and UPDATE must preserve the received ADMIT');
+      routes.set('peer', 12n);
+      // Core can deliver the new route handshake before the Framework observes its snapshot.
+      if (beforeSnapshot) await receive(wire.M6aServiceWireCommand.admit, 12n);
+      await h.runtime.observeSelectedRoutes();
+      assert.equal(hellos(), accepted + (beforeSnapshot ? 0 : 1));
+      if (!beforeSnapshot) {
+        await receive(wire.M6aServiceWireCommand.hello, 12n);
+        h.runtime.tickLiveness();
+        await turn();
+        assert.equal(hellos(), accepted + 2, 'receiving HELLO alone must not stop HELLO submission');
+        await receive(wire.M6aServiceWireCommand.admit, 12n);
+      }
+      const completed = hellos();
+      h.runtime.tickLiveness();
+      await turn();
+      assert.equal(hellos(), completed);
+    } finally { h.runtime.close(); }
   });
 }

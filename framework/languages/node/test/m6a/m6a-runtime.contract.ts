@@ -1442,6 +1442,7 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
+      await left.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1527,6 +1528,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
+      await left.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1654,6 +1656,7 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
+      await left.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1787,6 +1790,7 @@ test('normal receive pump carries application and liveness traffic on one route'
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
+      await left.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1884,6 +1888,7 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
       await client.pumpOne();
       await provider.tickLiveness();
       await client.tickLiveness();
+      await client.observeSelectedRoutes();
       await client.announceExpectedPeers();
       return (
         client.isPeerRouteReady(providerDescriptor.nodeRoutingId) &&
@@ -1966,7 +1971,10 @@ async function verifyBilateralEndpointRequests(
   const left = rawServiceRuntime({ descriptor: leftDescriptor });
   const right = rawServiceRuntime({ descriptor: rightDescriptor });
   const progress = async (): Promise<void> => {
-    for (const runtime of [right, left]) await runtime.announceExpectedPeers();
+    for (const runtime of [right, left]) {
+      await runtime.observeSelectedRoutes();
+      await runtime.announceExpectedPeers();
+    }
     for (const runtime of [right, left]) await runtime.observeSelectedRoutes();
     for (const runtime of [right, left]) await runtime.pumpOne();
     for (const runtime of [left, right]) await runtime.tickLiveness();
@@ -2063,6 +2071,7 @@ test('remote channel requests preserve successful and failed terminal results', 
     const peerDescriptor = peer.topology.localDescriptor();
     source.connectPeer(peerDescriptor.advertisedEndpoint, peerDescriptor);
     await pollUntil(async () => {
+      await source.observeSelectedRoutes();
       await source.announceExpectedPeers();
       await peer.pumpOne();
       await source.pumpOne();

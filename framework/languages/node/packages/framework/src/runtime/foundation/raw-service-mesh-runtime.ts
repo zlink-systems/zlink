@@ -161,7 +161,6 @@ export class RawServiceMeshRuntime {
       readonly endpoint?: string;
       readonly securityIdentity?: string;
       readonly lifecycleGeneration?: bigint;
-      helloSubmittedGeneration?: bigint;
     }
   >();
   private readonly endpointOnlyPeers = new Set<string>();
@@ -427,32 +426,28 @@ export class RawServiceMeshRuntime {
   }
 
   announcePeer(nodeRoutingId: string): Promise<boolean> {
-    const expected = this.expectedPeers.get(nodeRoutingId);
     const generation = this.selectedRoutes.get(nodeRoutingId);
-    if (
-      expected === undefined ||
-      generation === undefined ||
-      expected.helloSubmittedGeneration === generation ||
-      this.peerAdmissionSealed?.() === true
-    )
-      return Promise.resolve(false);
-    const current = () =>
-      this.expectedPeers.get(nodeRoutingId) === expected &&
-      this.selectedRoutes.get(nodeRoutingId) === generation;
+    if (generation === undefined) return Promise.resolve(false);
+    const current = () => {
+      const admission = this.topology.routeAdmission(nodeRoutingId);
+      return (
+        this.selectedRoutes.get(nodeRoutingId) === generation &&
+        !(
+          admission?.connectionId === routeConnectionId(generation) &&
+          admission.remoteAdmitReceived === true
+        ) &&
+        this.peerAdmissionSealed?.() !== true
+      );
+    };
+    if (!current()) return Promise.resolve(false);
     return Promise.resolve(
       this.startControlSend(
         nodeRoutingId,
         M6aServiceWireCommand.hello,
         () =>
-          this.submitControl(
-            nodeRoutingId,
-            [
-              encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
-            ],
-            () => {
-              if (current()) expected.helloSubmittedGeneration = generation;
-            }
-          ),
+          this.submitControl(nodeRoutingId, [
+            encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
+          ]),
         current
       )
     );
@@ -742,9 +737,6 @@ export class RawServiceMeshRuntime {
       rotation.releaseUnused();
     }
     if (!this.closed) {
-      for (const nodeRoutingId of this.expectedPeers.keys()) {
-        if (this.topology.peer(nodeRoutingId) === undefined) await this.announcePeer(nodeRoutingId);
-      }
       this.tickLiveness();
     }
     return receiveReady && messages > 0;
@@ -899,18 +891,10 @@ export class RawServiceMeshRuntime {
     nowMs: number,
     applicationJobOwner: ApplicationIngressRecordOwner
   ): RawServicePumpResult | Promise<RawServicePumpResult> {
-    if (
-      received.parts.length === 0 ||
-      (received.parts.length === 1 && received.parts[0]!.byteLength === 0)
-    ) {
-      if (this.peerAdmissionSealed?.() === true) return 'dropped';
-      return this.sendControl(received.sourceRid, [
-        encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
-      ]).then((sent) => (sent ? 'infrastructure' : 'dropped'));
-    }
     const peer = this.topology.admittedPeer(received.sourceRid);
     const currentSource =
       peer?.liveness !== undefined && peer.liveness.connectionId === received.routeGeneration;
+    if (received.parts.length === 0) return currentSource ? 'protocolError' : 'dropped';
     try {
       const header = decodeHeader(received.parts[0]!);
       if (header.command === M6aServiceWireCommand.hello && this.peerAdmissionSealed?.() === true) {
@@ -1001,7 +985,13 @@ export class RawServiceMeshRuntime {
       ]);
       return 'infrastructure';
     }
-    const result = this.admitPeer(descriptor, received.routeGeneration, nowMs, expected);
+    const result = this.admitPeer(
+      descriptor,
+      received.routeGeneration,
+      nowMs,
+      expected,
+      header.command === M6aServiceWireCommand.admit
+    );
     if (result !== 'admitted' && result !== 'notRequired') {
       const detail =
         result === 'invalidDescriptor'
@@ -1176,6 +1166,7 @@ export class RawServiceMeshRuntime {
   tickLiveness(nowMs = performance.now()): ServiceLivenessTick {
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
+    for (const nodeRoutingId of this.selectedRoutes.keys()) void this.announcePeer(nodeRoutingId);
     for (const probe of result.probes) {
       const parts = [
         livenessCodec.encodeLivenessRecord({
@@ -1213,8 +1204,6 @@ export class RawServiceMeshRuntime {
     for (const [nodeRoutingId, generation] of this.selectedRoutes) {
       if (observed.get(nodeRoutingId) === generation) continue;
       changes++;
-      const expected = this.expectedPeers.get(nodeRoutingId);
-      if (expected !== undefined) delete expected.helloSubmittedGeneration;
       const peer = this.topology.peer(nodeRoutingId);
       if (peer?.liveness?.connectionId === generation) {
         this.removePeer(peer);
@@ -1427,7 +1416,8 @@ export class RawServiceMeshRuntime {
       readonly endpoint?: string;
       readonly securityIdentity?: string;
       readonly lifecycleGeneration?: bigint;
-    }
+    },
+    remoteAdmitReceived = false
   ): PeerAdmissionResult {
     const previous = this.topology.peer(descriptor.nodeRoutingId);
     if (
@@ -1442,12 +1432,18 @@ export class RawServiceMeshRuntime {
       );
     }
     const topologyConnectionId =
-      typeof connectionId === 'bigint' ? `route:${connectionId}` : connectionId;
-    const result = this.topology.admit(descriptor, topologyConnectionId, expected, () => {
-      const admission = this.liveness.admit(descriptor.nodeRoutingId, connectionId, nowMs);
-      this.liveness.recordReceived(admission, nowMs);
-      return admission;
-    });
+      typeof connectionId === 'bigint' ? routeConnectionId(connectionId) : connectionId;
+    const result = this.topology.admit(
+      descriptor,
+      topologyConnectionId,
+      expected,
+      () => {
+        const admission = this.liveness.admit(descriptor.nodeRoutingId, connectionId, nowMs);
+        this.liveness.recordReceived(admission, nowMs);
+        return admission;
+      },
+      remoteAdmitReceived
+    );
     if (result === 'notRequired' && previous !== undefined) {
       this.liveness.disconnect(
         descriptor.nodeRoutingId,
@@ -1640,6 +1636,10 @@ export class RawServiceMeshRuntime {
  * not application NodeSend(16) envelopes. Keep this list closed: a bare
  * record outside the frozen control vocabulary remains a protocol error.
  */
+function routeConnectionId(generation: bigint): string {
+  return `route:${generation}`;
+}
+
 function isBareInfrastructureControl(command: number): boolean {
   return [
     ServiceWireCommand.relocationReady,
