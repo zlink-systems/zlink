@@ -27,9 +27,15 @@ async function routeChangePeers({
     const upstream = net.connect(Number(address.port), address.hostname);
     for (const socket of [client, upstream]) {
       sockets.add(socket);
-      socket.on('close', () => sockets.delete(socket));
+      socket.on('close', () => {
+        sockets.delete(socket);
+        client.destroy();
+        upstream.destroy();
+      });
       socket.on('error', (error) => {
-        if (error.code !== 'ECONNRESET') throw error;
+        if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE') throw error;
+        client.destroy();
+        upstream.destroy();
       });
     }
     client.pipe(upstream);
@@ -37,7 +43,7 @@ async function routeChangePeers({
       if (holding) {
         held.push([client, bytes]);
         heldBytes += bytes.length;
-      } else client.write(bytes);
+      } else if (client.writable && !client.writableEnded) client.write(bytes);
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -133,6 +139,7 @@ async function routeChangePeers({
         target.raw.observePeerRoute(sourceRid).generation
       ];
       source.raw.connectPeerByRoutingId(target.descriptor.advertisedEndpoint, targetRid);
+      target.router.disconnect(proxyEndpoint);
       const changed = () =>
         source.router
           .routesSnapshot()
@@ -149,16 +156,21 @@ async function routeChangePeers({
     held: () => heldBytes > 0,
     release() {
       holding = false;
-      for (const [client, bytes] of held.splice(0)) client.write(bytes);
+      for (const [client, bytes] of held.splice(0)) {
+        if (client.writable && !client.writableEnded) client.write(bytes);
+      }
     },
-    async switchRoute() {
+    async switchRoute(forceReplacement = false) {
       const before = [
         source.raw.observePeerRoute(targetRid).generation,
         target.raw.observePeerRoute(sourceRid).generation
       ];
       source.raw.connectPeerByRoutingId(target.descriptor.advertisedEndpoint, targetRid);
+      if (forceReplacement) target.router.disconnect(proxyEndpoint);
       await until(
         () =>
+          source.raw.observePeerRoute(targetRid).generation !== undefined &&
+          target.raw.observePeerRoute(sourceRid).generation !== undefined &&
           source.raw.observePeerRoute(targetRid).generation !== before[0] &&
           target.raw.observePeerRoute(sourceRid).generation !== before[1],
         'both Core selections change'

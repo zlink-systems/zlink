@@ -2340,7 +2340,7 @@ interface NativeRouteChangePeers {
   hold(): void;
   held(): boolean;
   release(): void;
-  switchRoute(): Promise<void>;
+  switchRoute(forceReplacement?: boolean): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -3553,7 +3553,7 @@ for (const phase of ['Prepare', 'cutover'] as const) {
         () => peers.held() && harness.prepareFingerprints.length > 0,
         `${phase} bytes retained on old pipe`
       );
-      await peers.switchRoute();
+      await peers.switchRoute(true);
       peers.release();
       await peers.until(
         () => outcome !== undefined || failure !== undefined,
