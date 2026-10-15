@@ -242,12 +242,12 @@ final class ZLinkSpotActivationFactory {
         }
         EntrySpotActivation activation =
                 new EntrySpotActivation(host, handlerInvoker, entrySpot, backendSpot, context);
-        context.enqueueDispatch(
+        return context.enqueueDispatch(
                         () ->
                                 host.runWithOutbound(
                                         context.dispatchOutbound(),
                                         () ->
-                                                ZLinkHandlerStages.fromRunnable(
+                                                ZLinkHandlerStages.fromStageSupplier(
                                                         entrySpot::onInitialize)))
                 .handle(
                         (ignored, failure) ->
@@ -255,14 +255,17 @@ final class ZLinkSpotActivationFactory {
                                         ? CompletableFuture.<Void>completedFuture(null)
                                         : SpotActivationBase.finishCleanup(
                                                 failure, context.closeResourcesAsync()))
-                .thenCompose(stage -> stage);
-        registerDispatchHandler(
-                backendSpot,
-                activation::handleDispatchEvent,
-                activation::admitRoute,
-                activation::admitTopic,
-                activation::admitActor);
-        return CompletableFuture.completedFuture(activation);
+                .thenCompose(stage -> stage)
+                .thenApply(
+                        ignored -> {
+                            registerDispatchHandler(
+                                    backendSpot,
+                                    activation::handleDispatchEvent,
+                                    activation::admitRoute,
+                                    activation::admitTopic,
+                                    activation::admitActor);
+                            return activation;
+                        });
     }
 
     /** Activates an Instance Spot on the MeshNode {@code nodeRid} of {@code meshName}. */

@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -61,6 +62,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
     private static CompletableFuture<ZLinkActorJoinCompletion> joinCompleted;
     private static CompletableFuture<Void> pingHandled;
     private static CompletableFuture<Void> completionRelease;
+    private static CompletableFuture<Void> initialization;
 
     @BeforeEach
     void reset() {
@@ -69,6 +71,26 @@ final class ZLinkJoinedActorSendAdmissionTest {
         joinCompleted = new CompletableFuture<>();
         pingHandled = new CompletableFuture<>();
         completionRelease = new CompletableFuture<>();
+        initialization = CompletableFuture.completedFuture(null);
+    }
+
+    @Test
+    void failedAsynchronousEntryInitializationFailsStartup() {
+        var expected = new IllegalStateException("entry initialization failure");
+        initialization = CompletableFuture.failedFuture(expected);
+        var failure =
+                assertThrows(
+                        RuntimeException.class,
+                        () -> {
+                            try (var runtime =
+                                    start(options("entry-init-failure", null, null, null, false))) {
+                                // A failed initialization must prevent startup from returning a
+                                // runtime.
+                            }
+                        });
+        Throwable cause = failure;
+        while (cause.getCause() != null) cause = cause.getCause();
+        assertSame(expected, cause);
     }
 
     @ParameterizedTest
@@ -300,6 +322,11 @@ final class ZLinkJoinedActorSendAdmissionTest {
         @Override
         public ZLinkEntrySpotContext context() {
             return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onInitialize() {
+            return initialization;
         }
 
         @Override
