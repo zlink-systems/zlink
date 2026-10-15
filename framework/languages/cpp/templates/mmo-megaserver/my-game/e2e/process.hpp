@@ -5,7 +5,9 @@
 #include <thread>
 #include <sstream>
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <csignal>
@@ -59,14 +61,25 @@ class Process
 #ifdef _WIN32
         SECURITY_ATTRIBUTES security{sizeof (SECURITY_ATTRIBUTES), nullptr, TRUE};
         HANDLE child_in = nullptr, child_out = nullptr;
-        if (!CreatePipe (&child_in, &input_, &security, 0)
-            || !CreatePipe (&output_, &child_out, &security, 0))
+        if (!CreatePipe (&child_in, &input_, &security, 0))
             throw std::runtime_error ("CreatePipe failed");
+        if (!CreatePipe (&output_, &child_out, &security, 0)) {
+            CloseHandle (child_in);
+            CloseHandle (input_);
+            throw std::runtime_error ("CreatePipe failed");
+        }
         SetHandleInformation (input_, HANDLE_FLAG_INHERIT, 0);
         SetHandleInformation (output_, HANDLE_FLAG_INHERIT, 0);
         HANDLE err =
           CreateFileW (err_log.c_str (), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                        &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (err == INVALID_HANDLE_VALUE) {
+            CloseHandle (child_in);
+            CloseHandle (input_);
+            CloseHandle (child_out);
+            CloseHandle (output_);
+            throw std::runtime_error ("Cannot open process stderr");
+        }
         STARTUPINFOA startup{};
         startup.cb = sizeof (startup);
         startup.dwFlags = STARTF_USESTDHANDLES;
@@ -95,11 +108,21 @@ class Process
         CloseHandle (info.hThread);
 #else
         int in[2], out[2];
-        if (pipe2 (in, O_CLOEXEC) != 0 || pipe2 (out, O_CLOEXEC) != 0)
+        if (pipe2 (in, O_CLOEXEC) != 0)
             throw std::runtime_error ("pipe failed");
+        if (pipe2 (out, O_CLOEXEC) != 0) {
+            close (in[0]);
+            close (in[1]);
+            throw std::runtime_error ("pipe failed");
+        }
         const int err = open (err_log.c_str (), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0600);
-        if (err < 0)
+        if (err < 0) {
+            close (in[0]);
+            close (in[1]);
+            close (out[0]);
+            close (out[1]);
             throw std::runtime_error ("Cannot open process stderr");
+        }
         std::vector<char *> argv;
         for (const auto &argument : arguments)
             argv.push_back (const_cast<char *> (argument.c_str ()));
