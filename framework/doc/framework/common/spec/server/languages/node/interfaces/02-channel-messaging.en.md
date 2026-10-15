@@ -23,6 +23,12 @@ Nest provider scope or application provider registration can't change
 this lifetime. Once dispatch finishes, the framework cleans up the
 instances it created and the child context.
 
+`ZLinkEncodedPayload.from(bytes)` and `data()` copy the bytes. `fromOwned(bytes)` retains the
+supplied bytes, including their offset and length, without copying. The caller must not modify
+the bytes after passing them in; doing so changes the payload contents. `view()` returns a
+read-only view of the stored bytes without copying. The caller must not modify the returned view
+or its backing buffer. `toBytes()` and `copy()` return copies.
+
 ## 1. Entry Spot And Classic Fanout
 
 ```ts
@@ -30,7 +36,9 @@ export declare class ZLinkEncodedPayload {
  private readonly payload;
  private constructor();
  static from(bytes: Uint8Array): ZLinkEncodedPayload;
+ static fromOwned(bytes: Uint8Array): ZLinkEncodedPayload;
  data(): Uint8Array;
+ view(): Readonly<Uint8Array>;
  toBytes(): Uint8Array;
  copy(): ZLinkEncodedPayload;
  size(): number;
