@@ -1403,18 +1403,17 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
               static_cast<std::uint64_t> (target.lease_generation),
               _state->default_request_timeout);
         },
-      .send_cutover = [this, target] (const runtime::protocol::relocation_cutover_t &cutover)
-        -> task_t<runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t::
-                    cutover_enqueue_t> {
-          using context_t = runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t;
-          co_return co_await _node->cutover_relocation_remote (target.rid, cutover)
-            ? context_t::cutover_enqueue_t::enqueued
-            : context_t::cutover_enqueue_t::not_enqueued;
+      .send_cutover =
+        [this, target] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
+          co_return co_await _node->cutover_relocation_remote (target.rid, cutover);
       },
       .restore_deadline = restore_deadline,
       .source_stopped = [this] { return relocation_source_stopped (); },
-      .target_connected =
-        [this, target] { return has_admitted_peer (target.rid, target.lifecycle_generation); },
+      .target_route =
+        [this, target] {
+            return _node->transport ().peer_route (target.rid.to_bytes (),
+                                                   target.lifecycle_generation);
+        },
       .abort_target_before_cutover = [] { return true; }};
 
     std::vector<std::byte> inventory_bytes;
@@ -1650,17 +1649,17 @@ mesh_node_runtime_t::relocate_application_unit (
               static_cast<std::uint64_t> (target.lease_generation),
               _state->default_request_timeout);
         },
-      .send_cutover = [this, target] (const runtime::protocol::relocation_cutover_t &cutover)
-        -> task_t<eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t> {
-          using context_t = eligible_relocation_unit_t::canonical_wire_context_t;
-          co_return co_await _node->cutover_relocation_remote (target.rid, cutover)
-            ? context_t::cutover_enqueue_t::enqueued
-            : context_t::cutover_enqueue_t::not_enqueued;
+      .send_cutover =
+        [this, target] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
+          co_return co_await _node->cutover_relocation_remote (target.rid, cutover);
       },
       .restore_deadline = restore_deadline,
       .source_stopped = [this] { return relocation_source_stopped (); },
-      .target_connected =
-        [this, target] { return has_admitted_peer (target.rid, target.lifecycle_generation); },
+      .target_route =
+        [this, target] {
+            return _node->transport ().peer_route (target.rid.to_bytes (),
+                                                   target.lifecycle_generation);
+        },
       .abort_target_before_cutover = [] { return true; }};
 
     std::vector<std::byte> inventory;
@@ -3291,18 +3290,17 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
               static_cast<std::uint64_t> (target.owner.lease_generation),
               _state->default_request_timeout);
         },
-      .send_cutover = [this, s] (const runtime::protocol::relocation_cutover_t &cutover)
-        -> task_t<runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t::
-                    cutover_enqueue_t> {
-          using context_t = runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t;
-          co_return co_await _node->cutover_relocation_remote (s->target.node_rid, cutover)
-            ? context_t::cutover_enqueue_t::enqueued
-            : context_t::cutover_enqueue_t::not_enqueued;
+      .send_cutover = [this,
+                       s] (const runtime::protocol::relocation_cutover_t &cutover) -> task_t<bool> {
+          co_return co_await _node->cutover_relocation_remote (s->target.node_rid, cutover);
       },
       .restore_deadline = s->deadline,
       .source_stopped = [this] { return relocation_source_stopped (); },
-      .target_connected =
-        [this, s] { return has_admitted_peer (s->target.node_rid, s->target.node_generation); },
+      .target_route =
+        [this, s] {
+            return _node->transport ().peer_route (s->target.node_rid.to_bytes (),
+                                                   s->target.node_generation);
+        },
       .abort_target_before_cutover = [] { return true; }};
     const auto inventory_digest =
       runtime::stateful::maintenance_runtime_t::compute_inventory_digest ({s->source_actor});

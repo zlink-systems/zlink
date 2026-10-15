@@ -3824,6 +3824,57 @@ void verify_topology_ready_is_remote_admit_on_current_route ()
     assert (!observe ().peer->ready);
 }
 
+void verify_prepare_replays_on_selected_route ()
+{
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("Z-prepare-source")}));
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("A-prepare-target")}));
+    source.start ();
+    target.start ();
+    const auto local = source.topology ().local_descriptor ();
+    const auto remote = target.topology ().local_descriptor ();
+    source.expect_peer (remote);
+    const auto prepare = relocation_prepare_request (local, remote);
+    auto pending = source.request_relocation_prepare (remote.node_routing_id, prepare, 2s);
+    assert (!pending.await_ready ());
+    assert (source.connect_peer (target.endpoint (), remote));
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    const auto receive = [&] {
+        std::optional<mesh::service_mailbox_claim_t> claim;
+        while (!claim && std::chrono::steady_clock::now () < deadline) {
+            const auto now = std::chrono::steady_clock::now ();
+            (void) await_task (source.pump_one (now));
+            (void) await_task (target.pump_one (now));
+            claim =
+              target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        }
+        assert (claim && claim->records.size () == 1);
+        assert (std::get<protocol::relocation_prepare_t> (protocol::decode_relocation_control (
+                  protocol::message_bytes (claim->records.front ().parts.front ())))
+                == prepare);
+        return *claim;
+    };
+    auto first = receive ();
+    assert (target.mailbox ().release (first));
+    assert (target.connect_peer (source.endpoint (), local));
+    auto replay = receive ();
+    assert (target.reply_relocation_failed (
+      replay.records.front (),
+      protocol::relocation_failed_t{
+        prepare.relocation, prepare.target_attempt_generation, prepare.coordinator, prepare.target,
+        prepare.object, protocol::relocation_role_t::target,
+        static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost)}));
+    assert (target.mailbox ().release (replay));
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline)
+        (void) await_task (source.pump_one (std::chrono::steady_clock::now ()));
+    assert (pending.await_ready ());
+    assert (await_task (std::move (pending)).failed);
+    assert (std::chrono::steady_clock::now () < deadline);
+    source.close ();
+    target.close ();
+}
+
 void verify_unadmitted_route (bool repeat_hello)
 {
     mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
@@ -3945,6 +3996,8 @@ int main (int argc, char **argv)
                 verify_bound_session_bind_retries_until_route_is_admitted ();
             else if (name == "silent")
                 verify_unadmitted_route (false);
+            else if (name == "prepare")
+                verify_prepare_replays_on_selected_route ();
             else if (name == "hello")
                 verify_unadmitted_route (true);
             else if (name == "native-standby")
@@ -4015,6 +4068,7 @@ int main (int argc, char **argv)
             == zlink::request_result_t::not_connected);
     verify_unadmitted_route (false);
     verify_unadmitted_route (true);
+    verify_prepare_replays_on_selected_route ();
     verify_topology_ready_is_remote_admit_on_current_route ();
     verify_durable_attempt_waits_for_admit (protocol::command::boundSessionBind);
     verify_durable_attempt_waits_for_admit (protocol::command::actorCreate);
