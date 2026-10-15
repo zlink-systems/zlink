@@ -3294,11 +3294,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
-    public void CloseSubmissions()
-    {
-        lock (_socketGate)
-            _activeSocketGeneration = 0;
-    }
+    public void CloseSubmissions() =>
+        RunState(() =>
+        {
+            lock (_socketGate)
+                _state = MeshNodeState.Stopped;
+        });
 
     public ValueTask DisposeAsync() =>
         new(ZLinkRuntimeTaskRunner.RunDisposal(ref _disposeTask, DisposeWithDefaultBoundAsync));
@@ -10031,7 +10032,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             lock (_socketGate)
             {
                 var socket = _socket;
-                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
+                if (
+                    _state == MeshNodeState.Stopped
+                    || socket is null
+                    || _activeSocketGeneration != _lifecycleGeneration
+                )
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.ShuttingDown,
                         "The mesh node is closed for submissions."
