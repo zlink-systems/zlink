@@ -191,11 +191,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             var readyField =
                     ZLinkJavaRawMeshNode.class.getDeclaredField("admissionControlReadyConnections");
             readyField.setAccessible(true);
+            assertEquals(MeshPeerState.CONNECTING, node.peers().getFirst().state());
             ((java.util.Map<RoutingId, String>) readyField.get(node)).put(peerRid, "pair");
-            Method isReady =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod("isReadyPeer", RoutingId.class);
-            isReady.setAccessible(true);
-            assertEquals(true, isReady.invoke(node, peerRid));
+            assertEquals(MeshPeerState.ADMITTED, node.peers().getFirst().state());
         }
     }
 

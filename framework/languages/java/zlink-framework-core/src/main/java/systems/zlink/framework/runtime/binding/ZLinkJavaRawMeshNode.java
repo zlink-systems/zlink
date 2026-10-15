@@ -118,7 +118,6 @@ import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * Raw-binding RouteMesh owner. Service topology and application dispatch are implemented in
@@ -1263,123 +1262,82 @@ final class ZLinkJavaRawMeshNode
 
     @Override
     public List<MeshPeerEntry> peers() {
-        List<MeshPeerEntry> manualPeers =
-                peerIntents.entrySet().stream()
-                        .filter(entry -> entry.getValue().expectedRoutingId() != null)
-                        .sorted(Comparator.comparingLong(Map.Entry::getKey))
-                        .map(
-                                entry ->
-                                        new MeshPeerEntry(
-                                                entry.getValue().expectedRoutingId(),
-                                                entry.getValue().endpoint(),
-                                                entry.getKey(),
-                                                MeshPeerSource.MANUAL,
-                                                isReadyPeer(entry.getValue())
-                                                        ? MeshPeerState.ADMITTED
-                                                        : topology != null
-                                                                        && topology.peer(
-                                                                                        entry.getValue()
-                                                                                                .expectedRoutingId())
-                                                                                .isPresent()
-                                                                ? MeshPeerState.CONNECTING
-                                                                : notRequiredPeers.contains(
-                                                                                entry.getValue()
-                                                                                        .expectedRoutingId())
-                                                                        ? MeshPeerState.NOT_REQUIRED
-                                                                        : rejectedPeers.contains(
-                                                                                        entry.getValue()
-                                                                                                .expectedRoutingId())
-                                                                                ? MeshPeerState
-                                                                                        .ERROR
-                                                                                // CLOSED is the
-                                                                                // intent's closed
-                                                                                // fact (mesh-node
-                                                                                // §7.1 (3)): the
-                                                                                // same publication
-                                                                                // that permits
-                                                                                // replacePeerConnection.
-                                                                                : closedPeerIntents
-                                                                                                .contains(
-                                                                                                        entry
-                                                                                                                .getKey())
-                                                                                        ? MeshPeerState
-                                                                                                .CLOSED
-                                                                                        : MeshPeerState
-                                                                                                .CONNECTING,
-                                                entry.getValue().expectedLifecycleGeneration(),
-                                                1,
-                                                0,
-                                                0,
-                                                entry.getValue().createdAtMs()))
-                        .toList();
-        List<MeshPeerEntry> automaticPeers =
-                automaticNotRequiredPeers.entrySet().stream()
-                        .filter(
-                                entry ->
-                                        manualPeers.stream()
-                                                .noneMatch(
-                                                        peer ->
-                                                                peer.routingId()
-                                                                        .equals(entry.getKey())))
-                        .sorted(Map.Entry.comparingByKey(Comparator.comparing(RoutingId::toHex)))
-                        .map(
-                                entry ->
-                                        new MeshPeerEntry(
-                                                entry.getKey(),
-                                                entry.getValue().endpoint(),
-                                                0,
-                                                MeshPeerSource.DISCOVERY,
-                                                MeshPeerState.NOT_REQUIRED,
-                                                entry.getValue().lifecycleGeneration(),
-                                                1,
-                                                0,
-                                                0,
-                                                entry.getValue().observedAtMs()))
-                        .toList();
-        List<MeshPeerEntry> admittedInboundPeers =
-                topology == null
-                        ? List.of()
-                        : topology.peers().stream()
-                                .filter(
-                                        entry ->
-                                                manualPeers.stream()
-                                                        .noneMatch(
-                                                                peer ->
-                                                                        peer.routingId()
-                                                                                .equals(
-                                                                                        entry.descriptor()
-                                                                                                .nodeRoutingId())))
-                                .filter(
-                                        entry ->
-                                                automaticPeers.stream()
-                                                        .noneMatch(
-                                                                peer ->
-                                                                        peer.routingId()
-                                                                                .equals(
-                                                                                        entry.descriptor()
-                                                                                                .nodeRoutingId())))
-                                .map(
-                                        entry ->
-                                                new MeshPeerEntry(
-                                                        entry.descriptor().nodeRoutingId(),
-                                                        entry.descriptor().advertisedEndpoint(),
-                                                        0,
-                                                        MeshPeerSource.DISCOVERY,
-                                                        isReadyPeer(
-                                                                        entry.descriptor()
-                                                                                .nodeRoutingId())
-                                                                ? MeshPeerState.ADMITTED
-                                                                : MeshPeerState.CONNECTING,
-                                                        entry.descriptor().lifecycleGeneration(),
-                                                        entry.descriptor().descriptorRevision(),
-                                                        0,
-                                                        0,
-                                                        currentTimeMillis.getAsLong()))
-                                .toList();
-        return Stream.concat(
-                        Stream.concat(manualPeers.stream(), automaticPeers.stream()),
-                        admittedInboundPeers.stream())
-                .toList();
+        List<MeshPeerEntry> peers = new ArrayList<>();
+        ZLinkServiceTopologyRegistry current = topology;
+        var observed =
+                current == null ? List.<ZLinkServiceTopologyRegistry.Peer>of() : current.peers();
+        for (var peer : observed) {
+            var descriptor = peer.descriptor();
+            var intent =
+                    findExpectedPeer(descriptor.nodeRoutingId(), descriptor.advertisedEndpoint());
+            // The topology supplies admission facts; an intent supplies registration metadata.
+            peers.add(
+                    new MeshPeerEntry(
+                            descriptor.nodeRoutingId(),
+                            intent == null
+                                    ? descriptor.advertisedEndpoint()
+                                    : intent.getValue().endpoint(),
+                            intent == null ? 0 : intent.getKey(),
+                            intent == null ? MeshPeerSource.DISCOVERY : MeshPeerSource.MANUAL,
+                            isReadyPeer(peer) ? MeshPeerState.ADMITTED : MeshPeerState.CONNECTING,
+                            descriptor.lifecycleGeneration(),
+                            descriptor.descriptorRevision(),
+                            descriptor.channels().size(),
+                            0,
+                            currentTimeMillis.getAsLong()));
+        }
+        peerIntents.entrySet().stream()
+                .filter(entry -> entry.getValue().expectedRoutingId() != null)
+                .sorted(Comparator.comparingLong(Map.Entry::getKey))
+                .forEach(
+                        entry -> {
+                            RoutingId rid = entry.getValue().expectedRoutingId();
+                            if (observed.stream()
+                                    .anyMatch(
+                                            peer -> peer.descriptor().nodeRoutingId().equals(rid)))
+                                return;
+                            // CLOSED records intent closure (mesh-node §7.1), not route absence.
+                            peers.add(
+                                    new MeshPeerEntry(
+                                            rid,
+                                            entry.getValue().endpoint(),
+                                            entry.getKey(),
+                                            MeshPeerSource.MANUAL,
+                                            notRequiredPeers.contains(rid)
+                                                    ? MeshPeerState.NOT_REQUIRED
+                                                    : rejectedPeers.contains(rid)
+                                                            ? MeshPeerState.ERROR
+                                                            : closedPeerIntents.contains(
+                                                                            entry.getKey())
+                                                                    ? MeshPeerState.CLOSED
+                                                                    : MeshPeerState.CONNECTING,
+                                            0,
+                                            0,
+                                            0,
+                                            0,
+                                            entry.getValue().createdAtMs()));
+                        });
+        automaticNotRequiredPeers.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey(Comparator.comparing(RoutingId::toHex)))
+                .forEach(
+                        entry -> {
+                            if (peers.stream()
+                                    .anyMatch(peer -> peer.routingId().equals(entry.getKey())))
+                                return;
+                            peers.add(
+                                    new MeshPeerEntry(
+                                            entry.getKey(),
+                                            entry.getValue().endpoint(),
+                                            0,
+                                            MeshPeerSource.DISCOVERY,
+                                            MeshPeerState.NOT_REQUIRED,
+                                            entry.getValue().lifecycleGeneration(),
+                                            0,
+                                            0,
+                                            0,
+                                            entry.getValue().observedAtMs()));
+                        });
+        return List.copyOf(peers);
     }
 
     Optional<Integer> classifyNodeSendTarget(RoutingId targetNodeRid) {
@@ -1577,14 +1535,6 @@ final class ZLinkJavaRawMeshNode
     @Override
     public RoutingId routingId() {
         return routingId;
-    }
-
-    private boolean isReadyPeer(RoutingId peerRoutingId) {
-        ZLinkServiceTopologyRegistry current = topology;
-        if (current == null) {
-            return false;
-        }
-        return current.peer(peerRoutingId).filter(this::isReadyPeer).isPresent();
     }
 
     private boolean isReadyPeer(PeerIntent intent) {
@@ -6893,8 +6843,9 @@ final class ZLinkJavaRawMeshNode
         try {
             ZLinkServiceNodeDescriptor descriptor =
                     wire.decodeAdmission(inbound.frames().getFirst(), command, inbound.source());
-            PeerIntent expected =
+            var expectedConnection =
                     findExpectedPeer(inbound.source(), descriptor.advertisedEndpoint());
+            PeerIntent expected = expectedConnection == null ? null : expectedConnection.getValue();
             rememberPeerIntentRoutingId(expected, inbound.source());
             PeerAdmissionExpectation observed = peerAdmissionExpectations.get(inbound.source());
             String expectedEndpoint =
@@ -7414,17 +7365,21 @@ final class ZLinkJavaRawMeshNode
         return !hasPeerExpectation(target) && (topology == null || topology.peer(target).isEmpty());
     }
 
-    private PeerIntent findExpectedPeer(RoutingId peer, String advertisedEndpoint) {
-        return peerIntents.values().stream()
+    private Map.Entry<Long, PeerIntent> findExpectedPeer(
+            RoutingId peer, String advertisedEndpoint) {
+        return peerIntents.entrySet().stream()
                 .filter(
-                        intent ->
-                                peer.equals(intent.expectedRoutingId())
-                                        || intent.expectedRoutingId() == null
-                                                && intent.endpoint().equals(advertisedEndpoint))
-                .sorted(
-                        Comparator.comparing(PeerIntent::endpoint)
-                                .thenComparingLong(PeerIntent::createdAtMs))
-                .findFirst()
+                        entry -> {
+                            PeerIntent intent = entry.getValue();
+                            return peer.equals(intent.expectedRoutingId())
+                                    || intent.expectedRoutingId() == null
+                                            && intent.endpoint().equals(advertisedEndpoint);
+                        })
+                .min(
+                        Comparator.comparing(
+                                        (Map.Entry<Long, PeerIntent> entry) ->
+                                                entry.getValue().endpoint())
+                                .thenComparingLong(entry -> entry.getValue().createdAtMs()))
                 .orElse(null);
     }
 
