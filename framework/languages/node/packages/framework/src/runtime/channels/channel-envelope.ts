@@ -75,9 +75,14 @@ interface PreparedChannelHeader {
   readonly bytes: Buffer;
   readonly correlationOffset: number;
   readonly deadlineOffset: number;
+  readonly flowOffset: number;
 }
 
-type PreparedHeaderVariants = Map<ZLinkChannelMessageKind, Map<boolean, PreparedChannelHeader>>;
+/** Per kind, deadline presence and flow origin (`undefined` when the header carries no flow). */
+type PreparedHeaderVariants = Map<
+  ZLinkChannelMessageKind,
+  Map<boolean, Map<ZLinkFlowOrigin | undefined, PreparedChannelHeader>>
+>;
 const preparedChannelHeaders = new WeakMap<
   ReadonlyMap<string, ZLinkMessageSerializer>,
   Map<string, Map<string, Map<string, PreparedHeaderVariants>>>
@@ -88,6 +93,10 @@ const CHANNEL_CORRELATION_TEXT_LENGTH = 32;
 const PREPARED_CHANNEL_CORRELATION = '0'.repeat(CHANNEL_CORRELATION_TEXT_LENGTH);
 const PREPARED_CHANNEL_DEADLINE = '2000-01-01T00:00:00.000Z';
 const CHANNEL_CORRELATION_TEXT = /^[0-9a-f]{32}$/;
+const CHANNEL_FLOW_FIELD = ',"flowId":';
+// A flow id is a lowercase UUIDv7 (spec 27 §3): fixed 36 JSON-safe ASCII bytes.
+const PREPARED_CHANNEL_FLOW = '00000000-0000-7000-8000-000000000000';
+const CHANNEL_FLOW_TEXT = /^[0-9a-f-]{36}$/;
 
 export function newChannelCorrelationId(): string {
   return randomUUID().replaceAll('-', '');
@@ -544,8 +553,9 @@ function encodeChannelHeader(
   if (
     codecs !== undefined &&
     metadata === EMPTY_APPLICATION_METADATA &&
-    flowId === undefined &&
-    flowOrigin === undefined &&
+    (flowId === undefined
+      ? flowOrigin === undefined
+      : flowOrigin !== undefined && CHANNEL_FLOW_TEXT.test(flowId)) &&
     topic === null &&
     source === undefined &&
     ((kind === ZLinkChannelMessageKind.Command &&
@@ -576,7 +586,9 @@ function encodeChannelHeader(
       correlationId,
       deadline,
       errorCode,
-      errorMessage
+      errorMessage,
+      flowId,
+      flowOrigin
     );
   }
   // The wire has a fixed field order. Measure escaped UTF-8 first, then write
@@ -629,7 +641,9 @@ function preparedChannelHeader(
   correlationId: string | null,
   deadline: string | null,
   errorCode: string | null | undefined,
-  errorMessage: string | null | undefined
+  errorMessage: string | null | undefined,
+  flowId: string | undefined,
+  flowOrigin: ZLinkFlowOrigin | undefined
 ): Buffer {
   let channels = preparedChannelHeaders.get(codecs.serializers);
   if (channels === undefined)
@@ -643,7 +657,9 @@ function preparedChannelHeader(
   let deadlines = kinds.get(kind);
   if (deadlines === undefined) kinds.set(kind, (deadlines = new Map()));
   const hasDeadline = deadline !== null;
-  let prepared = deadlines.get(hasDeadline);
+  let flows = deadlines.get(hasDeadline);
+  if (flows === undefined) deadlines.set(hasDeadline, (flows = new Map()));
+  let prepared = flows.get(flowOrigin);
   if (prepared === undefined) {
     const bytes = encodeChannelHeader(
       kind,
@@ -657,23 +673,32 @@ function preparedChannelHeader(
       errorMessage,
       undefined,
       EMPTY_APPLICATION_METADATA,
-      undefined,
-      undefined
+      flowOrigin === undefined ? undefined : PREPARED_CHANNEL_FLOW,
+      flowOrigin
     );
     prepared = {
       bytes,
       correlationOffset:
         bytes.indexOf(CHANNEL_CORRELATION_FIELD) + CHANNEL_CORRELATION_FIELD.length + 1,
-      deadlineOffset: bytes.indexOf(CHANNEL_DEADLINE_FIELD) + CHANNEL_DEADLINE_FIELD.length + 1
+      deadlineOffset: bytes.indexOf(CHANNEL_DEADLINE_FIELD) + CHANNEL_DEADLINE_FIELD.length + 1,
+      flowOffset: bytes.indexOf(CHANNEL_FLOW_FIELD) + CHANNEL_FLOW_FIELD.length + 1
     };
-    deadlines.set(hasDeadline, prepared);
+    flows.set(flowOrigin, prepared);
   }
-  if (correlationId === null) return prepared.bytes;
-  const bytes = Buffer.alloc(prepared.bytes.byteLength);
+  if (correlationId === null && flowId === undefined) return prepared.bytes;
+  const bytes = Buffer.allocUnsafe(prepared.bytes.byteLength);
   prepared.bytes.copy(bytes);
-  bytes.write(correlationId, prepared.correlationOffset, CHANNEL_CORRELATION_TEXT_LENGTH, 'ascii');
+  if (correlationId !== null)
+    bytes.write(
+      correlationId,
+      prepared.correlationOffset,
+      CHANNEL_CORRELATION_TEXT_LENGTH,
+      'ascii'
+    );
   if (deadline !== null)
     bytes.write(deadline, prepared.deadlineOffset, PREPARED_CHANNEL_DEADLINE.length, 'ascii');
+  if (flowId !== undefined)
+    bytes.write(flowId, prepared.flowOffset, PREPARED_CHANNEL_FLOW.length, 'ascii');
   return bytes;
 }
 
