@@ -1627,6 +1627,7 @@ class spot_node_runtime_t
     std::optional<spot_route_t> resolve_spot (spot_id_t spot_id) const;
     std::optional<spot_id_t> actor_spot (const actor_ref_t &actor_ref) const;
     result_t<bool> destroy_actor (const actor_ref_t &actor_ref);
+    result_t<bool> release_local_actor (const actor_ref_t &actor_ref);
     void record_actor_spot (const actor_ref_t &actor_ref, spot_id_t spot_id);
     std::optional<spot_route_t> actor_route (const actor_ref_t &actor_ref) const;
     bool matches_actor_message_follow_source (
@@ -1818,8 +1819,8 @@ class spot_node_runtime_t
      * yet, which is exactly the case that leaks (15 §4.2). */
     void discard_actor_join_recovery (const std::string &stable_type,
                                       const runtime::stateful::object_ref_t &target) noexcept;
-    std::optional<std::tuple<std::string, std::string, std::uint64_t>>
-    actor_join_relocation_authority_spot (const runtime::stateful::object_ref_t &target) const;
+    std::optional<runtime::actor_authority_payload_t>
+    actor_relocation_authority (const runtime::stateful::object_ref_t &target) const;
     // handoff_backlog holds the in-flight packets the source preserved while the
     // actor was moving (§10.2-2). They are enqueued on the target actor's
     // dispatch queue before the committed location is published (§10.2-3), and

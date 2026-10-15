@@ -964,7 +964,7 @@ void public_host_runtime_t::configure_message_follow_handler (
 void public_host_runtime_t::configure_actor_join_relocation (
   actor_join_relocation_prepare_validator_t prepare_validator,
   actor_join_recovery_consumer_t recovery_consumer,
-  actor_join_authority_spot_resolver_t authority_spot_resolver,
+  actor_relocation_authority_resolver_t authority_spot_resolver,
   actor_join_recovery_rollback_t recovery_rollback,
   actor_join_committed_authority_adopter_t authority_adopter)
 {
@@ -976,7 +976,7 @@ void public_host_runtime_t::configure_actor_join_relocation (
               throw std::logic_error ("Actor Join relocation must be configured before start");
           _actor_join_relocation_prepare_validator = std::move (prepare_validator);
           _actor_join_recovery_consumer = std::move (recovery_consumer);
-          _actor_join_authority_spot_resolver = std::move (authority_spot_resolver);
+          _actor_relocation_authority_resolver = std::move (authority_spot_resolver);
           _actor_join_recovery_rollback = std::move (recovery_rollback);
           _actor_join_committed_authority_adopter = std::move (authority_adopter);
       })
@@ -3390,23 +3390,15 @@ bool public_host_runtime_t::submit_relocation_target_authority (
               attempt.prepare.target.target_node_generation, target_owner};
             std::vector<std::byte> target_application_payload;
             if (attempt.targets.front ().kind == stateful::object_kind_t::actor
-                && _actor_join_authority_spot_resolver) {
-                const auto spot = _actor_join_authority_spot_resolver (attempt.targets.front ());
+                && _actor_relocation_authority_resolver) {
+                const auto spot = _actor_relocation_authority_resolver (attempt.targets.front ());
                 if (spot) {
-                    target_application_payload =
-                      runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
-                        .state = runtime::actor_authority_state_t::ready,
-                        .stable_type = std::get<0> (*spot),
-                        .actor_id = attempt.targets.front ().key,
-                        .current_spot_id = std::get<1> (*spot),
-                        .current_spot_generation = std::get<2> (*spot),
-                        .current_spot_kind = runtime::actor_authority_spot_kind_t::user,
-                        .owner_id = target_owner.owner_id,
-                        .owner_lease_generation =
-                          static_cast<std::uint64_t> (target_owner.lease_generation),
-                        .mesh_name = attempt.targets.front ().mesh_name,
-                        .node_rid = node_rid_t::from_string (attempt.targets.front ().node_id),
-                        .node_generation = attempt.prepare.target.target_node_generation});
+                    auto payload = *spot;
+                    payload.owner_id = target_owner.owner_id;
+                    payload.owner_lease_generation =
+                      static_cast<std::uint64_t> (target_owner.lease_generation);
+                    payload.node_generation = attempt.prepare.target.target_node_generation;
+                    target_application_payload = runtime::encode_actor_authority_payload (payload);
                 }
             }
             const auto published = _relocation_authority->publish (
@@ -3761,25 +3753,23 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
     std::optional<framework_exception_t> failure;
     try {
-        std::optional<stateful::object_ref_t> actor_join_target_spot;
+        std::optional<stateful::object_ref_t> actor_target_spot;
         if (staging->targets.size () == 1
             && staging->targets.front ().kind == stateful::object_kind_t::actor
-            && _actor_join_authority_spot_resolver) {
-            const auto spot = _actor_join_authority_spot_resolver (staging->targets.front ());
+            && _actor_relocation_authority_resolver) {
+            const auto spot = _actor_relocation_authority_resolver (staging->targets.front ());
             if (spot) {
-                actor_join_target_spot = stateful::object_ref_t{stateful::object_kind_t::user_spot,
-                                                                std::get<1> (*spot),
-                                                                std::get<2> (*spot),
-                                                                0,
-                                                                staging->targets.front ().mesh_name,
-                                                                staging->targets.front ().node_id};
+                actor_target_spot = stateful::object_ref_t{
+                  stateful::object_kind_t::user_spot,  spot->current_spot_id,
+                  spot->current_spot_generation,       0,
+                  staging->targets.front ().mesh_name, staging->targets.front ().node_id};
             }
         }
         restored =
           co_await (staging->targets.size () == 1
                       ? _objects.restore_relocation (
                           staging->frozen.front (), staging->targets.front (),
-                          staging->restore_identity, {}, std::move (actor_join_target_spot))
+                          staging->restore_identity, {}, std::move (actor_target_spot))
                       : _objects.restore_relocation_aggregate (staging->frozen, staging->targets,
                                                                staging->restore_identity, {}));
     }

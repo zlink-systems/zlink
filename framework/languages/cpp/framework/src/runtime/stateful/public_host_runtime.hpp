@@ -25,6 +25,7 @@
 #include <zlink/framework/contracts/locations/options.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <chrono>
@@ -667,15 +668,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
      * that Actor on this node is refused by the leftover. */
     using actor_join_recovery_rollback_t =
       std::function<void (const std::string &, const stateful::object_ref_t &)>;
-    using actor_join_authority_spot_resolver_t =
-      std::function<std::optional<std::tuple<std::string, std::string, std::uint64_t>> (
+    using actor_relocation_authority_resolver_t =
+      std::function<std::optional<runtime::actor_authority_payload_t> (
         const stateful::object_ref_t &)>;
     using actor_join_committed_authority_adopter_t =
       std::function<bool (const stateful::object_ref_t &, std::uint64_t, std::uint64_t)>;
     void
     configure_actor_join_relocation (actor_join_relocation_prepare_validator_t prepare_validator,
                                      actor_join_recovery_consumer_t recovery_consumer,
-                                     actor_join_authority_spot_resolver_t authority_spot_resolver,
+                                     actor_relocation_authority_resolver_t authority_spot_resolver,
                                      actor_join_recovery_rollback_t recovery_rollback,
                                      actor_join_committed_authority_adopter_t authority_adopter);
     void configure_instance_spot_operations (
@@ -959,7 +960,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     actor_join_relocation_prepare_validator_t _actor_join_relocation_prepare_validator;
     actor_join_recovery_consumer_t _actor_join_recovery_consumer;
     actor_join_recovery_rollback_t _actor_join_recovery_rollback;
-    actor_join_authority_spot_resolver_t _actor_join_authority_spot_resolver;
+    actor_relocation_authority_resolver_t _actor_relocation_authority_resolver;
     actor_join_committed_authority_adopter_t _actor_join_committed_authority_adopter;
     std::shared_ptr<const instance_spot_activation_materializer_t> _instance_spot_materializer;
     std::map<std::string, std::shared_ptr<instance_activation_operation_t>>

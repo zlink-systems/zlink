@@ -854,7 +854,7 @@ void mesh_node_runtime_t::start ()
             .consume_actor_join_recovery (frozen, target, prepare);
       },
       [spot_state] (const runtime::stateful::object_ref_t &target) {
-          return spot_node_runtime_t (spot_state).actor_join_relocation_authority_spot (target);
+          return spot_node_runtime_t (spot_state).actor_relocation_authority (target);
       },
       [spot_state] (const std::string &stable_type, const runtime::stateful::object_ref_t &target) {
           spot_node_runtime_t (spot_state).discard_actor_join_recovery (stable_type, target);
