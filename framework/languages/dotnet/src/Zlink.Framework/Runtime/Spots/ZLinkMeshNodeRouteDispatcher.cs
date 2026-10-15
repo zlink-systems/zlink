@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -271,45 +272,109 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         CancellationToken cancellationToken
     )
     {
-        List<Task>? pending = null;
+        var headers = new ZLinkEnvelopeHeader?[batch.Count];
+        var admitted = false;
+        var requests = 0;
         for (var index = 0; index < batch.Count; index++)
         {
             var received = batch[index];
-            ZLinkEnvelopeHeader? header = null;
-            if (received.PartCount > 0)
+            if (received.PartCount == 0)
+                continue;
+            try
             {
-                try
-                {
-                    header = received.ApplicationPayloadView is { } view
-                        ? ZLinkEnvelopeCodec.DecodeHeader(view, _dispatchErrors.Flow.CaptureEnabled)
-                        : ZLinkEnvelopeCodec.DecodeHeader(
-                            received.Parts,
-                            _dispatchErrors.Flow.CaptureEnabled
-                        );
-                }
-                catch
-                {
-                    // Normal dispatch owns malformed-frame reporting.
-                }
+                var header = received.ApplicationPayloadView is { } view
+                    ? ZLinkEnvelopeCodec.DecodeHeader(view, _dispatchErrors.Flow.CaptureEnabled)
+                    : ZLinkEnvelopeCodec.DecodeHeader(
+                        received.Parts,
+                        _dispatchErrors.Flow.CaptureEnabled
+                    );
+                headers[index] = header;
+                if (IsInfrastructureRelay(received, header))
+                    continue;
+                admitted = true;
+                if (header.Kind == ZLinkMessageKind.Request)
+                    requests++;
             }
-
-            var invocation =
-                received.ChannelName is { } channelName
-                && _channelQueues.TryGetValue(channelName, out var channelQueue)
-                    ? QueueChannelAsync(channelQueue, received, header, cancellationToken)
-                : header is not null
-                && TryGetOrderedActorRelayKey(received, header, out var actorId)
-                    ? DispatchOrderedActorRelayAsync(actorId, received, header, cancellationToken)
-                : DispatchAsync(received, header, cancellationToken);
-            if (invocation.IsCompletedSuccessfully)
-                invocation.GetAwaiter().GetResult();
-            else
-                (pending ??= []).Add(invocation.AsTask());
+            catch
+            {
+                // Normal dispatch owns malformed-frame reporting.
+            }
         }
 
-        if (pending is not null)
-            await Task.WhenAll(pending).ConfigureAwait(false);
+        // One lease admits the application records of this claim batch (spec 08
+        // §4.1 rotation unit). Drain waits for it until the last record of the
+        // batch completes; each record still observes the drain seal when it starts.
+        //  This dispatcher only invokes registered channel and node route
+        //  handlers. Neither is object work, so an expired owner lease must not
+        //  turn them away (spec 21 §4).
+        var admission = new BatchAdmission(default, null);
+        if (admitted)
+        {
+            try
+            {
+                admission = new BatchAdmission(
+                    (
+                        await _runtime
+                            .TryAdmitInboundOperationsAsync(requests, ownsObjectWork: false)
+                            .ConfigureAwait(false)
+                    ).EnterInbound(),
+                    null
+                );
+            }
+            catch (Exception failure)
+            {
+                admission = new BatchAdmission(default, failure);
+            }
+        }
+
+        try
+        {
+            List<Task>? pending = null;
+            for (var index = 0; index < batch.Count; index++)
+            {
+                var received = batch[index];
+                var header = headers[index];
+                var invocation =
+                    received.ChannelName is { } channelName
+                    && _channelQueues.TryGetValue(channelName, out var channelQueue)
+                        ? QueueChannelAsync(
+                            channelQueue,
+                            received,
+                            header,
+                            admission,
+                            cancellationToken
+                        )
+                    : header is not null
+                    && TryGetOrderedActorRelayKey(received, header, out var actorId)
+                        ? DispatchOrderedActorRelayAsync(
+                            actorId,
+                            received,
+                            header,
+                            admission,
+                            cancellationToken
+                        )
+                    : DispatchAsync(received, header, admission, cancellationToken);
+                if (invocation.IsCompletedSuccessfully)
+                    invocation.GetAwaiter().GetResult();
+                else
+                    (pending ??= []).Add(invocation.AsTask());
+            }
+
+            if (pending is not null)
+                await Task.WhenAll(pending).ConfigureAwait(false);
+        }
+        finally
+        {
+            admission.Admission.Lease?.Dispose();
+        }
     }
+
+    // The batch admission each record of one claim batch shares. A failure to
+    // decide it is reported by every application record it would have admitted.
+    private readonly record struct BatchAdmission(
+        ZLinkInboundOperationAdmission Admission,
+        Exception? Failure
+    );
 
     internal bool TryDispatch(ZLinkBackendRouteReceived received) =>
         _taskRunner.TryRunDetached(
@@ -321,6 +386,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         ZLinkChannelApplicationDispatchQueue<ChannelDispatchWork> queue,
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader? header,
+        BatchAdmission admission,
         CancellationToken cancellationToken
     )
     {
@@ -328,7 +394,10 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         await queue
-            .PostAsync(new ChannelDispatchWork(received, header, completion), cancellationToken)
+            .PostAsync(
+                new ChannelDispatchWork(received, header, admission, completion),
+                cancellationToken
+            )
             .ConfigureAwait(false);
         await completion.Task.ConfigureAwait(false);
     }
@@ -340,8 +409,11 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
     {
         try
         {
-            await DispatchAsync(work.Received, work.Header, cancellationToken)
-                .ConfigureAwait(false);
+            // The channel queue runs this record outside the batch frame; the
+            // batch lease stays the ambient operation of its handler.
+            using (ZLinkFrameworkRuntime.EnterAcceptedOperation(work.Admission.Admission.Lease))
+                await DispatchAsync(work.Received, work.Header, work.Admission, cancellationToken)
+                    .ConfigureAwait(false);
             work.Completion.TrySetResult();
         }
         catch (Exception exception)
@@ -359,6 +431,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
     private readonly record struct ChannelDispatchWork(
         ZLinkBackendRouteReceived Received,
         ZLinkEnvelopeHeader? Header,
+        BatchAdmission Admission,
         TaskCompletionSource Completion
     );
 
@@ -417,6 +490,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         ZLinkActorId actorId,
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
+        BatchAdmission admission,
         CancellationToken cancellationToken
     )
     {
@@ -438,6 +512,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
             actorId,
             received,
             header,
+            admission,
             prior,
             completion,
             cancellationToken
@@ -448,6 +523,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         ZLinkActorId actorId,
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
+        BatchAdmission admission,
         Task prior,
         TaskCompletionSource completion,
         CancellationToken cancellationToken
@@ -456,7 +532,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         try
         {
             await prior.ConfigureAwait(false);
-            await DispatchAsync(received, header, cancellationToken).ConfigureAwait(false);
+            await DispatchAsync(received, header, admission, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -482,6 +559,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
     private async ValueTask DispatchAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader? decodedHeader,
+        BatchAdmission batchAdmission,
         CancellationToken cancellationToken
     )
     {
@@ -527,24 +605,15 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                 ZLinkFlowOrigin.Inbound
             );
 
-            var infrastructure = IsInfrastructureRelay(received, header);
-            var admission = infrastructure
-                ? new ZLinkInboundOperationAdmission(
-                    true,
-                    ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease.None
-                )
-                //  This dispatcher only invokes registered channel and node
-                //  route handlers. Neither is object work, so an expired owner
-                //  lease must not turn them away (spec 21 §4).
-                : (
-                    await _runtime
-                        .TryAdmitInboundOperationAsync(
-                            header.Kind == ZLinkMessageKind.Request,
-                            ownsObjectWork: false
-                        )
-                        .ConfigureAwait(false)
-                ).EnterInbound();
-            if (!admission.Accepted)
+            var accepted = true;
+            if (!IsInfrastructureRelay(received, header))
+            {
+                if (batchAdmission.Failure is { } failure)
+                    ExceptionDispatchInfo.Throw(failure);
+                accepted =
+                    batchAdmission.Admission.Accepted && !_runtime.DrainAdmission.IsSealedObserved;
+            }
+            if (!accepted)
             {
                 //  With ownsObjectWork false the only refusal here is the drain
                 //  seal, which spec 06 §13.1 classifies as `ShuttingDown` -
@@ -570,29 +639,21 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                 return;
             }
 
-            using (admission.Lease)
-            {
-                if (received.ChannelName is { } channelName)
-                    await DispatchChannelAsync(received, channelName, header, cancellationToken)
-                        .ConfigureAwait(false);
-                else if (received.ApplicationPayloadView is { } payloadView)
-                    await DispatchNodeRouteAsync(
-                            received,
-                            header,
-                            received.Parts,
-                            cancellationToken,
-                            payloadView
-                        )
-                        .ConfigureAwait(false);
-                else
-                    await DispatchNodeRouteAsync(
-                            received,
-                            header,
-                            received.Parts,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-            }
+            if (received.ChannelName is { } channelName)
+                await DispatchChannelAsync(received, channelName, header, cancellationToken)
+                    .ConfigureAwait(false);
+            else if (received.ApplicationPayloadView is { } payloadView)
+                await DispatchNodeRouteAsync(
+                        received,
+                        header,
+                        received.Parts,
+                        cancellationToken,
+                        payloadView
+                    )
+                    .ConfigureAwait(false);
+            else
+                await DispatchNodeRouteAsync(received, header, received.Parts, cancellationToken)
+                    .ConfigureAwait(false);
         }
     }
 

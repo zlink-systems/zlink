@@ -116,6 +116,11 @@ internal sealed class ZLinkDrainAdmissionGate
 
     public bool IsSealed => RunState(() => _sealed != 0);
 
+    // A record that a batch admission already counts reads the seal without a
+    // lane turn: drain keeps waiting for that admission, so a stale read can
+    // only let one more counted record run.
+    internal bool IsSealedObserved => Volatile.Read(ref _sealed) != 0;
+
     //  Spec 30 §14 step 1: the mesh node follows the host's *shutdown* seal
     //  (no new peer admission). A relocation fence also seals application
     //  admission but is not a shutdown, so the owner decides.

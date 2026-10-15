@@ -915,17 +915,17 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         {
             EnsureAmbientOperationCurrent(current);
             return countAsRequest
-                ? AdmitNestedRequestAsync()
+                ? AdmitNestedRequestsAsync(1)
                 : ValueTask.FromResult(default(ZLinkRuntimeOperationAdmission));
         }
 
         return AdmitUnnestedOperationAsync(countAsRequest);
     }
 
-    private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitNestedRequestAsync()
+    private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitNestedRequestsAsync(int requests)
     {
-        await _stateLane.RunAsync(() => _activeRequests++).ConfigureAwait(false);
-        return new ZLinkRuntimeOperationAdmission(this, null, countsRequest: true);
+        await _stateLane.RunAsync(() => _activeRequests += requests).ConfigureAwait(false);
+        return new ZLinkRuntimeOperationAdmission(this, null, requests);
     }
 
     private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitUnnestedOperationAsync(
@@ -933,22 +933,22 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     )
     {
         var admitted = await _stateLane
-            .RunAsync(() => AdmitOperationOnLane(countAsRequest))
+            .RunAsync(() => AdmitOperationOnLane(countAsRequest ? 1 : 0))
             .ConfigureAwait(false);
-        return new ZLinkRuntimeOperationAdmission(this, admitted, countAsRequest);
+        return new ZLinkRuntimeOperationAdmission(this, admitted, countAsRequest ? 1 : 0);
     }
 
     internal readonly struct ZLinkRuntimeOperationAdmission(
         ZLinkFrameworkRuntime? runtime,
         ZLinkFrameworkComponentState? state,
-        bool countsRequest,
+        int requests,
         bool refused = false
     )
     {
         internal static readonly ZLinkRuntimeOperationAdmission Refused = new(
             null,
             null,
-            false,
+            0,
             refused: true
         );
 
@@ -961,8 +961,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                     "Application admission is sealed for drain."
                 );
             return runtime is null ? ZLinkRuntimeOperationLease.None
-                : state is null ? new ZLinkRuntimeOperationLease(runtime, countsRequest)
-                : runtime.AttachOperation(state, countsRequest);
+                : state is null ? new ZLinkRuntimeOperationLease(runtime, requests)
+                : runtime.AttachOperation(state, requests);
         }
 
         internal ZLinkInboundOperationAdmission EnterInbound() =>
@@ -1007,7 +1007,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             })
         );
 
-        return AttachOperation(admitted, countAsRequest: false);
+        return AttachOperation(admitted, requests: 0);
     }
 
     internal ZLinkRuntimeOperationLease RetainOperationForBackgroundWork()
@@ -1026,11 +1026,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             {
                 _activeOperations++;
                 _operationEpoch++;
-                return new ZLinkRuntimeOperationLease(
-                    this,
-                    countsOperation: true,
-                    countsRequest: false
-                );
+                return new ZLinkRuntimeOperationLease(this, countsOperation: true, requests: 0);
             })
         );
     }
@@ -1059,6 +1055,16 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     internal ValueTask<ZLinkRuntimeOperationAdmission> TryAdmitInboundOperationAsync(
         bool countAsRequest,
         bool ownsObjectWork = true
+    ) => TryAdmitInboundOperationsAsync(countAsRequest ? 1 : 0, ownsObjectWork);
+
+    /// <summary>
+    /// Admits the inbound records of one claim batch with one lease. The lease
+    /// counts <paramref name="requests"/> requests and keeps drain open until the
+    /// caller disposes it after the last record of the batch completes.
+    /// </summary>
+    internal ValueTask<ZLinkRuntimeOperationAdmission> TryAdmitInboundOperationsAsync(
+        int requests,
+        bool ownsObjectWork = true
     )
     {
         if (
@@ -1068,16 +1074,16 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         {
             if (!IsAmbientOperationCurrent(current))
                 return ValueTask.FromResult(ZLinkRuntimeOperationAdmission.Refused);
-            return countAsRequest
-                ? AdmitNestedRequestAsync()
+            return requests != 0
+                ? AdmitNestedRequestsAsync(requests)
                 : ValueTask.FromResult(default(ZLinkRuntimeOperationAdmission));
         }
 
-        return AdmitUnnestedInboundOperationAsync(countAsRequest, ownsObjectWork);
+        return AdmitUnnestedInboundOperationAsync(requests, ownsObjectWork);
     }
 
     private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitUnnestedInboundOperationAsync(
-        bool countAsRequest,
+        int requests,
         bool ownsObjectWork
     )
     {
@@ -1104,7 +1110,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                     );
                 }
                 return (
-                    Admitted: (ZLinkFrameworkComponentState?)AdmitOperationOnLane(countAsRequest),
+                    Admitted: (ZLinkFrameworkComponentState?)AdmitOperationOnLane(requests),
                     Accepted: true,
                     Neutral: false
                 );
@@ -1115,7 +1121,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             return ZLinkRuntimeOperationAdmission.Refused;
         if (admission.Neutral)
             return default;
-        return new ZLinkRuntimeOperationAdmission(this, admission.Admitted, countAsRequest);
+        return new ZLinkRuntimeOperationAdmission(this, admission.Admitted, requests);
     }
 
     internal async ValueTask ExecuteOperationAsync(Func<ValueTask> operation)
@@ -1581,7 +1587,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             .ConfigureAwait(false);
     }
 
-    private ZLinkFrameworkComponentState AdmitOperationOnLane(bool countAsRequest)
+    private ZLinkFrameworkComponentState AdmitOperationOnLane(int requests)
     {
         //  네 조건을 한 문장으로 뭉치면 호출자는 admission seal인지, 아직 기동
         //  중인지, owner lease가 닫힌 것인지 구분할 수 없다. 조사할 때마다 여기에
@@ -1603,8 +1609,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             );
         _activeOperations++;
         _operationEpoch++;
-        if (countAsRequest)
-            _activeRequests++;
+        _activeRequests += requests;
         return state;
     }
 
@@ -1614,11 +1619,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     // completing before the lease is attached.
     private ZLinkRuntimeOperationLease AttachOperation(
         ZLinkFrameworkComponentState state,
-        bool countAsRequest
+        int requests
     )
     {
         var previous = AmbientOperation.Value;
-        var lease = new ZLinkRuntimeOperationLease(this, state, previous, countAsRequest);
+        var lease = new ZLinkRuntimeOperationLease(this, state, previous, requests);
         AmbientOperation.Value = lease;
         return lease;
     }
@@ -1639,12 +1644,12 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     // Leaving an operation releases a count; no caller depends on its completion.
     // The release joins the lane FIFO before Dispose returns, so every later
     // admission, snapshot and drain turn observes it.
-    private void ExitOperation(bool countsOperation, bool countsRequest) =>
-        _stateLane.TryPost(() => ExitOperationOnLane(countsOperation, countsRequest));
+    private void ExitOperation(bool countsOperation, int requests) =>
+        _stateLane.TryPost(() => ExitOperationOnLane(countsOperation, requests));
 
-    private void ExitOperationOnLane(bool countsOperation, bool countsRequest)
+    private void ExitOperationOnLane(bool countsOperation, int requests)
     {
-        if (countsRequest && --_activeRequests < 0)
+        if (requests != 0 && (_activeRequests -= requests) < 0)
         {
             ErrorSink.ReportRuntimeTaskException(
                 "runtime-operation-lease",
@@ -1680,38 +1685,38 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         private readonly ZLinkFrameworkRuntime? _runtime;
         private readonly ZLinkRuntimeOperationLease? _previous;
         private readonly bool _countsOperation;
-        private readonly bool _countsRequest;
+        private readonly int _requests;
         private int _active;
         private int _disposed;
 
         private ZLinkRuntimeOperationLease() { }
 
-        internal ZLinkRuntimeOperationLease(ZLinkFrameworkRuntime runtime, bool countsRequest)
-            : this(runtime, countsOperation: false, countsRequest) { }
+        internal ZLinkRuntimeOperationLease(ZLinkFrameworkRuntime runtime, int requests)
+            : this(runtime, countsOperation: false, requests) { }
 
         internal ZLinkRuntimeOperationLease(
             ZLinkFrameworkRuntime runtime,
             bool countsOperation,
-            bool countsRequest
+            int requests
         )
         {
             _runtime = runtime;
             _countsOperation = countsOperation;
-            _countsRequest = countsRequest;
+            _requests = requests;
         }
 
         internal ZLinkRuntimeOperationLease(
             ZLinkFrameworkRuntime runtime,
             ZLinkFrameworkComponentState state,
             ZLinkRuntimeOperationLease? previous,
-            bool countsRequest
+            int requests
         )
         {
             _runtime = runtime;
             State = state;
             _previous = previous;
             _countsOperation = true;
-            _countsRequest = countsRequest;
+            _requests = requests;
             _active = 1;
         }
 
@@ -1731,7 +1736,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             Deactivate();
             if (ReferenceEquals(AmbientOperation.Value, this))
                 AmbientOperation.Value = _previous;
-            _runtime?.ExitOperation(_countsOperation, _countsRequest);
+            _runtime?.ExitOperation(_countsOperation, _requests);
         }
     }
 }
