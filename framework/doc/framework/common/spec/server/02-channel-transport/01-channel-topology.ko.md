@@ -447,9 +447,9 @@ Automatic RouteMesh의 두 MeshNode는 서로를 발견해도 양쪽이 동시�
 두 MeshNode가 RID의 canonical byte order를 같은 방식으로 비교하고, RID가 더 작은 MeshNode만
 상대 endpoint로 연결을 시작한다.
 
-Automatic discovery는 먼저 local과 remote descriptor를 확인한다. 양쪽이 모두 Object Client이고
-어느 쪽에도 RouteMesh Channel Server membership(weight `0` 포함)이 없을 때만 connection intent를
-만들지 않는다([§13 Peer 연결](#13-검증-요구)이 이 판정을 소유한다). 그 밖의 pair에는 RID 순서를
+Automatic discovery는 먼저 local과 remote descriptor를 확인한다. Object role 판정으로는 양쪽이 모두 Object Client이고
+어느 쪽에도 RouteMesh Channel Server membership(weight `0` 포함)이 없을 때만 connection이 필요 없다고
+본다([§13 Peer 연결](#13-검증-요구)이 이 판정을 소유한다). 그 밖의 pair에는 RID 순서를
 적용하므로 connect initiator가 하나다.
 
 Automatic discovery는 상대 RID에 이미 선택 route가 있거나(어느 쪽이 연결했든) 같은 상대를 가리키는

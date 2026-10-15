@@ -474,9 +474,9 @@ start the connection at the same time. The two MeshNodes compare their RIDs usin
 same canonical byte order, and only the MeshNode with the smaller RID starts the connection
 to the other endpoint.
 
-Automatic discovery first checks the local and remote descriptors. Only when both sides
-are Object Client and neither has a RouteMesh Channel Server membership (weight `0`
-included) is no connection intent created ([§13 Peer connection](#13-verification-requirements)
+Automatic discovery first checks the local and remote descriptors. By the Object role, a connection is
+judged unnecessary only when both sides are Object Client and neither has a RouteMesh
+Channel Server membership (weight `0` included) ([§13 Peer connection](#13-verification-requirements)
 owns this judgment). For every other pair, the RID-order rule applies, so there's one
 connect initiator.
 
