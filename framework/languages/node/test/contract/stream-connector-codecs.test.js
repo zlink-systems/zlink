@@ -13,6 +13,7 @@ const protocolCodecs = require('./helpers/stream-protocol-codecs');
 const msgpack = require('../../packages/framework-codec-msgpack/dist');
 const protobuf = require('../../packages/framework-codec-protobuf/dist');
 const protobufFramework = require('../../packages/framework-codec-protobuf/dist/server/framework.cjs');
+const msgpackFramework = require('../../packages/framework-codec-msgpack/dist/server/framework.cjs');
 
 test('stream connector messagepack codec encodes and decodes payloads', () => {
   const payload = msgpack.toMsgPack({ ready: true });
@@ -232,6 +233,17 @@ test('framework protobuf serializer preserves bytes bodies', () => {
   }
 });
 
+test('framework protobuf and MessagePack serializers decode through the byte view', () => {
+  for (const serializer of [
+    protobufFramework.createProtobufMessageSerializer(),
+    msgpackFramework.createMessagePackSerializer()
+  ]) {
+    const encoded = serializer.serialize({ value: 7 });
+    encoded.data = () => { throw new Error('deserialize copied the payload'); };
+    assert.deepEqual(serializer.deserialize(encoded), { value: 7 });
+  }
+});
+
 test('stream connector protobuf codec dispatches typed payloads through connector', async () => {
   const type = createLengthPrefixedJsonType();
   const transportFactory = new MemoryTransportFactory();
@@ -298,12 +310,16 @@ test('protobuf envelope extension registers the schema-backed envelope serialize
 
   const value = new Join();
   const encoded = serializer.serialize(value);
+  assert.equal(encoded.view().buffer, encodedBytes.buffer);
+  assert.equal(encoded.view().byteOffset, encodedBytes.byteOffset);
+  assert.equal(encoded.view().byteLength, encodedBytes.byteLength);
   assert.deepEqual([...encoded.data()], [...encodedBytes]);
   assert.equal(calls[0].direction, 'encode');
   assert.equal(calls[0].value, value);
   assert.equal(calls[0].context, Join);
 
   assert.deepEqual(serializer.deserialize(encoded), { decoded: true });
+  assert.equal(calls[1].payload.payload.buffer, encoded.view().buffer);
   assert.equal(calls[1].direction, 'decode');
   assert.equal(calls[1].payload.codec, connector.ZlinkStreamCodec.Protobuf);
   assert.deepEqual([...calls[1].payload.payload], [...encodedBytes]);

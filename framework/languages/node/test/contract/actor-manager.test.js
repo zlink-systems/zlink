@@ -2206,7 +2206,9 @@ test('ZLinkActorContext joinSpot uses binary codec extensions without raw reques
     const actorRef = { nodeRid: 'node-b', actorId: 'alice', generation: 1n };
     const joinCoordinator = {
       async joinSpot(actor, state, spotId, request) {
-        const decoded = serializer.deserialize(request);
+        const decoded = serializer.deserialize(
+          framework.ZLinkEncodedPayload.fromOwned(request.data())
+        );
         calls.push(`joinSpot:${actor.actorId}:${state.actorId}:${spotId}:${decoded.text}`);
         return { accepted: true, actor: actorRef, reply: replyMessage };
       },

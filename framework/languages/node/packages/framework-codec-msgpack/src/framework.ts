@@ -30,10 +30,10 @@ export function zlinkMessagePackCodec(): ZLinkMessagePackCodecExtension {
 export function createMessagePackSerializer(): ZLinkMessageSerializer {
   return {
     serialize<T>(value: T): ZLinkEncodedPayload {
-      return ZLinkEncodedPayload.from(encodeMessagePack(value));
+      return ZLinkEncodedPayload.fromOwned(encodeMessagePack(value));
     },
     deserialize<T>(payload: ZLinkEncodedPayload): T {
-      return decodeMessagePack(payload.data()) as T;
+      return decodeMessagePack(payload.view()) as T;
     }
   };
 }
