@@ -695,9 +695,10 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
 
             // Update follows the Admit on the same socket. It makes a discarded
             // Admit observable as the wrong first admission record. Admission
-            // starts liveness, so probes may arrive between them.
+            // starts liveness, so probes may arrive between them. Await the
+            // released scheduler batch before blocking on its socket output.
             node.PublishDraining();
-            scheduler.Release();
+            await scheduler.ReleaseAsync();
             Assert.Equal(
                 ServiceWireConstants.Command.Admit,
                 await ReceiveAdmissionCommandAsync(peer)
