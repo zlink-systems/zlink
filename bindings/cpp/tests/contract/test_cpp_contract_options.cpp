@@ -2,6 +2,8 @@
 
 #include "support.hpp"
 
+#include <thread>
+
 namespace
 {
 
@@ -322,11 +324,37 @@ void test_socket_common_and_router_options ()
     assert (routing_id.to_bytes () == std::vector<uint8_t> (rid_text.begin (), rid_text.end ()));
 }
 
+void test_socket_events_are_non_consuming ()
+{
+    zlink::context_t ctx;
+    zlink::pair_socket_t receiver (ctx);
+    zlink::pair_socket_t sender (ctx);
+    const auto endpoint = zlink_cpp_contract::unique_inproc ("socket-events");
+    receiver.bind (endpoint);
+    sender.connect (endpoint);
+    const auto readable = [&] {
+        return (static_cast<short> (receiver.options ().events ())
+                & static_cast<short> (zlink::poll_event_flag_t::pollin))
+               != 0;
+    };
+    assert (!readable ());
+    std::move (sender.send ()).message (zlink_cpp_contract::make_message ("events")).submit ();
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!readable () && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    assert (readable ());
+    assert (readable ());
+    zlink::received_t received;
+    assert (receiver.recv (received, zlink::recv_flags_t::dontwait) == 0);
+    assert (!readable ());
+}
+
 } // namespace
 
 int main ()
 {
     test_context_options ();
     test_socket_common_and_router_options ();
+    test_socket_events_are_non_consuming ();
     return 0;
 }

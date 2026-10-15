@@ -47,6 +47,12 @@ sub_socket_options_t::sub_socket_options_t (socket_t &socket_) noexcept :
 {
 }
 
+poll_event_flag_t common_socket_options_t::events () const
+{
+    return static_cast<poll_event_flag_t> (detail::get_typed_option_value<int> (
+      detail::native_option_handle (_socket), detail::socket_option_id::events));
+}
+
 std::chrono::milliseconds common_socket_options_t::linger () const
 {
     return std::chrono::milliseconds (detail::get_typed_option_value<int> (

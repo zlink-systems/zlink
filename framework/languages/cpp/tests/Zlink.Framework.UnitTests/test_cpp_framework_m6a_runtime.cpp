@@ -2200,14 +2200,24 @@ void verify_raw_owner_node_send_and_liveness (
     // A missing host-wide Application Job Queue permit fences the ordinary
     // ROUTER before Core receive.  Poll readiness alone must not consume or
     // retain the application record in the Framework owner.
-    // Activity waiting can end at a management deadline before DATA arrives.
-    // Observe the permit fence and the subsequent claim of the same payload,
-    // rather than requiring a particular poll wakeup after successful submit.
+    // Management wakes do not establish DATA arrival. Observe Core readiness
+    // without receiving, under the existing test deadline.
+    const auto wait_for_ingress_data = [&] {
+        while (!second.ingress_data_ready ()
+               && mesh::service_liveness_registry_t::clock_t::now () < deadline)
+            (void) second.wait_for_activity (
+              std::max (0ms, std::chrono::ceil<std::chrono::milliseconds> (
+                               deadline - mesh::service_liveness_registry_t::clock_t::now ())),
+              true);
+        assert (second.ingress_data_ready ());
+    };
+    wait_for_ingress_data ();
     const auto without_shared_permit =
       await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now (), false));
     assert (without_shared_permit == mesh::raw_mesh_pump_result_t::no_data);
     assert (second.last_pump_bytes () == 0);
     assert (second.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application) == 0);
+    assert (second.ingress_data_ready ());
 
     mesh::raw_mesh_pump_result_t pumped = mesh::raw_mesh_pump_result_t::no_data;
     while (pumped != mesh::raw_mesh_pump_result_t::application
@@ -2289,37 +2299,6 @@ void verify_raw_owner_node_send_and_liveness (
         assert (errors == 0);
     }
 
-    // Liveness is a finite ordinary control record: it shares the pre-receive
-    // permit, then returns that permit as soon as its internal processing
-    // completes.
-    const auto paused_liveness_base = mesh::service_liveness_registry_t::clock_t::now ();
-    const auto paused_probe = await_task (first.tick_liveness (paused_liveness_base + 5s));
-    assert (paused_probe.probes.size () == 1);
-    const auto paused_without_shared_permit =
-      await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now (), false));
-    assert (paused_without_shared_permit == mesh::raw_mesh_pump_result_t::no_data);
-    assert (second.last_pump_bytes () == 0);
-    mesh::raw_mesh_pump_result_t paused_probe_pump = mesh::raw_mesh_pump_result_t::no_data;
-    while (paused_probe_pump != mesh::raw_mesh_pump_result_t::infrastructure
-           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
-        paused_probe_pump =
-          await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
-        assert (paused_probe_pump != mesh::raw_mesh_pump_result_t::protocol_error);
-        if (paused_probe_pump != mesh::raw_mesh_pump_result_t::infrastructure)
-            std::this_thread::sleep_for (1ms);
-    }
-    assert (paused_probe_pump == mesh::raw_mesh_pump_result_t::infrastructure);
-    mesh::raw_mesh_pump_result_t paused_ack_pump = mesh::raw_mesh_pump_result_t::no_data;
-    while (paused_ack_pump != mesh::raw_mesh_pump_result_t::infrastructure
-           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
-        paused_ack_pump =
-          await_task (first.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
-        assert (paused_ack_pump != mesh::raw_mesh_pump_result_t::protocol_error);
-        if (paused_ack_pump != mesh::raw_mesh_pump_result_t::infrastructure)
-            std::this_thread::sleep_for (1ms);
-    }
-    assert (paused_ack_pump == mesh::raw_mesh_pump_result_t::infrastructure);
-
     auto claim = second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (claim && claim->records.size () == 1);
     assert (
@@ -2347,6 +2326,42 @@ void verify_raw_owner_node_send_and_liveness (
     assert (retained_claim && retained_claim->records.size () == 1);
     assert (second.mailbox ().release (*retained_claim));
     assert (!second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024));
+
+    // Liveness is a finite ordinary control record: it shares the pre-receive
+    // permit, then returns that permit as soon as its internal processing
+    // completes.
+    const auto paused_liveness_base = mesh::service_liveness_registry_t::clock_t::now ();
+    const auto paused_probe = await_task (first.tick_liveness (paused_liveness_base + 5s));
+    assert (paused_probe.probes.size () == 1);
+    wait_for_ingress_data ();
+    const auto paused_without_shared_permit =
+      await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now (), false));
+    assert (paused_without_shared_permit == mesh::raw_mesh_pump_result_t::no_data);
+    assert (second.last_pump_bytes () == 0);
+    assert (second.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application) == 0);
+    assert (second.ingress_data_ready ());
+    mesh::raw_mesh_pump_result_t paused_probe_pump = mesh::raw_mesh_pump_result_t::no_data;
+    while (paused_probe_pump != mesh::raw_mesh_pump_result_t::infrastructure
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        paused_probe_pump =
+          await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+        assert (paused_probe_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        if (paused_probe_pump != mesh::raw_mesh_pump_result_t::infrastructure)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (paused_probe_pump == mesh::raw_mesh_pump_result_t::infrastructure);
+    assert (second.last_pump_bytes () != 0);
+    assert (second.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application) == 0);
+    mesh::raw_mesh_pump_result_t paused_ack_pump = mesh::raw_mesh_pump_result_t::no_data;
+    while (paused_ack_pump != mesh::raw_mesh_pump_result_t::infrastructure
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        paused_ack_pump =
+          await_task (first.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+        assert (paused_ack_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        if (paused_ack_pump != mesh::raw_mesh_pump_result_t::infrastructure)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (paused_ack_pump == mesh::raw_mesh_pump_result_t::infrastructure);
 
     bool channel_submitted = false;
     while (!channel_submitted && mesh::service_liveness_registry_t::clock_t::now () < deadline) {

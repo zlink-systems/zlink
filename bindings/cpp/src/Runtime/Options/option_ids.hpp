@@ -27,6 +27,7 @@ enum class context_option_id : int
 
 enum class socket_option_id : int
 {
+    events = ZLINK_OPT_EVENTS,
     sndbuf = 12293,
     rcvbuf = 12294,
     linger = 12298,

@@ -4,6 +4,7 @@
 #include "../Core/byte_count.hpp"
 #include "../Core/routing_id.hpp"
 #include "../Messaging/message.hpp"
+#include "../Eventing/poll_event.hpp"
 
 namespace zlink
 {
@@ -61,6 +62,9 @@ class common_socket_options_t
   public:
     common_socket_options_t () noexcept;
     explicit common_socket_options_t (socket_t &socket_) noexcept;
+
+    /// @brief Reads Core readiness without receiving or claiming a record.
+    poll_event_flag_t events () const;
 
     std::chrono::milliseconds linger () const;
     void linger (std::chrono::milliseconds value);
