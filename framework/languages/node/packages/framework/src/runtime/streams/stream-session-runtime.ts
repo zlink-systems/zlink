@@ -9,7 +9,7 @@ import {
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { throwIfAborted } from '../abort';
+import { isPromiseLike, throwIfAborted } from '../abort';
 import { type ZLinkApplicationWorkClaim, shouldCompactBackingArray } from '../admission';
 
 import {
@@ -1509,10 +1509,6 @@ function streamMonitorEndpointKey(
 function streamMonitorHasEndpoint(event: ZLinkBackendSocketMonitorEvent): boolean {
   const endpoint = event as { readonly localAddr?: string; readonly remoteAddr?: string };
   return endpoint.localAddr !== undefined || endpoint.remoteAddr !== undefined;
-}
-
-function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
-  return typeof (value as { then?: unknown }).then === 'function';
 }
 
 function normalizeStreamCloseReason(reason: string): string {

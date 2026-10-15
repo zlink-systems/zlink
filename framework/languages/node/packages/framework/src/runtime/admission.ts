@@ -2,6 +2,7 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from './framework-errors-internal';
+import { isPromiseLike } from './abort';
 const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
 
 /** 소비한 배열 prefix가 정리 조건에 도달했는지 판정합니다. */
@@ -212,14 +213,6 @@ function exitAdmission(state: ZLinkMeshAdmissionState): void {
     let resolve: (() => void) | undefined;
     while ((resolve = takeWaiter(state)) !== undefined) resolve();
   }
-}
-
-function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
-  return (
-    value !== null &&
-    (typeof value === 'object' || typeof value === 'function') &&
-    typeof (value as { then?: unknown }).then === 'function'
-  );
 }
 
 function takeWaiter(state: ZLinkMeshAdmissionState): (() => void) | undefined {

@@ -3,6 +3,7 @@ import {
   createInternalFrameworkException,
   internalFrameworkErrorKind
 } from '../framework-errors-internal';
+import { isPromiseLike } from '../abort';
 import type {
   ZLinkMessageContext,
   ZLinkHandlerFilter,
@@ -464,14 +465,6 @@ export class ZLinkChannelDispatchPipeline {
 }
 
 const HANDLER_FILTER_REJECTED = Symbol('handler-filter-rejected');
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    value !== null &&
-    (typeof value === 'object' || typeof value === 'function') &&
-    typeof (value as { then?: unknown }).then === 'function'
-  );
-}
 
 const DEFAULT_UNHANDLED_DISPATCH: ZLinkUnhandledDispatchOptions = {
   request: ZLinkUnhandledDispatchAction.ReplyError,
