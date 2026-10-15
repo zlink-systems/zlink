@@ -30,9 +30,9 @@ public final class Table implements ZLinkSpot<Player> {
         var join = request.decode(JoinTableRequest.class);
         checkJoin(actorId, join);
         return CompletableFuture.completedFuture(
-                index(actorId) == Rules.NO_SEAT && state.seats.size() == Rules.SEATS
-                        ? ZLinkSpotActorJoinResult.reject()
-                        : ZLinkSpotActorJoinResult.accept());
+                admit(actorId)
+                        ? ZLinkSpotActorJoinResult.accept()
+                        : ZLinkSpotActorJoinResult.reject());
     }
 
     void checkJoin(String actorId, JoinTableRequest request) {
@@ -41,13 +41,19 @@ public final class Table implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
-        var id = actor.context().actorId();
-        if (index(id) == Rules.NO_SEAT) state.seats.add(new TableState.Seat(id));
         return broadcastViews();
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
         return CompletableFuture.completedFuture(null);
+    }
+
+    // Seats the player at admission; a seated player is admitted again without a new seat.
+    private boolean admit(String id) {
+        if (index(id) != Rules.NO_SEAT) return true;
+        if (state.seats.size() == Rules.SEATS) return false;
+        state.seats.add(new TableState.Seat(id));
+        return true;
     }
 
     private int index(String id) {

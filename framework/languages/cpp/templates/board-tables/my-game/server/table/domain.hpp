@@ -30,18 +30,15 @@ class TableState
                 return static_cast<int> (i);
         return Rules::no_seat;
     }
-    std::string admission (std::string_view id) const
-    {
-        return seat_of (id) == Rules::no_seat && seats.size () == Rules::seats ? Rules::table_full
-                                                                               : "";
-    }
-    void join (const std::string &id)
+    // Seats the player at admission; a seated player is admitted again without a new seat.
+    bool admit (std::string_view id)
     {
         if (seat_of (id) != Rules::no_seat)
-            return;
-        if (!admission (id).empty ())
-            throw std::logic_error ("Unadmitted Table join");
-        seats.push_back (Seat{id, Rules::initial_chips, {}, false});
+            return true;
+        if (seats.size () == Rules::seats)
+            return false;
+        seats.push_back (Seat{std::string (id), Rules::initial_chips, {}, false});
+        return true;
     }
     std::vector<SeatView> views () const
     {

@@ -138,15 +138,10 @@ class Table final : public fx::spot_t<Player>
         const auto request = message.decode<JoinTableRequest> ();
         if (request.playerId != id || request.tableId != context_.spot_id ())
             throw std::invalid_argument ("Table join identity mismatch");
-        if (!state.admission (id).empty ())
-            co_return fx::spot_actor_join_result_t::reject ();
-        co_return fx::spot_actor_join_result_t::accept ();
+        co_return state.admit (id) ? fx::spot_actor_join_result_t::accept ()
+                                   : fx::spot_actor_join_result_t::reject ();
     }
-    fx::task_t<void> on_actor_joined (Player &actor) override
-    {
-        state.join (player_id (actor));
-        co_await publish ();
-    }
+    fx::task_t<void> on_actor_joined (Player &) override { co_await publish (); }
     fx::task_t<void> on_leave_actor (Player &) override { co_return; }
     fx::task_t<void> on_disconnect_actor (Player &) override { co_return; }
     fx::task_t<void>
