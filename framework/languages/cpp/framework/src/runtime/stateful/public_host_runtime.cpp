@@ -6824,7 +6824,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
           record.source_node_rid = status ().routing_id ();
           record.actor_control = actor_control_t{lifecycle_kind_t::joined, actor};
           record.reply_token.local_actor_join =
-            [weak, operation, actor_type, membership] (actor_join_result_t result,
+            [weak, operation, actor_type, membership] (const actor_join_operation_result_t &result,
                                                        const std::vector<zlink::message_t> &reply) {
                 const auto host = weak.lock ();
                 return host
@@ -6854,7 +6854,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
 bool public_host_runtime_t::complete_local_actor_join (pending_operation_t operation,
                                                        std::string actor_type,
                                                        stateful::membership_token_t membership,
-                                                       actor_join_result_t result,
+                                                       const actor_join_operation_result_t &result,
                                                        const std::vector<zlink::message_t> &parts)
 {
     return _transport->complete_local_operation (
@@ -6868,15 +6868,21 @@ bool public_host_runtime_t::complete_local_actor_join (pending_operation_t opera
           completion.source_node_rid =
             zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
 
-          if (result == actor_join_result_t::accepted) {
+          if (result.terminal_result != 0) {
+              (void) _objects.abort_membership_move (membership);
+              completion.terminal_result = result.terminal_result;
+              completion.failure_errno = result.failure_code;
+          } else if (result.join_result == protocol::actor_join_result_t::accepted) {
               auto [error, current] = _objects.commit_membership_move (membership);
               if (error != stateful::stateful_error_t::none) {
                   //  Spec 32-framework-error-model:119-120 — a Framework execution
                   //  failure after the application ACCEPTED the join is not an
                   //  application rejection; carry a classified terminal
                   //  (internalError) instead of synthesizing typed Rejected.
-                  completion.terminal_result = 105;
-                  completion.failure_errno = 0;
+                  const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+                    framework_error_kind_t::internal_failure);
+                  completion.terminal_result = failure->terminal_result;
+                  completion.failure_errno = failure->failure_code;
               } else {
                   const auto actor = framework_actor_ref (current, actor_type);
                   _spot_actor_index_lane
@@ -7289,27 +7295,42 @@ zlink::submit_result_t reply (const reply_token_t &token,
 }
 
 bool actor_join_reply (const reply_token_t &token,
-                       actor_join_result_t result,
+                       result_t<actor_join_result_t> result,
                        const std::vector<zlink::message_t> &parts)
 {
-    if (token.local_actor_join) {
-        return token.local_actor_join (result, parts);
+    actor_join_operation_result_t completion;
+    if (result) {
+        completion.join_result = result.value () == actor_join_result_t::accepted
+                                   ? protocol::actor_join_result_t::accepted
+                                   : protocol::actor_join_result_t::rejected;
+    } else {
+        const messaging::request_failure_mapper_t mapper;
+        const auto failure =
+          result.error () ? mapper.target_failure_reply (*result.error ())
+                          : mapper.target_failure_reply (framework_error_kind_t::internal_failure);
+        completion.terminal_result = failure->terminal_result;
+        completion.failure_code = failure->failure_code;
     }
-    if (result != actor_join_result_t::accepted) {
-        const auto host = token.host.lock ();
-        if (!host || !token.request) {
-            return false;
-        }
-        try {
-            return host->transport ().reply_failure (
-              *token.request, 106,
-              static_cast<std::uint32_t> (protocol::framework_error_code::requestRejected));
-        }
-        catch (const zlink::submit_error_t &) {
-            return false;
-        }
+    if (token.local_actor_join)
+        return token.local_actor_join (completion, parts);
+    const auto host = token.host.lock ();
+    if (!host || !token.request)
+        return false;
+    try {
+        if (completion.terminal_result != 0)
+            return host->transport ().reply_failure (*token.request, completion.terminal_result,
+                                                     completion.failure_code);
+        if (completion.join_result == protocol::actor_join_result_t::rejected)
+            return host->transport ().reply_actor_join (
+              *token.request, completion.join_result, std::nullopt, 0, 0, 0, 0,
+              parts.empty ()
+                ? std::nullopt
+                : std::make_optional (protocol::application_payload_t::from_parts (parts)));
+        return reply (token, parts) == zlink::submit_result_t::ok;
     }
-    return reply (token, parts) == zlink::submit_result_t::ok;
+    catch (const zlink::submit_error_t &) {
+        return false;
+    }
 }
 
 } // namespace zlink::framework::runtime::host
