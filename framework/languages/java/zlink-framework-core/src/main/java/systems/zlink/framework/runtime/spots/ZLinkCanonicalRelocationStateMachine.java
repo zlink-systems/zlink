@@ -487,15 +487,16 @@ final class ZLinkCanonicalRelocationStateMachine
 
     /**
      * Classifies one read of the primary authority record against the source fence: target owner
-     * means the target commit is confirmed; any other StoreVersion means the target commit can no
-     * longer succeed, so the source keeps authority.
+     * means the target commit is confirmed; Missing ends the expired owner without Preserve. Any
+     * other StoreVersion means the target commit can no longer succeed, so the source keeps
+     * authority.
      */
     private static Optional<Settlement> settlementOf(
             ZLinkAuthorityReadResult read,
             ZLinkSpotRetireControl.StageRequest request,
             String expectedStoreVersion) {
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-            return Optional.empty();
+            return Optional.of(Settlement.SOURCE_LEASE_EXPIRED);
         }
         if (snapshot.ownerId().equals(request.targetOwnerId())
                 && snapshot.ownerLeaseGeneration() == request.targetOwnerLeaseGeneration()) {

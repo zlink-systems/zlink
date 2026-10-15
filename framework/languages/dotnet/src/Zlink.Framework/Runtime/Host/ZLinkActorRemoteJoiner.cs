@@ -1028,7 +1028,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                     false,
                     new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
-                        $"Actor '{actor.Context.ActorId}' source owner lease expired before the Preserve fence."
+                        $"Actor '{actor.Context.ActorId}' source owner lease expired or its authority is Missing."
                     )
                 );
             }
