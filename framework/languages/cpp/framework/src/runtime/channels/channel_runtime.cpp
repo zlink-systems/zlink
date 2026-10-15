@@ -70,17 +70,20 @@ result_t<node_transport_t>
 resolve_node_transport (const std::shared_ptr<channel_runtime_state_t> &state,
                         const std::string &mesh_name)
 {
-    return state->lane
-      .run_task ([&] () -> node_transport_t {
-          if (const auto route = state->route_channels.find (mesh_name);
-              route != state->route_channels.end ())
-              return route->second;
-          if (const auto mesh = state->mesh_node_transports.find (mesh_name);
-              mesh != state->mesh_node_transports.end ())
-              return mesh->second;
-          return std::monostate{};
-      })
-      .result ();
+    const auto index =
+      std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+    if (index->route_channels.contains (mesh_name))
+        return state->lane
+          .run_task ([&] () -> node_transport_t {
+              if (const auto route = state->route_channels.find (mesh_name);
+                  route != state->route_channels.end ())
+                  return route->second;
+              return std::monostate{};
+          })
+          .result ();
+    if (const auto mesh = index->mesh_nodes.find (mesh_name); mesh != index->mesh_nodes.end ())
+        return result_t<node_transport_t>::success (mesh->second);
+    return result_t<node_transport_t>::success (std::monostate{});
 }
 
 template <typename TClientServerTransports, typename TRouteMeshTransports>
@@ -750,11 +753,11 @@ void channel_runtime_t::bind_mesh_node_transport (
 {
     _state->lane
       .run_checked ([&] {
-          _state->mesh_node_transports.insert_or_assign (
-            std::move (mesh_name),
-            std::make_shared<const channel_runtime_state_t::mesh_node_transport_t> (
-              channel_runtime_state_t::mesh_node_transport_t{std::move (send),
-                                                             std::move (request)}));
+          auto transport = std::make_shared<const channel_runtime_state_t::mesh_node_transport_t> (
+            channel_runtime_state_t::mesh_node_transport_t{std::move (send), std::move (request)});
+          _state->publish_node_transports ([&] (auto &index) {
+              index.mesh_nodes.insert_or_assign (std::move (mesh_name), std::move (transport));
+          });
       })
       .get ();
 }

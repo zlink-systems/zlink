@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <optional>
 #include <string>
@@ -212,7 +213,26 @@ class channel_runtime_state_t
         mesh_node_request_t request;
     };
     using mesh_node_transport_ptr_t = std::shared_ptr<const mesh_node_transport_t>;
-    std::map<std::string, mesh_node_transport_ptr_t> mesh_node_transports;
+    // Node direct transports by name, published when a route channel is
+    // initialized or a MeshNode transport is bound and read with one atomic
+    // load on submit (08-messaging-hot-path E2: prepared at change time). A
+    // route channel name takes precedence and is resolved on the lane.
+    struct node_transport_index_t
+    {
+        std::set<std::string> route_channels;
+        std::map<std::string, mesh_node_transport_ptr_t> mesh_nodes;
+    };
+    std::shared_ptr<const node_transport_index_t> node_transports =
+      std::make_shared<const node_transport_index_t> ();
+    void publish_node_transports (const std::function<void (node_transport_index_t &)> &change)
+    {
+        auto next = std::make_shared<node_transport_index_t> (
+          *std::atomic_load_explicit (&node_transports, std::memory_order_acquire));
+        change (*next);
+        std::atomic_store_explicit (
+          &node_transports, std::shared_ptr<const node_transport_index_t> (std::move (next)),
+          std::memory_order_release);
+    }
     std::map<std::string, mesh_channel_send_t> mesh_channel_senders;
     std::map<std::string, mesh_channel_request_t> mesh_channel_requesters;
     std::map<std::string, client_server_send_t> client_server_senders;

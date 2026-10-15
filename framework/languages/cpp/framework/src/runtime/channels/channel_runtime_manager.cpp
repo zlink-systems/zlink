@@ -183,6 +183,8 @@ void channel_runtime_manager_t::initialize_route_channels (
             }
         }
         _state->route_channels.emplace (route_id, std::move (runtime));
+        _state->publish_node_transports (
+          [&route_id] (auto &index) { index.route_channels.insert (route_id); });
     }
 }
 
@@ -197,6 +199,8 @@ void channel_runtime_manager_t::initialize_route_channels (
         auto initialized = initializer.initialize (registration->registration);
         _state->route_handlers[route_id] = std::move (initialized.handlers);
         _state->route_channels.emplace (route_id, std::move (initialized.runtime));
+        _state->publish_node_transports (
+          [&route_id] (auto &index) { index.route_channels.insert (route_id); });
     }
 }
 
