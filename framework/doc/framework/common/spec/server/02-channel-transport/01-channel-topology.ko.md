@@ -463,7 +463,8 @@ RID 중복 정책이 정한다. Framework는 Core가 선택한 route([Core ROUTE
 받은 handshake만 검증해 논리 peer 하나를 ready 상태로 유지하며, 물리 pipe를 고르지 않는다.
 
 Manual endpoint만으로는 connect 전에 remote Object role을 알 수 없을 수 있다. Framework는
-handshake에서 양쪽 Object role이 모두 `Client`임을 확인하면 connection이 필요하지 않다는
+handshake에서 양쪽이 모두 Object Client이고 RouteMesh Channel Server membership도 없음을 확인하면
+connection이 필요하지 않다는
 terminal admission 결과를 기록하고 ready 전에 socket을 닫는다. 같은 endpoint와 configuration
 generation에는 background reconnect를 반복하지 않는다. Endpoint, expected RID 또는
 configuration generation이 바뀌면 새 intent로 한 번 다시 확인할 수 있다.

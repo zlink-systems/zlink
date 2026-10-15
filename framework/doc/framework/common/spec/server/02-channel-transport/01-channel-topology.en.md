@@ -493,7 +493,8 @@ handshake received on the route that Core selected ([Core ROUTER §10.1](../../.
 logical peer ready, and does not choose a physical pipe.
 
 With only a manual endpoint, the remote Object role may be unknown before connect.
-Once the framework confirms at handshake that both sides' Object role is `Client`, it
+Once the framework confirms at handshake that both sides are Object Client and neither has
+RouteMesh Channel Server membership, it
 records a terminal admission result that no connection is needed and closes the
 socket before ready. It doesn't repeat background reconnect for the same endpoint and
 configuration generation. If endpoint, expected RID, or configuration generation
