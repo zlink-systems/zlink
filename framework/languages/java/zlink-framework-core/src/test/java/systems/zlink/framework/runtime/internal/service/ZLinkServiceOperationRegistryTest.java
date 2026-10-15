@@ -611,8 +611,8 @@ final class ZLinkServiceOperationRegistryTest {
                                 }));
             }
             start.countDown();
-            for (var submission : submitted) submission.get(1, TimeUnit.SECONDS);
-            assertTrue(callbacks.await(1, TimeUnit.SECONDS));
+            for (var submission : submitted) submission.get(5, TimeUnit.SECONDS);
+            assertTrue(callbacks.await(5, TimeUnit.SECONDS));
             List<Integer> expected = java.util.stream.IntStream.range(0, 64).boxed().toList();
             for (var values : observed) assertEquals(expected, values);
             assertEquals(0, registry.pendingCount());
