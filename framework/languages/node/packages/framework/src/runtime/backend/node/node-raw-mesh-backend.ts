@@ -418,15 +418,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
           }
         }
       },
-      onPeerDisconnected: (nodeRoutingId, endpoint) => {
-        for (const [intentId, peer] of this.peerIntents) {
-          if (
-            peer.endpoint === endpoint &&
-            (peer.nodeRoutingId === undefined || peer.nodeRoutingId === nodeRoutingId)
-          ) {
-            this.peerIntents.delete(intentId);
-          }
-        }
+      onPeerDisconnected: (_nodeRoutingId, endpoint) => {
         for (const handler of this.peerDisconnectedHandlers) handler(endpoint);
       }
     });
@@ -639,6 +631,18 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   observePeerRoute(targetRid: unknown) {
     return this.requireRuntime().observePeerRoute(String(targetRid));
+  }
+
+  hasPeerRouteOrConnectionIntent(targetRid: unknown, endpoint: string): boolean {
+    const rid = String(targetRid);
+    return (
+      this.requireRuntime().hasSelectedPeerRoute(rid) ||
+      [...this.peerIntents.values()].some(
+        (intent) =>
+          intent.nodeRoutingId === rid ||
+          (intent.nodeRoutingId === undefined && intent.endpoint === endpoint)
+      )
+    );
   }
 
   isPeerRouteReady(targetRid: unknown, lifecycleGeneration?: bigint): boolean {

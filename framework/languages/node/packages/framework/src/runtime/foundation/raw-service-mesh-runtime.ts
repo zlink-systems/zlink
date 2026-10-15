@@ -410,6 +410,10 @@ export class RawServiceMeshRuntime {
     };
   }
 
+  hasSelectedPeerRoute(nodeRoutingId: string): boolean {
+    return this.selectedRoutes.has(nodeRoutingId);
+  }
+
   private notifyPeerRouteChanged(nodeRoutingId: string): void {
     for (const listener of this.peerRouteChanged) listener(nodeRoutingId);
   }
