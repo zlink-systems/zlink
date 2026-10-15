@@ -369,11 +369,17 @@ class raw_mesh_node_owner_t
     // same whenever POLLROUTE is ready; returns the number of RIDs whose
     // selected route changed.
     std::size_t observe_routes ();
-    // Classifies a direct node target from local topology before submit:
-    // an Object Client peer and a peer this node needs no RouteMesh
-    // connection to are not found; any other target proceeds (nullopt).
-    std::optional<zlink::submit_result_t>
-    classify_node_target (const std::vector<std::uint8_t> &target_routing_id) const;
+    // Classifies a direct node target from local topology before submit. An
+    // admitted peer is classified by its descriptor's object role; a peer this
+    // node needs no RouteMesh connection to is an Object Client; a target in
+    // neither set is unknown to the topology.
+    enum class node_target_t
+    {
+        application,
+        object_client,
+        unknown
+    };
+    node_target_t classify_node_target (const std::vector<std::uint8_t> &target_routing_id) const;
 
   private:
     static std::string owner_key (const std::vector<std::uint8_t> &routing_id);

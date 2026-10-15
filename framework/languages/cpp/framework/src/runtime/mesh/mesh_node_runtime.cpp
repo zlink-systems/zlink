@@ -4188,6 +4188,61 @@ mesh_node_runtime_t::await_request_reply (const host::pending_operation_t &opera
       runtime::messaging::message_parts_t (std::move (completion->value ().parts)));
 }
 
+std::optional<zlink::submit_result_t>
+mesh_node_runtime_t::classify_node_target_from_topology (const zlink::routing_id_t &target,
+                                                         bool &unknown) const
+{
+    using node_target_t = runtime::mesh::raw_mesh_node_owner_t::node_target_t;
+    const auto classified = _node->transport ().classify_node_target (target.to_bytes ());
+    unknown = classified == node_target_t::unknown;
+    if (classified == node_target_t::object_client)
+        return zlink::submit_result_t::not_found;
+    return std::nullopt;
+}
+
+task_t<std::optional<zlink::submit_result_t>>
+mesh_node_runtime_t::classify_unknown_node_target (const zlink::routing_id_t &target) const
+{
+    if (!_user_spot_store)
+        co_return std::nullopt;
+    try {
+        location_page_request_t page;
+        for (;;) {
+            const auto listed =
+              co_await _user_spot_store->list_mesh_nodes (_state->mesh_name, page);
+            const auto found = std::find_if (listed.items.begin (), listed.items.end (),
+                                             [&target] (const mesh_node_descriptor_t &descriptor) {
+                                                 return descriptor.rid == target;
+                                             });
+            if (found != listed.items.end ()) {
+                co_return found->object_role == object_role_t::client
+                  ? std::optional<zlink::submit_result_t> (zlink::submit_result_t::not_found)
+                  : std::nullopt;
+            }
+            if (!listed.continuation_token) {
+                /* The target being absent from this page of the Location
+                 * Store is not proof it does not exist as a live direct-send
+                 * peer: route-only mesh members (object_role=none, e.g. a
+                 * RouteMesh client with no spot hosting) are never published
+                 * to the Location Store, so an admitted transport-level peer
+                 * legitimately never appears here. Returning not_found
+                 * unconditionally in this branch used to short-circuit
+                 * every direct requestToNode/sendToNode before the real
+                 * admission check (raw_mesh_node_owner_t's
+                 * _topology.peer() gate) ever ran, permanently classifying
+                 * such peers as not found regardless of admission state.
+                 * Falling through with nullopt lets the caller consult the
+                 * actual transport-level topology instead. */
+                co_return std::nullopt;
+            }
+            page.continuation_token = listed.continuation_token;
+        }
+    }
+    catch (...) {
+        co_return std::nullopt;
+    }
+}
+
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
                                    const std::vector<zlink::message_t> &parts,
@@ -4196,8 +4251,12 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (const auto classified = _node->transport ().classify_node_target (target.to_bytes ()))
+    bool unknown_target = false;
+    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
         co_return *classified;
+    if (unknown_target)
+        if (const auto classified = co_await classify_unknown_node_target (target))
+            co_return *classified;
     (void) metadata;
     co_return co_await _node->send_to_node (target, parts);
 }
@@ -4210,8 +4269,12 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (const auto classified = _node->transport ().classify_node_target (target.to_bytes ()))
+    bool unknown_target = false;
+    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
         co_return *classified;
+    if (unknown_target)
+        if (const auto classified = co_await classify_unknown_node_target (target))
+            co_return *classified;
     (void) metadata;
     co_return co_await _node->send_to_node (target, std::move (parts));
 }
@@ -4235,8 +4298,12 @@ mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
-    if (const auto classified = _node->transport ().classify_node_target (target.to_bytes ()))
+    bool unknown_target = false;
+    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
         co_return *classified;
+    if (unknown_target)
+        if (const auto classified = co_await classify_unknown_node_target (target))
+            co_return *classified;
     (void) metadata;
     co_return co_await _node->request_to_node (target, std::move (parts), operation_id, timeout);
 }
