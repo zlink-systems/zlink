@@ -42,7 +42,7 @@ class World
         return process.output ();
     }
     std::pair<Node *, nlohmann::json>
-    start_node (const std::string &name, const std::string &role, bool bootstrap = true)
+    start_node (const std::string &name, const std::string &role, bool replacement = false)
     {
         auto config = read_json (root_ / "server/config" / (name + ".json"));
         config["RedisEndpoint"] = redis_;
@@ -50,9 +50,7 @@ class World
         config["MeshEndpoint"] = "tcp://127.0.0.1:0";
         if (role == "session")
             config["StreamEndpoint"] = "tcp://127.0.0.1:0";
-        if (role == "field")
-            config["Bootstrap"] = bootstrap;
-        const auto suffix = name + (bootstrap ? "" : "-replacement");
+        const auto suffix = name + (replacement ? "-replacement" : "");
         const auto config_path = logs_ / (suffix + ".json");
         {
             std::ofstream output (config_path);
@@ -121,7 +119,7 @@ class World
     void replace_instance (const std::string &id)
     {
         stop_node (*instances_.at (id));
-        instances_[id] = start_node (id, "instance", false).first;
+        instances_[id] = start_node (id, "instance", true).first;
     }
     void close ()
     {

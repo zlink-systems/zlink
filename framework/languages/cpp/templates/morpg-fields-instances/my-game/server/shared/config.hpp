@@ -19,7 +19,6 @@ struct NodeConfig
     std::optional<std::string> StreamEndpoint;
     std::vector<std::string> FieldIds;
     int FieldCapacity = 0, DungeonCapacity = 0;
-    bool Bootstrap = true;
     static NodeConfig load (const std::filesystem::path &path)
     {
         const auto j = read_json (path);
@@ -33,7 +32,6 @@ struct NodeConfig
         c.FieldIds = j.value ("FieldIds", std::vector<std::string>{});
         c.FieldCapacity = j.value ("FieldCapacity", 0);
         c.DungeonCapacity = j.value ("DungeonCapacity", 0);
-        c.Bootstrap = j.value ("Bootstrap", true);
         if (c.Id.empty () || c.RedisEndpoint.empty () || c.KeyPrefix.empty ()
             || c.MeshEndpoint.empty ())
             throw std::invalid_argument ("Node configuration fields must be nonempty");
