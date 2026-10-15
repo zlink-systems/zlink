@@ -349,6 +349,14 @@ flowchart LR
 예약이 필요하지 않다. 모든 완료 경로가 같은 방식을 사용해야 새 경로를 추가해도 경쟁
 규칙이 달라지지 않는다.
 
+이 경쟁은 완료가 나중에 도착하는 operation에만 있다. Binding send의 admission 결과는
+[§15](#15-binding-send-terminal-소비-구현)대로 확정한다. 즉시 admission된 send는 그 결과로
+완료하며 진행 중 호출 표에 항목을 만들지 않는다. 그 send에는 경쟁할 다른 완료 경로가
+없다 — one-way send에는 timeout·취소 입력이 없고(§7), 이미 확정된 결과는 종료로 바뀌지
+않는다. `BACKPRESSURED`로 나중의 admission을 기다리는 send와 모든 request는 항목을
+등록하고 위의 꺼내기로 완료 권한을 확정한다. 어느 경우든 caller continuation은
+[§11](#11-완료-callback의-execution-turn-구현)의 새 execution turn 조건을 따른다.
+
 Service wire의 request는 서로 다른 두 값을 함께 보존한다. 둘 다 Framework 내부
 값이며 application에는 노출하지 않는다.
 
