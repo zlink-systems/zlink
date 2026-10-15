@@ -64,9 +64,12 @@ The wire contracts are in `server/shared/contracts.hpp`. `SessionInfo` is a push
 
 ## Known issues
 
-- #1785: C++ Session cannot return an application-created typed reply through the public API. `SessionInfoRequest` receives a typed `SessionInfo` push instead.
-- #1771 (handoff candidate; identical cause unconfirmed): Public 0.30.0 validation is blocked during matching: Windows recorded a deferred `JoinSpot` activation failure; Linux reached Room location commits but did not deliver `MatchFound`. The first missing response fails the run. These observations require validation with the 0.30.1 candidate; they are not treated as successful scenarios.
-- #1740: Public 0.30.0 shutdown can fail with remaining participants and lacks the required public `SafeToShutdown` observation. The host reports an explicit error when that observation is unavailable; it never infers safety from another status.
+Public 0.30.0 validation does not pass; the 0.30.1 candidate must be verified on Windows and Linux. The template does not compensate for these Framework defects.
+
+- On Windows, the cross-node deferred join into the Room fails with `activation_rejected`, and a failed deferred join can terminate the source process ([#1784](https://github.com/zlink-systems/zlink/issues/1784)).
+- On Linux, both players reach the Room's location commit but `MatchFound` pushed after the join never arrives, without an error ([#1786](https://github.com/zlink-systems/zlink/issues/1786)).
+- Shutdown can fail with TeardownFailed, and the C++ lifecycle status has no `SafeToShutdown` field ([#1740](https://github.com/zlink-systems/zlink/issues/1740)).
+- A C++ Session cannot yet send a typed reply it creates, so `SessionInfoRequest` receives a typed `SessionInfo` push ([#1785](https://github.com/zlink-systems/zlink/issues/1785)).
 
 ## Deployment sequence
 
