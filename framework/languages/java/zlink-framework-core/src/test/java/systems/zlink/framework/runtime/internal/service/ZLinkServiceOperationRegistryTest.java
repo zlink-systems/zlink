@@ -140,6 +140,9 @@ final class ZLinkServiceOperationRegistryTest {
 
             assertEquals(1, scheduler.fixedRateSchedules.get());
             assertEquals(0, scheduler.otherSchedules.get());
+            // The scheduled maintenance would race the explicit expiries below and take
+            // entries from a slot already under the cursor; the test drives every turn.
+            scheduler.shutdownNow();
             // Hot-path E3: timer-wheel deadlines expire at the next 1ms tick, never early.
             assertEquals(0, registry.expire(109));
             assertEquals(0, registry.expire(110));

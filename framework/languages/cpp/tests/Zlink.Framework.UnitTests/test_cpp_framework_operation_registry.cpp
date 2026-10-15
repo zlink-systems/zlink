@@ -172,19 +172,25 @@ int main ()
         assert (yielding.size () == 0);
     }
     {
-        foundation::operation_registry_t budgeted;
-        constexpr std::size_t pending_count = 50000;
-        const auto deadline =
-          foundation::operation_registry_t::clock_t::now () + std::chrono::milliseconds (1);
+        injected_now = {};
+        injected_step = {};
+        foundation::operation_registry_t budgeted (&read_injected_clock);
+        constexpr std::size_t pending_count = 10;
+        const auto deadline = injected_now + std::chrono::milliseconds (1);
         for (std::size_t index = 0; index < pending_count; ++index)
             assert (budgeted.register_operation (
               foundation::call_id_t{1, index + 1}, deadline, [] (auto terminal, auto) {
                   assert (terminal == foundation::operation_terminal_t::timed_out);
               }));
         const auto tick = *budgeted.next_deadline ();
-        // Hot-path E3 / §4.2: the first expiry starts the budget; a partial slot resumes next turn.
+        // Hot-path E3 / §4.2: four budget reads on the injected clock end the turn after three
+        // expiries; the rest of the slot resumes on the next turn.
+        injected_step =
+          std::chrono::duration_cast<foundation::operation_registry_t::clock_t::duration> (
+            runtime::dispatch_limits::receive_batch_time)
+          / 4;
         auto expired = budgeted.expire (tick);
-        assert (expired > 0 && expired < pending_count);
+        assert (expired == 3);
         assert (budgeted.unregister (foundation::call_id_t{1, expired + 1}));
         assert (
           budgeted.register_operation (foundation::call_id_t{2, 1}, deadline, [] (auto, auto) {}));
