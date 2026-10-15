@@ -216,6 +216,7 @@ const RELOCATION_PARTICIPANT_STATE_LIMIT_BYTES = 64 * 1024 * 1024;
 const RELOCATION_TARGET_TOMBSTONE_LIMIT = 1024;
 const RELOCATION_OPERATION_RETENTION_MS = 5 * 60_000;
 const SERVICE_CONTROL_TERMINAL_CAPACITY = 4096;
+const INITIAL_MEMBERSHIP_EPOCH = 1n;
 
 interface ZLinkHostRelocationOptions {
   readonly registration: ZLinkFrameworkRegistration;
@@ -223,6 +224,7 @@ interface ZLinkHostRelocationOptions {
   readonly locationStore: () => ZLinkLocationStore | undefined;
   readonly currentOwner: () => ZLinkLocationOwnerToken | undefined;
   readonly targetAdmissionSealed?: () => boolean;
+  readonly sourceQuiescenceChanged?: () => void;
   readonly liveDescriptors: (
     meshName: string,
     signal?: AbortSignal
@@ -543,7 +545,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     for (const window of this.sourceCutoverWindows.values()) {
       if (window.followTimer !== undefined) clearTimeout(window.followTimer);
     }
+    const hadSourceWindows = this.sourceCutoverWindows.size !== 0;
     this.sourceCutoverWindows.clear();
+    if (hadSourceWindows) this.options.sourceQuiescenceChanged?.();
     const stopped = new Error('Relocation runtime stopped.');
     stopped.name = 'AbortError';
     this.targetPrepareOperations.clear();
@@ -1484,7 +1488,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const status = this.requireMeshNode(meshName).status();
     const owner = this.options.currentOwner();
     if (
-      String(status.routingId) !== session.sessionOwnerNodeRid ||
+      !routingIdsEqual(status.routingId, session.sessionOwnerNodeRid) ||
       status.lifecycleGeneration !== session.sessionOwnerNodeGeneration ||
       owner?.ownerId !== session.sessionOwnerId ||
       owner.leaseGeneration !== session.sessionOwnerLeaseGeneration
@@ -2643,7 +2647,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       windowClosed: false,
       followExpired: false
     };
+    const wasQuiescent = this.isSafeToShutdown();
     this.sourceCutoverWindows.set(relocationKey, window);
+    if (wasQuiescent) this.options.sourceQuiescenceChanged?.();
     window.followTimer = setTimeout(() => {
       window.followExpired = true;
       // S1→S4 route convergence: the span the source must keep its Message
@@ -2673,6 +2679,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       this.sourceCutoverWindows.get(relocationKey) === window
     ) {
       this.sourceCutoverWindows.delete(relocationKey);
+      if (this.isSafeToShutdown()) this.options.sourceQuiescenceChanged?.();
     }
   }
 
@@ -2905,7 +2912,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     const envelope = decodeServiceRelocationEnvelope(payload, request.targetAttemptGeneration);
     const inventoryEnvelope = attachCanonicalBoundSessions(
-      await this.resolveTargetParticipantInventory(request, envelope, signal),
+      await this.resolveTargetParticipantInventory(meshName, request, envelope, signal),
       request,
       meshName
     );
@@ -3791,7 +3798,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const publication = relocationPublication(prepare, envelope);
     const participants = envelope.participants.map((participant) => {
       const expected = authorities.get(participant.key)!;
-      const membership = actorMembershipTarget(envelope, participant.key);
+      const membership = actorMembershipTarget(
+        envelope.memberships.find((value) => value.actorKey === participant.key),
+        this.options.localDescriptor?.(meshName)
+      );
       const entrySpotId =
         expected.allocation.objectKind === 'actor' && membership === undefined
           ? this.options.spotManager()?.entrySpotIdForMesh(meshName)
@@ -3818,18 +3828,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           objectGeneration: expected.objectGeneration,
           targetAttemptGeneration: prepare.targetAttemptGeneration,
           coordinatorExpectedStoreVersion: expected.storeVersion.value,
-          ...(membership === undefined
-            ? expected.allocation.objectKind === 'actor'
+          ...(membership ??
+            (expected.allocation.objectKind === 'actor'
               ? {
                   actorSpotId: entrySpotId!,
                   actorSpotGeneration: prepare.target.nodeGeneration,
                   actorSpotKind: ZLinkSpotKind.Entry as const
                 }
-              : {}
-            : {
-                ...membership,
-                actorSpotKind: ZLinkSpotKind.User as const
-              })
+              : {}))
         }),
         membershipMutation: encodeMembershipMutation(envelope.memberships, participant.key)
       };
@@ -4128,6 +4134,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
 
   /** Maps schema ordinals to the authoritative Location Store inventory. */
   private async resolveTargetParticipantInventory(
+    meshName: string,
     request: ServiceMaintenanceRelocationPrepare,
     envelope: ServiceRelocationEnvelope,
     signal?: AbortSignal
@@ -4217,21 +4224,23 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         authorityOwnerGeneration: snapshot.authorityOwnerGeneration
       };
     });
-    // Actor-root saved work is admitted against the destination membership.
-    // The canonical root intentionally omits a membership vector; meanwhile
-    // Location Store still names the source Spot until target cutover. Rebuild
-    // the Actor lane from the already accepted ActorJoin admission, preserving
-    // the target queue boundary for decoded saved-work.
+    // Join recovery uses its accepted target membership. Maintenance Actor
+    // roots restore into the target's startup Entry incarnation (§10.1).
     const memberships =
       request.object.kind === 'actor'
-        ? actorJoinTargetMembership(manager, envelope.aggregateId, participants)
+        ? actorRootTargetMembership(
+            manager,
+            envelope.aggregateId,
+            participants,
+            this.options.localDescriptor?.(meshName)
+          )
         : entries
             .filter((entry) => entry.snapshot.allocation.objectKind === 'actor')
             .map((entry) => ({
               actorKey: entry.key.value,
               spotKey: primaryKey.value,
               spotObjectGeneration: primary.objectGeneration,
-              membershipEpoch: 1n
+              membershipEpoch: INITIAL_MEMBERSHIP_EPOCH
             }));
     return {
       ...envelope,
@@ -4547,13 +4556,28 @@ function actorJoinAdmissionIdentity(envelope: ServiceRelocationEnvelope): string
   );
 }
 
-function actorJoinTargetMembership(
+function actorRootTargetMembership(
   manager: DefaultZLinkSpotManager | undefined,
   relocationId: string,
-  participants: readonly ServiceRelocationParticipant[]
+  participants: readonly ServiceRelocationParticipant[],
+  localDescriptor: ZLinkMeshNodeDescriptor | undefined
 ): readonly ServiceRelocationMembership[] {
   const recovery = canonicalActorJoinRecovery(participants);
-  const admissionId = recovery?.request.handoffId ?? relocationId;
+  const actor = participants.find((value) => value.objectKind === 'actor');
+  if (recovery === undefined) {
+    if (actor === undefined || localDescriptor?.entrySpotId === undefined) {
+      throw new Error(`Actor relocation '${relocationId}' has no target Entry membership.`);
+    }
+    return [
+      {
+        actorKey: actor.key,
+        spotKey: encodeAuthorityKey('user_spot', localDescriptor.entrySpotId).value,
+        spotObjectGeneration: localDescriptor.lifecycleGeneration,
+        membershipEpoch: INITIAL_MEMBERSHIP_EPOCH
+      }
+    ];
+  }
+  const admissionId = recovery.request.handoffId;
   const admission = (
     manager as unknown as
       | {
@@ -4571,7 +4595,6 @@ function actorJoinTargetMembership(
         }
       | undefined
   )?.formalRemoteActorAdmissions?.get(admissionId);
-  const actor = participants.find((value) => value.objectKind === 'actor');
   if (admission === undefined || actor === undefined) {
     throw new Error(`Actor relocation '${relocationId}' has no accepted target membership.`);
   }
@@ -4603,18 +4626,19 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       );
       if (membership === undefined)
         throw new Error(`Actor '${identity}' relocation membership is missing.`);
-      const spotIdentity = decodeAuthorityKey({
-        value: membership.spotKey
-      } as ZLinkAuthorityKey).globalId;
-      const localDescriptor = this.options.localDescriptor?.(this.meshName);
-      const nativeEntrySpot = localDescriptor?.entrySpotId === spotIdentity;
+      const targetMembership = actorMembershipTarget(
+        membership,
+        this.options.localDescriptor?.(this.meshName)
+      )!;
       const actor = await this.requireActorManager().prepareRelocationActor(
         identity,
         participant.stableType,
         participant.objectGeneration,
         participant.authorityOwnerGeneration,
-        nativeEntrySpot ? undefined : (spotIdentity as RoutingId),
-        membership.spotObjectGeneration,
+        targetMembership.actorSpotKind === ZLinkSpotKind.Entry
+          ? undefined
+          : (targetMembership.actorSpotId as RoutingId),
+        targetMembership.actorSpotGeneration,
         membership.membershipEpoch,
         signal
       );
@@ -4687,9 +4711,11 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   ): Promise<void> {
     for (const membership of memberships) {
       const actor = hidden.get(membership.actorKey)?.actor;
-      const spotIdentity = decodeAuthorityKey({
-        value: membership.spotKey
-      } as ZLinkAuthorityKey).globalId;
+      const targetMembership = actorMembershipTarget(
+        membership,
+        this.options.localDescriptor?.(this.meshName)
+      )!;
+      const spotIdentity = targetMembership.actorSpotId;
       const spot =
         hidden.get(membership.spotKey)?.activation ??
         this.requireSpotManager().resolveRelocationActivation(
@@ -4698,9 +4724,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         );
       if (actor === undefined) throw new Error('Relocation membership Actor staging is missing.');
       const state = this.requireActorManager().getState(actor.context.actorId)!;
-      const localDescriptor = this.options.localDescriptor?.(this.meshName);
-      const isEntryMembership = localDescriptor?.entrySpotId === spotIdentity;
-      if (isEntryMembership) {
+      if (targetMembership.actorSpotKind === ZLinkSpotKind.Entry) {
         // Entry Spot identity is published as a Location membership key, but
         // it is not a User Spot activation in the Actor runtime. The native
         // restore already received the target MeshNode RID as its Entry
@@ -4708,7 +4732,12 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         // local Entry Spot path after the target commit.
         state.clearJoinedSpot();
       } else {
-        state.setJoinedSpot(spotIdentity as RoutingId, spot?.spot, membership.membershipEpoch);
+        state.setJoinedSpot(
+          spotIdentity as RoutingId,
+          spot?.spot,
+          membership.membershipEpoch,
+          membership.spotObjectGeneration
+        );
       }
       spot?.commitActorJoin(actor);
     }
@@ -4977,14 +5006,22 @@ function rewriteAuthorityApplicationRoute(
 }
 
 function actorMembershipTarget(
-  envelope: ServiceRelocationEnvelope,
-  actorKey: string
-): { readonly actorSpotId: string; readonly actorSpotGeneration: bigint } | undefined {
-  const membership = envelope.memberships.find((value) => value.actorKey === actorKey);
+  membership: ServiceRelocationMembership | undefined,
+  localDescriptor: ZLinkMeshNodeDescriptor | undefined
+):
+  | {
+      readonly actorSpotId: string;
+      readonly actorSpotGeneration: bigint;
+      readonly actorSpotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
+    }
+  | undefined {
   if (membership === undefined) return undefined;
+  const spotId = decodeAuthorityKey({ value: membership.spotKey } as ZLinkAuthorityKey).globalId;
   return {
-    actorSpotId: decodeAuthorityKey({ value: membership.spotKey } as ZLinkAuthorityKey).globalId,
-    actorSpotGeneration: membership.spotObjectGeneration
+    actorSpotId: spotId,
+    actorSpotGeneration: membership.spotObjectGeneration,
+    actorSpotKind:
+      spotId === localDescriptor?.entrySpotId ? ZLinkSpotKind.Entry : ZLinkSpotKind.User
   };
 }
 
@@ -6053,7 +6090,7 @@ function attachCanonicalBoundSessions(
       };
       const target: ZLinkRemoteBoundSessionTarget = {
         routerChannelId: meshName,
-        targetNodeRid: request.sourceNodeRid as RoutingId,
+        targetNodeRid: sessionNodeRid,
         spotId:
           request.object.kind === 'actor'
             ? ((participant.rootSpotId ?? '') as RoutingId)
