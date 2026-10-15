@@ -1171,6 +1171,28 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
+    public async Task PumpCloseRejectsNewImmediateSendsBeforeNodeDisposal()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
+        var pump = new Zlink.Framework.Runtime.Backend.DotNet.ZLinkMeshDispatchPump(
+            runtime.Target,
+            runtime.Target.Completions
+        );
+        await pump.DisposeAsync();
+        using var payload = Message.From(new byte[] { 1 });
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await runtime.Target.SendToNodeDirectAsync(
+                runtime.SourceRid,
+                [payload],
+                SendFlags.None,
+                default,
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, error.Kind);
+    }
+
+    [Fact]
     public async Task ImmediatelyAdmittedSend_CompletesFromTheSubmitResultWithoutACompletionEntry()
     {
         await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);

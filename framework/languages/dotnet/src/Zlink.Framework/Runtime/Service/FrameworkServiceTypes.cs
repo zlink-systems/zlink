@@ -911,6 +911,7 @@ internal struct MeshReceiveRecord
 
 internal interface IMeshNode : IDisposable, IAsyncDisposable
 {
+    void CloseSubmissions();
     ValueTask ForceStopAsync(CancellationToken cancellationToken);
     RoutingId RoutingId { get; }
     MeshOperationId AllocateOperationId();
