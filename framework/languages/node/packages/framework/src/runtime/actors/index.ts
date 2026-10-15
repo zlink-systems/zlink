@@ -191,7 +191,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     const actorRef = this.actorRefForState(state);
     return {
       spotId: spotId,
-      objectGeneration: state.locationGeneration ?? 0n,
+      objectGeneration: state.spotGeneration ?? 0n,
       meshName: this.actorMeshNames.get(actorId) ?? '',
       nodeRid: actorRef.nodeRid
     };
@@ -467,7 +467,8 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         await registry.restore(transfer.adapterKey, actor, transfer.state, signal);
       }
       state.setLocationGeneration(authorityOwnerGeneration);
-      if (spotId !== undefined) state.setJoinedSpot(spotId, undefined, membershipEpoch);
+      if (spotId !== undefined)
+        state.setJoinedSpot(spotId, undefined, membershipEpoch, spotGeneration);
       return actor;
     } catch (error) {
       if (nativeRef !== undefined) node.discardRelocatedActor?.(nativeRef);
@@ -486,17 +487,30 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
   }
 
   async abortRelocationActor(actorId: string): Promise<void> {
-    await this.removeRelocationActor(actorId);
+    await this.releaseLocalActor(actorId);
   }
 
   async completeRelocationSource(
     actorId: string,
     sourceActorRef?: ZLinkBackendActorRef
   ): Promise<void> {
-    await this.removeRelocationActor(actorId, sourceActorRef);
+    await this.releaseLocalActor(actorId, sourceActorRef);
   }
 
-  private async removeRelocationActor(
+  async releaseSpotActorMembers(meshName: string, spotId?: RoutingId): Promise<void> {
+    const results = await Promise.allSettled(
+      [...this.states.values()]
+        .filter((state) => state.meshName === meshName && state.spotId === spotId)
+        .map((state) => this.releaseLocalActor(state.actorId))
+    );
+    const errors = results
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map((result) => result.reason);
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'Actor member cleanup failed.');
+  }
+
+  private async releaseLocalActor(
     actorId: string,
     exactNativeActorRef?: ZLinkBackendActorRef
   ): Promise<void> {

@@ -34,6 +34,7 @@ const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const framework = require('../../packages/framework/dist');
 const nestjs = require('../../packages/nestjs/dist');
+const connector = require('../../packages/stream-connector/dist');
 const {
   ZLinkInMemoryProviderLocationStore
 } = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
@@ -229,7 +230,9 @@ for (const variant of [
   'relocated Entry',
   'safe status',
   'Spot generation',
-  'target shutdown'
+  'target shutdown',
+  'Session relocation',
+  'Session shutdown'
 ]) {
   test(
     `${variant} public Join and PlannedMaintenance preserve canonical Table inventory`,
@@ -328,6 +331,21 @@ for (const variant of [
         packetName: 'Move'
       })(MoveHandler);
       const apps = [];
+      let client;
+      let sessionActor;
+      class SessionFactory {
+        async create(context) {
+          return {
+            context,
+            async onDispatch(dispatch) {
+              if (dispatch.packetName === 'Bind') await context.actors.bindOrGet(sessionActor);
+              await context.client
+                .reply({ nodeRid: String(context.actors.find('player')?.ref.nodeRid) })
+                .submit();
+            }
+          };
+        }
+      }
       const localTable = variant !== 'cross-node' && variant !== 'relocated Entry';
       async function start(node) {
         const builder = nestjs
@@ -341,19 +359,26 @@ for (const variant of [
           .pollingIntervalMs(OBSERVATION_INTERVAL_MS)
           .routeCacheMaxAgeMs(0);
         if (variant === 'safe status') locations.messageFollowDurationMs(SOURCE_FOLLOW_DURATION_MS);
-        builder
-          .addRouteMesh('play')
-          .listen('tcp://127.0.0.1:0')
-          .routingId(node)
-          .objects()
-          .server()
-          .addEntrySpot(Entry)
-          .addActorFactory('Player', PlayerFactory, (f) => f.preserveStateWith(PlayerState))
-          .addSpotFactory('Table', Table, (f) => f.preserveStateWith(TableState));
+        const mesh = builder.addRouteMesh('play').listen('tcp://127.0.0.1:0').routingId(node);
+        if (node === 'session') mesh.objects().client();
+        else
+          mesh
+            .objects()
+            .server()
+            .addEntrySpot(Entry)
+            .addActorFactory('Player', PlayerFactory, (f) => f.preserveStateWith(PlayerState))
+            .addSpotFactory('Table', Table, (f) => f.preserveStateWith(TableState));
         class TestModule {}
+        if (variant.startsWith('Session') && node === 'session') {
+          builder
+            .addStreamNode('sessions')
+            .enableActorDispatch()
+            .bind('ws://127.0.0.1:*')
+            .registerSession(SessionFactory);
+        }
         Module({
           imports: [nestjs.ZLinkModule.forRoot(builder.build())],
-          providers: [MoveHandler, PlayerState, TableState]
+          providers: node === 'session' ? [SessionFactory] : [MoveHandler, PlayerState, TableState]
         })(TestModule);
         const app = await NestFactory.createApplicationContext(TestModule, {
           logger: false,
@@ -410,6 +435,25 @@ for (const variant of [
             .getOrCreate('table', 'Table')
             .inMesh('play')
             .submit();
+        if (variant.startsWith('Session')) {
+          const gateway = await start('session');
+          const sessionDeadline = Date.now() + PUBLIC_OPERATION_TIMEOUT_MS;
+          while (gateway.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME).snapshot('play').readyPeerCount < 2) {
+            assert.ok(Date.now() < sessionDeadline, 'Session owner peer readiness');
+            await new Promise((resolve) => setTimeout(resolve, OBSERVATION_INTERVAL_MS));
+          }
+          sessionActor = await actors.find('player');
+          client = connector.zlinkStreamConnectorFactory.create({
+            endpoint: gateway
+              .get(nestjs.ZLINK_FRAMEWORK_RUNTIME)
+              .getListenerStatus('stream', 'sessions').endpoint,
+            dispatchMode: connector.ZlinkStreamDispatchMode.Immediate
+          });
+          await client.connect();
+          assert.deepEqual(await client.request({}).packetName('Bind').submit(), {
+            nodeRid: 'source'
+          });
+        }
         const completion = new Promise((resolve) => {
           complete = resolve;
         });
@@ -432,6 +476,13 @@ for (const variant of [
         }
         if (localTable) {
           const runtime = source.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
+          if (variant === 'Session shutdown') {
+            assert.deepEqual(await runtime.shutdown({ deadlineMs: PUBLIC_OPERATION_TIMEOUT_MS }), {
+              outcome: framework.ZLinkFrameworkTerminationOutcome.Stopped,
+              reason: framework.ZLinkFrameworkTerminationReason.None
+            });
+            return;
+          }
           const observation = new AbortController();
           const statuses = [];
           const observer =
@@ -450,6 +501,24 @@ for (const variant of [
             assert.equal(terminal.outcome, framework.ZLinkFrameworkRelocationOutcome.Relocated);
             assert.ok(restored.includes('Table:table'));
             assert.ok(restored.includes('Player:player'));
+            if (variant === 'Session relocation') {
+              const routeDeadline = Date.now() + PUBLIC_OPERATION_TIMEOUT_MS;
+              while (
+                (await client.request({}).packetName('Status').submit()).nodeRid !== 'target'
+              ) {
+                assert.ok(Date.now() < routeDeadline, 'Session route observes the relocated Actor');
+                await new Promise((resolve) => setTimeout(resolve, OBSERVATION_INTERVAL_MS));
+              }
+              assert.deepEqual(
+                await target
+                  .get(nestjs.ZLINK_FRAMEWORK_RUNTIME)
+                  .shutdown({ deadlineMs: PUBLIC_OPERATION_TIMEOUT_MS }),
+                {
+                  outcome: framework.ZLinkFrameworkTerminationOutcome.Stopped,
+                  reason: framework.ZLinkFrameworkTerminationReason.None
+                }
+              );
+            }
             if (variant === 'target shutdown') {
               assert.deepEqual(
                 await target.get(nestjs.ZLINK_FRAMEWORK_RUNTIME).shutdown({
@@ -474,6 +543,18 @@ for (const variant of [
                     status.safeToShutdown
                 ),
                 'SAFE_TO_SHUTDOWN must be published after source quiescence changes'
+              );
+              const published = statuses.findLast(
+                (status) =>
+                  status.safeToShutdown &&
+                  status.state === framework.ZLinkFrameworkRuntimeState.Relocated
+              );
+              assert.equal(published.sequence, runtime.status.sequence);
+              assert.equal(published, runtime.status);
+              assert.ok(
+                statuses.some(
+                  (status) => !status.safeToShutdown && status.sequence < published.sequence
+                )
               );
             }
           } finally {
@@ -508,6 +589,7 @@ for (const variant of [
           );
         }
       } finally {
+        await client?.close();
         for (const app of apps.reverse()) await app.close();
       }
     }
@@ -664,6 +746,7 @@ for (const membership of [
     };
     const resolve = () =>
       runtime.resolveTargetParticipantInventory(
+        'play',
         {
           object: { kind: 'userSpot', spotId: 'table', objectGeneration: primary.objectGeneration }
         },
