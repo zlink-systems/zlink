@@ -1127,7 +1127,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         );
                         // The state chunks fence on the node's peer object
                         // (SendCanonicalRelocationRecordAsync); admission and the
-                        // lifecycle fence are the direct-peer rule.
+                        // lifecycle fence are the direct-peer rule. Command 40 and its
+                        // chunks leave on one ordered connection (wire protocol, relocation
+                        // direct chunk transfer), so a view whose route differs from the
+                        // peer object's is a route replacement: the attempt fails as not
+                        // connected and durable replay submits it on the ready route.
                         var chunkPeer =
                             await _lane
                                 .RunAsync(() => _peersByRid.GetValueOrDefault(targetNodeRid))
@@ -1135,7 +1139,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             ?? throw new ZlinkSubmitException(
                                 ZlinkSubmitException.ErrorCode.NotConnected
                             );
-                        var peer = RequireDirectPeer(targetNodeRid, prepare.Target.NodeGeneration);
+                        var physicalRoutingId = chunkPeer.PhysicalRoutingId;
+                        if (
+                            RequireDirectPeer(
+                                targetNodeRid,
+                                prepare.Target.NodeGeneration
+                            ).PhysicalRoutingId != physicalRoutingId
+                        )
+                            throw new ZlinkSubmitException(
+                                ZlinkSubmitException.ErrorCode.NotConnected
+                            );
                         TraceRelocationStage(
                             prepare,
                             ZLinkMessageFlowOutcome.Admitted,
@@ -1144,7 +1157,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         using var prepareRequestCancellation =
                             CancellationTokenSource.CreateLinkedTokenSource(attemptToken);
                         var prepareReply = RequestDirectWireAsync(
-                                peer.PhysicalRoutingId,
+                                physicalRoutingId,
                                 [
                                     Message.From(
                                         ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare)

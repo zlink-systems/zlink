@@ -468,6 +468,88 @@ public sealed class MeshChannelSelectionHotPathTests
         }
     }
 
+    // Command 40 and its state chunks leave on one ordered connection (wire
+    // protocol, relocation direct chunk transfer). A published direct-peer view
+    // whose physical route differs from the peer object the chunks use is a
+    // route replacement: the attempt submits nothing and replays (actor model
+    // §8.1) until the deadline. The node is not started, so a command 40 sent
+    // on the view's route would fail with ObjectDisposedException instead.
+    [Fact]
+    public async Task Relocation_prepare_does_not_submit_when_the_view_route_differs_from_the_chunk_route()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "mesh");
+        var targetRid = RoutingId.From("prepare-route-target");
+        var peer = new ZLinkMeshPeer(1)
+        {
+            RoutingId = targetRid,
+            PhysicalRoutingId = RoutingId.From("prepare-route-old"),
+            Admitted = true,
+            State = MeshPeerState.Admitted,
+            RouteGeneration = 7,
+            LifecycleGeneration = 1,
+        };
+        var peers = Field<Dictionary<RoutingId, ZLinkMeshPeer>>(source, "_peersByRid");
+        await Field<ZLinkStateLane>(source, "_lane")
+            .RunAsync(() =>
+            {
+                peers.Add(targetRid, peer);
+                Field<ZLinkMeshChannelSelection>(source, "_channelSelection")
+                    .PrepareRouterTargets(peers);
+                Field<ZLinkMeshSelectedRoutes>(source, "_selectedRoutes")
+                    .Apply([new RouterRoute(targetRid, 7)]);
+                // The peer object moved to a new physical route after the view
+                // was published.
+                peer.PhysicalRoutingId = RoutingId.From("prepare-route-new");
+            });
+        var payload = ZLinkRelocationTransferPayload.Create(
+            new ZLinkRelocationEnvelope(
+                Guid.NewGuid(),
+                1,
+                new byte[32],
+                [
+                    new ZLinkRelocationParticipantEnvelope(
+                        new ZLinkAuthorityKey("actor:mesh:actor"),
+                        ZLinkPlacementObjectKind.Actor,
+                        1,
+                        1,
+                        new byte[] { 1 },
+                        [],
+                        []
+                    ),
+                ]
+            ),
+            1024
+        );
+        var sourceRid = RoutingId.From("prepare-route-source");
+        var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            new(1, 1),
+            1,
+            new("source-owner", 1, sourceRid, 1, "v-source"),
+            new(targetRid, 1, "target-owner", 1),
+            1,
+            new(1, "actor", "actor", 1, 1),
+            sourceRid,
+            1,
+            (ulong)payload.TotalLength,
+            (uint)payload.ChunkCount,
+            payload.ChecksumCrc32c,
+            1
+        );
+
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await source.PrepareCanonicalRelocationAsync(
+                targetRid,
+                prepare,
+                payload,
+                TimeSpan.FromMilliseconds(100),
+                CancellationToken.None
+            )
+        );
+
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+    }
+
     // Every peer change point publishes the same direct-send facts the peer
     // table holds, so a send that reads the view sees what a node turn would.
     private static void AssertDirectPeerPublished(ZLinkManagedMeshNode node, RoutingId rid)
