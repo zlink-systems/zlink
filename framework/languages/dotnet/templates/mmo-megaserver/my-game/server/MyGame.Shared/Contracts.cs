@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+
 namespace MyGame.Shared;
 
 public static class GameNames
@@ -10,28 +11,45 @@ public static class GameNames
     public const string SessionStream = "players";
     public const int DefaultCapacity = 2;
     public const int DefaultRegionLimit = 2;
+
     public static string RegionId(string region, int index) => $"{region}-{index}";
 }
+
 public static class Rejection
 {
     public const string RegionFull = "region-full";
 }
+
 public sealed record EnterRegionRequest(string PlayerId, string Region);
+
 public sealed record JoinRegion(string Region, int Index);
+
 public sealed record RegionFull(string Reason, string Region, int Index);
+
 public sealed record MoveRequest(int X, long Sequence);
+
 public sealed record PlayerPosition(string PlayerId, int X);
+
 public sealed record RegionView(string RegionId, string NodeId, PlayerPosition[] Players);
+
 public sealed record OpenDungeonRequest(string DungeonId);
+
 public sealed record DungeonOpened(string DungeonId, string NodeId);
+
 public sealed record DungeonInfoRequest;
+
 public sealed record ViewRequest;
+
 public sealed record SessionInfoRequest;
+
 public sealed record SessionInfo(string SessionId, string ActorId, ulong ObjectGeneration);
+
 public sealed record NodeReady(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("meshEndpoint")] string MeshEndpoint,
-    [property: JsonPropertyName("streamEndpoint")] string? StreamEndpoint);
+    [property: JsonPropertyName("streamEndpoint")] string? StreamEndpoint
+);
+
 public static class NodeProtocol
 {
     public const string ReadyPrefix = "READY ";

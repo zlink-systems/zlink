@@ -56,22 +56,37 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
 
     public async Task<T> ReceiveAsync<T>(Func<T, bool> predicate, CancellationToken ct)
     {
-        var result = await Connector.WaitFor<T>().Where(message => predicate(message.Payload))
-            .Timeout(MessageTimeout).Async(ct);
+        var result = await Connector
+            .WaitFor<T>()
+            .Where(message => predicate(message.Payload))
+            .Timeout(MessageTimeout)
+            .Async(ct);
         return result.Payload;
     }
-    public async Task<T> SendAsync<T, TRequest>(TRequest request, Func<T, bool> predicate, CancellationToken ct)
+
+    public async Task<T> SendAsync<T, TRequest>(
+        TRequest request,
+        Func<T, bool> predicate,
+        CancellationToken ct
+    )
     {
         var response = ReceiveAsync(predicate, ct);
         await Connector.Send(request).Async(ct);
         return await response;
     }
+
     public Task<RegionView> JoinAsync(string region, CancellationToken ct) =>
-        SendAsync<RegionView, EnterRegionRequest>(new(PlayerId, region),
-            view => view.Players.Any(player => player.PlayerId == PlayerId), ct);
+        SendAsync<RegionView, EnterRegionRequest>(
+            new(PlayerId, region),
+            view => view.Players.Any(player => player.PlayerId == PlayerId),
+            ct
+        );
+
     public Task<SessionInfo> SessionAsync(CancellationToken ct) =>
         Connector.Request(new SessionInfoRequest()).Async<SessionInfo>(ct).AsTask();
+
     public Task<RegionView> RegionAsync(CancellationToken ct) =>
         SendAsync<RegionView, ViewRequest>(new(), _ => true, ct);
+
     public ValueTask DisposeAsync() => Connector.DisposeAsync();
 }

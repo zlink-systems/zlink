@@ -1,5 +1,6 @@
-using Systems.Zlink.Stream.Connector.Contracts;
 using MyGame.Shared;
+using Systems.Zlink.Stream.Connector.Contracts;
+
 namespace MyGame.E2E;
 
 internal static class Scenarios
@@ -7,18 +8,42 @@ internal static class Scenarios
     public static readonly string[] All = ["region", "dungeon", "reconnect", "update"];
     private const string Forest = "forest";
     private const int MovedX = 42;
+
     public static string[] Select(string? value)
     {
-        var selected = value is null ? All : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (selected.Length == 0 || selected.Distinct().Count() != selected.Length || selected.Any(id => !All.Contains(id)))
+        var selected = value is null
+            ? All
+            : value.Split(
+                ',',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+            );
+        if (
+            selected.Length == 0
+            || selected.Distinct().Count() != selected.Length
+            || selected.Any(id => !All.Contains(id))
+        )
             throw new ArgumentException("Select unique scenarios from: " + string.Join(',', All));
         return All.Where(selected.Contains).ToArray();
     }
+
     private static void Require(bool condition, string message)
-    { if (!condition) throw new InvalidDataException(message); }
-    private static void SameState(RegionView before, RegionView after) => Require(
-        before.RegionId == after.RegionId && before.Players.SequenceEqual(after.Players), "Region state changed.");
-    public static async Task RunAsync(string endpoint, WorldRun run, string[] selected, CancellationToken ct)
+    {
+        if (!condition)
+            throw new InvalidDataException(message);
+    }
+
+    private static void SameState(RegionView before, RegionView after) =>
+        Require(
+            before.RegionId == after.RegionId && before.Players.SequenceEqual(after.Players),
+            "Region state changed."
+        );
+
+    public static async Task RunAsync(
+        string endpoint,
+        WorldRun run,
+        string[] selected,
+        CancellationToken ct
+    )
     {
         var passed = 0;
         var current = selected[0];
@@ -33,34 +58,66 @@ internal static class Scenarios
                 var together = p1.ReceiveAsync<RegionView>(view => view.Players.Length == 2, ct);
                 var region = await p2.JoinAsync(Forest, ct);
                 SameState(region, await together);
-                Require(initial.RegionId == GameNames.RegionId(Forest, 1) && region.RegionId == initial.RegionId &&
-                    region.Players.Select(p => p.PlayerId).SequenceEqual(new[] { "p1", "p2" }), "First region membership mismatch.");
+                Require(
+                    initial.RegionId == GameNames.RegionId(Forest, 1)
+                        && region.RegionId == initial.RegionId
+                        && region
+                            .Players.Select(p => p.PlayerId)
+                            .SequenceEqual(new[] { "p1", "p2" }),
+                    "First region membership mismatch."
+                );
                 await using var p3 = await GameClient.ConnectAsync(endpoint, "p3", ct);
                 var separate = await p3.JoinAsync(Forest, ct);
-                Require(separate.RegionId == GameNames.RegionId(Forest, 2) &&
-                    separate.Players.Select(p => p.PlayerId).SequenceEqual(new[] { "p3" }), "Capacity overflow did not isolate p3.");
+                Require(
+                    separate.RegionId == GameNames.RegionId(Forest, 2)
+                        && separate.Players.Select(p => p.PlayerId).SequenceEqual(new[] { "p3" }),
+                    "Capacity overflow did not isolate p3."
+                );
                 var before1 = await p1.SessionAsync(ct);
                 var before2 = await p2.SessionAsync(ct);
-                var leaked = new TaskCompletionSource<RegionView>(TaskCreationOptions.RunContinuationsAsynchronously);
-                using var subscription = p3.Connector.On<RegionView>((message, _) =>
-                {
-                    if (message.Payload.Players.Any(p => p.PlayerId != "p3")) leaked.TrySetResult(message.Payload);
-                    return ValueTask.CompletedTask;
-                });
-                var observed = p2.ReceiveAsync<RegionView>(view => view.Players.Any(p => p.PlayerId == "p1" && p.X == MovedX), ct);
-                var moved = await p1.SendAsync<RegionView, MoveRequest>(new(MovedX, 1),
-                    view => view.Players.Any(p => p.PlayerId == "p1" && p.X == MovedX), ct);
+                var leaked = new TaskCompletionSource<RegionView>(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                using var subscription = p3.Connector.On<RegionView>(
+                    (message, _) =>
+                    {
+                        if (message.Payload.Players.Any(p => p.PlayerId != "p3"))
+                            leaked.TrySetResult(message.Payload);
+                        return ValueTask.CompletedTask;
+                    }
+                );
+                var observed = p2.ReceiveAsync<RegionView>(
+                    view => view.Players.Any(p => p.PlayerId == "p1" && p.X == MovedX),
+                    ct
+                );
+                var moved = await p1.SendAsync<RegionView, MoveRequest>(
+                    new(MovedX, 1),
+                    view => view.Players.Any(p => p.PlayerId == "p1" && p.X == MovedX),
+                    ct
+                );
                 SameState(moved, await observed);
                 SameState(separate, await p3.RegionAsync(ct));
                 Require(!leaked.Task.IsCompleted, "p3 received another region's movement.");
-                if (selected.Contains("region")) { Console.WriteLine("✓ region"); passed++; }
+                if (selected.Contains("region"))
+                {
+                    Console.WriteLine("✓ region");
+                    passed++;
+                }
                 if (selected.Contains("dungeon"))
                 {
                     current = "dungeon";
                     const string dungeonId = "dungeon-1";
-                    var opened = await p1.SendAsync<DungeonOpened, OpenDungeonRequest>(new(dungeonId), _ => true, ct);
-                    Require(opened.DungeonId == dungeonId && opened.NodeId == "instance", "Dungeon host mismatch.");
-                    Console.WriteLine("✓ dungeon"); passed++;
+                    var opened = await p1.SendAsync<DungeonOpened, OpenDungeonRequest>(
+                        new(dungeonId),
+                        _ => true,
+                        ct
+                    );
+                    Require(
+                        opened.DungeonId == dungeonId && opened.NodeId == "instance",
+                        "Dungeon host mismatch."
+                    );
+                    Console.WriteLine("✓ dungeon");
+                    passed++;
                 }
                 if (selected.Contains("reconnect"))
                 {
@@ -71,10 +128,14 @@ internal static class Scenarios
                     SameState(moved, restored);
                     Require(restored.NodeId == moved.NodeId, "Reconnect changed the region host.");
                     var after = await p1.SessionAsync(ct);
-                    Require(before1.ActorId == after.ActorId && before1.ObjectGeneration == after.ObjectGeneration,
-                        "Reconnect changed the Actor identity.");
+                    Require(
+                        before1.ActorId == after.ActorId
+                            && before1.ObjectGeneration == after.ObjectGeneration,
+                        "Reconnect changed the Actor identity."
+                    );
                     before1 = after;
-                    Console.WriteLine("✓ reconnect"); passed++;
+                    Console.WriteLine("✓ reconnect");
+                    passed++;
                 }
                 if (selected.Contains("update"))
                 {
@@ -88,25 +149,52 @@ internal static class Scenarios
                     SameState(moved, relocated);
                     var other = await p2.RegionAsync(ct);
                     SameState(relocated, other);
-                    Require(relocated.NodeId != moved.NodeId && other.NodeId == relocated.NodeId &&
-                        run.Regions.ContainsKey(relocated.NodeId), "Region did not move to the surviving host.");
-                    Require(before1 == await p1.SessionAsync(ct) && before2 == await p2.SessionAsync(ct) &&
-                        !p1.Disconnected && !p2.Disconnected, "Host relocation changed the Sessions.");
+                    Require(
+                        relocated.NodeId != moved.NodeId
+                            && other.NodeId == relocated.NodeId
+                            && run.Regions.ContainsKey(relocated.NodeId),
+                        "Region did not move to the surviving host."
+                    );
+                    Require(
+                        before1 == await p1.SessionAsync(ct)
+                            && before2 == await p2.SessionAsync(ct)
+                            && !p1.Disconnected
+                            && !p2.Disconnected,
+                        "Host relocation changed the Sessions."
+                    );
                     await run.ReplaceRegionAsync(moved.NodeId, ct);
                     await using var fresh = await GameClient.ConnectAsync(endpoint, "p4", ct);
                     var created = await fresh.JoinAsync("desert", ct);
-                    Require(created.NodeId == moved.NodeId && created.Players.Any(p => p.PlayerId == "p4"),
-                        "Replacement node did not accept a new region.");
-                    Console.WriteLine("✓ update"); passed++;
+                    Require(
+                        created.NodeId == moved.NodeId
+                            && created.Players.Any(p => p.PlayerId == "p4"),
+                        "Replacement node did not accept a new region."
+                    );
+                    Console.WriteLine("✓ update");
+                    passed++;
                 }
             }
             finally
             {
-                try { await p2.DisposeAsync(); }
-                finally { if (!ReferenceEquals(p1, initialP1)) await p1.DisposeAsync(); }
+                try
+                {
+                    await p2.DisposeAsync();
+                }
+                finally
+                {
+                    if (!ReferenceEquals(p1, initialP1))
+                        await p1.DisposeAsync();
+                }
             }
         }
-        catch { Console.WriteLine($"✗ {current}"); throw; }
-        finally { Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed"); }
+        catch
+        {
+            Console.WriteLine($"✗ {current}");
+            throw;
+        }
+        finally
+        {
+            Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed");
+        }
     }
 }

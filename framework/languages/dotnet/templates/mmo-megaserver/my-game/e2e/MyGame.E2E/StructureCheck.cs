@@ -89,7 +89,10 @@ internal static class StructureCheck
         );
         foreach (var field in new[] { "id", "name", "language" })
             Text(document, field);
-        Require(Text(document, "language") == "dotnet", "Structure language differs from this project.");
+        Require(
+            Text(document, "language") == "dotnet",
+            "Structure language differs from this project."
+        );
         ValidateRun(document);
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var roles = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -131,8 +134,10 @@ internal static class StructureCheck
             settings.Add(id, loaded);
             roles.Add(id, role);
         }
-        Require(Array(document, "channels").Count == 0,
-            "This template does not register application mesh channels.");
+        Require(
+            Array(document, "channels").Count == 0,
+            "This template does not register application mesh channels."
+        );
         var spotIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var spot in Array(document, "spots"))
         {
@@ -142,7 +147,10 @@ internal static class StructureCheck
             var kind = Text(spot, "kind");
             if (kind == "entry")
             {
-                Require(roles[owner] == "region", "Entry owner must host the Region Entry factory.");
+                Require(
+                    roles[owner] == "region",
+                    "Entry owner must host the Region Entry factory."
+                );
                 Require(
                     spot!["type"] is null && spot["logicalId"] is null && spot["dynamic"] is null,
                     "Entry must not claim a stable type, logical ID or dynamic family."
@@ -154,8 +162,10 @@ internal static class StructureCheck
                 kind == "user" && (type == GameNames.RegionType || type == GameNames.DungeonType),
                 "Spot kind or type differs from server registration."
             );
-            Require(roles[owner] == (type == GameNames.RegionType ? "region" : "instance"),
-                "Spot type differs from its owner registration.");
+            Require(
+                roles[owner] == (type == GameNames.RegionType ? "region" : "instance"),
+                "Spot type differs from its owner registration."
+            );
             var dynamic = false;
             if (spot!["dynamic"] is JsonNode dynamicNode)
             {
