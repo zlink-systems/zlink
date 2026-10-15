@@ -605,11 +605,17 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     @Override
     public CompletionStage<Void> sendRemoteActorBoundSession(
             ZLinkBackendActorRef actor, List<Message> parts) {
-        RemoteStreamBinding remote = remoteStreamBindings.get(actor.actorId());
-        if (remote == null || !remote.actor().equals(actor)) {
-            return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
-        }
-        return owner.sendBoundSession(remote, parts);
+        return stateLane
+                .runNowOrQueue(
+                        () -> {
+                            RemoteStreamBinding remote = remoteStreamBindings.get(actor.actorId());
+                            if (remote == null || !remote.actor().equals(actor)) {
+                                return CompletableFuture.<Void>failedFuture(
+                                        new ZlinkSubmitException(SubmitResult.NOT_FOUND));
+                            }
+                            return owner.sendBoundSession(remote, parts);
+                        })
+                .thenCompose(java.util.function.Function.identity());
     }
 
     @Override
