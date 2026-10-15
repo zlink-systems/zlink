@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Binding contract suites (7 languages) against the current core/build-dev, serialized behind the samples lock.
+# shellcheck source=./common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh" || exit $?
 cd "$Z" || exit
 require_quiet || exit 2

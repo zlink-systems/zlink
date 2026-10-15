@@ -52,6 +52,7 @@ check_env() {
     esac
   fi
   browser_manifest="$gate_env_root/framework/languages/node/node_modules/playwright-core/browsers.json"
+  # shellcheck disable=SC2016 # Pass the JavaScript source to node unchanged.
   if [[ -r "$browser_manifest" ]] && command -v node >/dev/null 2>&1 && node -e '
     const fs = require("fs");
     const path = require("path");
