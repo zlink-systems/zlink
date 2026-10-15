@@ -4237,13 +4237,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return DecodeDirectApplicationReply(operationId.Low, reply);
     }
 
-    private async ValueTask<(Peer Peer, ObservedAuthority Authority)> RequireDirectSpotPeerAsync(
-        RoutingId targetRid,
-        string spotId,
-        ulong spotGeneration
-    )
+    private async ValueTask<(
+        ZLinkMeshDirectPeer Peer,
+        ObservedAuthority Authority
+    )> RequireDirectSpotPeerAsync(RoutingId targetRid, string spotId, ulong spotGeneration)
     {
-        var peer = await RequireDirectPeerAsync(targetRid).ConfigureAwait(false);
+        var peer = RequireDirectPeer(targetRid);
         if (
             spotGeneration == 0
             || !_observedSpotAuthorities.TryGetValue(
@@ -4523,7 +4522,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         try
         {
-            var peer = await RequireDirectPeerAsync(actorRef.NodeRid).ConfigureAwait(false);
+            var peer = RequireDirectPeer(actorRef.NodeRid);
             if (
                 !_observedActorAuthorities.TryGetValue(
                     new ObservedActorAuthorityKey(actorRef.NodeRid, actorRef.ActorId),
@@ -9668,7 +9667,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken
     )
     {
-        var peer = await RequireDirectPeerAsync(targetRid).ConfigureAwait(false);
+        var peer = RequireDirectPeer(targetRid);
         await SendDirectWireAsync(
                 peer.PhysicalRoutingId,
                 CreateApplicationWire(
@@ -9695,7 +9694,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkRequestAdmission? requestAdmission = null
     )
     {
-        var peer = durable ? null : await RequireDirectPeerAsync(targetRid).ConfigureAwait(false);
+        var peer = durable ? null : RequireDirectPeer(targetRid);
         var started = _deadlineTimeProvider.GetTimestamp();
         var operationId = NextStandaloneOperationId();
         using var lifetime = durable ? new NativeDurableRequestLifetime(this, targetRid) : null;
@@ -9739,6 +9738,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     messages,
                     timeout,
                     cancellationToken,
+                    peer.Liveness,
                     requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
@@ -9832,20 +9832,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return DecodeDirectApplicationReply(operationId.Low, reply);
     }
 
-    private Peer RequireDirectPeer(RoutingId targetRid) =>
-        _lane.IsOnLane
-            ? RequireAdmittedPeer(_peersByRid.GetValueOrDefault(targetRid))
-            : AwaitStateLane(RequireDirectPeerAsync(targetRid));
-
-    private async ValueTask<Peer> RequireDirectPeerAsync(RoutingId targetRid) =>
-        RequireAdmittedPeer(
-            await _lane
-                .RunAsync(() => _peersByRid.GetValueOrDefault(targetRid))
-                .ConfigureAwait(false)
-        );
-
-    private static Peer RequireAdmittedPeer(Peer? peer) =>
-        peer is { Admitted: true }
+    private ZLinkMeshDirectPeer RequireDirectPeer(RoutingId targetRid) =>
+        _channelSelection.DirectPeer(targetRid) is { Admitted: true } peer
             ? peer
             : throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
 
@@ -9991,9 +9979,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var ownershipTransferred = false;
         try
         {
-            admission ??= RunState(() =>
-                _peersByRid.TryGetValue(target, out var peer) ? peer.Liveness : null
-            );
+            admission ??= _channelSelection.DirectPeer(target)?.Liveness;
             Task<IReadOnlyList<Message>> request;
             lock (_socketGate)
             {
