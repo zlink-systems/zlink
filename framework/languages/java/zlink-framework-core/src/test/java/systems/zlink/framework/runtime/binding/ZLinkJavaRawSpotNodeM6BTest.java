@@ -3173,6 +3173,32 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void joinedInstanceActivationIsRegisteredWhenItCompletes() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("jvm-m6b-instance-join-node"));
+            ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) node.spotNode();
+            String spotId = "jvm-m6b-instance-join";
+            spots.registerInstanceSpotType("alpha");
+
+            var first = spots.activateInstanceSpot(spotId, null).toCompletableFuture();
+            // The join's completion continuation observes the registry the moment it runs.
+            var closedOnJoin =
+                    spots.activateInstanceSpot(spotId, "alpha")
+                            .thenApply(
+                                    joined ->
+                                            spots.closeInstanceSpot(
+                                                    spotId, joined.spot().lifecycleGeneration()))
+                            .toCompletableFuture();
+
+            first.get(1, TimeUnit.SECONDS);
+            assertTrue(
+                    closedOnJoin.get(1, TimeUnit.SECONDS),
+                    "the joined activation completed before its registry entry was Ready");
+        }
+    }
+
+    @Test
     void acceptedInstanceSpotRequestCompletesAfterAdmissionSeals() throws Exception {
         String endpoint = "inproc://jvm-m6b-closing-instance-" + System.nanoTime();
         RoutingId targetRid = RoutingId.from("jvm-m6b-closing-target");

@@ -150,24 +150,30 @@ final class ZLinkJavaInstanceSpotRegistry {
             current.whenCompleteAsync(
                     (value, failure) -> {
                         if (failure != null) {
-                            result.completeExceptionally(failure);
                             candidate.completeExceptionally(failure);
+                            result.completeExceptionally(failure);
                             return;
                         }
+                        // This operation's queue admission is submitted first, so joined
+                        // operations enter in arrival order (06-spot-address-messaging.ko.md:423).
+                        // The registry then records Ready, which also releases the next joined
+                        // operation, before this caller observes the join
+                        // (09-object-lifecycle.ko.md:134-137). Ready stays even when this
+                        // operation's queue admission fails.
+                        CompletionStage<Void> admitted;
                         try {
-                            restoreFirst
-                                    .apply(value.spot())
-                                    .whenComplete(
-                                            (ignored, terminalFailure) -> {
-                                                if (terminalFailure == null) result.complete(value);
-                                                else result.completeExceptionally(terminalFailure);
-                                            });
+                            admitted = restoreFirst.apply(value.spot());
                         } catch (RuntimeException | Error refusal) {
-                            result.completeExceptionally(refusal);
-                        } finally {
-                            // Preserve Ready even when this operation's queue admission fails.
                             candidate.complete(value);
+                            result.completeExceptionally(refusal);
+                            return;
                         }
+                        candidate.complete(value);
+                        admitted.whenComplete(
+                                (ignored, terminalFailure) -> {
+                                    if (terminalFailure == null) result.complete(value);
+                                    else result.completeExceptionally(terminalFailure);
+                                });
                     },
                     applicationExecutor);
             return result;

@@ -24,7 +24,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
@@ -288,51 +287,55 @@ final class ZLinkBoundSessionSendCallContractTest {
                         .toCompletableFuture()
                         .join()
                         .orElseThrow();
-        ZLinkStateLane ownerTurn = ownerTurn(actors);
+        ZLinkBackendActorRef actorRef =
+                new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7);
+        // Hold the owner turn with a binding transition that waits for the release.
+        CompletableFuture<Void> started = new CompletableFuture<>();
         CompletableFuture<Void> release = new CompletableFuture<>();
-        ownerTurn.runAsync(
-                () -> {
+        actors.applyRemoteSessionBinding(
+                spotNode,
+                actorRef,
+                transition -> {
+                    started.complete(null);
                     release.join();
-                    return null;
+                    return true;
                 });
-
-        // A caller outside the owner turn submits the bind and returns while the turn is busy.
-        CompletableFuture<Long> bound =
-                assertTimeoutPreemptively(
-                        Duration.ofSeconds(2),
-                        () ->
-                                actors.bindNativeSession(
-                                                actor,
-                                                spotNode,
-                                                new ZLinkBackendActorRef(
-                                                        RoutingId.from("node-a"), "actor-1", 7),
-                                                RoutingId.from("session-node"),
-                                                RoutingId.from("session-1"),
-                                                11)
-                                        .toCompletableFuture());
-        assertFalse(bound.isDone());
-        assertFalse(actors.hasBoundSession(actor));
-        release.complete(null);
+        CompletableFuture<Long> bound;
+        try {
+            started.get(5, TimeUnit.SECONDS);
+            // A caller outside the owner turn submits the bind and returns while the turn is busy.
+            bound =
+                    assertTimeoutPreemptively(
+                            Duration.ofSeconds(2),
+                            () ->
+                                    actors.bindNativeSession(
+                                                    actor,
+                                                    spotNode,
+                                                    actorRef,
+                                                    RoutingId.from("session-node"),
+                                                    RoutingId.from("session-1"),
+                                                    11)
+                                            .toCompletableFuture());
+            assertFalse(bound.isDone());
+            assertFalse(actors.hasBoundSession(actor));
+        } finally {
+            release.complete(null);
+        }
         long bindingToken = bound.get(5, TimeUnit.SECONDS);
         assertTrue(actors.hasBoundSession(actor));
 
         // A completion continuation inside the owner turn clears the binding in that same turn.
         assertTrue(
-                ownerTurn
-                        .runAsync(
-                                () ->
+                actors.applyRemoteSessionBinding(
+                                spotNode,
+                                actorRef,
+                                transition ->
                                         actors.clearSessionBinding(actor, bindingToken)
                                                 .toCompletableFuture()
                                                 .join())
                         .toCompletableFuture()
                         .get(5, TimeUnit.SECONDS));
         assertFalse(actors.hasBoundSession(actor));
-    }
-
-    private static ZLinkStateLane ownerTurn(ZLinkActorRuntime actors) throws Exception {
-        java.lang.reflect.Field lane = ZLinkActorRuntime.class.getDeclaredField("stateLane");
-        lane.setAccessible(true);
-        return (ZLinkStateLane) lane.get(actors);
     }
 
     private static java.util.function.BiFunction<
