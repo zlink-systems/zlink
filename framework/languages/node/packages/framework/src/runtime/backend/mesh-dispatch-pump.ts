@@ -72,6 +72,8 @@ export class ZLinkMeshDispatchPump {
   private readonly capacityStop = new AbortController();
   private recordsSinceYield = 0;
   private yieldStartedAtMs = 0;
+  /** Drains in progress; the batch budget begins when work starts on an idle pump. */
+  private draining = 0;
 
   constructor(
     private readonly node: ZLinkBackendMeshNode,
@@ -330,6 +332,7 @@ export class ZLinkMeshDispatchPump {
     claimBudget?: number
   ): Promise<boolean> {
     let claimsDrained = 0;
+    this.beginDrain();
     try {
       while (!this.disposed) {
         if (claimBudget !== undefined && claimsDrained >= claimBudget) {
@@ -354,11 +357,15 @@ export class ZLinkMeshDispatchPump {
           if (receiveBatch !== undefined) {
             await this.drainClaim(domain, owner, claim, receiveBatch);
           } else {
+            this.beginDrain();
             const drain = this.drainClaim(domain, owner, claim, undefined).catch((error) =>
               this.reportDispatchError(error)
             );
             this.activeDrains.add(drain);
-            void drain.finally(() => this.activeDrains.delete(drain));
+            void drain.finally(() => {
+              this.draining -= 1;
+              this.activeDrains.delete(drain);
+            });
           }
         }
         if (claimBudget !== undefined && claimsDrained >= claimBudget) {
@@ -374,7 +381,20 @@ export class ZLinkMeshDispatchPump {
       return false;
     } finally {
       readyBatch.reset();
+      this.draining -= 1;
     }
+  }
+
+  /**
+   * Time the pump spent idle is not batch work: when work starts on an idle
+   * pump, its batch budget starts with it (spec 08 §6).
+   */
+  private beginDrain(): void {
+    if (this.draining === 0) {
+      this.recordsSinceYield = 0;
+      this.yieldStartedAtMs = this.nowMs();
+    }
+    this.draining += 1;
   }
 
   /** Drains one claimed owner in this worker's turn, in claim order. */
