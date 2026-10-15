@@ -119,7 +119,9 @@ final class ZLinkActorDispatchSerials {
                                                             () ->
                                                                     actorTargets.computeIfAbsent(
                                                                             actorId,
-                                                                            ignored -> resolved)));
+                                                                            ignored ->
+                                                                                    initializeOnRegistry(
+                                                                                            resolved))));
                         });
     }
 
@@ -178,16 +180,23 @@ final class ZLinkActorDispatchSerials {
             return previous;
         }
         if (resolved == null) return null;
-        CompletionStage<Void> barrier = lifecycleBarriers.get(actorId);
-        QueuedTurn turn =
-                new QueuedTurn(
-                        actorId, snapshot.target(), snapshot.incarnation(), resolved.activation());
-        if (barrier != null && previous != null) {
-            // Submit the lifecycle entry before exposing the new queue to payload dispatch.
-            // The Actor queue owns admission and execution order; callers need no barrier wait.
-            turn.activation().executeLifecycleNext(() -> barrier, null);
-        }
+        QueuedTurn turn = initializeOnRegistry(resolved);
         actorTargets.put(actorId, turn);
+        return turn;
+    }
+
+    private QueuedTurn initializeOnRegistry(QueuedTurn turn) {
+        CompletionStage<Void> barrier = lifecycleBarriers.get(turn.actorId());
+        if (barrier == null
+                && turn.incarnation() instanceof ZLinkActorRuntime.DefaultActorContext context) {
+            barrier = context.moveCompletion();
+        }
+        if (barrier != null) {
+            // Both a restored activation and a retargeted activation accept payloads behind
+            // their existing lifecycle completion. Admission belongs to the queue commit.
+            CompletionStage<Void> lifecycle = barrier;
+            turn.activation().executeLifecycleNext(() -> lifecycle, null);
+        }
         return turn;
     }
 

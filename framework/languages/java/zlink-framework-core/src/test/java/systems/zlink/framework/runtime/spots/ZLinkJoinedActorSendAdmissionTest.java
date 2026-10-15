@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -59,6 +60,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
     private static final AtomicReference<ZLinkActorClient> TABLE_CLIENT = new AtomicReference<>();
     private static CompletableFuture<ZLinkActorJoinCompletion> joinCompleted;
     private static CompletableFuture<Void> pingHandled;
+    private static CompletableFuture<Void> completionRelease;
 
     @BeforeEach
     void reset() {
@@ -66,6 +68,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
         TABLE_CLIENT.set(null);
         joinCompleted = new CompletableFuture<>();
         pingHandled = new CompletableFuture<>();
+        completionRelease = new CompletableFuture<>();
     }
 
     @ParameterizedTest
@@ -123,9 +126,13 @@ final class ZLinkJoinedActorSendAdmissionTest {
                         ZLinkActorJoinCompletion.Accepted.class,
                         completion,
                         () -> "Join completion " + describe(completion) + " events " + EVENTS);
+                assertFalse(
+                        pingHandled.isDone(), "payload ran before the completion callback ended");
+                completionRelease.complete(null);
                 pingHandled.get(WAIT_SECONDS, TimeUnit.SECONDS);
                 assertEquals(List.of("joined", "send admitted", "completed", "ping"), EVENTS);
             } finally {
+                completionRelease.complete(null);
                 if (crossNode) target.close();
             }
         }
@@ -258,7 +265,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
         public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
             EVENTS.add("completed");
             joinCompleted.complete(completion);
-            return CompletableFuture.completedFuture(null);
+            return completionRelease;
         }
     }
 
