@@ -58,8 +58,8 @@ class NodeControl final : public fx::hosted_service_t
             for (const auto &id : config_.ZoneIds) {
                 const auto created =
                   co_await spots.get_or_create (id, Names::zone).in_mesh (Names::mesh).async ();
-                if (created.state != fx::spot_create_state_t::created)
-                    throw std::runtime_error ("Zone bootstrap not created: " + id);
+                if (created.state == fx::spot_create_state_t::rejected)
+                    throw std::runtime_error ("Zone bootstrap rejected: " + id);
             }
         }
         auto &runtime = services.get_required<fx::framework_runtime_t> ();
