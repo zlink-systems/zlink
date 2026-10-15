@@ -12,7 +12,7 @@ gate_java_major() { # <java executable> -> major, or nothing
 }
 
 check_env() {
-  local missing=0 java java_major node_major cmake_version browser_root java_candidate
+  local missing=0 java java_major node_major cmake_version browser_root browser_manifest java_candidate
 
   export VCPKG_OVERLAY_PORTS="${VCPKG_OVERLAY_PORTS:-$gate_env_root/vcpkg/ports}"
 
@@ -38,12 +38,39 @@ check_env() {
     ((missing++))
   fi
 
-  case "$(uname -s)" in
-    Darwin) browser_root="$HOME/Library/Caches/ms-playwright" ;;
-    MINGW*|MSYS*|CYGWIN*) browser_root="${LOCALAPPDATA:-}/ms-playwright" ;;
-    *) browser_root="${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright" ;;
-  esac
-  if [[ -d "$browser_root" ]] && find "$browser_root" -maxdepth 1 -type d -name 'chromium-*' -print -quit | grep -q .; then
+  if [[ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
+    case "$PLAYWRIGHT_BROWSERS_PATH" in
+      0) browser_root="$gate_env_root/framework/languages/node/node_modules/playwright-core/.local-browsers" ;;
+      /*) browser_root="$PLAYWRIGHT_BROWSERS_PATH" ;;
+      *) browser_root="$(pwd -P)/$PLAYWRIGHT_BROWSERS_PATH" ;;
+    esac
+  else
+    case "$(uname -s)" in
+      Darwin) browser_root="$HOME/Library/Caches/ms-playwright" ;;
+      MINGW*|MSYS*|CYGWIN*) browser_root="${LOCALAPPDATA:-}/ms-playwright" ;;
+      *) browser_root="${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright" ;;
+    esac
+  fi
+  browser_manifest="$gate_env_root/framework/languages/node/node_modules/playwright-core/browsers.json"
+  if [[ -r "$browser_manifest" ]] && command -v node >/dev/null 2>&1 && node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const browsers = require(process.argv[1]).browsers;
+    const browserRoot = process.argv[2];
+    for (const name of ["chromium", "chromium-headless-shell"]) {
+      const browser = browsers.find((entry) => entry.name === name);
+      if (!browser) {
+        console.error(`missing Playwright browser definition: ${name}`);
+        process.exitCode = 1;
+        continue;
+      }
+      const directory = `${name.replace(/-/g, "_")}-${browser.revision}`;
+      if (!fs.existsSync(path.join(browserRoot, directory))) {
+        console.error(`missing Playwright browser revision directory: ${directory}`);
+        process.exitCode = 1;
+      }
+    }
+  ' "$browser_manifest" "$browser_root"; then
     echo "ok Playwright Chromium"
   else
     echo "missing Playwright Chromium: cd \"$gate_env_root/framework/languages/node\" && npm run browser:install"
@@ -70,6 +97,20 @@ check_env() {
     echo "ok node >= 20"
   else
     echo "missing node >= 20: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install nodejs"
+    ((missing++))
+  fi
+
+  if [[ -n "${ZLINK_PYTHON:-}" ]]; then
+    if [[ -x "$ZLINK_PYTHON" ]]; then
+      echo "ok ZLINK_PYTHON"
+    else
+      echo "missing configured ZLINK_PYTHON: $ZLINK_PYTHON"
+      ((missing++))
+    fi
+  elif command -v python3 >/dev/null 2>&1 && python3 -c 'import ensurepip, venv' >/dev/null 2>&1; then
+    echo "ok python3-venv"
+  else
+    echo "missing python3-venv: sudo apt install python3-venv"
     ((missing++))
   fi
 

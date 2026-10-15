@@ -1,3 +1,15 @@
 <Project>
-    <Import Project="../../../languages/dotnet/Directory.Build.props"/>
+    <Import Project="../../../languages/dotnet/Directory.Build.props" />
+
+    <PropertyGroup>
+        <_ZLinkGrpcBenchFrameworkProjects>;WithGrpcBench.Client;WithGrpcBench.ZLinkServer;</_ZLinkGrpcBenchFrameworkProjects>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ZLinkFrameworkReference Include="Zlink.Framework" Condition="$(_ZLinkGrpcBenchFrameworkProjects.Contains(';$(MSBuildProjectName);'))" />
+        <ZLinkFrameworkReference Include="Zlink.Framework.AspNetCore" Condition="$(_ZLinkGrpcBenchFrameworkProjects.Contains(';$(MSBuildProjectName);'))" />
+        <ZLinkFrameworkReference Include="Zlink.Framework.Codecs.Protobuf" Condition="$(_ZLinkGrpcBenchFrameworkProjects.Contains(';$(MSBuildProjectName);'))" />
+    </ItemGroup>
+
+    <Import Project="../../../languages/dotnet/props/ZLink.FrameworkReference.props" />
 </Project>
