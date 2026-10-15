@@ -1,3 +1,4 @@
+import { durableRequestCanReplay } from '../foundation/durable-service-request';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes } from 'node:crypto';
 import {
@@ -296,8 +297,8 @@ interface SourceCutoverWindow {
   readonly targetNodeRid: RoutingId;
   /** Boundary batch frames plus the cutover frame, retained until authority settlement. */
   frames?: readonly Buffer[];
-  /** A failed submit or a lost target connection requires the whole batch again. */
-  resendPending: boolean;
+  /** The ready route used to submit the retained batch. */
+  submittedRouteGeneration?: bigint;
   readonly cutoverSubmittedAtMs: number;
   followTimer?: ReturnType<typeof setTimeout>;
   windowClosed: boolean;
@@ -2452,14 +2453,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // The cutover submit result is not the authority result. The memory
       // copy of the boundary batch and cutover stays until the authority
       // settlement below (spec 28 §4.4).
-      let submitFailure: unknown;
+      const submittedRouteGeneration = this.requireMeshNode(meshName).observePeerRoute?.(
+        target.rid
+      ).generation;
       try {
         for (const record of boundaryBatch) {
           await this.submitControlFrame(meshName, target.rid, record.frame, 'relay');
         }
         await this.submitControlFrame(meshName, target.rid, cutoverFrame, 'cutover');
       } catch (error) {
-        submitFailure = error;
+        if (!durableRequestCanReplay(error)) throw error;
         console.warn('[zlink.runtime.relocation.cutover_submit_failed]', relayAuthorityId, error);
       }
       const window = this.beginSourceCutoverWindow(
@@ -2467,7 +2470,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         target.rid,
         relayAuthorityId,
         [...boundaryBatch.map((value) => value.frame), cutoverFrame],
-        submitFailure !== undefined,
+        submittedRouteGeneration,
         limits
       );
       try {
@@ -2637,7 +2640,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetNodeRid: RoutingId,
     relocationKey: string,
     frames: readonly Buffer[],
-    initialSubmitFailed: boolean,
+    submittedRouteGeneration: bigint | undefined,
     limits: ReturnType<ZLinkHostServiceRelocationRuntime['relocationLimits']>
   ): SourceCutoverWindow {
     const submittedAt = performance.now();
@@ -2645,7 +2648,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       meshName,
       targetNodeRid,
       frames,
-      resendPending: initialSubmitFailed,
+      submittedRouteGeneration,
       cutoverSubmittedAtMs: submittedAt,
       windowClosed: false,
       followExpired: false
@@ -2686,24 +2689,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  /**
-   * Sends the whole boundary batch and cutover again after a failed submit
-   * or an observed loss of the target connection (spec 28 §4.4). The target
-   * replaces its partial span with the whole batch.
-   */
+  /** Relocation flow §4.4: replay the whole batch on a different ready route. */
   private async resendSourceCutover(window: SourceCutoverWindow): Promise<void> {
     const frames = window.frames;
     if (frames === undefined) return;
-    const peers = this.requireMeshNode(window.meshName).peers();
-    const peer = peers.find(
-      (value) =>
-        value.routingId !== null && String(value.routingId) === String(window.targetNodeRid)
-    );
-    if (peer !== undefined && peer.state !== MeshPeerRuntimeState.Serving) {
-      window.resendPending = true;
-      return;
-    }
-    if (!window.resendPending) return;
+    const route = this.requireMeshNode(window.meshName).observePeerRoute?.(window.targetNodeRid);
+    if (route?.ready !== true || route.generation === window.submittedRouteGeneration) return;
+    window.submittedRouteGeneration = route.generation;
     try {
       for (const frame of frames) {
         await this.submitControlFrame(
@@ -2713,9 +2705,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           'cutover retransmission'
         );
       }
-      window.resendPending = false;
-    } catch {
-      // The next settlement round retries the whole batch.
+    } catch (error) {
+      if (!durableRequestCanReplay(error)) throw error;
     }
   }
 

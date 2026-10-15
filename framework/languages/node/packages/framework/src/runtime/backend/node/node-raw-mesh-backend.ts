@@ -637,6 +637,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.requireRuntime().isObjectClientNodeDirectTarget(String(targetRid));
   }
 
+  observePeerRoute(targetRid: unknown) {
+    return this.requireRuntime().observePeerRoute(String(targetRid));
+  }
+
   isPeerRouteReady(targetRid: unknown, lifecycleGeneration?: bigint): boolean {
     return this.requireRuntime().isPeerRouteReady(String(targetRid), lifecycleGeneration);
   }

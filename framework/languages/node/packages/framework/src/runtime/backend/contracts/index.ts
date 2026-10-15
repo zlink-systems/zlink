@@ -185,6 +185,9 @@ export interface ZLinkBackendMeshNode {
     readonly lifecycleGeneration: bigint;
   }): void;
   isObjectClientNodeDirectTarget?(targetRid: unknown): boolean;
+  observePeerRoute?(
+    targetRid: unknown
+  ): import('../../foundation/durable-service-request').PeerRouteObservation;
   isPeerRouteReady?(targetRid: unknown, lifecycleGeneration?: bigint): boolean;
   sendToNode(
     targetRid: unknown,

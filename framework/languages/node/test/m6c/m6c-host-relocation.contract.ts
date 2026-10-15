@@ -3501,7 +3501,7 @@ test('an exact failed Session relocation closes its physical Session context', a
   assert.equal(await registry.route('actor-current'), undefined);
 });
 
-for (const phase of ['Prepare'] as const) {
+for (const phase of ['Prepare', 'cutover'] as const) {
   test(`native relocation retains its original terminal after ${phase} route replacement`, async () => {
     const { routeChangePeers } = require(
       process.cwd() + '/test/contract/helpers/route-change-peer'
