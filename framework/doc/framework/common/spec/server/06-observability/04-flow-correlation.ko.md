@@ -65,8 +65,8 @@ request마다 새 `correlation_id`를 만들지만 같은 원인에서 이어졌
 Application은 세 값을 해석하거나 조립하지 않는다. `flow_id`와 `flow_origin`은 함께
 존재하거나 함께 없어야 한다.
 
-형식이 잘못된 `flow_id`, byte 길이가 0인 `correlation_id`, 두 field 중 하나만 있는
-flow 정보는 protocol error다.
+byte 길이가 0인 `correlation_id`는 protocol error다. §4에 따라 flow field를 검증하는 경우,
+형식이 잘못된 `flow_id`나 두 field 중 하나만 있는 flow 정보도 protocol error다.
 
 | 잘못된 값이 들어온 위치 | Framework가 완료하는 방법 |
 |---|---|
@@ -91,9 +91,7 @@ message를 받는 논리 대상을 [Spot](../00-foundation/02-glossary.ko.md#spo
 Message-flow tracing은 diagnostics level이 `Normal`·`Detailed`일 때 켜져 있다. `Off`·`Errors`이면
 관측 전용 flow 처리를 모두 생략한다. 새 `flow_id`를 만들지 않고 inbound message의 flow field를 flow context로 만들거나
 다음 message에 복사하지 않는다. Outbound envelope에도 두 field를 추가하지 않는다.
-`Errors`가 기록하는 dispatch error·backpressure·drop은 `correlation_id`(request)와
-[03 「4」](03-message-flow-tracing.ko.md#4-기록-범위-설정--level과-sampling)의 MeshNode generation·local sequence로
-식별한다. Client connector는 flow를 만들지 않으며, STREAM client의 흐름은 서버가 STREAM ingress에서 시작한다
+Client connector는 flow를 만들지 않으며, STREAM client의 흐름은 서버가 STREAM ingress에서 시작한다
 ([Stream connector §5.5](../../stream-connector/32-stream-connector.ko.md#55-flow)).
 
 `correlation_id`는 request와 terminal reply를 연결하는 protocol 정보다. Diagnostics

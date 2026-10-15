@@ -74,9 +74,9 @@ for a one-way message with no reply.
 The application doesn't interpret or assemble these three values.
 `flow_id` and `flow_origin` must exist together or be absent together.
 
-A malformed `flow_id`, a zero-byte-length `correlation_id`, or flow
-information with only one of the two fields present is a protocol
-error.
+A zero-byte-length `correlation_id` is a protocol error. When flow
+fields are validated under §4, a malformed `flow_id` or flow information
+with only one of the two fields present is also a protocol error.
 
 | Where the invalid value arrives | How the framework completes it |
 |---|---|
@@ -106,10 +106,7 @@ Message-flow tracing is on when the diagnostics level is `Normal` or
 `Detailed`. At `Off` and `Errors`, every observation-only flow-handling
 step is skipped. A new `flow_id` isn't built, and an inbound message's
 flow field isn't turned into flow context or copied to the next message.
-The two fields also aren't added to an outbound envelope. The dispatch
-errors, backpressure and drops that `Errors` records are identified by the
-`correlation_id` (for a request) and by the MeshNode generation and local
-sequence of [03 "4"](03-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope--level-and-sampling).
+The two fields also aren't added to an outbound envelope.
 A client connector
 creates no flow; the server starts a STREAM client's flow at STREAM ingress
 ([Stream connector §5.5](../../stream-connector/32-stream-connector.en.md#55-flow)).
