@@ -182,25 +182,32 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
-    public ValueTask DisposeAsync()
-    {
-        return BeginDispose(CancellationToken.None);
-    }
+    public ValueTask DisposeAsync() =>
+        DisposeAsync(DateTimeOffset.UtcNow + ZLinkFrameworkMaintenanceRuntime.DefaultDeadline);
 
-    internal ValueTask ForceStopAsync(CancellationToken cancellationToken)
-    {
-        return BeginDispose(cancellationToken);
-    }
+    internal ValueTask DisposeAsync(DateTimeOffset listenerCloseDeadline) =>
+        BeginDispose(CancellationToken.None, listenerCloseDeadline);
 
-    private ValueTask BeginDispose(CancellationToken forceStopToken) =>
+    internal ValueTask ForceStopAsync(
+        CancellationToken cancellationToken,
+        DateTimeOffset listenerCloseDeadline
+    ) => BeginDispose(cancellationToken, listenerCloseDeadline);
+
+    private ValueTask BeginDispose(
+        CancellationToken forceStopToken,
+        DateTimeOffset listenerCloseDeadline
+    ) =>
         new(
             ZLinkRuntimeTaskRunner.RunDisposal(
                 ref _disposeTask,
-                () => DisposeCoreAsync(forceStopToken)
+                () => DisposeCoreAsync(forceStopToken, listenerCloseDeadline)
             )
         );
 
-    private async Task DisposeCoreAsync(CancellationToken forceStopToken)
+    private async Task DisposeCoreAsync(
+        CancellationToken forceStopToken,
+        DateTimeOffset listenerCloseDeadline
+    )
     {
         // Leave the dispose gate before any disposal step runs.
         await Task.Yield();
@@ -224,6 +231,10 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             await _drainRelocationTargets(forceStopToken).ConfigureAwait(false);
         if (forceStopToken.CanBeCanceled)
             Capture(ForceStopTokenSource.Cancel);
+        // Each listener loop closes its router when it returns; the deadline reaches it
+        // before the stop signal does.
+        foreach (var bundle in resources.ClientServerServerBundles)
+            bundle.SetListenerCloseDeadline(listenerCloseDeadline);
         Capture(StopTokenSource.Cancel);
         Capture(ApplicationJobQueue.Dispose);
         foreach (var stream in resources.StreamNodes)
