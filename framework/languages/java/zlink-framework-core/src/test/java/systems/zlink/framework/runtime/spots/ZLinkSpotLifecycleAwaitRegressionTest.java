@@ -28,6 +28,59 @@ final class ZLinkSpotLifecycleAwaitRegressionTest {
     private static final long BOUND_SECONDS = 3;
 
     @Test
+    void independentActorInfrastructureWaitRetainsItsMailboxClaim() throws Exception {
+        var release = new CompletableFuture<Void>();
+        var prefixReturned = new CompletableFuture<Void>();
+        var observer = new AtomicReference<Runnable>();
+        var retained = new AtomicBoolean();
+        java.util.concurrent.Executor executor =
+                command -> {
+                    command.run();
+                    prefixReturned.complete(null);
+                };
+        var serials =
+                new ZLinkSpotSerialExecutor(
+                        new ZLinkSerialExecutionQueue(
+                                Runnable::run, ZLinkExecutionLanePolicy.spot()),
+                        Runnable::run,
+                        executor,
+                        ZLinkUserSpotExecutionMode.PER_ACTOR,
+                        false);
+        var actor =
+                serials.claimActorQueue("actor")
+                        .toCompletableFuture()
+                        .get(BOUND_SECONDS, TimeUnit.SECONDS);
+        try {
+            var lifecycle =
+                    actor.executeLifecycleNext(
+                            () -> {
+                                ZLinkSerialExecutionQueue.propagateCurrent(observer::set)
+                                        .execute(
+                                                () ->
+                                                        retained.set(
+                                                                actor.relocationLane()
+                                                                        .isCurrent()));
+                                return ZLinkSerialExecutionQueue.yieldCurrent(release);
+                            },
+                            null);
+            prefixReturned.get(BOUND_SECONDS, TimeUnit.SECONDS);
+            serials.executeTimer("probe", ignored -> CompletableFuture.completedFuture(null))
+                    .toCompletableFuture()
+                    .get(BOUND_SECONDS, TimeUnit.SECONDS);
+            observer.get().run();
+            boolean owned = retained.get();
+            release.complete(null);
+            lifecycle.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+            assertTrue(
+                    owned,
+                    "infrastructure progress must not release an independent Actor mailbox claim");
+        } finally {
+            release.complete(null);
+            serials.closeAsync().toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void infrastructureYieldThenOrdinaryAwaitRetainsTheResumedGate() throws Exception {
         var infrastructure = new CompletableFuture<Void>();
         var release = new CompletableFuture<Void>();
@@ -89,8 +142,8 @@ final class ZLinkSpotLifecycleAwaitRegressionTest {
 
     @ParameterizedTest
     @EnumSource(ZLinkUserSpotExecutionMode.class)
-    void yieldedActorLifecycleCanSealAndResumeItsOwnRelocation(ZLinkUserSpotExecutionMode mode)
-            throws Exception {
+    void actorLifecycleInfrastructureWaitCanSealAndResumeItsRelocation(
+            ZLinkUserSpotExecutionMode mode) throws Exception {
         var release = new CompletableFuture<Void>();
         var entered = new CompletableFuture<Void>();
         var prefixReturned = new CompletableFuture<Void>();

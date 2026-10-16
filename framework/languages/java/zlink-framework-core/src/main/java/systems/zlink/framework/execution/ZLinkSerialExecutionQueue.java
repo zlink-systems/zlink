@@ -2069,7 +2069,11 @@ public final class ZLinkSerialExecutionQueue {
         SerialTurn turn = currentTurn();
         ZLinkSerialExecutionQueue queue = turn == null ? null : turn.queue;
         CompletableFuture<Void> gate = turn == null ? null : turn.gate;
-        if (queue == null || gate == null || stage.toCompletableFuture().isDone()) {
+        if (queue == null
+                || gate == null
+                || stage.toCompletableFuture().isDone()
+                || (queue.lanePolicy instanceof ZLinkExecutionLanePolicy.ActorDelivery
+                        && isLifecycleTurn(turn.entry))) {
             return stage;
         }
         ZLinkFlowContext.State flow = ZLinkFlowContext.current();

@@ -203,11 +203,7 @@ final class ZLinkActorDispatchSerials {
             CompletionStage<Void> lifecycle = barrier;
             turn.activation()
                     .executeLifecycleNext(
-                            () ->
-                                    turn.activation().relocationLane().sharedSpotGate() == null
-                                            ? lifecycle
-                                            : ZLinkSerialExecutionQueue.yieldCurrent(lifecycle),
-                            null);
+                            () -> ZLinkSerialExecutionQueue.yieldCurrent(lifecycle), null);
         }
         return turn;
     }
