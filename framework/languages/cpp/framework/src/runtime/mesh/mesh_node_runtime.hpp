@@ -160,10 +160,6 @@ struct bound_session_relocation_route_t
     location_owner_token_t session_owner;
     zlink::routing_id_t session;
     std::uint64_t binding_generation = 0;
-    std::uint64_t observed_sequence = 0;
-
-    friend bool operator== (const bound_session_relocation_route_t &,
-                            const bound_session_relocation_route_t &) = default;
 };
 
 class mesh_node_runtime_t
@@ -526,10 +522,8 @@ class mesh_node_runtime_t
     struct session_relocation_checkpoint_t
     {
         runtime::stateful::object_ref_t source;
-        authority_snapshot_t authority;
         bound_session_relocation_route_t session;
         host::session_relocation_seal_result_t seal;
-        std::uint64_t seal_boundary_sequence = 0;
     };
 
     struct session_relocation_seal_outcome_t

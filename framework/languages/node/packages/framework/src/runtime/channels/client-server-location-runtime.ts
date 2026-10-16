@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import {
@@ -587,7 +588,7 @@ function requireMatchingAdmission(
 ): void {
   if (
     actual.channelName !== expected.channelName ||
-    actual.serverRid !== String(expected.serverRid) ||
+    !routingIdsEqual(actual.serverRid, expected.serverRid) ||
     actual.lifecycleGeneration !== expected.lifecycleGeneration ||
     actual.descriptorRevision !== expected.descriptorRevision ||
     actual.weight !== expected.weight ||

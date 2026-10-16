@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT.
 // Produced by framework/languages/node/scripts/sync-unity-webgl-package.mjs from
 // @zlink-systems/stream-connector (package root, IIFE build).
-// Package version: 0.30.0
+// Package version: 0.30.1
 //
 // This is the same TypeScript connector the npm package root ships. The UPM
 // adapter adds no wire runtime of its own (stream-connector spec 32 section 11).
@@ -879,9 +879,9 @@ var ZlinkStreamConnectorBundle = (() => {
         if (typeof value !== "string" || !BASE64_PATTERN.test(value)) {
           schemaFailure(path, "padded RFC 4648 base64");
         }
-        const bytes = decodeBase64(value);
-        if (encodeBase64(bytes) !== value) schemaFailure(path, "canonical padded RFC 4648 base64");
-        return decode ? Uint8Array.from(bytes) : value;
+        if (!hasCanonicalBase64Padding(value))
+          schemaFailure(path, "canonical padded RFC 4648 base64");
+        return decode ? decodeBase64(value) : value;
       }
       case "enum":
         if (typeof value !== "string" || !schema.names.includes(value)) {
@@ -1067,6 +1067,14 @@ var ZlinkStreamConnectorBundle = (() => {
     }
   };
   var BASE64_STRING_CHUNK_BYTES = 8192;
+  var BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  function hasCanonicalBase64Padding(value) {
+    if (value.endsWith("=="))
+      return (BASE64_ALPHABET.indexOf(value.charAt(value.length - 3)) & 15) === 0;
+    if (value.endsWith("="))
+      return (BASE64_ALPHABET.indexOf(value.charAt(value.length - 2)) & 3) === 0;
+    return true;
+  }
   function encodeBase64(bytes) {
     let binary = "";
     for (let offset = 0; offset < bytes.length; offset += BASE64_STRING_CHUNK_BYTES) {

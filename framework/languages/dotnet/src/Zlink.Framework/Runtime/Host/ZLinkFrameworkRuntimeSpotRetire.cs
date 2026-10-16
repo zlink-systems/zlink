@@ -80,7 +80,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                         spotParticipant.ObjectGeneration,
                         targetOwnerGeneration,
                         cancellationToken,
-                        restoreLogicalTimers: true
+                        restoreLogicalTimers: true,
+                        logicalTimers: spotParticipant.LogicalTimers
                     )
                     .ConfigureAwait(false);
             }
@@ -103,7 +104,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     targetOwnerGeneration,
                     ZLinkMessage.Empty,
                     cancellationToken,
-                    invokeCreate: false
+                    invokeCreate: false,
+                    logicalTimers: spotParticipant.LogicalTimers
                 )
                 .ConfigureAwait(false);
         }
@@ -154,9 +156,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                     $"Target SPOT '{request.SpotId}' could not seal staging admission.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
-            await preparedSpot
-                .Activation.RestoreLogicalTimersAsync(spotParticipant.LogicalTimers)
-                .ConfigureAwait(false);
             return new TargetStage(
                 node,
                 preparedSpot,
@@ -323,6 +322,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                                     cancellationToken
                                 )
                                 .ConfigureAwait(false);
+                        var actorState = GetOrCreateActorState(authority.ActorId);
+                        await _actorSessionManager
+                            .PrepareForTransferredActivationAsync(actorState, cancellationToken)
+                            .ConfigureAwait(false);
                         var creation = await _actorSessionManager
                             .RelocateAndBindActorAsync(
                                 authority.ActorId,
@@ -341,7 +344,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                             nameof(authority.ActorId)
                         );
                         boundActorIds.TryAdd(actorKey, 0);
-                        var actorState = GetOrCreateActorState(authority.ActorId);
                         stagedActorStates.TryAdd(actorKey, actorState);
                         var boundRoute = ZLinkSessionRelocationWire.RestoreBinding(
                             participant,
@@ -691,14 +693,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
-        foreach (var actorState in stage.ActorStates)
-            await stage
-                .Spot.Activation.CompleteTransferredActorJoinSealedAsync(
-                    actorState,
-                    stage.TargetAdmissionSeal,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
         await stage
             .Node.Catalog.ValidateRelocatedReservedAsync(
                 stage.Spot,

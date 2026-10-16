@@ -459,14 +459,15 @@ export class ZLinkStreamBindingRuntime {
       actorSessionLifecycle
     );
     registerActorSessionBindingRuntimeOwner(this, {
+      prepareSessionRelocationSeal: (...args) => this.routes.prepareSessionRelocationSeal(...args),
+      acceptSessionRelocationRoute: (value) => this.routes.acceptSessionRelocationRoute(value),
+      clearSessionRelocationResults: () => this.routes.clearSessionRelocationResults(),
       actorSlot: async (actorId, sessionRid) =>
         (await this.routes.routeForSessionBinding(actorId, sessionRid))?.actorSlot,
-      sealRelocation: (claim, expected, signal) =>
-        this.routes.sealRelocation(claim, expected, signal),
       relocationSnapshot: (actorId, sealId) => this.routes.relocationSnapshot(actorId, sealId),
       applyRelocation: (...args) => this.routes.applyRelocation(...args),
       observeRelocationTerminal: (...args) => this.routes.observeRelocationTerminal(...args),
-      clearRelocation: (actorId, error) => this.routes.clearRelocation(actorId, error),
+      clearRelocation: (...args) => this.routes.clearRelocation(...args),
       committedRoute: async (actorId) => {
         const route = await this.routes.route(actorId);
         return route === undefined

@@ -1122,6 +1122,162 @@ final class ZLinkProviderAuthorityRepositoryTest {
             String key,
             ZLinkObjectReservation reservation) {}
 
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"false,false", "true,false", "true,true"})
+    void relocatedSpotConsumesTargetTypeCapacityAndReleasesSourceCapacity(
+            boolean existingTargetRow, boolean commitConflict) throws Exception {
+        var provider =
+                new FailingParticipantStore(
+                        new ZLinkInMemoryProviderLocationStore(), null, commitConflict);
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                repository
+                                        .claimOwnerLease(
+                                                "relocation-capacity-owner", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        var source = capacityDescriptor(owner, "game", RoutingId.from("capacity-source"));
+        var descriptor = capacityDescriptor(owner, "game", RoutingId.from("capacity-target"));
+        var target =
+                new ZLinkMeshNodeDescriptor(
+                        descriptor.meshName(),
+                        descriptor.rid(),
+                        descriptor.lifecycleGeneration(),
+                        descriptor.descriptorRevision(),
+                        descriptor.endpoint(),
+                        descriptor.channelWeights(),
+                        descriptor.applicationVersion(),
+                        descriptor.objectCapabilities(),
+                        descriptor.objectRole(),
+                        descriptor.entrySpotId(),
+                        descriptor.placementWeight(),
+                        new ZLinkPlacementCapacity(
+                                new ZLinkCapacityUsage(0, 0, 0),
+                                new ZLinkCapacityUsage(0, 0, 0),
+                                List.of()),
+                        descriptor.activationConcurrency(),
+                        descriptor.maintenanceWave(),
+                        descriptor.state(),
+                        descriptor.securityIdentity(),
+                        descriptor.ownerId(),
+                        descriptor.leaseGeneration(),
+                        descriptor.updatedAt());
+        for (var node : List.of(source, target)) {
+            assertEquals(
+                    ZLinkLocationWriteStatus.STORED,
+                    repository
+                            .updateMeshNode(node, ZLinkLocationWriteIntent.NEW_CLAIM)
+                            .toCompletableFuture()
+                            .join()
+                            .status());
+        }
+        if (existingTargetRow) {
+            var temporary =
+                    assertInstanceOf(
+                                    ZLinkObjectReserved.class,
+                                    repository
+                                            .reserve(
+                                                    capacityRequest(
+                                                            ZLinkAuthorityKeyCodec.spot(
+                                                                    "temporary"),
+                                                            target,
+                                                            owner),
+                                                    () -> false)
+                                            .toCompletableFuture()
+                                            .join())
+                            .reservation();
+            assertEquals(
+                    ZLinkObjectAbortResult.ABORTED,
+                    repository.abort(temporary, () -> false).toCompletableFuture().join());
+        }
+        String key = ZLinkAuthorityKeyCodec.spot("relocated-room");
+        var reservation =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                repository
+                                        .reserve(capacityRequest(key, source, owner), () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .reservation();
+        assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                repository
+                        .commit(reservation, new byte[] {1}, null, () -> false)
+                        .toCompletableFuture()
+                        .join());
+        var current =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        repository.read(key, () -> false).toCompletableFuture().join());
+        var request =
+                new ZLinkAggregatePrepareRequest(
+                        UUID.randomUUID(),
+                        1,
+                        List.of(
+                                new ZLinkAggregateParticipant(
+                                        key,
+                                        current.objectGeneration(),
+                                        current.authorityOwnerGeneration(),
+                                        current.storeVersion(),
+                                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                                        new byte[] {2},
+                                        new byte[0])),
+                        new byte[32],
+                        new ZLinkMeshNodeDescriptorKey(target.meshName(), target.rid()),
+                        target.lifecycleGeneration(),
+                        current.allocation().capacityBundle(),
+                        owner);
+        var prepared =
+                assertInstanceOf(
+                        ZLinkAggregatePrepared.class,
+                        repository
+                                .prepareAggregate(request, () -> false)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(
+                ZLinkAggregateCommitResult.COMMITTED,
+                repository
+                        .commitAggregate(prepared.fence(), () -> false)
+                        .toCompletableFuture()
+                        .join());
+        assertFalse(provider.failCommitOnce);
+        assertEquals(
+                ZLinkAggregateCommitResult.ALREADY_COMMITTED,
+                repository
+                        .commitAggregate(prepared.fence(), () -> false)
+                        .toCompletableFuture()
+                        .join());
+        assertEquals(
+                target.rid(),
+                assertInstanceOf(
+                                ZLinkAuthoritySnapshot.class,
+                                repository.read(key, () -> false).toCompletableFuture().join())
+                        .allocation()
+                        .descriptor()
+                        .rid());
+        assertInstanceOf(
+                ZLinkPlacementCapacityExhausted.class,
+                repository
+                        .reserve(
+                                capacityRequest(
+                                        ZLinkAuthorityKeyCodec.spot("target-extra"), target, owner),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
+        assertInstanceOf(
+                ZLinkObjectReserved.class,
+                repository
+                        .reserve(
+                                capacityRequest(
+                                        ZLinkAuthorityKeyCodec.spot("source-extra"), source, owner),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
+    }
+
     @Test
     void authorityParticipantMarkersRoundTripNodeWireBytesThroughPublicRepository()
             throws Exception {

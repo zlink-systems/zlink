@@ -1,3 +1,4 @@
+import { encodeRoutingIdStorageHex } from '../../packages/framework/src/runtime/routing-id';
 import { ZLinkStatefulAuthorityRouteRuntime } from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
 import { encodeServiceInstanceAuthorityPayload } from '../../packages/framework/src/runtime/foundation/service-authority-payload-codec';
 import assert from 'node:assert/strict';
@@ -2067,7 +2068,8 @@ test('User Spot placement excludes a capacity-race loser and reserves the next c
   const coordinator = new ZLinkUserSpotCreationCoordinator({
     store,
     target: async (_request, _signal, excluded) => {
-      const node = excluded?.has('node-a') === true ? 'node-b' : 'node-a';
+      const node =
+        excluded?.has(encodeRoutingIdStorageHex('node-a')) === true ? 'node-b' : 'node-a';
       return {
         meshName: 'mesh',
         nodeRid: node,

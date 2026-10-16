@@ -1021,11 +1021,18 @@ export class ZLinkActorHandoffCoordinator {
     target: ZLinkSpotRouteTarget,
     targetActorRef: ActorRef,
     results: readonly ZLinkActorHandoffResult[],
-    targetOwnerFence: ZLinkActorMessageFollowOwnerFence
+    targetOwnerFence: ZLinkActorMessageFollowOwnerFence | null
   ): void {
     const handoff = this.requireActive(actorId);
-    const committedTargetOwner = requireExactTargetOwnerFence(actorId, targetOwnerFence);
+    const committedTargetOwner =
+      targetOwnerFence === null ? null : requireExactTargetOwnerFence(actorId, targetOwnerFence);
     this.active.delete(actorId);
+    // Location runtime §10: a later owner has no source-local Follow route.
+    if (committedTargetOwner === null) {
+      const unavailable = actorLocationStale(actorId);
+      for (const pending of handoff.pending) this.failReleasedPending(pending, unavailable);
+      return;
+    }
     const byIndex = new Map(results.map((result) => [result.index, result]));
     for (let i = 0; i <= handoff.snapshotIndex; i++) {
       const pending = handoff.pending[i];
@@ -1436,7 +1443,10 @@ export class ZLinkActorHandoffCoordinator {
       return BigInt(context.targetOwner.authorityOwnerGeneration);
     }
     const current = this.options.currentOwnerFence?.(actorId);
-    if (current !== undefined && current.nodeRid === String(actor.nodeRid)) {
+    if (
+      current !== undefined &&
+      routingIdsEqual(messageFollowOwnerNodeRid(current), actor.nodeRid)
+    ) {
       return BigInt(current.authorityOwnerGeneration);
     }
     return undefined;

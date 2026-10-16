@@ -214,6 +214,7 @@ class actor_transfer_coordinator_t
     // The reservation may carry the transfer ID that the deferred join will
     // use, so packets preserved before transfer-out already emit their
     // handoff markers under the final transfer correlation.
+    task_t<void> wait_for_source_completion (std::string actor_key);
     bool try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
@@ -399,6 +400,7 @@ class actor_transfer_coordinator_t
         actor_move_phase_t phase;
         std::string transfer_id;
         std::optional<std::chrono::steady_clock::time_point> transfer_started_at;
+        std::shared_ptr<task_completion_source_t<void>> source_completion;
         bool source_leave_submitted = false;
         // reconcile is entered for a genuinely ambiguous outcome (e.g. the
         // FINALIZE/cutover submission itself failed, so the source cannot
@@ -447,6 +449,8 @@ class actor_transfer_coordinator_t
     // is left intact for the caller to hand back.
     handoff_append_result_t try_append_backlog_unlocked (const std::string &actor_key,
                                                          handoff_packet_t &packet);
+
+    void erase_move_on_lane (const std::string &actor_key);
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};

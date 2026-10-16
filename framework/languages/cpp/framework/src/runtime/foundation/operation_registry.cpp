@@ -2,8 +2,11 @@
 
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
+#include "runtime/dispatch/dispatch_limits.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -254,9 +257,15 @@ std::shared_ptr<operation_completion_dispatcher_t> shared_completion_dispatcher 
 
 } // namespace
 
-operation_registry_t::operation_registry_t () :
+operation_registry_t::operation_registry_t () : operation_registry_t (&clock_t::now)
+{
+}
+
+operation_registry_t::operation_registry_t (now_t now) :
     _completion_dispatcher (shared_completion_dispatcher ()),
-    _drain_state (std::make_shared<operation_registry_drain_state_t> ())
+    _drain_state (std::make_shared<operation_registry_drain_state_t> ()),
+    _now (now),
+    _deadline_origin (now ())
 {
 }
 
@@ -293,11 +302,11 @@ bool operation_registry_t::register_operation (call_id_t id,
     if (_closed || _pending.contains (id)) {
         return false;
     }
-    const auto inserted =
-      _pending.emplace (id, pending_t{deadline, {}, std::move (target_routing_id)});
+    const auto inserted = _pending.emplace (id, pending_t{{}, std::move (target_routing_id), {}});
     if (!inserted.second)
         return false;
     try {
+        index_deadline (id, deadline, inserted.first->second);
         auto completion =
           _completion_dispatcher->create_completion_item (std::move (callback), _drain_state);
         completion->request_metric = std::move (request_metric);
@@ -306,9 +315,79 @@ bool operation_registry_t::register_operation (call_id_t id,
         return true;
     }
     catch (...) {
+        unindex_deadline (inserted.first->second);
         _pending.erase (inserted.first);
         throw;
     }
+}
+
+std::optional<std::uint64_t> operation_registry_t::next_occupied_tick () const noexcept
+{
+    const auto slot = static_cast<std::size_t> (_deadline_tick & (deadline_slot_count - 1));
+    const auto first_word = slot / deadline_bitmap_word_bits;
+    const auto words = _deadline_occupied.size ();
+    for (std::size_t step = 0; step <= words; ++step) {
+        const auto word = (first_word + step) % words;
+        auto bits = _deadline_occupied[word];
+        const auto mask = ~std::uint64_t{0} << (slot % deadline_bitmap_word_bits);
+        if (step == 0)
+            bits &= mask;
+        if (step == words)
+            bits &= ~mask;
+        if (bits != 0) {
+            const auto next = word * deadline_bitmap_word_bits + std::countr_zero (bits);
+            return _deadline_tick + ((next - slot) & (deadline_slot_count - 1));
+        }
+    }
+    return {};
+}
+
+void operation_registry_t::index_deadline (const call_id_t &id,
+                                           clock_t::time_point deadline,
+                                           pending_t &pending)
+{
+    const auto relative =
+      deadline <= _deadline_origin
+        ? std::chrono::milliseconds::zero ()
+        : std::chrono::ceil<std::chrono::milliseconds> (deadline - _deadline_origin);
+    const auto tick = std::max (_deadline_tick, static_cast<std::uint64_t> (relative.count ()));
+    const auto slot = static_cast<std::size_t> (tick & (deadline_slot_count - 1));
+    pending.id = id;
+    pending.deadline_slot = slot;
+    pending.deadline_rounds = (tick - _deadline_tick) / deadline_slot_count;
+    pending.deadline_previous = _deadline_tails[slot];
+    if (pending.deadline_previous)
+        pending.deadline_previous->deadline_next = &pending;
+    else
+        _deadline_heads[slot] = &pending;
+    _deadline_tails[slot] = &pending;
+    _deadline_occupied[slot / deadline_bitmap_word_bits] |= std::uint64_t{1}
+                                                            << (slot % deadline_bitmap_word_bits);
+}
+
+void operation_registry_t::unindex_deadline (pending_t &pending) noexcept
+{
+    const auto slot = pending.deadline_slot;
+    auto *previous = pending.deadline_previous;
+    auto *next = pending.deadline_next;
+    if (previous)
+        previous->deadline_next = next;
+    else
+        _deadline_heads[slot] = next;
+    if (next)
+        next->deadline_previous = previous;
+    else
+        _deadline_tails[slot] = previous;
+    if (_deadline_cursor == &pending) {
+        _deadline_cursor = next;
+        if (!next)
+            ++_deadline_tick;
+    }
+    if (!_deadline_heads[slot])
+        _deadline_occupied[slot / deadline_bitmap_word_bits] &=
+          ~(std::uint64_t{1} << (slot % deadline_bitmap_word_bits));
+    pending.deadline_previous = nullptr;
+    pending.deadline_next = nullptr;
 }
 
 bool operation_registry_t::take (const call_id_t &id,
@@ -320,6 +399,7 @@ bool operation_registry_t::take (const call_id_t &id,
         return false;
     }
     completion = std::move (found->second.completion);
+    unindex_deadline (found->second);
     _pending.erase (found);
     return true;
 }
@@ -426,6 +506,7 @@ std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &
                 continue;
             }
             completions.append (std::move (entry->second.completion), terminal);
+            unindex_deadline (entry->second);
             entry = _pending.erase (entry);
         }
     }
@@ -437,17 +518,40 @@ std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &
 std::size_t operation_registry_t::expire (clock_t::time_point now)
 {
     operation_completion_chain_t completions;
-    {
+    // §4.2: the budget counts from entry and bounds every slot visit, a rounds-only visit
+    // included; the cursor keeps the rest of the slot for the next management turn.
+    const auto started = _now ();
+    const auto now_tick =
+      now <= _deadline_origin
+        ? std::uint64_t{0}
+        : static_cast<std::uint64_t> (
+            std::chrono::duration_cast<std::chrono::milliseconds> (now - _deadline_origin)
+              .count ());
+    while (_now () - started < runtime::dispatch_limits::receive_batch_time) {
         std::lock_guard lock (_mutex);
-        for (auto entry = _pending.begin (); entry != _pending.end ();) {
-            if (entry->second.deadline > now) {
-                ++entry;
-                continue;
+        if (!_deadline_cursor) {
+            const auto next = next_occupied_tick ();
+            if (!next) {
+                _deadline_tick = std::max (_deadline_tick, now_tick + 1);
+                break;
             }
-            completions.append (std::move (entry->second.completion),
-                                operation_terminal_t::timed_out);
-            entry = _pending.erase (entry);
+            if (*next > now_tick)
+                break;
+            _deadline_tick = *next;
+            _deadline_cursor = _deadline_heads[*next & (deadline_slot_count - 1)];
         }
+        auto *current = _deadline_cursor;
+        if (current->deadline_rounds > 0) {
+            --current->deadline_rounds;
+            _deadline_cursor = current->deadline_next;
+            if (!_deadline_cursor)
+                ++_deadline_tick;
+            continue;
+        }
+        const auto entry = _pending.find (current->id);
+        completions.append (std::move (entry->second.completion), operation_terminal_t::timed_out);
+        unindex_deadline (entry->second);
+        _pending.erase (entry);
     }
     const auto expired = completions.size;
     _completion_dispatcher->post_chain (std::move (completions));
@@ -458,12 +562,10 @@ std::optional<operation_registry_t::clock_t::time_point>
 operation_registry_t::next_deadline () const
 {
     std::lock_guard lock (_mutex);
-    std::optional<clock_t::time_point> result;
-    for (const auto &[_, pending] : _pending) {
-        if (!result || pending.deadline < *result)
-            result = pending.deadline;
-    }
-    return result;
+    const auto tick = next_occupied_tick ();
+    if (!tick)
+        return {};
+    return _deadline_origin + deadline_tick_duration * *tick;
 }
 
 std::size_t operation_registry_t::shutdown ()
@@ -477,6 +579,7 @@ std::size_t operation_registry_t::shutdown ()
             for (auto &[id, pending] : _pending) {
                 static_cast<void> (id);
                 completions.append (std::move (pending.completion), operation_terminal_t::shutdown);
+                unindex_deadline (pending);
             }
             _pending.clear ();
             stopped = completions.size;

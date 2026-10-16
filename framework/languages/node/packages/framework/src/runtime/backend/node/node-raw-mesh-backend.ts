@@ -1,4 +1,6 @@
+import { routingIdsEqual } from '../../routing-id';
 import { requestDurableService } from '../../foundation/durable-service-request';
+import { encodeRoutingIdStorageHex, toBackendRoutingId } from '../../routing-id';
 import {
   decodeStreamWireFrame,
   decodeStreamWireHeader,
@@ -48,6 +50,8 @@ import {
 import {
   RawServiceMeshRuntime,
   RAW_MESH_RECEIVE_TIME_BUDGET_MS,
+  type RawServiceObservedRequest,
+  type RawServiceRequestObserver,
   type RawServiceRequestResult
 } from '../../foundation/raw-service-mesh-runtime';
 import type { ServiceInstanceActivationRecoveryEnvelope } from '../../foundation/service-instance-activation-recovery-codec';
@@ -116,9 +120,8 @@ import {
   ServiceWireFrameworkErrorCode
 } from '../../foundation/service-wire-constants.generated';
 import {
-  APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES,
-  APPLICATION_PAYLOAD_VERSION,
   decodeApplicationPayloadView,
+  decodeMultipartApplicationPayloadView,
   encodeMultipartApplicationPayload,
   ServiceWireProtocolError,
   type ServiceApplicationPayload
@@ -144,11 +147,13 @@ const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
 
 const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
-const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
-// Preserve the existing route observation/admission/liveness cadence. Only the binding
-// readable handler admits receive work; this timer never probes the socket.
+// The maintenance timer runs at the nearest management deadline and never
+// sooner than this. Only the binding readable handler admits receive work;
+// this timer never probes the socket.
 const MESH_BACKEND_MAINTENANCE_INTERVAL_MS = 1;
+/** The longest single timer delay Node accepts. */
+const MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS = 2 ** 31 - 1;
 // Spec 08 §4.2 bounds the combined turn. Raw gets one equal share; stateful
 // can use the remaining turn, including time the raw registry did not consume.
 const MESH_BACKEND_RAW_MAINTENANCE_SHARE = 1 / 2;
@@ -185,6 +190,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private stateful?: ServiceStatefulRuntime;
   private readyHandler?: (domains: number) => number;
   private maintenanceTimer?: NodeJS.Timeout;
+  private maintenanceDueMs = Number.POSITIVE_INFINITY;
   private pumpTask?: Promise<void>;
   private readable = 0;
   private readonly onReadable = (receiveReady: boolean, routeReady: boolean): void => {
@@ -194,6 +200,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   };
   private readonly onMaintenance = (): void => {
     this.maintenanceTimer = undefined;
+    this.maintenanceDueMs = Number.POSITIVE_INFINITY;
     if (this.closed) return;
     const nowMs = performance.now();
     const turnDeadlineMs = nowMs + RAW_MESH_RECEIVE_TIME_BUDGET_MS;
@@ -364,7 +371,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   setRoutingId(routingId: unknown): void {
-    if (String(routingId) !== this.routingId) {
+    if (!routingIdsEqual(toBackendRoutingId(routingId), this.routingId)) {
       throw new Error('MeshNode routing id is immutable after construction.');
     }
   }
@@ -716,9 +723,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       String(targetRid),
       encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options?.onAdmitted
+      options?.onAdmitted,
+      this.requestObserver,
+      OperationKind.NodeRequest
     );
-    return this.observeCompletion(pending.id, OperationKind.NodeRequest, pending.promise);
+    return this.observedOperation(pending, OperationKind.NodeRequest);
   }
 
   async sendToChannel(
@@ -737,9 +746,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       channelName,
       encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options?.onAdmitted
+      options?.onAdmitted,
+      this.requestObserver,
+      OperationKind.ChannelRequest
     );
-    return this.observeCompletion(pending.id, OperationKind.ChannelRequest, pending.promise);
+    return this.observedOperation(pending, OperationKind.ChannelRequest);
   }
 
   status() {
@@ -1031,7 +1042,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         generation: actor.generation
       },
       String(sessionNodeRid),
-      String(sessionRid),
+      toBackendRoutingId(sessionRid),
       bindingGeneration
     );
   }
@@ -1163,7 +1174,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   commitSpotMessageFollowIngress(
     seal: ServiceSpotMessageFollowSeal,
-    target: ServiceDirectSpotRouteFence,
+    target: ServiceDirectSpotRouteFence | null,
     durationMs: number
   ): Promise<boolean> {
     return this.requireStateful().commitSpotMessageFollowIngress(seal, target, durationMs);
@@ -1563,9 +1574,35 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return result;
   }
 
+  /**
+   * Arms the one maintenance timer for the nearest management deadline
+   * (spec 08 §4.2): request expiry, liveness, or a pending peer handshake.
+   * An earlier deadline re-arms it; a later one keeps the armed time.
+   */
   private scheduleMaintenance(): void {
     if (this.closed) return;
-    this.maintenanceTimer ??= setTimeout(this.onMaintenance, MESH_BACKEND_MAINTENANCE_INTERVAL_MS);
+    const nowMs = performance.now();
+    const dueMs = Math.max(
+      nowMs + MESH_BACKEND_MAINTENANCE_INTERVAL_MS,
+      Math.min(
+        this.runtime?.nextMaintenanceDeadlineMs(nowMs) ?? Number.POSITIVE_INFINITY,
+        this.stateful?.nextMaintenanceDeadlineMs() ?? Number.POSITIVE_INFINITY
+      )
+    );
+    if (dueMs === Number.POSITIVE_INFINITY) {
+      if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+      this.maintenanceTimer = undefined;
+      this.maintenanceDueMs = dueMs;
+      return;
+    }
+    if (this.maintenanceTimer === undefined || dueMs < this.maintenanceDueMs) {
+      if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+      this.maintenanceTimer = setTimeout(
+        this.onMaintenance,
+        Math.min(MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS, Math.ceil(dueMs - nowMs))
+      );
+      this.maintenanceDueMs = dueMs;
+    }
     const pending =
       (this.runtime?.pendingOperationCount ?? 0) + (this.stateful?.pendingOperationCount ?? 0) > 0;
     if (pending === this.maintenanceTimer.hasRef()) return;
@@ -1612,6 +1649,26 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       domains |= ReadyDomain.Application;
     }
     if (domains !== ReadyDomain.None) this.readyHandler?.(domains);
+  }
+
+  /**
+   * The raw registry takes a remote request's terminal and hands it here,
+   * where the Framework completion owner receives it in the same turn.
+   */
+  private readonly requestObserver: RawServiceRequestObserver = {
+    operationCompleted: (id, result, operationKind) =>
+      this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result),
+    operationFailed: (id, error, operationKind) =>
+      this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, requestFailureResult(error))
+  };
+
+  private observedOperation(
+    pending: RawServiceObservedRequest,
+    operationKind: number
+  ): MeshOperationId {
+    return pending.promise === undefined
+      ? { high: 1n, low: pending.id }
+      : this.observeCompletion(pending.id, operationKind, pending.promise);
   }
 
   private observeCompletion(
@@ -1936,7 +1993,9 @@ class RawStreamSessionService implements StreamSessionService {
     return {
       state: this.state,
       lifecycleGeneration: 1n,
-      sessionCount: BigInt(new Set(bindings.map((value) => value.sessionRid)).size),
+      sessionCount: BigInt(
+        new Set(bindings.map((value) => encodeRoutingIdStorageHex(value.sessionRid))).size
+      ),
       bindingCount: BigInt(bindings.length),
       pendingMessageCount: 0n,
       pendingByteCount: 0n,
@@ -1973,11 +2032,10 @@ class RawStreamSessionService implements StreamSessionService {
     return this.observe(
       OperationKind.StreamBind,
       this.stateful.bindSession(
-        sessionKey,
+        sessionRid,
         actor,
         timeoutMs,
-        (targetSessionRid, payloadFrame) =>
-          this.deliver(targetSessionRid, actor.actorId, payloadFrame),
+        (_targetSessionRid, payloadFrame) => this.deliver(sessionKey, actor.actorId, payloadFrame),
         onBindingReplaced,
         actorAuthority
       )
@@ -1993,12 +2051,12 @@ class RawStreamSessionService implements StreamSessionService {
     this.requireStarted();
     return this.observe(
       OperationKind.StreamUnbind,
-      this.stateful.unbindSession(String(sessionRid), actor, expectedBindingGeneration, timeoutMs)
+      this.stateful.unbindSession(sessionRid, actor, expectedBindingGeneration, timeoutMs)
     );
   }
 
   bindings(sessionRid: RoutingId) {
-    return this.stateful.sessionBindings(String(sessionRid));
+    return this.stateful.sessionBindings(sessionRid);
   }
 
   async sendToActor(
@@ -2008,7 +2066,7 @@ class RawStreamSessionService implements StreamSessionService {
   ): Promise<SubmitResultValue> {
     this.requireStarted();
     return (await this.stateful.sendSessionToActor(
-      String(sessionRid),
+      sessionRid,
       actor,
       encodeMultipart(parts)
     )) as SubmitResultValue;
@@ -2029,7 +2087,7 @@ class RawStreamSessionService implements StreamSessionService {
     if (parts.length === 0) return false;
     const actorSlot = await serviceSessionBindingIngressPortIfRegistered(this)?.actorSlot(
       actorId,
-      sessionRid
+      target
     );
     if (actorSlot === undefined) return false;
     parts[0] = Buffer.from(streamFrameWithActorSlot(parts[0]!, actorSlot));
@@ -2297,7 +2355,7 @@ function decodeMultipartRecord(
   const header = record.parts[0]!;
   const command = header[SERVICE_WIRE_COMMAND_OFFSET]!;
   const payloadFrame = record.parts[1]!;
-  const application = decodeApplicationEnvelope(payloadFrame);
+  const application = decodeMultipartApplicationPayloadView(payloadFrame);
   const channelName = record.owner.startsWith('channel:')
     ? record.owner.slice('channel:'.length)
     : null;
@@ -2319,7 +2377,7 @@ function decodeMultipartRecord(
       : kind === ReceiveKind.ChannelRequest
         ? OperationKind.ChannelRequest
         : 0;
-  const ingressLifecycle = receiveIngressLifecycle(record);
+  const applicationJob = record.applicationJob;
   return {
     kind,
     domain: readyDomain(record.domain),
@@ -2337,15 +2395,31 @@ function decodeMultipartRecord(
     kindData: null,
     terminalResult: 0,
     failureErrno: 0,
-    ...ingressLifecycle,
+    applicationJobPermit: applicationJob,
+    releaseRetainedIngress: applicationJob === undefined ? undefined : releaseRecordApplicationJob,
     parts: decodeMultipart(application.payload),
     reply(parts) {
       if (record.correlation === undefined) return SubmitResult.InvalidState;
       runtime.reply(record, encodeMultipartApplicationFrame(parts));
       return SubmitResult.Ok;
     },
-    replyActorJoin: () => SubmitResult.NotSupported
+    replyActorJoin: replyActorJoinNotSupported
   };
+}
+
+/** Shared by every ordinary record: the record's own permit lease is its retained ingress. */
+function releaseRecordApplicationJob(this: {
+  readonly applicationJobPermit?: import('../../application-jobs/contracts').ApplicationJobPermitPort;
+}): void {
+  (
+    this.applicationJobPermit as
+      | import('../../application-jobs/application-ingress-record-owner').ApplicationJobRecordLease
+      | undefined
+  )?.close();
+}
+
+function replyActorJoinNotSupported(): SubmitResultValue {
+  return SubmitResult.NotSupported;
 }
 
 function decodeStatefulRecord(
@@ -2363,7 +2437,7 @@ function decodeStatefulRecord(
     ? stateful.canonicalApplicationPayload
     : payloadFrame === undefined
       ? undefined
-      : decodeApplicationEnvelope(payloadFrame);
+      : decodeMultipartApplicationPayloadView(payloadFrame);
   const operationId =
     record.correlation === undefined
       ? { high: 0n, low: 0n }
@@ -2591,53 +2665,6 @@ function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLi
   );
 }
 
-function decodeApplicationEnvelope(frame: Uint8Array) {
-  const bytes = Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
-  if (
-    bytes.length < APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES ||
-    bytes[0] !== APPLICATION_PAYLOAD_VERSION
-  ) {
-    throw new ServiceWireProtocolError('Invalid application envelope.');
-  }
-  const bodyLength = bytes.readUInt32BE(1);
-  if (bodyLength !== bytes.length - 5) {
-    throw new ServiceWireProtocolError('Invalid application envelope length.');
-  }
-  let offset = 5;
-  const packetLength = bytes[offset++]!;
-  if (packetLength === 0 || bytes.length - offset < packetLength + 1) {
-    throw new ServiceWireProtocolError('Invalid application envelope packet name.');
-  }
-  let packetName: string;
-  try {
-    packetName = FATAL_UTF8.decode(bytes.subarray(offset, offset + packetLength));
-  } catch {
-    throw new ServiceWireProtocolError('Invalid application envelope packet name.');
-  }
-  offset += packetLength;
-  const contentLength = bytes[offset++]!;
-  if (contentLength === 0 || bytes.length - offset < contentLength + 4) {
-    throw new ServiceWireProtocolError('Invalid application envelope content type.');
-  }
-  let contentType: string;
-  try {
-    contentType = FATAL_UTF8.decode(bytes.subarray(offset, offset + contentLength));
-  } catch {
-    throw new ServiceWireProtocolError('Invalid application envelope content type.');
-  }
-  offset += contentLength;
-  const payloadLength = bytes.readUInt32BE(offset);
-  offset += 4;
-  if (
-    packetName !== MULTIPART_PACKET_NAME ||
-    contentType !== MULTIPART_CONTENT_TYPE ||
-    payloadLength !== bytes.length - offset
-  ) {
-    throw new ServiceWireProtocolError('Unexpected M6A application payload.');
-  }
-  return { packetName, contentType, payload: bytes.subarray(offset) };
-}
-
 function decodeMultipart(payload: Uint8Array): FrameworkMessage[] {
   return decodeMultipartParts(payload, ZLinkBufferMessage.fromOwned, closeMultipartMessage);
 }
@@ -2655,7 +2682,9 @@ function decodeMultipartParts<T>(
   materialize: (part: Buffer) => T,
   release?: (part: T) => void
 ): T[] {
-  const bytes = Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
+  const bytes = Buffer.isBuffer(payload)
+    ? payload
+    : Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
   if (bytes.length < 4) throw new ServiceWireProtocolError('Truncated multipart payload.');
   const count = bytes.readUInt32BE(0);
   if (count === 0 || count > Math.floor((bytes.length - 4) / 4)) {
