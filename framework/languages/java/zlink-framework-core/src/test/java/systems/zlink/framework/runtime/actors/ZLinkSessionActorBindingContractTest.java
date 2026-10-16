@@ -119,6 +119,67 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @Test
+    void disconnectSenderUsesBindingOwnerSnapshotAndCanonicalPacket() throws Exception {
+        var golden =
+                new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readTree(getClass().getResourceAsStream("/session-disconnected-v1.json"));
+        for (var entry : golden.path("canonical")) {
+            var ownerRid =
+                    new java.util.concurrent.atomic.AtomicReference<>(
+                            RoutingId.from(
+                                    java.util.HexFormat.of()
+                                            .parseHex(
+                                                    entry.path("sessionOwnerNodeRidHex")
+                                                            .asText())));
+            var lifecycle =
+                    new java.util.concurrent.atomic.AtomicLong(
+                            Long.parseUnsignedLong(
+                                    entry.path("sessionOwnerNodeGeneration").asText()));
+            long binding = Long.parseUnsignedLong(entry.path("bindingGeneration").asText());
+            var owner =
+                    (ZLinkInternalSpotNode)
+                            Proxy.newProxyInstance(
+                                    getClass().getClassLoader(),
+                                    new Class<?>[] {ZLinkInternalSpotNode.class},
+                                    (proxy, method, arguments) ->
+                                            switch (method.getName()) {
+                                                case "routingId" -> ownerRid.get();
+                                                case "localNodeGeneration" -> lifecycle.get();
+                                                default ->
+                                                        throw new UnsupportedOperationException(
+                                                                method.getName());
+                                            });
+            FakeStream stream = new FakeStream();
+            var runtime =
+                    new ZLinkSessionActorsRuntime(
+                            owner,
+                            stream,
+                            SESSION,
+                            null,
+                            new RawSerializer(),
+                            null,
+                            true,
+                            ZLinkStreamCodec.RAW,
+                            null,
+                            Duration.ofSeconds(1),
+                            () -> binding);
+            stream.runtime = runtime;
+            stream.nativeBindingGeneration = binding;
+            var actor =
+                    runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+                            .toCompletableFuture()
+                            .join();
+            ownerRid.set(RoutingId.from("replacement-owner"));
+            lifecycle.set(5L);
+            actor.notifyDisconnected().toCompletableFuture().join();
+            assertEquals("zlink.framework.actor.session_disconnected", stream.disconnectPacketName);
+            org.junit.jupiter.api.Assertions.assertArrayEquals(
+                    java.util.HexFormat.of().parseHex(entry.path("hex").asText()),
+                    stream.disconnectBody);
+        }
+    }
+
+    @Test
     void logicalDisconnectSubmitsExactlyOneActorUnbound() {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime = runtime(stream);
@@ -1108,6 +1169,7 @@ final class ZLinkSessionActorBindingContractTest {
     private static ZLinkSessionActorsRuntime runtime(FakeStream stream) {
         ZLinkSessionActorsRuntime runtime =
                 new ZLinkSessionActorsRuntime(
+                        authoritySpotNode(Map.of()),
                         stream,
                         SESSION,
                         null,
@@ -1153,7 +1215,7 @@ final class ZLinkSessionActorBindingContractTest {
             FakeStream stream, Duration sessionRelocationSealTimeout) {
         ZLinkSessionActorsRuntime runtime =
                 new ZLinkSessionActorsRuntime(
-                        null,
+                        authoritySpotNode(Map.of()),
                         stream,
                         SESSION,
                         null,
@@ -1335,6 +1397,9 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     private static final class FakeStream implements ZLinkBackendStreamSocket {
+        private long nativeBindingGeneration = BINDING_GENERATION;
+        private String disconnectPacketName;
+        private byte[] disconnectBody;
         private final List<String> binds = new ArrayList<>();
         private final List<String> bindingEvents = new ArrayList<>();
         private final List<ControlFrame> controls = new ArrayList<>();
@@ -1421,7 +1486,7 @@ final class ZLinkSessionActorBindingContractTest {
 
         @Override
         public long boundActorBindingGeneration(RoutingId sessionRid, String actorId) {
-            return BINDING_GENERATION;
+            return nativeBindingGeneration;
         }
 
         @Override
@@ -1694,6 +1759,8 @@ final class ZLinkSessionActorBindingContractTest {
                 Duration timeout) {
             if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                     header.packetName())) {
+                disconnectPacketName = header.packetName();
+                disconnectBody = parts.getFirst().toByteArray();
                 disconnectNotifications++;
                 if (disconnectSubmissionFailure != null) {
                     RuntimeException failure = disconnectSubmissionFailure;
