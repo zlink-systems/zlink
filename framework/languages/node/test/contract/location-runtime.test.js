@@ -961,14 +961,17 @@ for (const expiresDuringRenewal of [false, true]) {
           ownerLeaseFencingMarginMs: 5_000
         }
       });
+      let renewals = 0;
       let recoveries = 0;
-      runtime.addOwnerLeaseRenewedHandler(() => {
-        recoveries += 1;
+      runtime.addOwnerLeaseRenewedHandler((_renewal, wasOwnerLeaseUsable) => {
+        renewals += 1;
+        if (!wasOwnerLeaseUsable) recoveries += 1;
         assert.equal(runtime.ownerLeaseUsable, true);
       });
       let renewal;
       try {
         await runtime.start(rid('lease-recovery'));
+        renewals = 0;
         recoveries = 0;
         monotonicMs = 10_000;
         assert.equal(runtime.ownerLeaseUsable, true);
@@ -994,6 +997,7 @@ for (const expiresDuringRenewal of [false, true]) {
         }
         assert.equal(await renewal, true);
         assert.equal(runtime.ownerLeaseUsable, true);
+        assert.equal(renewals, 1);
         assert.equal(recoveries, expiresDuringRenewal ? 1 : 0);
         monotonicMs = 19_999;
         assert.equal(runtime.ownerLeaseUsable, true);

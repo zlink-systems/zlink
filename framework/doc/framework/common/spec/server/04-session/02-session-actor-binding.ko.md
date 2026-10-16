@@ -411,6 +411,14 @@ Session disconnect callback은 bound Actor를 순회하지 않는다. Framework�
 보관한 route와 generation을 검증해 통지를 Actor queue로 전달하며 이 과정에서도
 Location Store를 조회하지 않는다.
 
+통지는 그 binding의 identity를 담는다. Packet `zlink.framework.actor.session_disconnected`의
+본문은 다음 세 값을 이 순서로 담는다: Session owner Node RID의 길이(u8, 1–255)와 그 바이트, Session
+owner lifecycle generation(u64 big-endian), binding generation(u64 big-endian). 통지는 Message Follow로
+다른 node를 거쳐 도착할 수 있으므로 Actor owner는 transport source가 아니라 본문으로 identity를
+확인한다. Actor owner는 Actor turn에서 이 identity를 current binding과 비교해, 다른 current binding이
+있으면 통지를 버리고, current binding이 없거나 같은 binding이면 callback을 실행한다. 본문이 이
+형식이 아니면 통지를 버리고 `ProtocolError` Warning을 남긴다.
+
 한 Actor의 제출이나 callback이 실패해도 나머지 Actor 통지와 Session cleanup을 계속하는
 all-settled 규칙을 사용한다. Automatic 통지와 public `NotifyDisconnectedAsync(...)`
 논리 통지가 경쟁하면 같은 binding identity로 중복을 제거하고 current Spot의 callback은
@@ -643,8 +651,7 @@ command 44를 보내지 않으며, relocation은 계속 진행한다. Participan
 도착하지 않았을 수 있다. 통지의 중복 제거와 callback 최대 1회 실행은 §7의 Session owner가 binding
 identity 단위로 계속 소유한다. 통지는 일반 Actor message와 같이 처리한다. Source가 capture 전에
 수락했으면 saved work로 target에 옮겨지고, capture 뒤에 도착하면 Message Follow로 target에 전달된다.
-Actor owner는 통지의 binding identity와 다른 current binding이 있으면 통지를 버리고, current binding이
-없으면 callback을 실행한다. Coordinator는 disconnect 통지를 새로 만들거나 다시 제출하지 않는다.
+Actor owner는 §7의 identity 비교로 통지를 판정한다. Coordinator는 disconnect 통지를 새로 만들거나 다시 제출하지 않는다.
 
 **실패.** Command 42가 불일치로 거부되거나 seal 대기 deadline에 도달하면 relocation은 실패한다.
 복원 대상은 이미 시작한 모든 participant의 capture와, 이미 `sealed`로 확인한 participant의 seal이다.
@@ -869,6 +876,9 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
   번이다.
 - Disconnect 통지 뒤에도 Actor는 destroy되지 않고 Spot membership도 그대로다.
 - Client가 재접속하면 이전 binding이 복원되지 않고 새 bind가 필요하다.
+- Session owner와 Actor owner가 다른 언어여도 disconnect 통지는 §7의 본문 형식으로 같은 binding
+  identity를 전하며, Actor owner는 같은 binding이면 callback을 실행하고 다른 current binding이 있으면
+  통지를 버린다.
 
 **Actor relocation**
 
