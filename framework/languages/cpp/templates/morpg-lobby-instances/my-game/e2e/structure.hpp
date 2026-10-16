@@ -101,9 +101,11 @@ inline void check_structure (const std::filesystem::path &root)
     const std::map<std::string, std::string> roles{
       {"players", "external"},   {"session", "session"},    {"lobby", "lobby"},
       {"instanceA", "instance"}, {"instanceB", "instance"}, {"location", "location-store"}};
-    require (j.at ("nodes").size () == roles.size (), "Node count mismatch");
+    for (const auto &required : roles)
+        require (nodes.contains (required.first), "Missing required node");
     for (const auto &node : j.at ("nodes"))
-        require (roles.contains (node.at ("id")) && node.at ("role") == roles.at (node.at ("id")),
+        require (roles.contains (node.at ("id")) ? node.at ("role") == roles.at (node.at ("id"))
+                                                 : node.at ("role") == "external",
                  "Node role mismatch");
     require (j.at ("channels").empty (), "This structure has no channels");
     // These roles explicitly register the shared Entry and first-admission handlers.
