@@ -1,0 +1,28 @@
+{
+  "version": 1, "id": "board-tables", "name": "my-game", "language": "kotlin",
+  "run": {
+    "commands": {
+      "sh": ["./gradlew --no-daemon installDist", "./run-e2e.sh", "./run-e2e.sh --scenario table,reconnect,update"],
+      "powershell": ["./gradlew.bat --no-daemon installDist", "pwsh -NoProfile -File ./run-e2e.ps1", "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update"]
+    },
+    "scenarios": ["table", "reconnect", "update"]
+  },
+  "nodes": [
+    { "id": "players", "role": "external", "title": "Players", "config": null },
+    { "id": "session", "role": "session", "title": "Session node", "config": "server/config/session.json" },
+    { "id": "tableA", "role": "table", "title": "Table node A", "config": "server/config/table-a.json" },
+    { "id": "tableB", "role": "table", "title": "Table node B", "config": "server/config/table-b.json" },
+    { "id": "location", "role": "location-store", "title": "Location Store", "config": "docker-compose.yml" }
+  ],
+  "channels": [],
+  "spots": [
+    { "id": "table-entry-a", "kind": "entry", "type": null, "owner": "tableA" },
+    { "id": "table-entry-b", "kind": "entry", "type": null, "owner": "tableB" },
+    { "id": "table", "kind": "user", "type": "Table", "owner": "tableA", "dynamic": true }
+  ],
+  "edges": [
+    { "from": "players", "to": "session", "label": "STREAM" },
+    { "from": "session", "to": "tableA", "label": "relay" },
+    { "from": "tableA", "to": "location", "label": "Location / lease", "semantic": "location-authority" }
+  ]
+}
