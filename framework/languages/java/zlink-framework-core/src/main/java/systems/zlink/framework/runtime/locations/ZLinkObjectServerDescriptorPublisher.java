@@ -44,10 +44,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
             owner = runtime.currentOwnerToken();
         } catch (IllegalStateException ownerAdmissionClosed) {
             // Location runtime §5: an expired owner does not publish a descriptor.
-            return CompletableFuture.failedFuture(
-                    new ZLinkLocationStoreFailureException(
-                            "MeshNode descriptor owner lease admission is closed.",
-                            ownerAdmissionClosed));
+            return CompletableFuture.failedFuture(ownerAdmissionClosed);
         }
         long currentLeaseGeneration = owner.leaseGeneration();
         long previousLeaseGeneration = lastPublishedLeaseGeneration.get();

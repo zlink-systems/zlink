@@ -1229,7 +1229,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                         .log(
                                                                 java.util.logging.Level.WARNING,
                                                                 "Host relocation descriptor"
-                                                                    + " rollback failed",
+                                                                        + " rollback failed",
                                                                 unwrapCompletionFailure(
                                                                         rollbackFailure));
                                                 Duration remaining =
@@ -1377,8 +1377,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
             if (cause
                     instanceof
-                    systems.zlink.framework.runtime.internal.locations
-                            .ZLinkLocationStoreFailureException) {
+                    systems.zlink.framework.runtime.internal.locations.ZLinkLocationStoreFailure) {
                 return ZLinkFrameworkRelocationReason.STORE_UNAVAILABLE;
             }
         }
