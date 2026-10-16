@@ -29,6 +29,31 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkApplicationJobQueueTest {
     @Test
+    void rotationBudgetReservesFreeCapacityOnceAndReturnsTheRestToWaiters() {
+        try (var queue = queue(4)) {
+            var first =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
+            assertEquals(3, queue.reserveRotationBudget(63));
+            assertEquals(4, queue.snapshot().permitsInUse());
+            var taken = queue.takeRotationPermit();
+            var waiter =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
+            assertFalse(waiter.isDone());
+            queue.abandonRotationBudget(2);
+            assertTrue(waiter.isDone(), "a returned budget permit grants the oldest waiter");
+            assertEquals(3, queue.snapshot().permitsInUse());
+            assertEquals(1, queue.reserveRotationBudget(63));
+            queue.abandonRotationBudget(1);
+            waiter.join().close();
+            taken.abandonReservation();
+            first.abandonReservation();
+            assertEquals(0, queue.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
     void inlineAcquireContinuationDoesNotBlockAnotherGrant() throws Exception {
         try (var queue = queue(2)) {
             var heldFirst =

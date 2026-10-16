@@ -103,8 +103,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private int _activeOperations;
     private long _operationEpoch;
     private int _activeRequests;
-    private bool _acceptingOperations;
-    private ZLinkDrainOwner _admissionOwner;
     private long _nextRelocationFenceGeneration;
     private long _relocationFenceGeneration;
     private long _nextInstanceActivationSelection;
@@ -527,13 +525,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         _drainAdmission.ClaimShutdown();
         var streamNodes = AwaitStateLane(
             _stateLane.RunAsync(() =>
-            {
-                _drainAdmission.Seal();
-                _acceptingOperations = false;
-                _admissionOwner = ZLinkDrainOwner.Shutdown;
-                return _state?.StreamNodes.Values.ToArray()
-                    ?? Array.Empty<ZLinkStreamNodeRuntime>();
-            })
+                _state?.StreamNodes.Values.ToArray() ?? Array.Empty<ZLinkStreamNodeRuntime>()
+            )
         );
         foreach (var streamNode in streamNodes)
             AwaitStateLane(streamNode.SealSessionAdmissionAsync(cancellationToken));
@@ -560,16 +553,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             return AwaitStateLane(
                 _stateLane.RunAsync(() =>
                 {
-                    if (
-                        _admissionOwner != ZLinkDrainOwner.Relocation
-                        || _relocationFenceGeneration != expectedFence.Generation
-                    )
+                    if (_relocationFenceGeneration != expectedFence.Generation)
                         return false;
                     if (!AwaitStateLane(_actorHandoffAdmissions.SnapshotDrainAsync()).IsSafe)
                         return false;
-                    _admissionOwner = ZLinkDrainOwner.None;
                     _relocationFenceGeneration = 0;
-                    _acceptingOperations = true;
                     return true;
                 })
             );
@@ -623,7 +611,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             _stateLane.RunAsync<ZLinkRelocationAdmissionFence?>(() =>
             {
                 return
-                    _admissionOwner == ZLinkDrainOwner.Relocation && _relocationFenceGeneration != 0
+                    _relocationFenceGeneration != 0
+                    && _drainAdmission.DrainOwner == ZLinkDrainOwner.Relocation
                     ? new ZLinkRelocationAdmissionFence(_relocationFenceGeneration)
                     : null;
             })
@@ -640,14 +629,12 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 return AwaitStateLane(
                     _stateLane.RunAsync(() =>
                     {
-                        var acquired =
-                            _admissionOwner == ZLinkDrainOwner.Relocation
-                            && _relocationFenceGeneration == expectedFence.Generation
-                            && _activeOperations == 0
+                        //  The drain gate requires no accepted new-owner admission
+                        //  (actor join or relocation target staging); existing-owner
+                        //  traffic keeps running under the fence (spec 30 §15) and
+                        //  does not block rollback (§11, §13).
+                        return _relocationFenceGeneration == expectedFence.Generation
                             && AwaitStateLane(_actorHandoffAdmissions.SnapshotDrainAsync()).IsSafe;
-                        if (acquired)
-                            _admissionOwner = ZLinkDrainOwner.RelocationRollback;
-                        return acquired;
                     })
                 );
             },
@@ -669,14 +656,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                     _stateLane.RunAsync(() =>
                     {
                         if (
-                            _admissionOwner != ZLinkDrainOwner.RelocationRollback
-                            || _relocationFenceGeneration != expectedFence.Generation
+                            _relocationFenceGeneration != expectedFence.Generation
                             || !AwaitStateLane(_actorHandoffAdmissions.SnapshotDrainAsync()).IsSafe
                         )
                             return false;
-                        _admissionOwner = ZLinkDrainOwner.None;
                         _relocationFenceGeneration = 0;
-                        _acceptingOperations = true;
                         return true;
                     })
                 );
@@ -706,9 +690,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                         _actorHandoffAdmissions.SnapshotDrainAsync()
                     );
                     if (
-                        _admissionOwner != ZLinkDrainOwner.None
-                        || !_acceptingOperations
-                        || currentOperation != operationBaseline
+                        currentOperation != operationBaseline
                         || actorSnapshot != actorBaseline
                         || currentHandoff != handoffBaseline
                         || !currentHandoff.IsSafe
@@ -716,8 +698,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                         return false;
 
                     _drainAdmission.Seal();
-                    _acceptingOperations = false;
-                    _admissionOwner = ZLinkDrainOwner.Relocation;
                     var generation = checked(++_nextRelocationFenceGeneration);
                     _relocationFenceGeneration = generation;
                     fence = new ZLinkRelocationAdmissionFence(generation);
@@ -933,7 +913,14 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     )
     {
         var admitted = await _stateLane
-            .RunAsync(() => AdmitOperationOnLane(countAsRequest))
+            .RunAsync(() =>
+            {
+                //  New host work: any drain-gate seal (relocation fence or
+                //  shutdown) refuses it.
+                if (_drainAdmission.IsSealed)
+                    throw NotAcceptingOperations("application admission is sealed");
+                return AdmitOperationOnLane(countAsRequest);
+            })
             .ConfigureAwait(false);
         return new ZLinkRuntimeOperationAdmission(this, admitted, countAsRequest);
     }
@@ -1042,8 +1029,12 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     /// Instance message and timer starts, factory and restore commits, and
     /// relocation state, because "만료된 owner 자격으로 새 Store 변경을 만들지
     /// 않는다". Handler invocation makes no Store change, so a Location Store
-    /// outage must not turn it away. The drain seal still applies to every
-    /// caller.
+    /// outage must not turn it away.
+    /// Inbound reaches an owner this host already holds. Host relocation §15
+    /// keeps its payload and timers running under the relocation fence until
+    /// the unit seal, which then holds them (§12); only the shutdown seal
+    /// refuses it. New-owner admission (join, relocation target staging) is
+    /// the drain gate's actor admission, closed by any drain.
     /// </summary>
     internal ZLinkInboundOperationAdmission TryEnterInboundOperation(
         bool countAsRequest,
@@ -1084,7 +1075,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         var admission = await _stateLane
             .RunAsync(() =>
             {
-                if (_drainAdmission.IsSealed || (ownsObjectWork && !IsOwnerAdmissionOpen))
+                if (
+                    _drainAdmission.IsSealedForShutdown || (ownsObjectWork && !IsOwnerAdmissionOpen)
+                )
                 {
                     return (
                         Admitted: (ZLinkFrameworkComponentState?)null,
@@ -1245,7 +1238,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     internal bool IsAcceptingApplicationWork
     {
-        get { return AwaitStateLane(_stateLane.RunAsync(() => _acceptingOperations)); }
+        get
+        {
+            return Volatile.Read(ref _lifecyclePhase) == (int)ZLinkRuntimeLifecyclePhase.Running
+                && !_drainAdmission.IsSealed;
+        }
     }
 
     internal RoutingId PrepareLocationNodeRoutingId()
@@ -1276,7 +1273,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 // Recovery remains an explicit same-process operation; a new
                 // process must rediscover the current owner through the normal
                 // location lifecycle instead of taking over a prior journal.
-                await _stateLane.RunAsync(() => _acceptingOperations = true).ConfigureAwait(false);
+                //  A new runtime generation starts with an open drain gate.
+                _drainAdmission.Reset();
                 Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Running);
                 _locationLifecycle?.ResumeBackgroundWork();
             }
@@ -1377,7 +1375,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             try
             {
                 SealApplicationAdmissionsForDrain(cancellationToken);
-                await _stateLane.RunAsync(() => _acceptingOperations = false).ConfigureAwait(false);
                 stateToDispose?.FenceOperations();
                 stateToDispose?.CancelActiveSpotOperations();
                 if (stateToDispose is not null)
@@ -1587,7 +1584,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         return await _stateLane
             .RunAsync(() =>
             {
-                _acceptingOperations = false;
                 if (_activeOperations == 0)
                     return Task.CompletedTask;
                 return (
@@ -1599,22 +1595,23 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Counts an operation whose drain-gate seal the caller already applied
+    /// for its kind (new host work or existing-owner inbound).
+    /// </summary>
     private ZLinkFrameworkComponentState AdmitOperationOnLane(bool countAsRequest)
     {
         //  네 조건을 한 문장으로 뭉치면 호출자는 admission seal인지, 아직 기동
         //  중인지, owner lease가 닫힌 것인지 구분할 수 없다. 조사할 때마다 여기에
         //  계측을 다시 심게 되므로 어느 조건인지 메시지에 남긴다.
         var refusal =
-            !_acceptingOperations ? "application admission is sealed"
-            : Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running
+            Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running
                 ? $"lifecycle phase is {(ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase)}"
             : _state is null ? "runtime state is not created"
             : !IsOwnerAdmissionOpen ? "owner admission is closed"
             : null;
         if (refusal is not null)
-            throw new InvalidOperationException(
-                $"ZLink framework runtime is not accepting operations ({refusal})."
-            );
+            throw NotAcceptingOperations(refusal);
         if (_state is not { } state)
             throw new InvalidOperationException(
                 "ZLink framework runtime is not accepting operations (runtime state is not created)."
@@ -1625,6 +1622,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             _activeRequests++;
         return state;
     }
+
+    private static InvalidOperationException NotAcceptingOperations(string refusal) =>
+        new($"ZLink framework runtime is not accepting operations ({refusal}).");
 
     // Runs outside the state lane: the ownership/lease allocation and the AsyncLocal
     // write (an execution-context copy) touch only caller-local state, and the
@@ -1658,7 +1658,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     // The release joins the lane FIFO before Dispose returns, so every later
     // admission, snapshot and drain turn observes it.
     private void ExitOperation(bool countsOperation, bool countsRequest) =>
-        _stateLane.TryPost(() => ExitOperationOnLane(countsOperation, countsRequest));
+        _stateLane.TryPost(
+            static state =>
+                state.Runtime.ExitOperationOnLane(state.CountsOperation, state.CountsRequest),
+            (Runtime: this, CountsOperation: countsOperation, CountsRequest: countsRequest)
+        );
 
     private void ExitOperationOnLane(bool countsOperation, bool countsRequest)
     {

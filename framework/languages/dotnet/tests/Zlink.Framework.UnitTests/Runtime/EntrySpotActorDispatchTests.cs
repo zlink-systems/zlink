@@ -358,7 +358,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.EnsureKnownRouteMeshPeer(
                     "entry",
                     RoutingId.From("remote-node"),
-                    "SPOT 'remote'"
+                    "SPOT",
+                    "remote"
                 )
             );
 
@@ -389,7 +390,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.EnsureKnownRouteMeshPeer(
                     "entry",
                     RoutingId.From("remote-node"),
-                    "SPOT 'remote'"
+                    "SPOT",
+                    "remote"
                 )
             );
 
@@ -431,7 +433,7 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         try
         {
-            runtime.EnsureKnownRouteMeshPeer("entry", targetRid, "packet 'GetNodeStatus'");
+            runtime.EnsureKnownRouteMeshPeer("entry", targetRid, "packet", "GetNodeStatus");
             Assert.Equal(0, node.MeshPeerSnapshotReads);
         }
         finally
@@ -4113,11 +4115,47 @@ public sealed partial class EntrySpotActorDispatchTests
             );
 
             Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
-            await runtime.NotifyActorDisconnectedAsync(binding, CancellationToken.None);
-
-            var relay = ZLinkFrameworkJsonPayloadCodec.Deserialize<ZLinkRemoteActorFrameRelay>(
-                node.NodeSendAttempts.Single()[1]
+            var submitted = new TaskCompletionSource<ZLinkRemoteActorFrameRelay>(
+                TaskCreationOptions.RunContinuationsAsynchronously
             );
+            node.OnNodeSend = () =>
+                submitted.TrySetResult(
+                    ZLinkFrameworkJsonPayloadCodec.Deserialize<ZLinkRemoteActorFrameRelay>(
+                        node.NodeSendAttempts.Single()[1]
+                    )!
+                );
+            var notification = runtime
+                .NotifyActorDisconnectedAsync(binding, CancellationToken.None)
+                .AsTask();
+            var relay = await submitted.Task;
+            try
+            {
+                Assert.False(notification.IsCompleted);
+            }
+            finally
+            {
+                var header = ZLinkStreamProtocolDefaults.DecodeHeader(relay.Header);
+                using var terminal = Message.From(
+                    new ZLinkActorReply(
+                        ZlinkStreamMessageKind.Response,
+                        ZlinkStreamCodec.Json,
+                        ZLinkFrameworkJsonPayloadCodec.Serialize(true),
+                        ZlinkStreamHeaderFlags.None,
+                        ZlinkStreamMetadata.Empty
+                    ).ToFrame(header)
+                );
+                Assert.True(
+                    await runtime.ActorMessageFollower.TryCompleteLocalDirectReplyAsync(
+                        relay.ActorId,
+                        relay.ReplyRequestId,
+                        relay.ReplyFlags,
+                        relay.ReplyCapability!,
+                        [terminal],
+                        CancellationToken.None
+                    )
+                );
+                await notification;
+            }
             Assert.NotNull(relay);
             Assert.True(relay.OperationIdHigh != 0 || relay.OperationIdLow != 0);
             Assert.Equal(actor.ActorId, relay.ActorId);
@@ -7871,7 +7909,12 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task Retained_BoundSession_Preserves_The_Ambient_Lifecycle_Flow()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        // Flow-correlation §4: flow IDs are carried only while message-flow
+        // tracing is on, at Normal or Detailed.
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
         try
         {
             runtime.GetOrCreateActorState(actor.ActorId).BindNativeActorRef(actor);
@@ -9609,7 +9652,12 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         const string flowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        // Flow-correlation §4: flow IDs are carried only while message-flow
+        // tracing is on, at Normal or Detailed.
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);
@@ -11088,6 +11136,7 @@ public sealed partial class EntrySpotActorDispatchTests
         if (retireTarget is not null)
             serviceCollection.AddSingleton<IZLinkSpotRetireTarget>(retireTarget);
         ZLinkFrameworkRuntime? runtime = null;
+        serviceCollection.AddSingleton<ZLinkFrameworkRuntime>(_ => runtime!);
         serviceCollection.AddSingleton<IZLinkRouteClient>(_ => new ZLinkRouteClient(runtime!));
         var services = serviceCollection.BuildServiceProvider();
         var registration = new ZLinkFrameworkRegistration

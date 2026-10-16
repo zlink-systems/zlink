@@ -584,9 +584,10 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
 ### Relocation manifest와 direct chunk transfer
 
 - Source는 command 40 `relocationPrepare`을 `[request]`로 보내 temporary queue 설치와 뒤이을
-  전송의 payload manifest 선언을 요청한다. Body에는 object identity, source node RID·generation과
-  payload를 설명하는 `payloadTotalLength`, `payloadChunkCount`, `payloadChecksumCrc32c`가
-  들어간다. relocation-root pointer나 Relocation Store lookup key는 싣지 않는다 —
+  전송의 payload manifest 선언을 요청한다. Body에는 object identity, source node RID·generation,
+  payload를 설명하는 `payloadTotalLength`, `payloadChunkCount`, `payloadChecksumCrc32c`와 relocation을
+  시작한 source operation의 absolute deadline `deadlineUnixMs`가 들어간다. Target은 relay 수신 준비
+  대기를 이 값으로 끝낸다([relocation §4.3](../05-location-relocation/04-relocation-flow.ko.md#43-target은-실행하지-않은-상태로-복원한다)). relocation-root pointer나 Relocation Store lookup key는 싣지 않는다 —
   Prepare 하나로 이어질 direct transfer(source memory 원본)를 완전히 설명한다. Target은 temporary
   queue가 수신 준비되었을 때만 command 30 `relocationReady`를 `[reply]`로 보낸다. 이 pair는
   선언한 manifest 외의 message·byte allowance나 participant reservation을 협상하지 않는다.

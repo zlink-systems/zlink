@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Timers;
@@ -587,6 +588,107 @@ public sealed class TimerLifecycleTests
         );
         Assert.Equal(1, Volatile.Read(ref targetDeliveries));
         Assert.Equal(0, Volatile.Read(ref targetFailures));
+
+        await source.DisposeAsync();
+        await target.DisposeAsync();
+    }
+
+    // Host relocation §12 (#1877): a SpotWide relocation seal refuses the tick
+    // in the Spot serial executor. The tick stays pending (no delivery index
+    // advance, no handler failure), travels with the relocation payload and
+    // runs once on the target.
+    [Fact]
+    public async Task Spot_relocation_sealed_tick_stays_pending_and_runs_once_on_the_target()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            static () => false,
+            CancellationToken.None,
+            errorSink,
+            executionMode: ZLinkUserSpotExecutionMode.SpotWide
+        );
+        Assert.NotNull(await executor.TrySealRelocationAsync());
+
+        var source = new ZLinkSpotTimerRegistry(static () => false);
+        var sourceRefused = new TaskCompletionSource<ZLinkTimerTick>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var sourceRuns = 0;
+        var sourceFailures = 0;
+        _ = await source.AddAsync(
+            "spot-seal-target",
+            TimeSpan.FromMilliseconds(1),
+            null,
+            typeof(TestTimerHandler),
+            typeof(TestTimerSpot),
+            CancellationToken.None,
+            async (_, tick, ct) =>
+            {
+                var delivered = false;
+                try
+                {
+                    await executor.ExecuteTimerAsync(
+                        "spot-seal-target",
+                        (_, _, _) =>
+                        {
+                            Interlocked.Increment(ref sourceRuns);
+                            delivered = true;
+                            return ValueTask.CompletedTask;
+                        },
+                        0,
+                        ct
+                    );
+                }
+                finally
+                {
+                    sourceRefused.TrySetResult(tick);
+                }
+                return delivered;
+            },
+            (_, _, _, _, _) =>
+            {
+                Interlocked.Increment(ref sourceFailures);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None
+        );
+
+        var refused = await sourceRefused.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var relocation = source.FreezeRelocation();
+        var captured = ZLinkSpotTimerRelocationCodec.Decode(Assert.Single(relocation)).Timer;
+        Assert.Equal(refused, captured.PendingTick);
+        Assert.Equal(0UL, captured.DeliveryIndex);
+        Assert.Equal(0UL, captured.LastScheduledIndex);
+        Assert.Equal(0, Volatile.Read(ref sourceRuns));
+        Assert.Equal(0, Volatile.Read(ref sourceFailures));
+
+        var targetTick = new TaskCompletionSource<ZLinkTimerTick>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var targetDeliveries = 0;
+        var target = new ZLinkSpotTimerRegistry(static () => false);
+        target.RestoreRelocation(
+            relocation,
+            CancellationToken.None,
+            (_, tick, _) =>
+            {
+                Interlocked.Increment(ref targetDeliveries);
+                target.FreezeForApplicationAdmissionSeal();
+                targetTick.TrySetResult(tick);
+                return ValueTask.FromResult(true);
+            },
+            static (_, _, _, _, _) => ValueTask.CompletedTask
+        );
+        target.Resume();
+        Assert.Equal(refused, await targetTick.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        await WaitUntilAsync(() =>
+            ZLinkSpotTimerRelocationCodec
+                .Decode(Assert.Single(target.FreezeRelocation()))
+                .Timer.PendingTick
+                is null
+        );
+        Assert.Equal(1, Volatile.Read(ref targetDeliveries));
 
         await source.DisposeAsync();
         await target.DisposeAsync();

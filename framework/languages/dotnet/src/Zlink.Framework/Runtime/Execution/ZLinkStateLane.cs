@@ -32,10 +32,10 @@ namespace Zlink.Framework.Runtime.Execution;
 /// </remarks>
 internal sealed class ZLinkStateLane : IAsyncDisposable
 {
-    private ConcurrentQueue<Func<ValueTask>>? _mailbox;
+    private ConcurrentQueue<LaneWork>? _mailbox;
     private TaskCompletionSource? _completed;
 
-    private ConcurrentQueue<Func<ValueTask>> Mailbox =>
+    private ConcurrentQueue<LaneWork> Mailbox =>
         LazyInitializer.EnsureInitialized(ref _mailbox, static () => new());
 
     private bool HasQueuedWork => Volatile.Read(ref _mailbox) is { IsEmpty: false };
@@ -65,6 +65,16 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     internal ValueTask<T> RunAsync<T>(Func<T> work)
     {
         ArgumentNullException.ThrowIfNull(work);
+        return RunAsync(static work => work(), work);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> with its <paramref name="state"/> on the lane; the same turn
+    /// as <see cref="RunAsync{T}(Func{T})"/> without a closure for the state.
+    /// </summary>
+    internal ValueTask<T> RunAsync<TState, T>(Func<TState, T> work, TState state)
+    {
+        ArgumentNullException.ThrowIfNull(work);
         ThrowIfReentrant();
         if (Volatile.Read(ref _closed) != 0)
             throw new ObjectDisposedException(nameof(ZLinkStateLane));
@@ -84,7 +94,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
                 {
                     ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
                     CurrentLane.Value = this;
-                    return ValueTask.FromResult(work());
+                    return ValueTask.FromResult(work(state));
                 }
                 catch (Exception error)
                 {
@@ -98,12 +108,12 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
                 }
             }
 
-            var queued = Enqueue(work);
+            var queued = Enqueue(work, state);
             _ = DrainAsync();
             return queued;
         }
 
-        var completion = Enqueue(work);
+        var completion = Enqueue(work, state);
         // The holder may have released between the claim attempt and the
         // enqueue; its release re-check and this attempt cannot both miss.
         if (TryClaimDrain())
@@ -111,24 +121,10 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         return completion;
     }
 
-    private ValueTask<T> Enqueue<T>(Func<T> work)
+    private ValueTask<T> Enqueue<TState, T>(Func<TState, T> work, TState state)
     {
-        var completion = new TaskCompletionSource<T>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        Mailbox.Enqueue(() =>
-        {
-            try
-            {
-                completion.TrySetResult(work());
-            }
-            catch (Exception error)
-            {
-                completion.TrySetException(error);
-            }
-
-            return ValueTask.CompletedTask;
-        });
+        var completion = new ResultWork<TState, T>(work, state);
+        Mailbox.Enqueue(completion);
         return new ValueTask<T>(completion.Task);
     }
 
@@ -159,21 +155,8 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         if (Volatile.Read(ref _closed) != 0)
             return ValueTask.FromException(new ObjectDisposedException(nameof(ZLinkStateLane)));
 
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        Mailbox.Enqueue(async () =>
-        {
-            try
-            {
-                await work().ConfigureAwait(false);
-                completion.TrySetResult();
-            }
-            catch (Exception failure)
-            {
-                completion.TrySetException(failure);
-            }
-        });
+        var completion = new AsyncWork(work);
+        Mailbox.Enqueue(completion);
         ScheduleDrain();
         return new ValueTask(completion.Task);
     }
@@ -191,23 +174,19 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     internal bool TryPost(Action work)
     {
         ArgumentNullException.ThrowIfNull(work);
+        return TryPost(static work => work(), work);
+    }
+
+    /// <summary>
+    /// Queues <paramref name="work"/> with its <paramref name="state"/>, so a caller that would
+    /// otherwise capture the state in a closure posts one queued item per turn.
+    /// </summary>
+    internal bool TryPost<TState>(Action<TState> work, TState state)
+    {
+        ArgumentNullException.ThrowIfNull(work);
         if (Volatile.Read(ref _closed) != 0)
             return false;
-        Mailbox.Enqueue(() =>
-        {
-            try
-            {
-                work();
-            }
-            catch (Exception failure)
-            {
-                // A posted turn has no awaiting caller. Its failure becomes an
-                // unobserved task fault (the channel of any fire-and-forget
-                // task) instead of stopping the turns queued behind it.
-                _ = Task.FromException(failure);
-            }
-            return ValueTask.CompletedTask;
-        });
+        Mailbox.Enqueue(new PostWork<TState>(work, state));
         // A current owner, including a turn that posts to its own lane, drains
         // this item before it releases the lane.
         if (TryClaimDrain())
@@ -257,7 +236,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
             do
             {
                 while (_mailbox is { } mailbox && mailbox.TryDequeue(out var work))
-                    await work().ConfigureAwait(false);
+                    await work.RunAsync().ConfigureAwait(false);
             } while (ReleaseDrain());
         }
         finally
@@ -278,6 +257,76 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         if (Volatile.Read(ref _closed) != 0 && Volatile.Read(ref _scheduled) == 0)
             _completed?.TrySetResult();
         return false;
+    }
+
+    // One queued item per turn. The item owns the result signal of its turn, so a
+    // queued turn allocates no wrapper closure around the caller's work.
+    private abstract class LaneWork
+    {
+        internal abstract ValueTask RunAsync();
+    }
+
+    private sealed class ResultWork<TState, T>(Func<TState, T> work, TState state) : LaneWork
+    {
+        private readonly TaskCompletionSource<T> _completion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        internal Task<T> Task => _completion.Task;
+
+        internal override ValueTask RunAsync()
+        {
+            try
+            {
+                _completion.TrySetResult(work(state));
+            }
+            catch (Exception error)
+            {
+                _completion.TrySetException(error);
+            }
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class AsyncWork(Func<ValueTask> work) : LaneWork
+    {
+        private readonly TaskCompletionSource _completion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        internal Task Task => _completion.Task;
+
+        internal override async ValueTask RunAsync()
+        {
+            try
+            {
+                await work().ConfigureAwait(false);
+                _completion.TrySetResult();
+            }
+            catch (Exception failure)
+            {
+                _completion.TrySetException(failure);
+            }
+        }
+    }
+
+    private sealed class PostWork<TState>(Action<TState> work, TState state) : LaneWork
+    {
+        internal override ValueTask RunAsync()
+        {
+            try
+            {
+                work(state);
+            }
+            catch (Exception failure)
+            {
+                // A posted turn has no awaiting caller. Its failure becomes an
+                // unobserved task fault (the channel of any fire-and-forget
+                // task) instead of stopping the turns queued behind it.
+                _ = System.Threading.Tasks.Task.FromException(failure);
+            }
+            return ValueTask.CompletedTask;
+        }
     }
 
     public async ValueTask DisposeAsync()

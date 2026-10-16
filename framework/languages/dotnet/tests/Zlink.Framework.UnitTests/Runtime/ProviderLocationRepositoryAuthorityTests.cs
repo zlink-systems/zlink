@@ -623,6 +623,56 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         }
     }
 
+    // Location runtime §10: a MeshNode NewClaim whose result was lost is
+    // repeated with a new write time; reading the key confirms the first claim.
+    [Fact]
+    public async Task RepeatedMeshNodeNewClaimAfterLostResponseIsConfirmed()
+    {
+        var repository = new ZLinkProviderLocationRepository(
+            new ZLinkInMemoryProviderLocationStore()
+        );
+        var owner = await ClaimAsync(repository, "claim-retry-owner");
+        var other = await ClaimAsync(repository, "claim-retry-other");
+        var descriptor = Descriptor("target", owner) with
+        {
+            UpdatedAt = DateTimeOffset.FromUnixTimeMilliseconds(1_000),
+        };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)
+            ).Status
+        );
+
+        var retry = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                UpdatedAt = DateTimeOffset.FromUnixTimeMilliseconds(2_000),
+            },
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, retry.Status);
+        Assert.NotEqual(0UL, retry.Generation);
+
+        var foreign = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                OwnerId = other.OwnerId,
+                LeaseGeneration = other.LeaseGeneration,
+            },
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.RejectedConflict, foreign.Status);
+        var changed = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                Endpoint = "tcp://127.0.0.1:7999",
+            },
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.RejectedConflict, changed.Status);
+    }
+
     [Fact]
     public async Task ReplacedDescriptorLifecycleReleasesReservedCapacity()
     {

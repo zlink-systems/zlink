@@ -768,7 +768,8 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                     discovered,
                     "inproc://discovered",
                     17,
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                    ZLinkMeshNodeObjectRole.NONE);
             assertTrue(pair.source.configuredPeerIds().contains(discovered));
             assertFalse(pair.source.isPeerTransportConnected(discovered));
             pair.source.forgetPeerAdmissionExpectation(discovered);

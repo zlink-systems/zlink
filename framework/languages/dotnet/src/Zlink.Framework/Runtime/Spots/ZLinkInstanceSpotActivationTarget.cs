@@ -470,7 +470,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
     ZLinkSpotNodeCatalog catalog,
     IZLinkBackendSpotNode node,
     ZLinkSpotNodeRegistration registration,
-    ZLinkLocationOwnerToken owner
+    // Read when an activation runs: a host without an owner lease builds the
+    // target before the lease is claimed (location runtime §5).
+    Func<ZLinkLocationOwnerToken> owner
 ) : IInstanceSpotActivationTarget
 {
     private const int RecoveryScanPageSize = 128;
@@ -708,7 +710,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                             operation.Target.TargetNodeRid
                         ),
                         operation.Target.TargetNodeGeneration,
-                        owner,
+                        owner(),
                         ZLinkInstanceSpotAuthorityPayloadCodec.Encode(creatingPayload),
                         new ZLinkCapacityVector(
                             0,
@@ -1287,18 +1289,21 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         InstanceSpotActivationOperation operation,
         ZLinkInstanceSpotAuthorityState state,
         ZLinkInstanceSpotActivationRecoveryPointer? activationRecovery
-    ) =>
-        new(
+    )
+    {
+        var ownerToken = owner();
+        return new(
             state,
             operation.Target.TargetSpotId,
             operation.Target.StableType,
             operation.Target.MeshName,
             node.RoutingId,
             node.MeshStatus().LifecycleGeneration,
-            owner.OwnerId,
-            checked((ulong)owner.LeaseGeneration),
+            ownerToken.OwnerId,
+            checked((ulong)ownerToken.LeaseGeneration),
             activationRecovery
         );
+    }
 
     private void ValidateTarget(InstanceSpotActivationOperation operation)
     {

@@ -196,7 +196,8 @@ public sealed class ActorHandlerActivationTests
             await releaseBlocker.Task.ConfigureAwait(false);
         });
         await blockerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var mailbox = Assert.IsType<ConcurrentQueue<Func<ValueTask>>>(
+        // The lane's queued turns; only their count is observed here.
+        var mailbox = Assert.IsAssignableFrom<System.Collections.ICollection>(
             typeof(ZLinkStateLane)
                 .GetField("_mailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(lane)

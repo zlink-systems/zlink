@@ -277,7 +277,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.GetSpotNodeRuntime("entry").Catalog,
                 node,
                 runtime.Registration.SpotNodes["entry"],
-                owner
+                () => owner
             );
             InstanceSpotActivationTerminal? terminal = null;
             if (recovered)
@@ -434,7 +434,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.GetSpotNodeRuntime("entry").Catalog,
                 node,
                 runtime.Registration.SpotNodes["entry"],
-                new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
+                () => new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
             );
             var message = new ProbeRouteMessage(Guid.NewGuid().ToString("N"));
             var encoded = ZLinkClientCallCodec.EncodeEnvelopeParts(

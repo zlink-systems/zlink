@@ -448,6 +448,8 @@ internal interface IZLinkBackendSessionRelocationBarrier
 {
     void SetSessionRelocationBarrierTarget(ISessionRelocationBarrierTarget target);
 
+    void CompleteSessionRelocation(Guid relocationId);
+
     ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord> SealSessionRelocationAsync(
         RoutingId sessionOwnerNodeRid,
         ZLinkServiceWireCodec.SessionRelocationSealRecord seal,

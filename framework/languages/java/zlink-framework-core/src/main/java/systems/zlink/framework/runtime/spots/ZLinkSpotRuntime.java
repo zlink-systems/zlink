@@ -1909,6 +1909,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             return SpotActivationBase.finishCleanup(failure, closing);
                         })
                 .thenCompose(stage -> stage)
+                .handle(
+                        (ignored, failure) ->
+                                SpotActivationBase.finishCleanup(failure, publishers.closeAsync()))
+                .thenCompose(stage -> stage)
                 .handleAsync(
                         (ignored, failure) -> {
                             RuntimeException firstFailure =
@@ -1921,7 +1925,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 instanceSpotActivations.clear();
                                 signalCountChanged();
                             }
-                            firstFailure = closeRuntimeComponent(publishers::close, firstFailure);
                             for (ZLinkInternalSpotNode node : nodes) {
                                 firstFailure = closeRuntimeComponent(node::close, firstFailure);
                             }
@@ -2033,6 +2036,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     public int activeUserSpotCount() {
         return spotLifecycle.userSpotCount();
+    }
+
+    /** Instance Spots activated in this process. */
+    public int activeInstanceSpotCount() {
+        return instanceSpotActivations.size();
     }
 
     /** User and Instance Spots activated on the named MeshNode in this process. */
@@ -2375,9 +2383,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         : new systems.zlink.framework.runtime.actors
                                 .ZLinkSessionRelocationPeerClient(relocationMesh);
         actorAdmissions.attach(actorRuntime, this::isDraining, sessionRelocationPeer);
-        //  The same peer client also carries command 42 from the relocation
-        //  source to the bound Session owner (spec 20 §5 step 1).
-        actorRuntime.setSessionRelocationSealer(sessionRelocationPeer);
         actorRuntime.setLocalActorJoiner(this::joinLocalActor);
     }
 
@@ -6398,13 +6403,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     CompletionStage<Void> dispatchActorControlPacket(
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorReceived headerPart,
+            ZLinkBackendActorReceived bodyPart,
             ZLinkActor actor,
             boolean pendingHeader) {
         if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                 packetHeader.packetName())) {
+            byte[] namedSession = bodyPart == null ? new byte[0] : bodyPart.message().toByteArray();
+            RoutingId sessionRid =
+                    namedSession.length == 0
+                            ? headerPart.sourceSessionRid()
+                            : RoutingId.from(namedSession);
             return actorSessions
                     .runtime()
-                    .notifyDisconnected(actor)
+                    .notifyDisconnected(actor, headerPart.sourceNodeRid(), sessionRid)
                     .handle(
                             (ignored, error) -> {
                                 try {

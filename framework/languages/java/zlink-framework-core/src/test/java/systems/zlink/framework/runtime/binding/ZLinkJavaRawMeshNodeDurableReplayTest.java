@@ -10,6 +10,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -34,7 +35,8 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
             source.setRoutingId(RoutingId.from("durable-source"));
             source.setBind(endpoint + "-source");
             source.start();
-            source.observePeerAdmissionExpectation(target, endpoint, 8, "security");
+            source.observePeerAdmissionExpectation(
+                    target, endpoint, 8, "security", ZLinkMeshNodeObjectRole.NONE);
             long intent = source.connectPeer(endpoint, target, 8, "security");
             assertFalse(source.targetLifecycleEnded(target), "peer absence is transient");
             source.forgetPeerAdmissionExpectation(target);
@@ -56,7 +58,11 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
             source.setBind("inproc://durable-no-route-" + System.nanoTime());
             source.start();
             source.observePeerAdmissionExpectation(
-                    targetRid, "inproc://durable-awaiting-admission", 8, "security");
+                    targetRid,
+                    "inproc://durable-awaiting-admission",
+                    8,
+                    "security",
+                    ZLinkMeshNodeObjectRole.NONE);
             var actor = new ZLinkBackendActorRef(targetRid, "actor", 3);
             var spots = (ZLinkJavaRawSpotNode) source.spotNode();
             spots.rememberActorAuthority(actor, 9, 10);

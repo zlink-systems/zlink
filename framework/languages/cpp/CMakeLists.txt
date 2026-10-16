@@ -53,7 +53,7 @@ else()
 endif()
 if(NOT EXISTS "${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp/service_wire_constants.hpp"
     OR NOT EXISTS "${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp/service_wire_pilot_codec.hpp")
-  message(FATAL_ERROR "Missing generated protocol headers; prepare the C++ source archive with cmake/prepare-source-archive.cmake")
+  message(FATAL_ERROR "Missing generated protocol headers; build the C++ source archive with scripts/package-source.py")
 endif()
 option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})

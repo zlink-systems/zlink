@@ -1367,6 +1367,8 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(requestSource, follower.LastRequestSource);
         Assert.Empty(follower.LastApplicationMetadata);
         Assert.Equal([193], follower.LastPayload);
+        // The reply reaches the caller before the handler's finally runs on the owner thread.
+        await follower.HandlerCompleted.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(follower.DisposedByHandler);
         Assert.All(
             follower.LastMessages,
@@ -5609,6 +5611,13 @@ public sealed partial class StatefulServiceRuntimeTests
 
         public bool DisposedByHandler { get; private set; }
 
+        private readonly TaskCompletionSource _handlerCompleted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        // Completes after DisposedByHandler is set, so a test can order its reads after the handler's finally.
+        public Task HandlerCompleted => _handlerCompleted.Task;
+
         public bool TryFollow(IReadOnlyList<ZLinkBackendActorPart> parts)
         {
             Count++;
@@ -5637,6 +5646,7 @@ public sealed partial class StatefulServiceRuntimeTests
             {
                 ZLinkMessageParts.DisposeAll(LastMessages);
                 DisposedByHandler = true;
+                _handlerCompleted.TrySetResult();
             }
         }
     }
