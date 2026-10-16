@@ -11,7 +11,7 @@ flowchart LR
 
 ## Prerequisites
 
-- Node.js 22 or later with npm. The supported range of public binding 1.19.0 is `>=22`.
+- Local process debugging: Node.js 22 or later with npm. The supported range of public binding 1.19.0 is `>=22`.
 - Docker Engine with Docker Compose v2, reachable from the current shell.
 - PowerShell 7 on Windows; Bash on Linux and WSL.
 - A Windows x64 or Linux x64 environment supported by the published native binding.
@@ -21,16 +21,20 @@ The Framework package is pinned to `0.30.0` and the binding to `1.19.0`. Copy on
 ## Build
 
 ```sh
-npm ci && npm run build
+./run-e2e.sh --build-only
 ```
 
 ```powershell
-npm ci; npm run build
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
 This compiles TypeScript and generates the Framework default typed JSON schema from the contract DTOs. The server loads the generated schema through the public `ZLinkPacket` registration path. Do not add per-message codecs.
 
-## Local e2e
+## Docker e2e
+
+Docker runs the e2e runner and each node in containers. All roles use one image; the runner image adds Docker CLI 28.5.1. `NODE_IMAGE` pins `node:22.20.0-trixie` with a slim runtime and the native binding's OpenSSL dependency. Nodes share the runner network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied with `docker cp`; stdin/stdout controls use `docker start -a -i`. Each invocation owns a unique Compose project, network and image tags. Cleanup failures return exit code 1, and shared Docker build cache remains available.
+
+Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuration, stdout and message-flow stderr remain in `.logs/run-<id>/`. For local process debugging, install Node.js 22 or later and npm, then run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse an existing local build. Redis remains in Docker.
 
 ```sh
 ./run-e2e.sh
@@ -42,7 +46,7 @@ pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect
 ```
 
-Both scripts run `npm ci`, the build, and the same runner. After the structure check, the runner starts Redis in a uniquely named Compose project and exposes only an ephemeral loopback port. It records the node endpoints and a unique Redis prefix in the configuration under `.logs/run-<id>/`. After receiving `READY`, it runs the scenarios and then cleans up the processes and the Compose project it started.
+Both scripts build Docker images and execute the same runner in a container. After the structure check, the runner starts Redis in a uniquely named Compose project and exposes only an ephemeral loopback port. It records the node endpoints and a unique Redis prefix in the configuration under `.logs/run-<id>/`. After receiving `READY`, it runs the scenarios and then cleans up the processes and the Compose project it started.
 
 | Scenario  | Verified behavior                                                                                                                                             |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -52,7 +56,7 @@ Both scripts run `npm ci`, the build, and the same runner. After the structure c
 
 Results print as `✓ <id>` or `✗ <id>` followed by `Scenarios: N/M passed`. A failure or a cleanup failure returns exit code 1. The node stderr and client JSONL of the first failure are retained. Node stderr records dispatch `Normal` message flow through the OpenTelemetry log exporter.
 
-To check only the structure, run `npm run build` and then `node dist/e2e/runner.js --check-structure`. The checker validates the actual structure and configuration files and does not run its own self-tests.
+To check only the structure, run `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 --check-structure`. The checker validates the actual structure and configuration files and does not run its own self-tests.
 
 ## Known issues
 
@@ -92,6 +96,6 @@ The e2e runner sets each node's optional `tableCapacity` to the number of select
 
 ## 한국어 실행 안내
 
-이 프로젝트는 Session node와 Table node 두 개, 그리고 Redis Location Store를 실행한다. `run-e2e.sh`와 `run-e2e.ps1`은 같은 runner를 사용하며, 착석과 카드 비공개, 재접속, node 교체(update)를 공개 stream connector로 확인한 뒤 자신이 시작한 process와 Compose project를 정리한다.
+기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
-처음에는 `npm ci && npm run build`로 빌드하고, 전체 시나리오 또는 `--scenario table,reconnect`로 선택하여 실행한다. 실패하면 종료 코드 1을 반환하고 첫 실패의 node stderr와 client JSONL을 `.logs/run-<id>/` 아래에 남긴다. 공개 0.30.0에서는 `update`가 #1725 때문에, `table,reconnect`는 종료 단계의 #1690 때문에 종료 코드 1이 될 수 있으므로 시나리오 통과 줄과 전체 성공을 구분하여 확인한다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.
+이 프로젝트는 Session node와 Table node 두 개, 그리고 Redis Location Store를 실행한다. `run-e2e.sh`와 `run-e2e.ps1`은 같은 runner를 사용하며, 착석과 카드 비공개, 재접속, node 교체(update)를 공개 stream connector로 확인한 뒤 자신이 시작한 process와 Compose project를 정리한다. 처음에는 `./run-e2e.sh --build-only`로 빌드하고, 전체 시나리오 또는 `--scenario table,reconnect`로 선택하여 실행한다. 실패하면 종료 코드 1을 반환하고 첫 실패의 node stderr와 client JSONL을 `.logs/run-<id>/` 아래에 남긴다. 공개 0.30.0에서는 `update`가 #1725 때문에, `table,reconnect`는 종료 단계의 #1690 때문에 종료 코드 1이 될 수 있으므로 시나리오 통과 줄과 전체 성공을 구분하여 확인한다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.

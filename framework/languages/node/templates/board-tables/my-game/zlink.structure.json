@@ -5,9 +5,9 @@
   "language": "node",
   "run": {
     "commands": {
-      "sh": ["npm ci && npm run build", "./run-e2e.sh", "./run-e2e.sh --scenario table,reconnect"],
+      "sh": ["./run-e2e.sh --build-only", "./run-e2e.sh", "./run-e2e.sh --scenario table,reconnect"],
       "powershell": [
-        "npm ci; npm run build",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
         "pwsh -NoProfile -File ./run-e2e.ps1",
         "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect"
       ]

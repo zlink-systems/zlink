@@ -21,6 +21,8 @@ Do not add internal APIs, reflection, raw frames, custom message codecs, transpo
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` and `./run-e2e.sh` for Docker verification. On Windows use `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly` and `pwsh -NoProfile -File ./run-e2e.ps1`. The default runs the runner and nodes in Docker with unique project resources. Preserve stdin/stdout lifecycle control and inspect `.logs/docker-<project>/` as well as `.logs/run-<id>/`. Use `--local` or `-Local` for local process debugging; Node.js and npm are required in that mode. Keep resource limits in the validation environment rather than template scripts.
+
 Keep the structure, role entrypoints, configuration, README commands, and ordered `lobby,hit,reconnect,update` scenarios consistent. Each run validates the structure before creating isolated Redis and server processes. Logs remain in `.logs/run-<id>/`; cleanup errors fail the run. An intermittent failure remains a defect even if a subsequent run passes.
 
 Run build, lint, structure checks, and relevant e2e scenarios on Windows and Linux. Check invalid structures in a disposable development copy; do not put self-test mutations into the structure checker.

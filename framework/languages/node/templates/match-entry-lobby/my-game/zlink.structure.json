@@ -6,12 +6,12 @@
   "run": {
     "commands": {
       "sh": [
-        "npm install && npm run build",
+        "./run-e2e.sh --build-only",
         "./run-e2e.sh",
         "./run-e2e.sh --scenario hit,reconnect,update"
       ],
       "powershell": [
-        "npm install; if ($LASTEXITCODE -eq 0) { npm run build }",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
         "pwsh -NoProfile -File ./run-e2e.ps1",
         "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update"
       ]
