@@ -11,6 +11,7 @@ import type { ActorRef, RoutingId, ZLinkActorCreateResult } from '../../contract
 import { ZLinkSpotKind } from '../../contracts';
 import type {
   ZLinkAuthoritySnapshot,
+  ZLinkAuthorityReadResult,
   ZLinkCreationOperationIdentity,
   ZLinkLocationOwnerToken,
   ZLinkObjectReserveResult,
@@ -104,6 +105,15 @@ export class ZLinkActorPlacementCoordinator {
       for (;;) {
         const target = await this.options.target(meshName, stableType, deadline.signal, excluded);
         if (target === undefined) {
+          // Entry eligibility limits new creation, not lookup of a Ready Actor (Actor model §6.3, §6.5).
+          if (!createOnly) {
+            const current = await this.options.store.readAuthority(
+              encodeAuthorityKey('actor', actorId),
+              deadline.signal
+            );
+            const existing = existingActor(current, actorId, stableType);
+            if (existing !== undefined) return { status: 'existing', actor: existing };
+          }
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
             `No eligible Actor placement target is ready for '${stableType}'.`,
@@ -454,16 +464,18 @@ function creationTarget(snapshot: ZLinkAuthoritySnapshot) {
 }
 
 function existingActor(
-  reserved: ZLinkObjectReserveResult,
+  current: ZLinkObjectReserveResult | ZLinkAuthorityReadResult,
   actorId: string,
   stableType: string
 ): ActorRef | undefined {
   const snapshot =
-    reserved.kind === 'alreadyExists'
-      ? reserved.current
-      : reserved.kind === 'conflict' && reserved.current.kind === 'snapshot'
-        ? reserved.current
-        : undefined;
+    current.kind === 'snapshot'
+      ? current
+      : current.kind === 'alreadyExists'
+        ? current.current
+        : current.kind === 'conflict' && current.current.kind === 'snapshot'
+          ? current.current
+          : undefined;
   if (
     snapshot === undefined ||
     snapshot.allocation.state !== 'active' ||
