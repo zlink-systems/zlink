@@ -185,7 +185,10 @@ for (const backend of ['provider', 'memory'] as const) {
         });
         assert.equal(committed.kind, 'committed');
         if (committed.kind !== 'committed') throw new Error('Ready missing');
-        const addAuthority = async (actorId: string, spotKind: ZLinkSpotKind) => {
+        const addAuthority = async (
+          actorId: string,
+          spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User
+        ) => {
           const actorRequest = {
             key: { kind: 'actor' as const, globalId: actorId },
             intent: {
