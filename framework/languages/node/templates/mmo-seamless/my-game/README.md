@@ -17,25 +17,25 @@ flowchart LR
 
 ## Prerequisites
 
-Install Node.js 22 or later, npm, Docker with Compose v2 and PowerShell 7 on Windows. The project pins public ZLink packages to 0.30.1. That release must be available from the public npm registry before installation. No repository source or local package feed is required by this template.
+Install Docker with Compose v2 and PowerShell 7 on Windows. Local debugging also requires Node.js 22 or later and npm. The project pins public ZLink packages to 0.30.1. That release must be available from the public npm registry before installation. No repository source or local package feed is required by this template.
 
 ## Build
 
 Shell:
 
 ```sh
-npm install && npm run build
+./run-e2e.sh --build-only
 ```
 
 PowerShell:
 
 ```powershell
-npm install; npm run build
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-The build compiles TypeScript and generates packet schemas for the Framework's default typed JSON serializer. Relocation adapters serialize only application state.
+Docker builds a shared role image and a runner image using the pinned `NODE_IMAGE` ARG (`node:22.20.0-trixie`, with a slim runtime stage). The runner image also includes Docker CLI 28.5.1. The build compiles TypeScript and generates packet schemas for the Framework's default typed JSON serializer. Relocation adapters serialize only application state.
 
-## Local e2e
+## Docker e2e
 
 ```sh
 ./run-e2e.sh
@@ -50,6 +50,10 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
 The default order is `cross`, `border`, `reconnect`, `update`. Cross verifies Zone A to Zone B movement, Actor identity, uninterrupted Session binding and Dungeon placement. Border verifies adjacent visibility across physical processes. Reconnect verifies preserved movement with a new physical Session. Update drains Zone A while movement continues, observes relocation and SafeToShutdown, stops the old process, starts its replacement and verifies continued game traffic.
 
 Each run validates `zlink.structure.json`, creates a unique Redis Compose project and key prefix, binds listeners to OS-assigned ports, and saves node stdout, stderr message-flow records and client packets in `.logs/run-<id>/`. Cleanup failure causes exit code 1. The runner uses separate role entrypoints and starts Zone A before Zone B so fixed Zone placement follows the declared configuration.
+
+Docker runs the e2e runner and each node in containers. Nodes share the runner's network namespace, preserving loopback endpoints and OS-assigned ports. The runner controls stdin and captures stdout through `docker start -a -i`. Each run owns a unique Compose project, network and image tags. Shell logs are in `.logs/docker-<project>/`; node and message-flow logs remain in `.logs/run-<id>/`. Cleanup removes only that run's resources and returns exit code 1 on failure. Shared Docker build cache is retained.
+
+For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. These commands install packages, build and run the same scenarios with Redis in Docker. Add `--no-build` or `-NoBuild` to reuse an existing local build.
 
 ## Known issues
 
@@ -70,6 +74,6 @@ Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity befo
 
 ## 한국어 실행 안내
 
-Node.js 22 이상과 Docker Compose v2를 설치한 뒤 위 Build 명령으로 빌드합니다. 공개 package 0.30.1이 게시되어 있어야 설치할 수 있습니다. Windows에서는 PowerShell 7로 `run-e2e.ps1`을 실행하고, Linux에서는 `run-e2e.sh`를 실행합니다.
+Docker Compose v2를 설치한 뒤 위 Build 명령으로 이미지를 빌드합니다. 기본 e2e는 runner와 node를 컨테이너에서 실행합니다. 로컬 프로세스 디버깅은 Node.js 22 이상을 설치하고 `--local` 또는 `-Local`로 실행합니다. 공개 package 0.30.1이 게시되어 있어야 설치할 수 있습니다. Windows에서는 PowerShell 7로 `run-e2e.ps1`을 실행하고, Linux에서는 `run-e2e.sh`를 실행합니다.
 
 기본 검증은 Zone 경계 이동, 인접 Zone의 위치 관찰, 재접속과 host 교체를 순서대로 실행합니다. 실행별 node 로그와 message-flow 기록은 `.logs/run-<id>/`에 보존됩니다. 0.30.0에서는 #1725로 host 교체가 차단되므로 해당 결과를 통과로 간주하지 않습니다.

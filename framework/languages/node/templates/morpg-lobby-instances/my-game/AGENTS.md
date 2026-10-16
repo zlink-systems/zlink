@@ -22,6 +22,8 @@ Lobby and Instance register the shared application Entry and first-admission han
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` and `./run-e2e.sh` for Docker verification. On Windows use `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly` and `pwsh -NoProfile -File ./run-e2e.ps1`. The default runs the runner and nodes in Docker with unique project resources. Preserve stdin/stdout lifecycle control and inspect `.logs/docker-<project>/` as well as `.logs/run-<id>/`. Use `--local` or `-Local` for local process debugging; Node.js and npm are required in that mode. Keep resource limits in the validation environment rather than template scripts.
+
 Keep `party`, `reconnect`, and `update` scenarios in their declared order. Run build, typecheck, lint, format checks, structure validation, and the affected e2e scenarios. Validate on Windows and Linux; an intermittent failure remains a defect. Inspect the first failure and message flow in `.logs/run-<id>/` before changing code. The checker validates real project files; temporary negative fixtures belong outside the template.
 
 Code comments are English. Keep project tokens `my-game` and `MyGame` for Initializr substitution. Update structure declarations and README commands with composition changes. Keep the Framework versions in `package.json` and do not commit local package paths or validation caches.

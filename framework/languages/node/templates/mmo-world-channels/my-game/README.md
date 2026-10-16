@@ -18,7 +18,7 @@ flowchart LR
 
 ## Prerequisites
 
-Use Node.js 22 or later, npm, Docker Compose v2 and PowerShell 7 on Windows.
+Use Docker Compose v2 and PowerShell 7 on Windows.
 Install the public ZLink Framework 0.30.1 packages specified in `package.json`.
 Redis ports and node listeners use OS-assigned ports in the e2e runner.
 
@@ -27,19 +27,23 @@ Redis ports and node listeners use OS-assigned ports in the e2e runner.
 From this directory on Bash:
 
 ```sh
-npm install && npm run build
+./run-e2e.sh --build-only
 ```
 
 On PowerShell:
 
 ```powershell
-npm install; if ($LASTEXITCODE -eq 0) { npm run build }
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
 The build emits TypeScript and generates the Framework JSON schema catalog from
 the shared DTO declarations. Messages use the default typed JSON serializer.
 
-## Local e2e
+## Docker e2e
+
+Docker runs the e2e runner and each node in containers. All roles use one image; the runner image adds Docker CLI 28.5.1. `NODE_IMAGE` pins `node:22.20.0-trixie` with a slim runtime and the native binding's OpenSSL dependency. Nodes share the runner network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied with `docker cp`; stdin/stdout controls use `docker start -a -i`. Each invocation owns a unique Compose project, network and image tags. Cleanup failures return exit code 1, and shared Docker build cache remains available.
+
+Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuration, stdout and message-flow stderr remain in `.logs/run-<id>/`. For local process debugging, install Node.js 22 or later and npm, then run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse an existing local build. Redis remains in Docker.
 
 ```sh
 ./run-e2e.sh
@@ -104,10 +108,9 @@ its control protocol accepts `shutdown` and it does not host relocatable objects
 
 ## 한국어 실행 안내
 
+기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
+
 이 템플릿은 월드별 Session endpoint, mesh, Redis와 Player Actor를 분리합니다.
 Player Actor가 gold를 소유하며 변경 값을 해당 월드 Redis에 저장합니다. 채널 변경은
-공개 Actor join API를 사용하므로 client 연결을 유지합니다.
-
-Node.js와 Docker Compose를 준비한 뒤 위 Build 명령으로 빌드하고 Local e2e 명령으로
-검증하십시오. 실행별 로그는 `.logs/run-<id>/`에 남습니다. channel node를 교체할 때는
+공개 Actor join API를 사용하므로 client 연결을 유지합니다. Docker Compose를 준비한 뒤 위 Build 명령으로 이미지를 빌드하고 Docker e2e 명령으로 검증한다. 실행별 로그는 `.logs/run-<id>/`에 남습니다. channel node를 교체할 때는
 `drain` 완료와 `SAFE_TO_SHUTDOWN`을 확인한 뒤 종료하고 같은 설정으로 다시 기동합니다.

@@ -23,21 +23,17 @@ class NodeProcess {
   constructor(
     readonly config: NodeConfig,
     readonly role: NodeRole,
-    readonly path: string,
+    command: string,
+    args: string[],
     logDir: string,
     sequence: number
   ) {
-    writeFileSync(path, JSON.stringify(config, null, 2));
     const out = createWriteStream(`${logDir}/${config.id}-${sequence}.out.log`),
       err = createWriteStream(`${logDir}/${config.id}-${sequence}.err.log`);
-    this.child = spawn(
-      process.execPath,
-      [`dist/${NodeEntrypoints[role].replace(/\.ts$/, '.js')}`, path],
-      {
-        windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe']
-      }
-    );
+    this.child = spawn(command, args, {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
     this.child.stdout!.pipe(out);
     this.child.stderr!.pipe(err);
     const reader = createInterface({ input: this.child.stdout! });
@@ -142,12 +138,14 @@ async function runScenario(name: string): Promise<boolean> {
   const logDir = `.logs/run-${runId}`;
   mkdirSync(logDir, { recursive: true });
   const project = `my-game-${runId}`;
+  const dockerProject = process.env.MY_GAME_DOCKER_PROJECT;
+  const containers: string[] = [];
   const nodes = new Map<string, NodeProcess>();
   const all: NodeProcess[] = [];
   let failed = false;
   async function docker(args: string[], label: string): Promise<string> {
     const log = createWriteStream(`${logDir}/docker-${label}.log`);
-    const child = spawn('docker', ['compose', '-p', project, '-f', 'docker-compose.yml', ...args], {
+    const child = spawn('docker', args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -166,15 +164,52 @@ async function runScenario(name: string): Promise<boolean> {
     assert.equal(code, 0, `Docker ${label}; log=${logDir}`);
     return output.trim();
   }
+  function compose(args: string[], label: string): Promise<string> {
+    return docker(['compose', '-p', project, '-f', 'docker-compose.yml', ...args], label);
+  }
   async function start(config: NodeConfig, role: NodeRole): Promise<NodeProcess> {
-    const node = new NodeProcess(config, role, `${logDir}/${config.id}.json`, logDir, all.length);
+    const path = `${logDir}/${config.id}.json`;
+    writeFileSync(path, JSON.stringify(config, null, 2));
+    const entrypoint = `dist/${NodeEntrypoints[role].replace(/\.ts$/, '.js')}`;
+    let command = process.execPath;
+    let args = [entrypoint, path];
+    if (dockerProject) {
+      const container = `${dockerProject}-${config.id.toLowerCase()}-${runId}-${all.length}`;
+      const image = process.env.MY_GAME_NODE_IMAGE;
+      const runner = process.env.MY_GAME_RUNNER_CONTAINER;
+      assert(image && runner, 'Missing Docker node image or runner container');
+      await docker(
+        [
+          'create',
+          '-i',
+          '--name',
+          container,
+          '--label',
+          `my-game.e2e=${dockerProject}`,
+          '--network',
+          `container:${runner}`,
+          image,
+          entrypoint,
+          '/template/node.json'
+        ],
+        `${config.id}-create-${all.length}`
+      );
+      containers.push(container);
+      await docker(
+        ['cp', path, `${container}:/template/node.json`],
+        `${config.id}-config-${all.length}`
+      );
+      command = 'docker';
+      args = ['start', '-a', '-i', container];
+    }
+    const node = new NodeProcess(config, role, command, args, logDir, all.length);
     all.push(node);
     nodes.set(config.id, node);
     return node;
   }
   try {
-    await docker(['up', '-d', '--wait'], 'up');
-    const redis = await docker(['port', 'redis', '6379'], 'port');
+    if (!dockerProject) await compose(['up', '-d', '--wait'], 'up');
+    const redis = dockerProject ? 'redis:6379' : await compose(['port', 'redis', '6379'], 'port');
     const structure = JSON.parse(readFileSync('zlink.structure.json', 'utf8')) as {
       nodes: { role: string; config: string | null }[];
     };
@@ -229,8 +264,16 @@ async function runScenario(name: string): Promise<boolean> {
         failed = true;
         console.error('Node cleanup failed', error);
       }
+    for (const container of containers) {
+      try {
+        await docker(['rm', '-f', container], `${container}-remove`);
+      } catch (error) {
+        failed = true;
+        console.error('Container cleanup failed', error);
+      }
+    }
     try {
-      await docker(['down', '--volumes', '--remove-orphans'], 'down');
+      if (!dockerProject) await compose(['down', '--volumes', '--remove-orphans'], 'down');
     } catch (error) {
       failed = true;
       console.error('Redis cleanup failed', error);

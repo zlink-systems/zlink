@@ -20,6 +20,8 @@ Spots do not retain Actor references. Each application decision has one state ow
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` and `./run-e2e.sh` for Docker verification. On Windows use `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly` and `pwsh -NoProfile -File ./run-e2e.ps1`. The default runs the runner and nodes in Docker with unique project resources. Preserve stdin/stdout lifecycle control and inspect `.logs/docker-<project>/` as well as `.logs/run-<id>/`. Use `--local` or `-Local` for local process debugging; Node.js and npm are required in that mode. Keep resource limits in the validation environment rather than template scripts.
+
 Keep `zlink.structure.json`, shared constants, configuration and the ordered scenarios `field,dungeon,reconnect,update` consistent. Validate the structure before starting processes. Run build, typecheck, lint and e2e on Windows and Linux; verify that intentionally invalid structures are rejected during development without adding self-tests to the shipped checker. Preserve the four scenarios when extending game rules.
 
 Any intermittent failure is a defect. Preserve the first failing node log and message-flow record under `.logs/run-<id>/`, identify the public API call, and report Framework defects instead of compensating for them. Cleanup must release only this run's processes and Compose project; failures must remain visible in the exit code. Keep README and comments in English, except for the final Korean execution section in README.

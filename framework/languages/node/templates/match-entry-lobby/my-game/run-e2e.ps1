@@ -1,12 +1,81 @@
-param([string]$Scenario)
+[CmdletBinding(PositionalBinding = $false)]
+param(
+    [switch]$Local,
+    [switch]$NoBuild,
+    [switch]$BuildOnly,
+    [string]$Scenario,
+    [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
+)
 $ErrorActionPreference = 'Stop'
-Set-Location $PSScriptRoot
-& npm install
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& npm run build
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-# The runner selects server/session/main.js and server/match/main.js from declared node roles.
-$arguments = @('dist/e2e/runner.js')
-if ($Scenario) { $arguments += @('--scenario', $Scenario) }
-& node @arguments
-exit $LASTEXITCODE
+Set-StrictMode -Version Latest
+if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
+$root = $PSScriptRoot
+Set-Location $root
+New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
+if ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if ($Local) {
+    if (-not $NoBuild) {
+        & npm install *> (Join-Path $root '.logs/build.log')
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & npm run build *>> (Join-Path $root '.logs/build.log')
+        if ($LASTEXITCODE -ne 0) {
+            Get-Content (Join-Path $root '.logs/build.log') -Tail 20 | Write-Host
+            exit 1
+        }
+    }
+    if ($BuildOnly) { exit 0 }
+    & node dist/e2e/runner.js @RunnerArguments
+    exit $LASTEXITCODE
+}
+if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
+$checkOnly = $RunnerArguments.Count -gt 0 -and $RunnerArguments[0] -eq '--check-structure'
+$project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
+$logs = Join-Path $root ".logs/docker-$project"
+New-Item -ItemType Directory $logs | Out-Null
+$compose = @('compose', '-f', (Join-Path $root 'docker-compose.yml'), '-p', $project, '--profile', 'docker')
+$result = 1
+Write-Host "Docker logs: $logs"
+try {
+    & docker @compose build *> (Join-Path $logs 'build.log')
+    if ($LASTEXITCODE -ne 0) {
+        Get-Content (Join-Path $logs 'build.log') -Tail 30 | Write-Host
+        throw 'Docker image build failed.'
+    }
+    if ($BuildOnly) { $result = 0 }
+    else {
+        $checkArguments = @('--check-structure')
+        if ($checkOnly) {
+            $checkArguments = $RunnerArguments
+        }
+        & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
+        if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
+        if ($checkOnly) { $result = 0 }
+        else {
+            & docker @compose up -d --wait --wait-timeout 30 redis *> (Join-Path $logs 'redis-start.log')
+            if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }
+            & docker @compose run --rm --no-deps -T --name "$project-control" runner @RunnerArguments
+            $result = $LASTEXITCODE
+        }
+    }
+}
+catch { Write-Host $_ -ForegroundColor Red }
+finally {
+    $containers = @(& docker ps -aq --filter "label=my-game.e2e=$project")
+    if ($LASTEXITCODE -ne 0) { $result = 1 }
+    if ($containers.Count -gt 0) {
+        & docker rm -f @containers *> (Join-Path $logs 'containers-stop.log')
+        if ($LASTEXITCODE -ne 0) { $result = 1 }
+    }
+    & docker @compose logs --no-color redis *> (Join-Path $logs 'redis.log')
+    if ($LASTEXITCODE -ne 0) { $result = 1 }
+    & docker @compose down --volumes *> (Join-Path $logs 'cleanup.log')
+    if ($LASTEXITCODE -ne 0) { $result = 1 }
+    foreach ($image in @("$project-node", "$project-runner")) {
+        & docker image inspect $image *> $null
+        if ($LASTEXITCODE -eq 0) {
+            & docker image rm $image *>> (Join-Path $logs 'cleanup.log')
+            if ($LASTEXITCODE -ne 0) { $result = 1 }
+        }
+    }
+}
+exit $result

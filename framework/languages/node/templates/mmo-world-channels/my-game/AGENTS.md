@@ -28,6 +28,8 @@ retries, increased deadlines or weaker assertions to bypass Framework defects.
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` and `./run-e2e.sh` for Docker verification. On Windows use `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly` and `pwsh -NoProfile -File ./run-e2e.ps1`. The default runs the runner and nodes in Docker with unique project resources. Preserve stdin/stdout lifecycle control and inspect `.logs/docker-<project>/` as well as `.logs/run-<id>/`. Use `--local` or `-Local` for local process debugging; Node.js and npm are required in that mode. Keep resource limits in the validation environment rather than template scripts.
+
 Keep the ordered `worlds`, `channel`, `reconnect`, `update` scenarios and the
 structure manifest consistent. Run build, lint, structure checking and e2e on
 Windows and WSL. An intermittent failure is a defect; retain the first failure

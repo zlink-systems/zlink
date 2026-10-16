@@ -14,25 +14,29 @@ flowchart LR
 
 ## Prerequisites
 
-Node.js 22 or later, npm, Docker Compose v2, and PowerShell 7 for the PowerShell runner are required. The project pins public Framework packages to 0.30.1 and the binding to 1.19.0 in `package.json`. Framework 0.30.1 must be published before the normal install commands can resolve it. A license, when required by the deployment, is provided externally and is never committed.
+Docker Compose v2, and PowerShell 7 for the PowerShell runner are required. The project pins public Framework packages to 0.30.1 and the binding to 1.19.0 in `package.json`. Framework 0.30.1 must be published before the normal install commands can resolve it. A license, when required by the deployment, is provided externally and is never committed.
 
 ## Build
 
 Run from this directory. POSIX shell:
 
 ```sh
-npm install && npm run build
+./run-e2e.sh --build-only
 ```
 
 PowerShell:
 
 ```powershell
-npm install; if ($LASTEXITCODE -eq 0) { npm run build }
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
 The build generates the Framework's standard typed JSON schemas from shared contracts. No message-specific codec is registered.
 
-## Local e2e
+## Docker e2e
+
+Docker runs the e2e runner and each node in containers. All roles use one image; the runner image adds Docker CLI 28.5.1. `NODE_IMAGE` pins `node:22.20.0-trixie` with a slim runtime and the native binding's OpenSSL dependency. Nodes share the runner network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied with `docker cp`; stdin/stdout controls use `docker start -a -i`. Each invocation owns a unique Compose project, network and image tags. Cleanup failures return exit code 1, and shared Docker build cache remains available.
+
+Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuration, stdout and message-flow stderr remain in `.logs/run-<id>/`. For local process debugging, install Node.js 22 or later and npm, then run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse an existing local build. Redis remains in Docker.
 
 ```sh
 ./run-e2e.sh
@@ -71,6 +75,6 @@ Initial Field placement uses public stable-type capacity and sequential startup.
 
 ## 한국어 실행 안내
 
-이 디렉터리에서 Build와 Local e2e의 명령을 실행합니다. `field`, `dungeon`, `reconnect`, `update`는 각각 필드 이동과 경계 표시, 파티 던전 입장, 던전 안 재접속, instance 교체를 검증합니다. 공개 패키지 0.30.1 게시 전에는 일반 설치 명령이 해당 버전을 받을 수 없습니다.
+기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
-실행 로그와 message-flow 기록은 `.logs/run-<id>/`에 남습니다. 배포 시 Redis, fieldA, fieldB, 두 instance, Session 순서로 시작하고 READY를 확인합니다. instance 교체 시 drain의 relocation 및 SafeToShutdown 결과를 확인한 뒤 shutdown하고 같은 설정으로 대체 프로세스를 시작합니다.
+이 디렉터리에서 Build와 Docker e2e의 명령을 실행합니다. `field`, `dungeon`, `reconnect`, `update`는 각각 필드 이동과 경계 표시, 파티 던전 입장, 던전 안 재접속, instance 교체를 검증합니다. 공개 패키지 0.30.1 게시 전에는 일반 설치 명령이 해당 버전을 받을 수 없습니다. 실행 로그와 message-flow 기록은 `.logs/run-<id>/`에 남습니다. 배포 시 Redis, fieldA, fieldB, 두 instance, Session 순서로 시작하고 READY를 확인합니다. instance 교체 시 drain의 relocation 및 SafeToShutdown 결과를 확인한 뒤 shutdown하고 같은 설정으로 대체 프로세스를 시작합니다.

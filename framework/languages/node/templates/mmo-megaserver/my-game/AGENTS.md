@@ -17,4 +17,6 @@ Region owns membership, positions and sequence validation. Entry owns index sele
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` and `./run-e2e.sh` for Docker verification. On Windows use `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly` and `pwsh -NoProfile -File ./run-e2e.ps1`. The default runs the runner and nodes in Docker with unique project resources. Preserve stdin/stdout lifecycle control and inspect `.logs/docker-<project>/` as well as `.logs/run-<id>/`. Use `--local` or `-Local` for local process debugging; Node.js and npm are required in that mode. Keep resource limits in the validation environment rather than template scripts.
+
 Keep `region,dungeon,reconnect,update` and the structure declaration consistent. Run build, typecheck, lint, formatting and e2e after changes. Structure checks read actual files and reject inconsistent declarations. Verify both valid and invalid structure inputs outside permanent test code. A single intermittent failure is a defect; preserve the first failure and message-flow stderr records under `.logs/run-<id>/`. Report Framework defects with reproduction and public API evidence.

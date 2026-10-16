@@ -28,7 +28,9 @@ Change the game rules in `server/table/domain/table-state.ts`. Infrastructure ow
 
 ## Verification
 
-Run `npm ci && npm run build`, `npm run typecheck`, `npm run lint`, and `npm run format:check`. Windows `run-e2e.ps1` and Linux `run-e2e.sh` perform the actual structure check and the public connector e2e. Verification runs the full e2e once and the `table,reconnect` selection twice. Preserve the first failure and the message flow; do not ignore an intermittent failure because a rerun passed.
+Run `./run-e2e.sh --build-only` and `./run-e2e.sh` for Docker verification. On Windows use `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly` and `pwsh -NoProfile -File ./run-e2e.ps1`. The default runs the runner and nodes in Docker with unique project resources. Preserve stdin/stdout lifecycle control and inspect `.logs/docker-<project>/` as well as `.logs/run-<id>/`. Use `--local` or `-Local` for local process debugging; Node.js and npm are required in that mode. Keep resource limits in the validation environment rather than template scripts.
+
+For local development, run `npm ci && npm run build`, `npm run typecheck`, `npm run lint`, and `npm run format:check`. Windows `run-e2e.ps1` and Linux `run-e2e.sh` perform the actual structure check and the public connector e2e. Verification runs the full e2e once and the `table,reconnect` selection twice. Preserve the first failure and the message flow; do not ignore an intermittent failure because a rerun passed.
 
 Do not fix or work around Framework defects in this template. After checking the usage against the public guide and samples, report the reproduction, the first failure log, and the relevant source locations. Cleanup is limited to the processes and Compose project owned by the runner.
 
