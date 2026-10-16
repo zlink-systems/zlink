@@ -46,11 +46,7 @@ internal static class Scenarios
             {
                 try
                 {
-                    await using (var run = new MatchRun(root))
-                    {
-                        await run.StartAsync(ct);
-                        await PlayAsync(run.Endpoint, scenario, run, ct);
-                    }
+                    await RunOutcome.RunAsync(PlayRunAsync);
                     Console.WriteLine($"✓ {scenario}");
                     passed++;
                 }
@@ -58,6 +54,16 @@ internal static class Scenarios
                 {
                     Console.WriteLine($"✗ {scenario}");
                     throw;
+                }
+
+                async Task<int> PlayRunAsync()
+                {
+                    await using (var run = new MatchRun(root))
+                    {
+                        await run.StartAsync(ct);
+                        await PlayAsync(run.Endpoint, scenario, run, ct);
+                    }
+                    return 0;
                 }
             }
         }

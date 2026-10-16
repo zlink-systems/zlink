@@ -30,6 +30,16 @@ string? Option(string name)
 
 try
 {
+    return await RunOutcome.RunAsync(RunAsync);
+}
+catch (Exception error)
+{
+    Console.Error.WriteLine(error);
+    return 1;
+}
+
+async Task<int> RunAsync()
+{
     var root = Path.GetFullPath(Option("--root") ?? Directory.GetCurrentDirectory());
     if (args.Contains("--check-structure"))
     {
@@ -45,19 +55,13 @@ try
         StructureCheck.Run(root, null);
         await run.StartAsync(deadline.Token);
     }
-    catch (Exception failure)
+    catch
     {
         Console.WriteLine($"✗ {selected[0]} (startup)");
         Console.WriteLine($"Scenarios: 0/{selected.Length} passed");
-        Console.Error.WriteLine("Startup failure: " + failure);
         throw;
     }
     await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
     Console.WriteLine("morpg-fields-instances=completed");
     return 0;
-}
-catch (Exception error)
-{
-    Console.Error.WriteLine(error);
-    return 1;
 }

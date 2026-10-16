@@ -48,10 +48,13 @@ internal sealed class ManagedProcess : IAsyncDisposable
         }
         catch
         {
-            if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
-            process.WaitForExit();
-            process.Dispose();
+            RunOutcome.Cleanup(() =>
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            });
+            RunOutcome.Cleanup(process.WaitForExit);
+            RunOutcome.Cleanup(process.Dispose);
             throw;
         }
     }
@@ -110,11 +113,12 @@ internal sealed class ManagedProcess : IAsyncDisposable
 
     public Task CommandAsync(string command) => process.StandardInput.WriteLineAsync(command);
 
-    public async Task StopAsync()
+    public ValueTask StopAsync() => RunOutcome.CleanupAsync(StopCoreAsync);
+
+    private async ValueTask StopCoreAsync()
     {
         if (stopped)
             return;
-        List<Exception> failures = [];
         if (!process.HasExited)
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -125,7 +129,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
             }
             catch (Exception error)
             {
-                failures.Add(error);
+                RunOutcome.Record(error);
             }
             finally
             {
@@ -133,7 +137,7 @@ internal sealed class ManagedProcess : IAsyncDisposable
                 {
                     process.Kill(entireProcessTree: true);
                     await process.WaitForExitAsync();
-                    failures.Add(
+                    RunOutcome.Record(
                         new InvalidOperationException(
                             $"Node PID {process.Id} required forced termination."
                         )
@@ -141,33 +145,19 @@ internal sealed class ManagedProcess : IAsyncDisposable
                 }
             }
         }
-        try
-        {
-            await Task.WhenAll(stdout, stderr);
-        }
-        catch (Exception error)
-        {
-            failures.Add(error);
-        }
+        await RunOutcome.CleanupAsync(async () => await stdout);
+        await RunOutcome.CleanupAsync(async () => await stderr);
         stopped = true;
         if (process.ExitCode != 0)
-            failures.Add(
+            RunOutcome.Record(
                 new InvalidOperationException($"Node PID {process.Id} exited {process.ExitCode}.")
             );
-        if (failures.Count > 0)
-            throw new AggregateException($"Node PID {process.Id} cleanup failed.", failures);
     }
 
     public async ValueTask DisposeAsync()
     {
-        try
-        {
-            await StopAsync();
-        }
-        finally
-        {
-            process.Dispose();
-        }
+        await StopAsync();
+        RunOutcome.Cleanup(process.Dispose);
     }
 }
 

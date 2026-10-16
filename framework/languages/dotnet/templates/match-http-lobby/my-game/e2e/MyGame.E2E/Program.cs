@@ -44,9 +44,8 @@ try
         StructureCheck.Run(root, null);
         await Scenarios.RunAsync(root, selected, deadline.Token);
     }
-    catch (Exception failure)
+    catch
     {
-        Console.Error.WriteLine("Startup or scenario failure: " + failure);
         throw;
     }
     Console.WriteLine("match-http-lobby=completed");

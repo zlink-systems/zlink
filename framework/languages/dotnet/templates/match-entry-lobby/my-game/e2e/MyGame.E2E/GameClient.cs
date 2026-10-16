@@ -56,7 +56,7 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
         }
         catch
         {
-            await connector.DisposeAsync();
+            await client.DisposeAsync();
             throw;
         }
     }
@@ -110,5 +110,5 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
     public async Task<SessionInfo> SessionAsync(CancellationToken ct) =>
         await Connector.Request(new SessionInfoRequest()).Async<SessionInfo>(ct);
 
-    public ValueTask DisposeAsync() => Connector.DisposeAsync();
+    public ValueTask DisposeAsync() => RunOutcome.CleanupAsync(Connector.DisposeAsync);
 }

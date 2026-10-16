@@ -119,17 +119,9 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        List<Exception> failures = [];
         foreach (var node in Enumerable.Reverse(nodes))
         {
-            try
-            {
-                await node.DisposeAsync();
-            }
-            catch (Exception error)
-            {
-                failures.Add(error);
-            }
+            await node.DisposeAsync();
         }
         if (composeStarted)
         {
@@ -144,7 +136,7 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
             }
             catch (Exception error)
             {
-                failures.Add(error);
+                RunOutcome.Record(error);
             }
             try
             {
@@ -157,10 +149,8 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
             }
             catch (Exception error)
             {
-                failures.Add(error);
+                RunOutcome.Record(error);
             }
         }
-        if (failures.Count > 0)
-            throw new AggregateException("Run cleanup failed.", failures);
     }
 }

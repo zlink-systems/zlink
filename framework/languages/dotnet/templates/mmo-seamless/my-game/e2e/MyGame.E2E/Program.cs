@@ -30,6 +30,16 @@ string? Option(string name)
 
 try
 {
+    return await RunOutcome.RunAsync(RunAsync);
+}
+catch (Exception error)
+{
+    Console.Error.WriteLine(error);
+    return 1;
+}
+
+async Task<int> RunAsync()
+{
     var root = Path.GetFullPath(Option("--root") ?? Directory.GetCurrentDirectory());
     if (args.Contains("--check-structure"))
     {
@@ -63,9 +73,8 @@ try
             await run.StartAsync(deadline.Token);
             await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
         }
-        catch (Exception failure)
+        catch
         {
-            Console.Error.WriteLine("Startup or scenario failure: " + failure);
             throw;
         }
     }
@@ -73,9 +82,4 @@ try
         throw new ArgumentException($"Unknown mode: {mode}");
     Console.WriteLine("mmo-seamless=completed");
     return 0;
-}
-catch (Exception error)
-{
-    Console.Error.WriteLine(error);
-    return 1;
 }

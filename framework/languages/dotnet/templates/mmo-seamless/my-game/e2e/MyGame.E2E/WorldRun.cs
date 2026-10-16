@@ -12,7 +12,9 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
         ".logs",
         "run-" + Guid.NewGuid().ToString("N")
     );
-    private readonly string? dockerProject = Environment.GetEnvironmentVariable("MY_GAME_DOCKER_PROJECT");
+    private readonly string? dockerProject = Environment.GetEnvironmentVariable(
+        "MY_GAME_DOCKER_PROJECT"
+    );
     private readonly List<string> containers = [];
     private bool composeStarted;
     private string redisEndpoint = "";
@@ -84,17 +86,31 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
         if (dockerProject is not null)
         {
             var name = dockerProject + "-" + suffix;
-            var image = Environment.GetEnvironmentVariable("MY_GAME_NODE_IMAGE")
+            var image =
+                Environment.GetEnvironmentVariable("MY_GAME_NODE_IMAGE")
                 ?? throw new InvalidOperationException("Missing node image.");
-            var runner = Environment.GetEnvironmentVariable("MY_GAME_RUNNER_CONTAINER")
+            var runner =
+                Environment.GetEnvironmentVariable("MY_GAME_RUNNER_CONTAINER")
                 ?? throw new InvalidOperationException("Missing runner container name.");
             await Commands.RunAsync(
                 "docker",
                 [
-                    "create", "-i", "--name", name, "--label", "my-game.e2e=" + dockerProject,
-                    "--network", "container:" + runner, image,
-                    "/app/" + assembly["MyGame.".Length..].ToLowerInvariant() + "/" + assembly + ".dll",
-                    "--config", "/app/node.json",
+                    "create",
+                    "-i",
+                    "--name",
+                    name,
+                    "--label",
+                    "my-game.e2e=" + dockerProject,
+                    "--network",
+                    "container:" + runner,
+                    image,
+                    "/app/"
+                        + assembly["MyGame.".Length..].ToLowerInvariant()
+                        + "/"
+                        + assembly
+                        + ".dll",
+                    "--config",
+                    "/app/node.json",
                 ],
                 Path.Combine(runDirectory, suffix + "-create.log"),
                 ct
@@ -140,17 +156,9 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        List<Exception> failures = [];
         foreach (var node in Enumerable.Reverse(nodes))
         {
-            try
-            {
-                await node.DisposeAsync();
-            }
-            catch (Exception error)
-            {
-                failures.Add(error);
-            }
+            await node.DisposeAsync();
         }
         foreach (var container in containers)
         {
@@ -165,7 +173,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             }
             catch (Exception error)
             {
-                failures.Add(error);
+                RunOutcome.Record(error);
             }
         }
         if (composeStarted)
@@ -181,7 +189,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             }
             catch (Exception error)
             {
-                failures.Add(error);
+                RunOutcome.Record(error);
             }
             try
             {
@@ -194,10 +202,8 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             }
             catch (Exception error)
             {
-                failures.Add(error);
+                RunOutcome.Record(error);
             }
         }
-        if (failures.Count > 0)
-            throw new AggregateException("Run cleanup failed.", failures);
     }
 }

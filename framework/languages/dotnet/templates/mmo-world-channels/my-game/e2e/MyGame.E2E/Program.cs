@@ -30,6 +30,16 @@ string? Option(string name)
 
 try
 {
+    return await RunOutcome.RunAsync(RunAsync);
+}
+catch (Exception error)
+{
+    Console.Error.WriteLine(error);
+    return 1;
+}
+
+async Task<int> RunAsync()
+{
     var root = Path.GetFullPath(Option("--root") ?? Directory.GetCurrentDirectory());
     if (args.Contains("--check-structure"))
     {
@@ -45,9 +55,4 @@ try
     await Scenarios.RunAsync(run, selected, deadline.Token);
     Console.WriteLine("mmo-world-channels=completed");
     return 0;
-}
-catch (Exception error)
-{
-    Console.Error.WriteLine(error);
-    return 1;
 }
