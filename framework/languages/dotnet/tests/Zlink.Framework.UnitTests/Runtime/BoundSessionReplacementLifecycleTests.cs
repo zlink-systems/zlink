@@ -335,6 +335,94 @@ public sealed class BoundSessionReplacementLifecycleTests
     }
 
     [Fact]
+    public async Task Same_Physical_Session_Rebind_And_State_Updates_Keep_The_Current_Entry()
+    {
+        await using var fixture = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success
+        );
+        var oldToken = fixture.BindRetiredSessionActor("actor-a");
+        Assert.True(
+            fixture.Runtime.TryGetSessionActorBinding("actor-a", oldToken, out var original)
+        );
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30),
+            new ZLinkLocationOptions().SessionRelocationSealTimeout
+        );
+        var actorId = ZLinkActorId.FromBoundary("actor-a", "actorId");
+        var token = oldToken;
+        var generation = original.BindingGeneration;
+
+        async Task<ZLinkSessionBindingEntry> AssertCurrentAsync()
+        {
+            var primary = Assert.IsType<ZLinkSessionBindingEntry>(
+                await table.GetExactRetiredBindingAsync(
+                    "actor-a",
+                    original.SessionOwnerNodeRid,
+                    fixture.SessionRid,
+                    original.SessionOwnerNodeGeneration,
+                    original.SessionOwnerId,
+                    original.SessionOwnerLeaseGeneration,
+                    generation
+                )
+            );
+            Assert.Equal(token, primary.BindingToken);
+            Assert.Same(primary, await table.GetBindingAsync("actor-a", token));
+            return primary;
+        }
+
+        async Task BindAsync(ZLinkSessionActor actor) =>
+            await table.BindAsync(
+                actorId,
+                original.Context,
+                token,
+                actor,
+                generation,
+                original.Route,
+                original.SessionOwnerNodeGeneration,
+                original.SessionOwnerNodeRid,
+                original.SessionOwnerId,
+                original.SessionOwnerLeaseGeneration
+            );
+
+        await BindAsync(original.ActorRef);
+        var first = await AssertCurrentAsync();
+        token = "same-session-replacement";
+        generation++;
+        var replacement = new ZLinkSessionActor(
+            original.Context,
+            "actor-a",
+            fixture.SessionRid,
+            token
+        );
+        await BindAsync(replacement);
+        var rebound = await AssertCurrentAsync();
+        Assert.NotSame(first, rebound);
+        Assert.Same(replacement, rebound.ActorRef);
+        Assert.Null(await table.GetBindingAsync("actor-a", oldToken));
+
+        await table.AcceptAsync("actor-a", token);
+        var accepted = await AssertCurrentAsync();
+        Assert.NotSame(rebound, accepted);
+        Assert.Equal(1UL, accepted.AcceptedHighWater);
+        Assert.Equal(1, accepted.ActiveFrames);
+        await table.CompleteAcceptedAsync("actor-a", token);
+        var completed = await AssertCurrentAsync();
+        Assert.NotSame(accepted, completed);
+        Assert.Equal(0, completed.ActiveFrames);
+
+        await table.TombstoneAsync(
+            "actor-a",
+            fixture.SessionRid,
+            token,
+            generation,
+            original.SessionOwnerNodeGeneration,
+            original.Route
+        );
+        Assert.Null(await table.GetBindingAsync("actor-a", token));
+        Assert.Null(await table.GetEntryForSessionAsync("actor-a", original.Context));
+    }
+
+    [Fact]
     public async Task Rebind_Preserves_The_Exact_Retired_Notification_Target()
     {
         await using var retired = await ReplacementFixture.CreateAsync(
