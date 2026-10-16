@@ -193,10 +193,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     CompletionStage<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> awaitMessage(
             String name, Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate) {
-        CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result =
-                new CompletableFuture<>();
-        dispatchQueue.awaitMessage(name, predicate, result);
-        return result;
+        return dispatchQueue.awaitMessage(name, predicate);
     }
 
     @Override
