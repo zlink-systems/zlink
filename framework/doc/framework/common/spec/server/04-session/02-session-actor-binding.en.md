@@ -682,37 +682,63 @@ direction, use, and completion style are in §5's command table.
 
 ### 8.3 Sealing an Already-Cleaned Binding
 
-Command 42 can arrive after the binding was already tombstoned and cleaned by §7's
-disconnect notification or a logical notification. The Session owner classifies command 42
-as one of the following three. Only the Session owner of §8.1 makes this decision.
+Command 42 can arrive after the binding was already cleaned up by §7's disconnect
+notification or a logical notification. The Session owner decides command 42 once, in the
+order below. Only the Session owner of §8.1 decides, and the lookup scope is every Session
+that Session owner owns.
 
-| Decision | Condition | Session owner handling |
-|---|---|---|
-| Seal installed | Command 42's Session identity/SessionRid, binding generation, and `ActorId`/`ObjectGeneration` match the current binding. | Installs the seal per §8.1 and returns command 43 with `sealResult = sealed`. |
-| Exact binding absent | There is no current Session for command 42's SessionRid, or that Session has no current binding for the same `ActorId`. | Creates no seal, held messages, or seal timeout, and returns command 43 with `sealResult = bindingAbsent`. |
-| Mismatch | A current binding exists for the same `ActorId` but its Session identity, binding generation, or `ObjectGeneration` differs, or the same binding holds a seal of a different relocation identity. | Rejects as before. It is never turned into an absence result. |
+1. If a **result record for the same relocation identity** exists, return that result as is.
+   The current binding is not decided again.
+2. Within the Session owner, **look up the current binding for command 42's `ActorId`.** Do not
+   narrow first by SessionRid or binding generation.
+   - If there is no current binding, it is **exact binding absent**.
+   - If a current binding exists and its Session identity/SessionRid, binding generation, and
+     `ObjectGeneration` all equal command 42's, it is **seal installed**. If that binding already
+     holds a seal of a different relocation identity, it is a mismatch.
+   - If a current binding exists but any of those values differs, it is a **mismatch**.
 
-`bindingAbsent` doesn't mean a seal was installed; it means there is no exact binding to
-seal. When the Session owner receives the same command 42 again, it returns the same
-decision without changing state. Because no seal is installed, a late command 44 for this
-relocation identity only records §8.1's `late_session_route_update` Warning and is ignored.
+| Decision | Session owner handling |
+|---|---|
+| Seal installed | Installs the seal per §8.1 and returns command 43 with `sealResult = sealed`. |
+| Exact binding absent | Creates no seal, held messages, or seal timeout, and returns command 43 with `sealResult = bindingAbsent`. |
+| Mismatch | Rejects as before. It is never turned into an absence result. |
 
-The relocation coordinator treats a participant that received `bindingAbsent` like an
-unbound participant. It leaves it out of the relocation envelope's `sessionBindings`, the
-target sends no command 44 to that Session, and the relocation continues. Only the Session
-owner decides absence. The coordinator and the Actor owner don't skip the seal or guess
-absence from binding information they keep.
+`bindingAbsent` doesn't mean a seal was installed; it means there is no current binding to
+seal. The result describes only the Session binding and seal, and says nothing about the
+progress of a disconnect callback.
 
-Under §7 a binding is tombstoned only after its disconnect callback reaches a terminal, so
-when `bindingAbsent` is returned that binding's disconnect callback has already finished or
-is captured as saved work in the source queue. The coordinator doesn't create the disconnect
-callback again.
+**Result record and lifetime.** The Session owner records `sealed` and `bindingAbsent` results
+per relocation identity. The record is neither a binding nor a seal and is used only for step 1.
+A `sealed` record follows the existing seal lifetime (command 44 applied, abort, seal timeout,
+physical Session close). A `bindingAbsent` record is kept for `SessionRelocationSealTimeout`
+from the decision. When the same command 42 arrives after the record is gone, the decision
+starts again from step 2, and its result describes only the current binding at that point. No
+separate message ACK journal or second binding registry is kept.
 
-If command 42 is rejected as a mismatch or the seal wait reaches its deadline, the
-relocation fails. The coordinator releases the seals of other participants already confirmed
-`sealed` with command 44 abort, restores every capture already started to the source queue,
-and fails the operation
-([Relocation §9](../05-location-relocation/04-relocation-flow.en.md#9-timeout-failure-and-cancellation)).
+**Coordinator handling.** The relocation coordinator uses only the first command 43 it receives
+for each participant and ignores later command 43s of the same relocation identity. A
+participant that received `bindingAbsent` is treated like an unbound participant. It is left out
+of the relocation envelope's `sessionBindings`, the target sends no command 44 to that Session,
+and the relocation continues. The participant's Actor and Spot membership still go into the
+envelope. Only the Session owner decides absence. The coordinator and the Actor owner don't skip
+the seal or guess absence from binding information they keep. A command 44 that arrives late for
+a `bindingAbsent` record only records §8.1's `late_session_route_update` Warning and is ignored.
+That command 44 never changes a binding created later or another relocation's seal.
+
+**Disconnect notification in flight.** When `bindingAbsent` is returned, the binding's disconnect
+notification may not have reached the Actor yet. De-duplication of notifications and running the
+callback at most once remain owned by §7's Session owner per binding identity. The notification is
+handled like an ordinary Actor message. If the source accepted it before capture, it moves to the
+target as saved work; if it arrives after capture, Message Follow forwards it to the target. The
+Actor owner drops a notification when a current binding other than the notification's binding
+identity exists, and runs the callback when there is no current binding. The coordinator never
+creates or resubmits a disconnect notification.
+
+**Failure.** If command 42 is rejected as a mismatch or the seal wait reaches its deadline, the
+relocation fails. What is restored is every participant capture already started and the seals of
+participants already confirmed `sealed`. The restore order follows §8.1's abort order: durable
+abort and source queue restoration are confirmed first, and then the matching command 44 abort is
+sent ([Relocation §9](../05-location-relocation/04-relocation-flow.en.md#9-timeout-failure-and-cancellation)).
 
 ## 9. Distinguishing Reconnection from Relocation
 

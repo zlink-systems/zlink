@@ -557,33 +557,56 @@ Store CAS가 결정했으므로 Session owner가 Store나 Actor authority mirror
 
 ### 8.3 이미 정리된 binding에 대한 seal
 
-§7의 disconnect 통지나 logical notification으로 binding이 이미 tombstone·정리된 뒤 command 42가
-도착할 수 있다. Session owner는 command 42를 다음 셋 중 하나로 판정한다. 판정은 §8.1의 Session
-owner 한 곳에서만 한다.
+§7의 disconnect 통지나 logical notification으로 binding이 이미 정리된 뒤 command 42가 도착할 수
+있다. Session owner는 command 42를 아래 순서로 한 번 판정한다. 판정은 §8.1의 Session owner 한
+곳에서만 하며, 조회 범위는 그 Session owner가 소유한 모든 Session이다.
 
-| 판정 | 조건 | Session owner 처리 |
-|---|---|---|
-| Seal 설치 | Command 42의 Session identity·SessionRid, binding generation, `ActorId`·`ObjectGeneration`이 current binding과 일치한다. | §8.1대로 seal을 설치하고 command 43을 `sealResult = sealed`로 반환한다. |
-| Exact binding 부재 | Command 42가 가리키는 SessionRid의 current Session이 없거나, 그 Session에 같은 `ActorId`의 current binding이 없다. | Seal, held message, seal timeout을 만들지 않고 command 43을 `sealResult = bindingAbsent`로 반환한다. |
-| 불일치 | 같은 `ActorId`의 current binding이 있으나 Session identity, binding generation 또는 `ObjectGeneration`이 다르거나, 같은 binding에 다른 relocation identity의 seal이 있다. | 기존대로 거부한다. 부재로 바꿔 반환하지 않는다. |
+1. **같은 relocation identity의 결과 기록**이 있으면 그 결과를 그대로 반환한다. Current binding을
+   다시 판정하지 않는다.
+2. Session owner 안에서 command 42의 `ActorId`에 대한 **current binding을 찾는다.** SessionRid나
+   binding generation으로 먼저 좁히지 않는다.
+   - Current binding이 없으면 **exact binding 부재**다.
+   - Current binding이 있고 Session identity·SessionRid, binding generation,
+     `ObjectGeneration`이 command 42와 모두 같으면 **seal 설치**다. 그 binding에 다른 relocation
+     identity의 seal이 이미 있으면 불일치다.
+   - Current binding이 있으나 위 값 중 하나라도 다르면 **불일치**다.
 
-`bindingAbsent`는 seal을 설치했다는 뜻이 아니라 seal할 exact binding이 없다는 뜻이다. Session owner는
-같은 command 42를 다시 받으면 같은 판정을 반환하며 state를 바꾸지 않는다. 설치된 seal이 없으므로
-이 relocation identity로 늦게 도착한 command 44는 §8.1의 `late_session_route_update` Warning만 남기고
-무시한다.
+| 판정 | Session owner 처리 |
+|---|---|
+| Seal 설치 | §8.1대로 seal을 설치하고 command 43을 `sealResult = sealed`로 반환한다. |
+| Exact binding 부재 | Seal, held message, seal timeout을 만들지 않고 command 43을 `sealResult = bindingAbsent`로 반환한다. |
+| 불일치 | 기존대로 거부한다. 부재로 바꿔 반환하지 않는다. |
 
-Relocation coordinator는 `bindingAbsent`를 받은 participant를 bind되지 않은 participant와 같이
-다룬다. Relocation envelope의 `sessionBindings`에 넣지 않고, target은 그 Session에 command 44를
-보내지 않으며, relocation은 계속 진행한다. 부재 판정은 Session owner만 소유한다. Coordinator와 Actor
-owner는 자신이 보관한 binding 정보로 seal을 생략하거나 부재를 추측하지 않는다.
+`bindingAbsent`는 seal을 설치했다는 뜻이 아니라 seal할 current binding이 없다는 뜻이다. 이 결과는
+Session binding과 seal에 관한 결과만 나타내며, disconnect callback의 진행 상태를 알려 주지 않는다.
 
-§7에 따라 binding은 disconnect callback이 terminal에 도달한 뒤에만 tombstone으로 정리되므로,
-`bindingAbsent` 시점에 그 binding의 disconnect callback은 이미 끝났거나 source queue의 saved work로
-capture된다. Coordinator는 disconnect callback을 다시 만들지 않는다.
+**결과 기록과 수명.** Session owner는 `sealed`와 `bindingAbsent` 결과를 relocation identity별로
+기록한다. 이 기록은 binding이나 seal이 아니며 1단계 조회에만 쓴다. `sealed` 기록은 기존 seal의
+수명(command 44 적용, abort, seal timeout, physical Session 종료)을 따른다. `bindingAbsent` 기록은
+판정 시점부터 `SessionRelocationSealTimeout` 동안 유지한다. 기록이 사라진 뒤 같은 command 42가
+도착하면 2단계부터 다시 판정하며, 그 결과는 그 시점의 current binding만 나타낸다. 별도 message ACK
+journal이나 두 번째 binding registry를 두지 않는다.
 
-Command 42가 불일치로 거부되거나 seal 대기 deadline에 도달하면 relocation은 실패한다. Coordinator는
-이미 `sealed`로 확인한 다른 participant의 seal을 command 44 abort로 해제하고, 이미 시작한 capture를
-source queue로 복원한 뒤 operation을 실패로 끝낸다
+**Coordinator 처리.** Relocation coordinator는 participant마다 처음 받은 command 43만 사용하고, 같은
+relocation identity의 이후 command 43은 무시한다. `bindingAbsent`를 받은 participant는 bind되지 않은
+participant와 같이 다룬다. Relocation envelope의 `sessionBindings`에 넣지 않고, target은 그 Session에
+command 44를 보내지 않으며, relocation은 계속 진행한다. Participant의 Actor와 Spot membership은
+그대로 envelope에 들어간다. 부재 판정은 Session owner만 소유한다. Coordinator와 Actor owner는 자신이
+보관한 binding 정보로 seal을 생략하거나 부재를 추측하지 않는다. `bindingAbsent` 기록에 대해 늦게
+도착한 command 44는 §8.1의 `late_session_route_update` Warning만 남기고 무시한다. 이 command 44는
+이후 생긴 binding이나 다른 relocation의 seal을 바꾸지 않는다.
+
+**진행 중인 disconnect 통지.** `bindingAbsent` 시점에 그 binding의 disconnect 통지가 아직 Actor에
+도착하지 않았을 수 있다. 통지의 중복 제거와 callback 최대 1회 실행은 §7의 Session owner가 binding
+identity 단위로 계속 소유한다. 통지는 일반 Actor message와 같이 처리한다. Source가 capture 전에
+수락했으면 saved work로 target에 옮겨지고, capture 뒤에 도착하면 Message Follow로 target에 전달된다.
+Actor owner는 통지의 binding identity와 다른 current binding이 있으면 통지를 버리고, current binding이
+없으면 callback을 실행한다. Coordinator는 disconnect 통지를 새로 만들거나 다시 제출하지 않는다.
+
+**실패.** Command 42가 불일치로 거부되거나 seal 대기 deadline에 도달하면 relocation은 실패한다.
+복원 대상은 이미 시작한 모든 participant의 capture와, 이미 `sealed`로 확인한 participant의 seal이다.
+복원 순서는 §8.1의 abort 순서를 따른다. Durable abort와 source queue 복원을 먼저 확정한 뒤 matching
+command 44 abort를 보낸다
 ([Relocation §9](../05-location-relocation/04-relocation-flow.ko.md#9-timeout-failure와-cancellation)).
 
 ## 9. 재접속과 이동의 구분
