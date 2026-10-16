@@ -2498,7 +2498,8 @@ test('relocation materialization restores inherited User Spot handler registrati
     RecoverySpot,
     'recovery-spot',
     1n,
-    1n
+    1n,
+    []
   );
 
   try {
@@ -4726,11 +4727,19 @@ test('spot managed timer keeps elapsed scheduling monotonic and relocation curso
       const state = await timer.captureRelocation();
       assert.equal(state.startedAtUnixMs, wallStart);
       assert.equal(state.nextDueAtUnixMs, wallStart + 30);
+      await timer.cancel();
       clock.setUtcNow(wallStart + 20);
-      timer.restoreRelocation(state);
-      await clock.runNext(10);
-      assert.equal(ticks.at(-1).scheduledIndex, 3n);
-      assert.equal(ticks.at(-1).startedElapsedMs, 30);
+      const restored = new framework.ZLinkManagedTimer(
+        'monotonic', 10, options, async (tick) => ticks.push(tick), undefined, undefined, clock,
+        { cursor: state }
+      );
+      try {
+        await clock.runNext(10);
+        assert.equal(ticks.at(-1).scheduledIndex, 3n);
+        assert.equal(ticks.at(-1).startedElapsedMs, 30);
+      } finally {
+        await restored.cancel();
+      }
     } finally {
       await timer.cancel();
     }
