@@ -118,7 +118,7 @@ inline void check_structure (const std::filesystem::path &root)
                        && !spot.contains ("dynamic"),
                      "Entry Spot cannot declare type or logical ID");
             require (roles.at (owner) == "field" || roles.at (owner) == "instance",
-                     "Entry owner must register an Object Server");
+                     "Entry owner must register application Entry and its first-entry handler");
             require (entries.insert (owner).second, "Duplicate Entry owner");
             continue;
         }
@@ -155,7 +155,7 @@ inline void check_structure (const std::filesystem::path &root)
     for (const auto &[id, role] : roles) {
         if (role != "field" && role != "instance")
             continue;
-        require (entries.contains (id), "Missing Entry owner: " + id);
+        require (entries.contains (id), "Missing application Entry owner: " + id);
     }
     for (const auto &[id, config] : configurations) {
         if (!config.contains ("FieldIds"))
@@ -164,8 +164,9 @@ inline void check_structure (const std::filesystem::path &root)
         const std::set<std::string> configured (ids.begin (), ids.end ());
         require (configured.size () == ids.size () && configured == fields[id],
                  "Configured FieldIds do not match fixed Fields");
-        require (config.at ("FieldCapacity").get<int> () >= static_cast<int> (ids.size ()),
-                 "Field capacity smaller than initial placement");
+        require (!ids.empty ()
+                   && config.at ("FieldCapacity").get<int> () == static_cast<int> (ids.size ()),
+                 "Sequential Field bootstrap must fill the owner capacity");
     }
     for (const auto &edge : j.at ("edges")) {
         require (nodes.contains (nonempty (edge, "from")) && nodes.contains (nonempty (edge, "to")),

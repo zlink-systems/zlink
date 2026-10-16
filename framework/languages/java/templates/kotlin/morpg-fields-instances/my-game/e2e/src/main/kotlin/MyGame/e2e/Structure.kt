@@ -128,6 +128,11 @@ fun checkStructure(root: Path) {
                 }
                 .map { text(it, "logicalId") }
         unique(configured)
+        check(
+            configured.isNotEmpty() && requireNotNull(configs[id]).fieldCapacity == configured.size
+        ) {
+            "Sequential Field bootstrap must fill the owner capacity: $id"
+        }
         check(configured.toSet() == declared.toSet()) {
             "Configured FieldIds differ from fixed Spots: $id"
         }
@@ -136,7 +141,7 @@ fun checkStructure(root: Path) {
     for (node in nodes.filter { roles[it["id"].asText()] in listOf("field", "instance") }) {
         val id = text(node, "id")
         check(spots.count { it["owner"].asText() == id && it["kind"].asText() == "entry" } == 1) {
-            "Object Server must declare one Entry: $id"
+            "Application Entry registration must declare one Entry: $id"
         }
     }
     for (edge in array("edges")) {

@@ -121,7 +121,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     assert.equal(
       spots.filter((s) => s.owner === node.id && s.kind === 'entry').length,
       1,
-      'Object Server must declare one Entry'
+      'Application Entry registration must declare one Entry'
     );
     const cfg = object(JSON.parse(readFileSync(text(node.config), 'utf8')));
     const capacity = node.role === 'field' ? cfg.fieldCapacity : cfg.dungeonCapacity;
@@ -133,7 +133,11 @@ export function checkStructure(path = 'zlink.structure.json'): void {
         .filter((s) => s.owner === node.id && s.type === Names.field)
         .map((s) => text(s.logicalId));
       assert.deepEqual([...configured].sort(), declared.sort(), 'Field bootstrap set mismatch');
-      assert(configured.length <= Number(capacity), 'Field bootstrap exceeds capacity');
+      assert.equal(
+        configured.length,
+        Number(capacity),
+        'Sequential Field bootstrap must fill the owner capacity'
+      );
     }
   }
   for (const edge of array(s.edges).map(object)) {

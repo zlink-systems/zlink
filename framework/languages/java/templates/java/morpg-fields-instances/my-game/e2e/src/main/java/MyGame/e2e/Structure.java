@@ -165,6 +165,10 @@ public final class Structure {
                                 .toList();
                 unique(configured);
                 require(
+                        !configured.isEmpty()
+                                && configs.get(id).fieldCapacity() == configured.size(),
+                        "Sequential Field bootstrap must fill the owner capacity: " + id);
+                require(
                         new HashSet<>(configured).equals(new HashSet<>(declared)),
                         "Configured FieldIds differ from fixed Spots: " + id);
                 require(
@@ -184,7 +188,7 @@ public final class Structure {
                                                                     .equals("entry"))
                                     .count()
                             == 1,
-                    "Object Server must declare one Entry: " + id);
+                    "Application Entry registration must declare one Entry: " + id);
         }
         for (var edge : array(s, "edges")) {
             require(

@@ -170,7 +170,7 @@ internal static class StructureCheck
             {
                 Require(
                     roles[owner] is "field" or "instance",
-                    "Entry owner must host an Object Server."
+                    "Entry owner must register application Entry and its first-entry handler."
                 );
                 Require(entries.Add(owner), "Duplicate Entry owner.");
                 Require(
@@ -212,13 +212,13 @@ internal static class StructureCheck
                 hosted.Add(Text(spot, "logicalId"));
             }
         }
-        var objectOwners = roles
+        var entryOwners = roles
             .Where(pair => pair.Value is "field" or "instance")
             .Select(pair => pair.Key)
             .ToHashSet(StringComparer.Ordinal);
         Require(
-            entries.SetEquals(objectOwners),
-            "Entry owners differ from Object Server registrations."
+            entries.SetEquals(entryOwners),
+            "Entry owners differ from application Entry registrations."
         );
         Require(
             userTypes.SetEquals([GameNames.FieldType, GameNames.DungeonType]),
@@ -227,6 +227,11 @@ internal static class StructureCheck
         foreach (var (id, configured) in settings)
         {
             var expected = configured.FieldIds ?? System.Array.Empty<string>();
+            if (roles[id] == "field")
+                Require(
+                    expected.Length > 0 && configured.FieldCapacity == expected.Length,
+                    "Sequential Field bootstrap must fill the owner capacity."
+                );
             Require(
                 expected.All(field => !string.IsNullOrWhiteSpace(field))
                     && expected.Distinct(StringComparer.Ordinal).Count() == expected.Length,

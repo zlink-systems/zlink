@@ -27,4 +27,4 @@ Run formatters and installation commands only from this project directory, with 
 
 README and instructions are English. Code comments are English. Keep the short Korean execution guidance at the end of README.
 
-Register the shared Entry and first-login handler on every node that registers the Player Actor factory. Structure validation must require exactly one Entry for each Field and Instance owner and every registered User Spot type. Keep Message Follow and the derived safe-shutdown observation deadline in shared timing constants.
+Register the shared Entry and first-login handler on every node that registers the Player Actor factory. Declare Entry only on roles registering application Entry and its first-entry handler: Field and Instance in this template. Do not declare internal Framework default Entries. Structure validation must require those Entries and every registered User Spot type. Initial Field hosts start sequentially, awaiting READY after bootstrap; each Field capacity must equal its configured Field ID count so earlier hosts are full. Keep Message Follow and the derived safe-shutdown observation deadline in shared timing constants.

@@ -25,7 +25,7 @@ import {
   type ZLinkRouteMeshRuntime,
   type ZLinkRouteMeshStatus
 } from '@zlink-systems/framework';
-import { Names, Limits, Control, MessageFollowMs } from './constants';
+import { Names, Limits, Control } from './constants';
 import { NODE_CONFIG, readConfig, type NodeConfig } from './config';
 interface HostComposition {
   providers: Type[];
@@ -57,7 +57,7 @@ export async function runHost(
   class Configuration {}
   class Host {}
   const builder = zlinkFramework();
-  builder.configureLocations().messageFollowDurationMs(MessageFollowMs);
+  builder.configureLocations().messageFollowDurationMs(Limits.messageFollowMs);
   builder.addLocationStore(location);
   builder.addRelocationStore(relocation);
   builder.configureDispatch().messageFlow('normal');

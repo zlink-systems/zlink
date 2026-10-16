@@ -80,9 +80,11 @@ For a planned update, write `drain` to the affected process's standard input. Wa
 
 Game messages carry world state; `SessionInfo` carries Session ID, Actor ID, and object generation from the actual bound Actor. Parties are owned by Field state; dungeon membership and stage are owned by Dungeon state. Player movement is owned by `server/shared/player-state.hpp`; party rules are in `server/field/domain.hpp` and dungeon rules in `server/instance/domain.hpp`. Field visibility stores player IDs and position projections, and sends pushes through the public Actor client. Relocation adapters preserve application state only.
 
-Player Actor factories and the shared Entry implementation are registered on both Field and Instance nodes. Keep one Entry declaration per Object Server in `zlink.structure.json`. The update scenario uses Dungeon capacity 1: after relocation, the occupied peer cannot create the new Dungeon, so the replacement must accept it.
+Player Actor factories and the shared Entry implementation are registered on both Field and Instance nodes. Declare one Entry in `zlink.structure.json` for each Field or Instance node, where the application registers Entry and its first-entry handler. Do not declare Framework default Entries on other roles. The update scenario uses Dungeon capacity 1: after relocation, the occupied peer cannot create the new Dungeon, so the replacement must accept it.
 
 Message Follow is explicitly 20 seconds, preserving the default 15-second route cache and its 5-second safety margin. Safe-shutdown observation is derived as Message Follow plus 10 seconds. Relocation operation deadlines are unchanged.
+
+Initial Field placement uses public stable-type capacity and sequential startup. Set each Field node capacity to exactly its configured Field ID count. Start one Field node and wait for its READY, which follows creation of all its Fields, before starting the next Field node. Earlier nodes are full, so the newly started node is the only eligible Field host. Do not start initial Field hosts concurrently.
 
 ## 한국어 실행 안내
 
