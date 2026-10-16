@@ -117,7 +117,23 @@ export function checkStructure(path = 'zlink.structure.json'): void {
       'Zone bootstrap mismatch'
     );
   }
-  for (const edge of array(s.edges).map(object)) {
+  const requiredEdges = [
+    { from: 'players', to: 'accounts', label: 'HTTP' },
+    { from: 'players', to: 'sessionA', label: 'STREAM' },
+    { from: 'players', to: 'sessionB', label: 'STREAM' },
+    { from: 'sessionA', to: 'channelA1', label: 'relay' },
+    { from: 'sessionB', to: 'channelB', label: 'relay' },
+    { from: 'channelA1', to: 'channelA2', label: 'relocation' },
+    { from: 'channelA2', to: 'dbA', label: 'game data' },
+    { from: 'channelB', to: 'dbB', label: 'game data' }
+  ];
+  const edges = array(s.edges).map(object);
+  for (const required of requiredEdges)
+    assert(
+      edges.some((edge) => Object.entries(required).every(([key, value]) => edge[key] === value)),
+      `Missing required edge: ${required.from} -> ${required.to} (${required.label})`
+    );
+  for (const edge of edges) {
     owner(edge.from);
     owner(edge.to);
     text(edge.label);

@@ -110,7 +110,20 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     text(cfg.httpEndpoint);
     text(cfg.sessionEndpoint);
   }
-  for (const edge of array(s.edges).map(object)) {
+  const requiredEdges = [
+    { from: 'players', to: 'lobby', label: 'HTTP' },
+    { from: 'players', to: 'session', label: 'STREAM' },
+    { from: 'session', to: 'matchA', label: 'relay' },
+    { from: 'lobby', to: 'location', label: 'Find room' },
+    { from: 'matchA', to: 'location', label: 'Location / lease', semantic: 'location-authority' }
+  ];
+  const edges = array(s.edges).map(object);
+  for (const required of requiredEdges)
+    assert(
+      edges.some((edge) => Object.entries(required).every(([key, value]) => edge[key] === value)),
+      `Missing required edge: ${required.from} -> ${required.to} (${required.label})`
+    );
+  for (const edge of edges) {
     owner(edge.from);
     owner(edge.to);
     text(edge.label);
