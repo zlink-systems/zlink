@@ -76,29 +76,29 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     spots.map((n) => text(n.id)),
     'Spot ID'
   );
-  const logical: string[] = [];
+  const entryOwners = new Set<string>();
   for (const spot of spots) {
     const host = owner(spot.owner);
     assert(host.role === 'lobby' || host.role === 'instance', 'Invalid Spot host');
     if (spot.kind === 'entry') {
-      assert.equal(host.role, 'lobby', 'Entry owner must host lobby');
+      assert(!entryOwners.has(text(spot.owner)), 'Duplicate Entry owner');
+      entryOwners.add(text(spot.owner));
       assert.equal(spot.type, null);
       assert(!('dynamic' in spot) && !('logicalId' in spot));
     } else {
       assert.equal(spot.kind, 'user');
       assert([Names.party, Names.dungeon].includes(text(spot.type) as typeof Names.party));
       assert.equal(host.role, spot.type === Names.party ? 'lobby' : 'instance');
-      if (spot.dynamic === true) assert(!('logicalId' in spot));
-      else {
-        assert(!('dynamic' in spot) || spot.dynamic === false);
-        logical.push(text(spot.logicalId));
-      }
+      assert.equal(spot.dynamic, true, 'Expected dynamic User Spot family');
+      assert(!('logicalId' in spot), 'Dynamic Spot family must omit logicalId');
     }
   }
-  unique(logical, 'logical Spot ID');
-  assert(
-    spots.some((s) => s.kind === 'entry'),
-    'Missing Entry Spot'
+  assert.deepEqual(
+    entryOwners,
+    new Set(
+      nodes.filter((n) => n.role === 'lobby' || n.role === 'instance').map((n) => text(n.id))
+    ),
+    'Entry owners differ from Object Server registrations'
   );
   for (const type of [Names.party, Names.dungeon])
     assert(

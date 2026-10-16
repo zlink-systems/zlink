@@ -112,12 +112,15 @@ public final class Structure {
         unique(spots.stream().map(p -> text(p, "id")).toList());
         var logical = new ArrayList<String>();
         var dynamic = new HashSet<String>();
+        var entryOwners = new HashSet<String>();
         for (var spot : spots) {
+            if (spot.path("kind").asText().equals("entry"))
+                require(entryOwners.add(owner(spot, roles)), "Duplicate Entry owner");
             NodeRole role = roles.get(owner(spot, roles));
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(
-                                role == NodeRole.LOBBY
+                                (role == NodeRole.LOBBY || role == NodeRole.INSTANCE)
                                         && spot.has("type")
                                         && spot.path("type").isNull()
                                         && !spot.has("logicalId")
@@ -142,14 +145,15 @@ public final class Structure {
         unique(logical);
         require(dynamic.equals(Set.of(Names.PARTY, Names.DUNGEON)), "Missing dynamic Spot family");
         for (var node : nodes)
-            if (roles.get(text(node, "id")) == NodeRole.LOBBY)
+            if (roles.get(text(node, "id")) == NodeRole.LOBBY
+                    || roles.get(text(node, "id")) == NodeRole.INSTANCE)
                 require(
                         spots.stream()
                                 .anyMatch(
                                         p ->
                                                 p.path("owner").asText().equals(text(node, "id"))
                                                         && p.path("kind").asText().equals("entry")),
-                        "Lobby node lacks Entry Spot");
+                        "Object Server lacks Entry Spot");
         for (var edge : array(s, "edges")) {
             require(
                     ids.contains(text(edge, "from")) && ids.contains(text(edge, "to")),

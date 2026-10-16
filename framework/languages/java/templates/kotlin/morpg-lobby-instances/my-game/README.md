@@ -11,6 +11,8 @@ flowchart LR
     lobby -->|Location / lease| location[(Redis)]
 ```
 
+Every Object Server (`lobby`, `instanceA`, and `instanceB`) registers the same stateless Entry and initial party-admission handlers from the shared module because each registers the Player factory. Party state remains in the Lobby Party User Spot. Message Follow is explicitly 30 seconds; the safe-shutdown observation budget adds that duration to the existing host-operation budget. Each instance admits one Dungeon, so the relocated Dungeon fills the surviving instance and fresh work must use the replacement.
+
 ## Prerequisites
 
 - JDK 25, Docker with Compose, and PowerShell 7 on Windows or Bash on Linux.

@@ -18,6 +18,8 @@ Use public APIs and default typed JSON serialization. Reply to a requester throu
 
 Do not add internal APIs, reflection, raw frames, manual message codecs, runtime routing state, second queues or locks around the execution gate, sleeps, retries, or enlarged deadlines to conceal Framework defects. Report the first failure with message-flow logs and the related public operation.
 
+Register the shared stateless Entry and its shared admission handlers on every Object Server that registers Player. Keep party state in the Party User Spot. Structure checks must reject missing Entry owners and missing dynamic Party or Dungeon types. Keep the one-Dungeon instance capacity that makes replacement admission deterministic.
+
 ## Changes and verification
 
 Keep `party`, `reconnect`, and `update` and their order in the structure declaration and runner. Preserve actual response/event assertions, Actor generation checks, and replacement placement checks. Validate structure changes against real files, including negative mutations outside the committed template. Run builds and e2e on Windows and Linux; one intermittent failure remains a defect.

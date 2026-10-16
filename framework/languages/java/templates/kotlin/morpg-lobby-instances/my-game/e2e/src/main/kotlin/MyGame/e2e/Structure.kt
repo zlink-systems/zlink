@@ -85,12 +85,15 @@ fun checkStructure(root: Path) {
     unique(spots.map { text(it, "id") })
     val logicalIds = mutableListOf<String>()
     val dynamic = mutableSetOf<String>()
+    val entryOwners = mutableSetOf<String>()
     for (spot in spots) {
+        if (spot["kind"].asText() == "entry")
+            check(entryOwners.add(owner(spot))) { "Duplicate Entry owner" }
         val role = roles[owner(spot)]
         when (text(spot, "kind")) {
             "entry" ->
                 check(
-                    role == NodeRole.LOBBY &&
+                    (role == NodeRole.LOBBY || role == NodeRole.INSTANCE) &&
                         spot["type"]?.isNull == true &&
                         !spot.has("logicalId") &&
                         !spot.has("dynamic")
@@ -112,7 +115,8 @@ fun checkStructure(root: Path) {
     }
     unique(logicalIds)
     check(dynamic == setOf(Names.PARTY, Names.DUNGEON)) { "Missing dynamic Spot family" }
-    for (node in nodes.filter { roles[it["id"].asText()] == NodeRole.LOBBY }) {
+    for (node in
+        nodes.filter { roles[it["id"].asText()] in setOf(NodeRole.LOBBY, NodeRole.INSTANCE) }) {
         val id = text(node, "id")
         check(spots.any { it["owner"].asText() == id && it["kind"].asText() == "entry" })
     }

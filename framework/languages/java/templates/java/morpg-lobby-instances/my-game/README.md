@@ -11,6 +11,8 @@ flowchart LR
   lobby -->|Location / lease| location[(Redis)]
 ```
 
+Every Object Server (`lobby`, `instanceA`, and `instanceB`) registers the same stateless Entry and initial party-admission handlers from the shared module because each registers the Player factory. Party state remains in the Lobby Party User Spot. Message Follow is explicitly 30 seconds; the safe-shutdown observation budget adds that duration to the existing host-operation budget. Each instance admits one Dungeon, so the relocated Dungeon fills the surviving instance and fresh work must use the replacement.
+
 ## Prerequisites
 
 JDK 25, Docker with Compose v2, and PowerShell 7 on Windows. Gradle Wrapper is included. Public Framework packages are pinned to 0.30.1 and the binding to 1.19.0 in `build.gradle.kts`. Framework 0.30.1 must be available in Maven Central before these commands can resolve it.
@@ -51,7 +53,7 @@ Public 0.30.0 validation reached party readiness on Linux, then failed cross-nod
 
 ## Deployment sequence
 
-Start Redis, the lobby, both instance nodes, and then the Session node. Configure unique node IDs and Redis key prefixes in `server/config/`. Start each role using its installed distribution under `server/<role>/build/install/<role>/bin/`, supplying the corresponding configuration path. Instance nodes register `Dungeon` with capacity one; they do not register an Entry Spot.
+Start Redis, the lobby, both instance nodes, and then the Session node. Configure unique node IDs and Redis key prefixes in `server/config/`. Start each role using its installed distribution under `server/<role>/build/install/<role>/bin/`, supplying the corresponding configuration path. Instance nodes register `Dungeon` with capacity one; they also register the shared stateless Entry Spot.
 
 Each process prints `READY` with actual listener endpoints. Send `drain` on standard input to request planned maintenance. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`; send `shutdown` and require `STOPPED` before replacing the process with the same configuration. Party and Dungeon adapters preserve application state only; Framework owns memberships, routes, leases, queues, and relocation progress.
 

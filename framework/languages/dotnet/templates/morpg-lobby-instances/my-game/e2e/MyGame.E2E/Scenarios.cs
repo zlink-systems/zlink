@@ -128,8 +128,20 @@ internal static class Scenarios
             "Party did not enter the same fresh dungeon."
         );
         // A reply from each current Spot confirms both deferred joins finished before Advance.
-        SameDungeon(leaderView, await leader.DungeonAsync(ct));
-        SameDungeon(memberView, await member.DungeonAsync(ct));
+        SameDungeon(
+            leaderView,
+            await leader.DungeonAsync(
+                view => view.Stage == leaderView.Stage && view.NodeId == leaderView.NodeId,
+                ct
+            )
+        );
+        SameDungeon(
+            memberView,
+            await member.DungeonAsync(
+                view => view.Stage == memberView.Stage && view.NodeId == memberView.NodeId,
+                ct
+            )
+        );
         return leaderView;
     }
 
@@ -200,9 +212,15 @@ internal static class Scenarios
                     await source.WaitLineAsync(NodeProtocol.RelocationRequested, ct);
                     await source.WaitLineAsync(NodeProtocol.Relocated, ct);
                     await source.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
-                    var relocated = await p1.DungeonAsync(ct);
+                    var relocated = await p1.DungeonAsync(
+                        view => view.Stage == advanced.Stage && view.NodeId != advanced.NodeId,
+                        ct
+                    );
                     SameDungeon(advanced, relocated);
-                    var relocatedMember = await p2.DungeonAsync(ct);
+                    var relocatedMember = await p2.DungeonAsync(
+                        view => view.Stage == relocated.Stage && view.NodeId == relocated.NodeId,
+                        ct
+                    );
                     SameDungeon(relocated, relocatedMember);
                     Require(
                         relocatedMember.NodeId == relocated.NodeId

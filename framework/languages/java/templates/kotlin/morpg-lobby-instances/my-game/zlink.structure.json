@@ -69,6 +69,18 @@
       "owner": "lobby"
     },
     {
+      "id": "instanceA-entry",
+      "kind": "entry",
+      "type": null,
+      "owner": "instanceA"
+    },
+    {
+      "id": "instanceB-entry",
+      "kind": "entry",
+      "type": null,
+      "owner": "instanceB"
+    },
+    {
       "id": "party",
       "kind": "user",
       "type": "Party",

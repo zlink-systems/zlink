@@ -11,6 +11,8 @@ flowchart LR
   instanceA <-->|host relocation| instanceB
 ```
 
+Every Object Server (`lobby`, `instanceA`, and `instanceB`) registers the same stateless Entry and initial party-admission handlers from the shared module because each registers the Player factory. Party state remains in the Lobby Party User Spot. Message Follow is explicitly 30 seconds; the safe-shutdown observation budget adds that duration to the existing host-operation budget. Each instance admits one Dungeon, so the relocated Dungeon fills the surviving instance and fresh work must use the replacement.
+
 ## Prerequisites
 
 Use C++20, CMake 3.24 or later, Ninja, vcpkg, Docker Compose and PowerShell 7 on Windows or Bash on Linux. Windows requires the Visual Studio C++ toolchain in the current shell.
@@ -55,7 +57,8 @@ The runner checks the structure. Each selected scenario starts Redis under a uni
 
 The committed version is 0.30.1; validation against public 0.30.0 uses an isolated copy and does not pass. The template does not compensate for these Framework defects.
 
-- The first `JoinLobbyRequest` fails in the Session handler. Instance nodes register the Player factory for relocation but have no Entry Spot, and the C++ Actor GetOrCreate can be rejected for that placement ([#1772](https://github.com/zlink-systems/zlink/issues/1772)).
+- Initial Player placement can use every Object Server that registers its factory ([#1772](https://github.com/zlink-systems/zlink/issues/1772)); all such nodes register the shared Entry and admission handlers. Framework placement policy is unchanged.
+- Candidate validation fails during the deferred Dungeon Join with `activation_rejected` ([#1784](https://github.com/zlink-systems/zlink/issues/1784)); no retry or weakened assertion is included.
 - The C++ lifecycle status has no `SafeToShutdown` field, so drain completion cannot be observed ([#1740](https://github.com/zlink-systems/zlink/issues/1740)).
 - A C++ Session cannot yet send a typed reply it creates, so `SessionInfo` is a typed push after `SessionInfoRequest` rather than a correlated reply ([#1785](https://github.com/zlink-systems/zlink/issues/1785)). Actor identity and generation are still read from the binding.
 

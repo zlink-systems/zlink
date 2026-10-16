@@ -17,6 +17,8 @@ Use public typed messages, coroutine APIs, and the default Framework JSON serial
 
 Party owns roster, leadership order and readiness. Dungeon owns the prepared party and stage. Entry owns no party state. Relocation adapters serialize application state only; do not duplicate Framework membership, routes, leases, queues, or placement decisions. Keep game rules independent of hosting. Do not add internal APIs, reflection, raw frame handling, manual message codecs, sleep, retry, deadline increases, or relaxed assertions to compensate for Framework defects.
 
+Register the shared stateless Entry and its shared admission handlers on every Object Server that registers Player. Keep party state in the Party User Spot. Structure checks must reject missing Entry owners and missing dynamic Party or Dungeon types. Keep the one-Dungeon instance capacity that makes replacement admission deterministic.
+
 ## Changes and verification
 
 Keep `party`, `reconnect`, and `update` in that order in the runner and structure file. Preserve the shutdown and replacement assertions. Validate the structure before starting nodes. Run the relevant domain tests and e2e on Windows and Linux. A single intermittent failure is a defect; retain its first message-flow and node logs in `.logs/run-<id>/`.

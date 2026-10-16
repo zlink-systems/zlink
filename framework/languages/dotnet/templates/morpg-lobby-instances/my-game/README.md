@@ -6,10 +6,12 @@ Players connect to Session, form a party in Lobby and enter a Dungeon without a 
 flowchart LR
     players[Players] -->|STREAM| session[Session]
     session -->|relay| lobby[Lobby: Entry and Party]
-    lobby -->|GetOrCreate| instanceA[Instance A: Dungeon]
-    instanceA --- instanceB[Instance B: Dungeon relocation target]
+    lobby -->|GetOrCreate| instanceA[Instance A: Entry and Dungeon]
+    instanceA --- instanceB[Instance B: Entry and Dungeon relocation target]
     lobby -->|Location / lease| location[Redis]
 ```
+
+Every Object Server (`lobby`, `instanceA`, and `instanceB`) registers the same stateless Entry and initial party-admission handlers from the shared module because each registers the Player factory. Party state remains in the Lobby Party User Spot. Message Follow is explicitly 30 seconds; the safe-shutdown observation budget adds that duration to the existing host-operation budget. Each instance admits one Dungeon, so the relocated Dungeon fills the surviving instance and fresh work must use the replacement.
 
 ## Prerequisites
 
@@ -49,7 +51,7 @@ Party logical IDs use `party-<partyId>` and Dungeon IDs use `dungeon-<partyId>`.
 
 ## Known issues
 
-Template validation under #1755 with public 0.30.0 stops during the second player's login: Framework places the new Player on instanceB, which has no application Entry Spot, then drops `JoinLobbyRequest` with `no_handler`. This is a Framework contract candidate: initial Actor creation requires Entry membership. The template retains the specified topology and does not add an Entry to instances or select a target node. The listed fixes for #1723 and #1728 do not establish that this placement case is fixed. Full 0.30.1 candidate validation remains required.
+Candidate validation passes `party` and `reconnect` but fails to receive a post-relocation `DungeonView` during `update`. Cleanup also reports sealed application admission ([#1877](https://github.com/zlink-systems/zlink/issues/1877)). The first response failure and the later cleanup error require separate runtime diagnosis. The template preserves all state and continuity assertions; full candidate validation remains required.
 
 ## Deployment sequence
 

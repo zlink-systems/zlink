@@ -73,4 +73,7 @@ public static class NodeProtocol
     public const string RelocationRequested = "RELOCATION_REQUESTED";
     public const string Relocated = "RELOCATED";
     public const string SafeToShutdown = "SAFE_TO_SHUTDOWN";
+    public static readonly TimeSpan MessageFollow = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan RelocationDeadline = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan SafeDeadline = MessageFollow + RelocationDeadline;
 }

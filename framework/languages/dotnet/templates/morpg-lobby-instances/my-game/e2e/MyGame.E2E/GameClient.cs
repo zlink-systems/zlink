@@ -81,8 +81,10 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
     public Task<SessionInfo> SessionAsync(CancellationToken ct) =>
         Connector.Request(new SessionInfoRequest()).Async<SessionInfo>(ct).AsTask();
 
-    public Task<DungeonView> DungeonAsync(CancellationToken ct) =>
-        SendAsync<DungeonView, ViewRequest>(new(), _ => true, ct);
+    public Task<DungeonView> DungeonAsync(
+        Func<DungeonView, bool> predicate,
+        CancellationToken ct
+    ) => SendAsync<DungeonView, ViewRequest>(new(), predicate, ct);
 
     public ValueTask DisposeAsync() => Connector.DisposeAsync();
 }

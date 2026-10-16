@@ -72,7 +72,11 @@ class Client
     }
     void join () { (void) exchange<JoinLobbyRequest, LobbyView> ({player_id}); }
     SessionInfo info () { return exchange<SessionInfoRequest, SessionInfo> ({}); }
-    DungeonView view () { return exchange<ViewRequest, DungeonView> ({}); }
+    template <class Predicate> DungeonView view (Predicate predicate)
+    {
+        send (ViewRequest{});
+        return receive<DungeonView> (predicate);
+    }
     PartyView party_view (const std::string &id, std::size_t count, std::size_t ready)
     {
         return receive<PartyView> ([=] (const auto &view) {

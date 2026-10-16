@@ -11,6 +11,7 @@ GameHosting.Configure(
     options =>
     {
         options.AddHandlersFromAssemblyOf<PartySpot>();
+        options.AddHandlersFromAssemblyOf<LobbyEntry>();
         options
             .AddRouteMesh(GameNames.WorldMesh)
             .SetRoutingIdPrefix(settings.Id)

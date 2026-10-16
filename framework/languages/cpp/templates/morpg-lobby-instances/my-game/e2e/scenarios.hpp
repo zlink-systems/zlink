@@ -97,10 +97,14 @@ inline void update (const std::string &endpoint, World &world)
     source.command (Control::drain);
     source.wait_line (Control::requested, Limits::relocation);
     source.wait_line (Control::relocated, Limits::relocation);
-    source.wait_line (Control::safe, Limits::relocation);
-    const auto relocated = p1.view ();
+    source.wait_line (Control::safe, Limits::safe);
+    const auto relocated = p1.view ([&before] (const auto &view) {
+        return view.stage == before.stage && view.nodeId != before.nodeId;
+    });
     same_dungeon (before, relocated);
-    const auto member = p2.view ();
+    const auto member = p2.view ([&relocated] (const auto &view) {
+        return view.stage == relocated.stage && view.nodeId == relocated.nodeId;
+    });
     same_dungeon (before, member);
     require (member.nodeId == relocated.nodeId, "Relocated members have different hosts");
     require (relocated.nodeId != before.nodeId, "Dungeon did not relocate");
@@ -110,8 +114,11 @@ inline void update (const std::string &endpoint, World &world)
     const auto advanced = p1.dungeon_view (id, 2);
     same_dungeon (advanced, p2.dungeon_view (id, 2));
     world.replace_instance (placed.nodeId);
-    same_dungeon (advanced, p1.view ());
-    same_dungeon (advanced, p2.view ());
+    const auto current_dungeon = [&advanced] (const auto &view) {
+        return view.stage == advanced.stage && view.nodeId == advanced.nodeId;
+    };
+    same_dungeon (advanced, p1.view (current_dungeon));
+    same_dungeon (advanced, p2.view (current_dungeon));
     // Framework selects placement. Live clients exercise new work after
     // replacement readiness.
     const auto fresh_id = "replacement-" + unique_id ();

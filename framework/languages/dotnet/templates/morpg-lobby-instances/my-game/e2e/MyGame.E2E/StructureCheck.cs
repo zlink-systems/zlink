@@ -140,6 +140,8 @@ internal static class StructureCheck
         );
         var spotIds = new HashSet<string>(StringComparer.Ordinal);
         var logicalIds = new HashSet<string>(StringComparer.Ordinal);
+        var entryOwners = new HashSet<string>(StringComparer.Ordinal);
+        var dynamicTypes = new HashSet<string>(StringComparer.Ordinal);
         foreach (var spot in Array(document, "spots"))
         {
             Require(spotIds.Add(Text(spot, "id")), "Duplicate Spot ID.");
@@ -148,7 +150,11 @@ internal static class StructureCheck
             var kind = Text(spot, "kind");
             if (kind == "entry")
             {
-                Require(roles[owner] == "lobby", "Entry owner must host the Lobby Entry factory.");
+                Require(
+                    roles[owner] is "lobby" or "instance",
+                    "Entry owner must be an Object Server."
+                );
+                Require(entryOwners.Add(owner), "Duplicate Entry owner.");
                 Require(
                     spot!["type"] is null && spot["logicalId"] is null && spot["dynamic"] is null,
                     "Entry must not claim a stable type, logical ID or dynamic family."
@@ -177,7 +183,18 @@ internal static class StructureCheck
             else
                 Require(logicalIds.Add(Text(spot, "logicalId")), "Duplicate logical Spot ID.");
             Require(dynamic, "Party and Dungeon registrations are dynamic families.");
+            dynamicTypes.Add(type);
         }
+        Require(
+            entryOwners.SetEquals(
+                roles.Where(pair => pair.Value is "lobby" or "instance").Select(pair => pair.Key)
+            ),
+            "Entry owners differ from Object Server registrations."
+        );
+        Require(
+            dynamicTypes.SetEquals(new[] { GameNames.PartyType, GameNames.DungeonType }),
+            "Missing dynamic Spot family."
+        );
         foreach (var edge in Array(document, "edges"))
         {
             Require(

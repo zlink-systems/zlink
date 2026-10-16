@@ -19,6 +19,7 @@ public class Program {
         return options -> {
             Hosting.configure(options, locations, relocations);
             options.addHandlersFromPackageOf(Program.class);
+            options.addHandlersFromPackageOf(EntryActions.class);
             options.addRouteMesh(Names.MESH)
                     .listen(config.meshEndpoint())
                     .setRoutingIdPrefix(config.id())

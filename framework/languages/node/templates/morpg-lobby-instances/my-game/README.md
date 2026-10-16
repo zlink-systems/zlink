@@ -6,10 +6,12 @@ This Node.js template creates parties in a lobby and moves ready parties into Du
 flowchart LR
   players[Players] -->|STREAM| session[Session]
   session -->|relay| lobby[Lobby: Entry and Party]
-  lobby -->|GetOrCreate| instanceA[Instance A: Dungeon]
+  lobby -->|GetOrCreate| instanceA[Instance A: Entry and Dungeon]
   instanceA <-->|host relocation| instanceB[Instance B: Dungeon]
   lobby -->|Location / lease| location[Redis]
 ```
+
+Every Object Server (`lobby`, `instanceA`, and `instanceB`) registers the same stateless Entry and initial party-admission handlers from the shared module because each registers the Player factory. Party state remains in the Lobby Party User Spot. Message Follow is explicitly 30 seconds; the safe-shutdown observation budget adds that duration to the existing host-operation budget. Each instance admits one Dungeon, so the relocated Dungeon fills the surviving instance and fresh work must use the replacement.
 
 ## Prerequisites
 
@@ -47,9 +49,9 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario party,reconnect,update
 
 ## Known issues
 
-Framework 0.30.1 is pending publication. Development validation uses a separate copy with public 0.30.0; successful build alone does not establish relocation correctness. Node typed handler payloads require the packet-name-to-class restoration table before forwarding (#1731, planned for 0.32.0). Keep this table until the published Framework preserves declared DTO classes.
+Framework 0.30.1 is pending publication. Validate candidate packages in a separate copy; successful build alone does not establish relocation correctness. Node typed handler payloads require the packet-name-to-class restoration table before forwarding (#1731, planned for 0.32.0). Keep this table until the published Framework preserves declared DTO classes.
 
-The public 0.30.0 validation stopped before lobby login: the Player factory registered on Instance nodes also permits initial Actor placement there, where no application Lobby Entry handlers exist. The reference .NET composition registers the same factories. This placement/composition conflict blocks all STREAM scenarios pending supervisor resolution; do not introduce a second lobby, placement retry, or target selection workaround.
+Initial Player placement can use any Object Server that registers its factory (#1772). Each such node now registers the shared Entry and admission handlers. This composition does not change Framework placement policy.
 
 ## Deployment sequence
 

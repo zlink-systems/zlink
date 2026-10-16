@@ -1,8 +1,7 @@
-using MyGame.Shared;
 using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
-namespace MyGame.Lobby;
+namespace MyGame.Shared;
 
 public sealed class LobbyEntry(IZLinkEntrySpotContext context, IZLinkSpotManager spots)
     : IZLinkEntrySpot<PlayerActor>

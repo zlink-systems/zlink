@@ -106,25 +106,32 @@ inline void check_structure (const std::filesystem::path &root)
         require (roles.contains (node.at ("id")) && node.at ("role") == roles.at (node.at ("id")),
                  "Node role mismatch");
     require (j.at ("channels").empty (), "This structure has no channels");
-    require (j.at ("spots").size () == 3, "Spot count mismatch");
+    std::set<std::string> entry_owners, dynamic_types;
     for (const auto &spot : j.at ("spots")) {
         const auto id = nonempty (spot, "id"), owner = nonempty (spot, "owner"),
                    kind = nonempty (spot, "kind");
         require (spot_ids.insert (id).second && configurations.contains (owner),
                  "Invalid Spot owner or duplicate ID");
-        if (id == "entry")
-            require (kind == "entry" && owner == "lobby" && spot.at ("type").is_null ()
-                       && !spot.contains ("logicalId") && !spot.contains ("dynamic"),
+        if (kind == "entry") {
+            require (entry_owners.insert (owner).second, "Duplicate Entry owner");
+            require ((roles.at (owner) == "lobby" || roles.at (owner) == "instance")
+                       && spot.at ("type").is_null () && !spot.contains ("logicalId")
+                       && !spot.contains ("dynamic"),
                      "Invalid Entry Spot");
-        else {
+        } else {
             require (kind == "user" && spot.at ("dynamic") == true && !spot.contains ("logicalId"),
                      "Expected dynamic User Spot");
-            require (
-              (id == "party" && owner == "lobby" && spot.at ("type") == Names::party)
-                || (id == "dungeon" && owner == "instanceA" && spot.at ("type") == Names::dungeon),
-              "User Spot registration mismatch");
+            require ((roles.at (owner) == "lobby" && spot.at ("type") == Names::party)
+                       || (roles.at (owner) == "instance" && spot.at ("type") == Names::dungeon),
+                     "User Spot registration mismatch");
+            dynamic_types.insert (spot.at ("type").get<std::string> ());
         }
     }
+    require (dynamic_types == std::set<std::string>{Names::party, Names::dungeon},
+             "Missing dynamic Spot family");
+    for (const auto &[id, role] : roles)
+        if (role == "lobby" || role == "instance")
+            require (entry_owners.contains (id), "Object Server lacks Entry Spot");
     for (const auto &[id, config] : configurations) {
         require ((id == "session") == config.contains ("StreamEndpoint"),
                  "Session endpoint ownership mismatch");

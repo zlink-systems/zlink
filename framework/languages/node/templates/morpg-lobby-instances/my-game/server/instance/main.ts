@@ -2,10 +2,13 @@ import { ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
 import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
+import { Entry } from '../shared/entry';
+import { Login, CreateParty, JoinParty } from '../shared/entry-handlers';
 import { Dungeon, DungeonRelocation } from './dungeon';
 import { Prepare, Reconnect, View, Advance, Delivery } from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
+  objects.addEntrySpot(Entry);
   objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.preserveStateWith(PlayerRelocation));
   objects.addSpotFactory(Names.dungeon, Dungeon, (f) => {
     f.stableTypeLimit(config.dungeonCapacity);
@@ -14,6 +17,10 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      Entry,
+      Login,
+      CreateParty,
+      JoinParty,
       Dungeon,
       DungeonRelocation,
       PlayerFactory,

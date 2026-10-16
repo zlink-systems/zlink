@@ -1,69 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import { zlinkEntrySpotActorSendHandler, zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
+import { zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
 import {
-  LobbyView,
   PartyView,
   JoinDungeon,
   type JoinLobbyRequest,
-  type CreatePartyRequest,
-  type JoinPartyRequest,
   type ReadyRequest,
   type EnterDungeonRequest,
   type ViewRequest
 } from '../shared/messages';
 import { Player } from '../shared/player';
-import { Entry, Party } from './spots';
-@Injectable()
-@zlinkEntrySpotActorSendHandler({
-  entrySpot: () => Entry,
-  actor: () => Player,
-  packetName: PacketNames.joinLobbyRequest
-})
-export class Login {
-  async handle(
-    _spot: Entry,
-    actor: Player,
-    _context: ZLinkMessageContext,
-    request: JoinLobbyRequest
-  ): Promise<void> {
-    if (request.playerId !== actor.context.actorId) throw new Error('Player identity mismatch');
-    await actor.context.boundSession.send(new LobbyView()).submit();
-  }
-}
-@Injectable()
-@zlinkEntrySpotActorSendHandler({
-  entrySpot: () => Entry,
-  actor: () => Player,
-  packetName: PacketNames.createPartyRequest
-})
-export class CreateParty {
-  async handle(
-    spot: Entry,
-    actor: Player,
-    _context: ZLinkMessageContext,
-    request: CreatePartyRequest
-  ): Promise<void> {
-    await spot.join(actor, request.partyId, true);
-  }
-}
-@Injectable()
-@zlinkEntrySpotActorSendHandler({
-  entrySpot: () => Entry,
-  actor: () => Player,
-  packetName: PacketNames.joinPartyRequest
-})
-export class JoinParty {
-  async handle(
-    spot: Entry,
-    actor: Player,
-    _context: ZLinkMessageContext,
-    request: JoinPartyRequest
-  ): Promise<void> {
-    await spot.join(actor, request.partyId, false);
-  }
-}
+import { Party } from './spots';
 @Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Party,

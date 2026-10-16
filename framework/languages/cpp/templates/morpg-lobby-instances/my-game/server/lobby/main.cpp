@@ -1,4 +1,4 @@
-#include "entry.hpp"
+#include "server/shared/entry.hpp"
 #include "party.hpp"
 #include "server/shared/hosting.hpp"
 int main (int argc, char **argv)

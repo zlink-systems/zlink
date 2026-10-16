@@ -20,12 +20,14 @@ class Program {
     ) = ZLinkFrameworkConfigurer { options ->
         configure(options, locations, relocations)
         options.addHandlersFromPackageOf<Program>()
+        options.addHandlersFromPackageOf<EntryActions>()
         options
             .addRouteMesh(Names.MESH)
             .listen(config.meshEndpoint)
             .setRoutingIdPrefix(config.id)
             .objects()
             .server()
+            .addEntrySpot<Entry>()
             .addActorFactory<Player, PlayerFactory>(Names.PLAYER) {
                 preserveStateWith<Player, PlayerTransfer>()
             }

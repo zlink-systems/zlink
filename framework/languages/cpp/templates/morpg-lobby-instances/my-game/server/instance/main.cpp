@@ -1,4 +1,5 @@
 #include "dungeon.hpp"
+#include "server/shared/entry.hpp"
 #include "server/shared/hosting.hpp"
 int main (int argc, char **argv)
 {
@@ -16,6 +17,7 @@ int main (int argc, char **argv)
         mesh.add_actor_factory<MyGame::Player, MyGame::PlayerFactory> (
           MyGame::Names::player, std::make_shared<MyGame::PlayerFactory> (),
           [] (auto &factory) { factory.recreate_on_relocation (); });
+        objects.add_entry_spot<MyGame::Entry, MyGame::fx::spot_manager_t> ();
         objects
           .add_spot_factory<MyGame::Dungeon, MyGame::NodeConfig, MyGame::fx::actor_client_t> (
             MyGame::Names::dungeon)

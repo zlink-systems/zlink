@@ -11,12 +11,14 @@ GameHosting.Configure(
     options =>
     {
         options.AddHandlersFromAssemblyOf<DungeonSpot>();
+        options.AddHandlersFromAssemblyOf<LobbyEntry>();
         options
             .AddRouteMesh(GameNames.WorldMesh)
             .SetRoutingIdPrefix(settings.Id)
             .Listen(settings.MeshEndpoint)
             .Objects()
             .Server()
+            .AddEntrySpot<LobbyEntry>()
             .AddActorFactory<PlayerActor, PlayerFactory>(
                 GameNames.PlayerType,
                 factory => factory.PreserveStateWith<PlayerRelocation>()

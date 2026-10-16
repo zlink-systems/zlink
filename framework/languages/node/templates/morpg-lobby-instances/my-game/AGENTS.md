@@ -4,19 +4,21 @@ This template implements MORPG parties in a lobby and relocatable dungeon instan
 
 ## Node responsibilities
 
-| Role           | Responsibility and extension points                                                                                                           |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Session        | `server/session/session.ts`: Player GetOrCreate, binding, SessionInfo, and relay.                                                             |
-| Lobby          | `server/lobby/domain.ts`: party rules. `spots.ts` and `handlers.ts`: Entry login, Party admission, readiness, dungeon preparation and travel. |
-| Instance       | `server/instance/dungeon.ts`: party admission and stage. `handlers.ts`: typed requests and delivery.                                          |
-| Shared hosting | `server/shared/hosting.ts`: stores, listener readiness, relocation observation, and shutdown.                                                 |
-| Client         | `e2e/client.mts`: public STREAM scenarios and assertions.                                                                                     |
+| Role           | Responsibility and extension points                                                                                              |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Session        | `server/session/session.ts`: Player GetOrCreate, binding, SessionInfo, and relay.                                                |
+| Lobby          | `server/lobby/domain.ts`: party rules. `spots.ts` and `handlers.ts`: Party admission, readiness, dungeon preparation and travel. |
+| Instance       | `server/instance/dungeon.ts`: party admission and stage. `handlers.ts`: typed requests and delivery.                             |
+| Shared hosting | `server/shared/hosting.ts`: stores, listener readiness, relocation observation, and shutdown.                                    |
+| Client         | `e2e/client.mts`: public STREAM scenarios and assertions.                                                                        |
 
 ## Public API boundaries
 
 Use public APIs and the default typed JSON serializer. Reply inside a request handler through the received Actor's bound Session. Other pushes address player IDs through Actor send and the current Spot's delivery handler. Spots never retain Actor references. Session binding alone owns Actor identity; game-state DTOs must not copy Session identity or generation.
 
 Party owns party membership and readiness. Dungeon owns its admitted party and stage. Relocation adapters capture application state only. Framework owns routes, leases, membership, queues, execution gates, and relocation. Do not compensate for Framework errors through internal APIs, reflection, raw frames, manual codecs, sleeps, retries, larger deadlines, or weaker assertions. Delivery handlers restore declared DTO classes using their packet table until #1731 is fixed.
+
+Register the shared stateless Entry and its shared admission handlers on every Object Server that registers Player. Keep party state in the Party User Spot. Structure checks must reject missing Entry owners and missing dynamic Party or Dungeon types. Keep the one-Dungeon instance capacity that makes replacement admission deterministic.
 
 ## Changes and verification
 

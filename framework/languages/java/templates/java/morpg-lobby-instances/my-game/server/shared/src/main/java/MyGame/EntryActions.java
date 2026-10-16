@@ -1,6 +1,4 @@
-package MyGame.lobby;
-
-import MyGame.*;
+package MyGame;
 
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.handlers.*;

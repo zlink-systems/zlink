@@ -17,6 +17,8 @@ Use typed messages and the default JSON serializer. Replies to handler requests 
 
 Do not add internal APIs, reflection, raw frame parsing, manual codecs, transport policy, retries, fixed sleeps or relaxed assertions. A public package defect must remain a documented blocker. Framework owns execution gates, routing, membership, binding and relocation.
 
+Register the shared stateless Entry and its shared admission handlers on every Object Server that registers Player. Keep party state in the Party User Spot. Structure checks must reject missing Entry owners and missing dynamic Party or Dungeon types. Keep the one-Dungeon instance capacity that makes replacement admission deterministic.
+
 ## Changes and verification
 
 Keep the party, reconnect and update scenarios and structure checks. Build and run on Windows and Linux. Any intermittent failure is a defect. Logs and generated configurations are under `.logs/run-<id>/`. The runner owns only its child processes and its unique Compose project. Validate structure checks against both valid files and temporary invalid copies outside committed sources.
