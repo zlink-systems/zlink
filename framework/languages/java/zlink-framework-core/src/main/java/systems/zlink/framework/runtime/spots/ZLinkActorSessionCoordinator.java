@@ -251,9 +251,16 @@ final class ZLinkActorSessionCoordinator {
     }
 
     CompletionStage<Void> completeRelocationSource(List<String> actorIds) {
+        return completeRelocationSource(actorIds, null);
+    }
+
+    CompletionStage<Void> completeRelocationSource(
+            List<String> actorIds,
+            systems.zlink.framework.execution.ZLinkSerialExecutionQueue.ActiveTurnSealHandle
+                    activeTurn) {
         List<Supplier<? extends CompletionStage<Void>>> cleanups = new ArrayList<>();
         for (String actorId : List.copyOf(actorIds))
-            cleanups.add(() -> requireActors().completeRelocationSource(actorId));
+            cleanups.add(() -> requireActors().completeRelocationSource(actorId, activeTurn));
         return ZLinkHandlerStages.completeAll(cleanups);
     }
 

@@ -157,7 +157,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                                 "Actor Join source owner lease expired or authority is Missing");
                 attempt.committed().completeExceptionally(expired);
-                yield prepared.discardAfterSourceLeaseExpiry()
+                yield prepared.discardAfterSourceLeaseExpiry(goal.activeTurnSeal())
                         .handle(
                                 (ignored, discardFailure) -> {
                                     if (discardFailure != null) {

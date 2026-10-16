@@ -1671,6 +1671,29 @@ public final class ZLinkSerialExecutionQueue {
         return sealNowLocked();
     }
 
+    /**
+     * Runs infrastructure owned by the captured logical turn through its existing gate. A lifecycle
+     * operation can have returned the physical turn while its result is still pending; its captured
+     * origin, rather than the current thread, is the lifetime fence.
+     */
+    public <T> CompletionStage<T> runInActiveTurn(
+            ActiveTurnSealHandle handle, Supplier<CompletionStage<T>> operation) {
+        return underSharedSpotGateAsync(
+                        () -> {
+                            synchronized (this) {
+                                if (handle == null
+                                        || handle.owner != this
+                                        || handle.entry.turnOrigin().result.isDone()) {
+                                    throw ZLinkFrameworkErrorOrigin.framework(
+                                            ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                            "Actor lifecycle cleanup requires its live captured turn");
+                                }
+                            }
+                            return operation.get();
+                        })
+                .thenCompose(stage -> stage);
+    }
+
     public static final class ActiveTurnSealHandle {
         private final ZLinkSerialExecutionQueue owner;
         private final Entry entry;
