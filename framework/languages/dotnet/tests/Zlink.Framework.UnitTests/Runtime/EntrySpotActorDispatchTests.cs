@@ -4113,11 +4113,47 @@ public sealed partial class EntrySpotActorDispatchTests
             );
 
             Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
-            await runtime.NotifyActorDisconnectedAsync(binding, CancellationToken.None);
-
-            var relay = ZLinkFrameworkJsonPayloadCodec.Deserialize<ZLinkRemoteActorFrameRelay>(
-                node.NodeSendAttempts.Single()[1]
+            var submitted = new TaskCompletionSource<ZLinkRemoteActorFrameRelay>(
+                TaskCreationOptions.RunContinuationsAsynchronously
             );
+            node.OnNodeSend = () =>
+                submitted.TrySetResult(
+                    ZLinkFrameworkJsonPayloadCodec.Deserialize<ZLinkRemoteActorFrameRelay>(
+                        node.NodeSendAttempts.Single()[1]
+                    )!
+                );
+            var notification = runtime
+                .NotifyActorDisconnectedAsync(binding, CancellationToken.None)
+                .AsTask();
+            var relay = await submitted.Task;
+            try
+            {
+                Assert.False(notification.IsCompleted);
+            }
+            finally
+            {
+                var header = ZLinkStreamProtocolDefaults.DecodeHeader(relay.Header);
+                using var terminal = Message.From(
+                    new ZLinkActorReply(
+                        ZlinkStreamMessageKind.Response,
+                        ZlinkStreamCodec.Json,
+                        ZLinkFrameworkJsonPayloadCodec.Serialize(true),
+                        ZlinkStreamHeaderFlags.None,
+                        ZlinkStreamMetadata.Empty
+                    ).ToFrame(header)
+                );
+                Assert.True(
+                    await runtime.ActorMessageFollower.TryCompleteLocalDirectReplyAsync(
+                        relay.ActorId,
+                        relay.ReplyRequestId,
+                        relay.ReplyFlags,
+                        relay.ReplyCapability!,
+                        [terminal],
+                        CancellationToken.None
+                    )
+                );
+                await notification;
+            }
             Assert.NotNull(relay);
             Assert.True(relay.OperationIdHigh != 0 || relay.OperationIdLow != 0);
             Assert.Equal(actor.ActorId, relay.ActorId);
@@ -11088,6 +11124,7 @@ public sealed partial class EntrySpotActorDispatchTests
         if (retireTarget is not null)
             serviceCollection.AddSingleton<IZLinkSpotRetireTarget>(retireTarget);
         ZLinkFrameworkRuntime? runtime = null;
+        serviceCollection.AddSingleton<ZLinkFrameworkRuntime>(_ => runtime!);
         serviceCollection.AddSingleton<IZLinkRouteClient>(_ => new ZLinkRouteClient(runtime!));
         var services = serviceCollection.BuildServiceProvider();
         var registration = new ZLinkFrameworkRegistration

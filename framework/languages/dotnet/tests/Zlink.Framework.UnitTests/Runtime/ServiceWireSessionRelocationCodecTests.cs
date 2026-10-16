@@ -1,12 +1,164 @@
 using System.Reflection;
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
-using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class ServiceWireSessionRelocationCodecTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Participant_uses_first_command43_and_ignores_later_results(bool absentFirst)
+    {
+        var first = absentFirst
+            ? ServiceWirePilotCodec.SessionSealResult.BindingAbsent
+            : ServiceWirePilotCodec.SessionSealResult.Sealed;
+        var later = absentFirst
+            ? ServiceWirePilotCodec.SessionSealResult.Sealed
+            : ServiceWirePilotCodec.SessionSealResult.BindingAbsent;
+        var seal = Seal();
+        var pending = new ZLinkManagedMeshNode.PendingSessionRelocationSeal(
+            System.Security.Cryptography.SHA256.HashData(
+                ZLinkServiceWireCodec.EncodeSessionRelocationSeal(seal)
+            ),
+            seal
+        );
+        var response = new ZLinkServiceWireCodec.SessionRelocationSealedRecord(
+            seal.RelocationId,
+            seal.Coordinator,
+            seal.Actor,
+            seal.Session,
+            first
+        );
+        Assert.False(
+            pending.TryComplete(
+                response with
+                {
+                    Actor = response.Actor with { OwnerLeaseGeneration = 9 },
+                }
+            )
+        );
+        Assert.False(pending.Completion.Task.IsCompleted);
+        Assert.True(pending.TryComplete(response));
+        Assert.False(pending.TryComplete(response with { RelocationId = new(8, 9) }));
+        Assert.False(
+            pending.TryComplete(
+                response with
+                {
+                    Coordinator = response.Coordinator with { OwnerId = "changed" },
+                }
+            )
+        );
+        Assert.False(
+            pending.TryComplete(
+                response with
+                {
+                    Actor = response.Actor with { OwnerLeaseGeneration = 9 },
+                }
+            )
+        );
+        Assert.False(
+            pending.TryComplete(
+                response with
+                {
+                    Session = response.Session with { BindingGeneration = 9 },
+                }
+            )
+        );
+        Assert.True(pending.TryComplete(response with { SealResult = later }));
+        Assert.Equal(response, await pending.Completion.Task);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Late_command43_validates_fields_for_pending_and_terminal(bool terminal)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "session-seal-replies");
+        await using var monitor = node.OpenMonitor();
+        var request = Seal();
+        var response = new ZLinkServiceWireCodec.SessionRelocationSealedRecord(
+            request.RelocationId,
+            request.Coordinator,
+            request.Actor,
+            request.Session
+        );
+        var pending = new ZLinkManagedMeshNode.PendingSessionRelocationSeal(
+            System.Security.Cryptography.SHA256.HashData(
+                ZLinkServiceWireCodec.EncodeSessionRelocationSeal(request)
+            ),
+            request
+        );
+        Assert.True(pending.TryComplete(response));
+        var flags = BindingFlags.NonPublic | BindingFlags.Instance;
+        var keyType = typeof(ZLinkManagedMeshNode).GetNestedType(
+            "PendingSessionRelocationKey",
+            BindingFlags.NonPublic
+        )!;
+        var key = keyType
+            .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .Single(method =>
+                method.Name == "Create"
+                && method.GetParameters()[1].ParameterType == request.GetType()
+            )
+            .Invoke(null, [request.Session.SessionOwnerNodeRid, request])!;
+        var field = terminal
+            ? "_sessionRelocationSealReplyTerminals"
+            : "_pendingSessionRelocationSeals";
+        var entries = (System.Collections.IDictionary)
+            typeof(ZLinkManagedMeshNode).GetField(field, flags)!.GetValue(node)!;
+        entries.Add(key, pending);
+        var receive = typeof(ZLinkManagedMeshNode).GetMethod(
+            "ProcessSessionRelocationSealed",
+            flags
+        )!;
+        receive.Invoke(
+            node,
+            [
+                request.Session.SessionOwnerNodeRid,
+                response with
+                {
+                    SealResult = ServiceWirePilotCodec.SessionSealResult.BindingAbsent,
+                },
+            ]
+        );
+        Assert.Equal(0UL, monitor.Status().ProtocolErrors);
+        receive.Invoke(
+            node,
+            [
+                request.Session.SessionOwnerNodeRid,
+                response with
+                {
+                    Coordinator = response.Coordinator with { OwnerId = "changed" },
+                },
+            ]
+        );
+        receive.Invoke(
+            node,
+            [
+                request.Session.SessionOwnerNodeRid,
+                response with
+                {
+                    Actor = response.Actor with { OwnerLeaseGeneration = 9 },
+                },
+            ]
+        );
+        receive.Invoke(
+            node,
+            [
+                request.Session.SessionOwnerNodeRid,
+                response with
+                {
+                    Session = response.Session with { BindingGeneration = 9 },
+                },
+            ]
+        );
+        Assert.Equal(3UL, monitor.Status().ProtocolErrors);
+        Assert.Equal(response, await pending.Completion.Task);
+    }
+
     [Fact]
     public void Commands_42_through_44_match_the_shared_golden_vectors()
     {
@@ -58,7 +210,7 @@ public sealed class ServiceWireSessionRelocationCodecTests
     public void Session_relocation_DTOs_exclude_sequence_high_water_and_reply()
     {
         Assert.Equal(
-            new[] { "RelocationId", "Coordinator", "Actor", "Session" },
+            new[] { "RelocationId", "Coordinator", "Actor", "Session", "SealResult" },
             PublicPropertyNames<ZLinkServiceWireCodec.SessionRelocationSealedRecord>()
         );
         Assert.Equal(
@@ -230,10 +382,7 @@ public sealed class ServiceWireSessionRelocationCodecTests
     [Theory]
     [InlineData("sessionRelocationSealed", "sealed")]
     [InlineData("sessionRelocationBindingAbsent", "bindingAbsent")]
-    public void SealResult_GeneratedCodecsAcceptBothAndRuntimeRequiresSealed(
-        string name,
-        string result
-    )
+    public void SealResult_RuntimeRoundTripsBothResults(string name, string result)
     {
         var bytes = ReadGolden(name);
         var context = ServiceWireCodec.DecodeContext.Empty;
@@ -252,16 +401,13 @@ public sealed class ServiceWireSessionRelocationCodecTests
         Assert.Equal(bytes, ServiceWirePilotCodec.EncodeSessionRelocationSealed43(pilot));
         var accepted = ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed(
             bytes,
-            out _,
+            out var runtimeRecord,
             out var error
         );
-        Assert.Equal(result == "sealed", accepted);
-        Assert.Equal(
-            result == "sealed"
-                ? ZLinkServiceWireCodec.DecodeError.None
-                : ZLinkServiceWireCodec.DecodeError.InvalidField,
-            error
-        );
+        Assert.True(accepted);
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(pilot.SealResult, runtimeRecord.SealResult);
+        Assert.Equal(bytes, ZLinkServiceWireCodec.EncodeSessionRelocationSealed(runtimeRecord));
     }
 
     [Theory]

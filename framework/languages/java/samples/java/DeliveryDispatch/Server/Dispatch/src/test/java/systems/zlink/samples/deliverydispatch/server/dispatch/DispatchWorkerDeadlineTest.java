@@ -11,6 +11,7 @@ import systems.zlink.framework.actors.ZLinkActorRequestCall;
 import systems.zlink.framework.actors.ZLinkActorSendCall;
 import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.samples.deliverydispatch.server.configuration.SampleTimings;
 import systems.zlink.samples.deliverydispatch.server.dispatch.DeliveryOfferStore.DeliveryOffer;
@@ -110,8 +111,17 @@ final class DispatchWorkerDeadlineTest {
 
                     @Override
                     @SuppressWarnings("unchecked")
-                    public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
-                        return (CompletionStage<TReply>) statusReply;
+                    public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
+                        AdmittedReply<TReply> reply = new AdmittedReply<>();
+                        statusReply.whenComplete(
+                                (value, failure) -> {
+                                    if (failure != null) {
+                                        reply.completeExceptionally(failure);
+                                    } else {
+                                        reply.complete((TReply) value);
+                                    }
+                                });
+                        return reply;
                     }
 
                     @Override
@@ -178,6 +188,15 @@ final class DispatchWorkerDeadlineTest {
         @Override
         public Instant instant() {
             return current;
+        }
+    }
+
+    /** A request reply whose source-local admission has already completed. */
+    private static final class AdmittedReply<T> extends CompletableFuture<T>
+            implements ZLinkRequestStage<T> {
+        @Override
+        public CompletionStage<Void> admitted() {
+            return CompletableFuture.completedFuture(null);
         }
     }
 }

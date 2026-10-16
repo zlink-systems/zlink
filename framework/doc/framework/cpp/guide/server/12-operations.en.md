@@ -201,7 +201,7 @@ verification rules are covered by
 
 `Relocated` means the source finished sending its cutovers, not that every caller caching
 the old route now points at the new owner. The source runtime publishes the
-`SafeToShutdown` state in its own runtime status once every unit's Message Follow can end
+`safe_to_shutdown` state in its own runtime status once every unit's Message Follow can end
 and the cutover retransmission window has closed. A deployment orchestrator should confirm
 `Relocated`, then observe this state before calling `shutdown` — terminating
 before it's published is allowed, but the remaining follow routes disappear and requests
@@ -228,7 +228,7 @@ scope, authority, session, and topology resources. If no deadline is given, it's
 The state of any Spot cleaned up here doesn't survive. If your deployment automation needs to
 keep state alive while taking a host down, call `relocate(...)` before shutting down,
 confirm the result is `Relocated`, and only then move on to this call (the example in §4).
-When possible, also confirm the `SafeToShutdown` publication (§2.3).
+When possible, also confirm the `safe_to_shutdown` publication (§2.3).
 
 A Spot's lifetime is independent of any request. A User/Instance Spot isn't closed just
 because an ordinary request finished. Likewise, preparing a nonexistent Instance Spot never
@@ -241,7 +241,7 @@ The two operations above don't happen automatically. The application calls them 
 the framework runtime. This interface is a DI singleton that owns host maintenance.
 
 The order used in deployment is "move first, and shut down only if it succeeded." Confirming
-`Relocated` and then observing the `SafeToShutdown` publication (§2.3) before terminating
+`Relocated` and then observing the `safe_to_shutdown` publication (§2.3) before terminating
 avoids failures for callers still caching the old route.
 
 ```cpp

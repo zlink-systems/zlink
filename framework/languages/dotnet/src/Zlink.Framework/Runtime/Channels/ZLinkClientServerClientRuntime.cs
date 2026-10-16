@@ -1580,13 +1580,19 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     ?? ZLinkServiceLiveness.ProbeInterval;
                 return false;
             }
+            var physicalGeneration = _physicalGeneration;
+            var admission = _liveness;
             Task requestTask;
+            // State ownership §6: even an already completed native reply must begin
+            // its ACK continuation outside this turn before entering the lane once.
             using (ExecutionContext.SuppressFlow())
-                requestTask = RequestLivenessProbeAsync(
-                    probeId,
-                    _physicalGeneration,
-                    _liveness,
-                    cancellationToken
+                requestTask = Task.Run(() =>
+                    RequestLivenessProbeAsync(
+                        probeId,
+                        physicalGeneration,
+                        admission,
+                        cancellationToken
+                    )
                 );
             _requestTasks.RemoveAll(static candidate =>
                 candidate.IsCompletedSuccessfully || candidate.IsCanceled
