@@ -113,7 +113,7 @@ public final class Structure {
                         require(
                                 spot.has("type")
                                         && spot.path("type").isNull()
-                                        && objectServerRoles.contains(roles.get(owner(spot, roles)))
+                                        && Roles.REGION.equals(roles.get(owner(spot, roles)))
                                         && !spot.has("logicalId")
                                         && !spot.has("dynamic"),
                                 "Invalid Entry Spot declaration");
@@ -138,14 +138,20 @@ public final class Structure {
                 dynamicTypes.containsAll(Set.of(Names.REGION, Names.DUNGEON)),
                 "Missing dynamic Spot family");
         for (var node : nodes)
-            if (objectServerRoles.contains(roles.get(text(node, "id"))))
+            if (Roles.REGION.equals(roles.get(text(node, "id"))))
                 require(
                         spots.stream()
-                                .anyMatch(
-                                        p ->
-                                                p.path("owner").asText().equals(text(node, "id"))
-                                                        && p.path("kind").asText().equals("entry")),
-                        "Object Server lacks Entry Spot");
+                                        .filter(
+                                                p ->
+                                                        p.path("owner")
+                                                                        .asText()
+                                                                        .equals(text(node, "id"))
+                                                                && p.path("kind")
+                                                                        .asText()
+                                                                        .equals("entry"))
+                                        .count()
+                                == 1,
+                        "Expected one application Entry Spot");
         for (var edge : array(s, "edges")) {
             require(
                     ids.contains(text(edge, "from")) && ids.contains(text(edge, "to")),

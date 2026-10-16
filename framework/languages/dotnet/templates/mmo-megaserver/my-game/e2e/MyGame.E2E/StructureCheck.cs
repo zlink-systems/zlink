@@ -148,8 +148,8 @@ internal static class StructureCheck
             if (kind == "entry")
             {
                 Require(
-                    roles[owner] is "region" or "instance",
-                    "Entry owner must be an Object Server."
+                    roles[owner] == "region",
+                    "Entry owner must register the application Entry handler."
                 );
                 Require(
                     spot!["type"] is null && spot["logicalId"] is null && spot["dynamic"] is null,
@@ -178,14 +178,11 @@ internal static class StructureCheck
             Require(dynamic, "Region and Dungeon registrations are dynamic families.");
         }
         var spots = Array(document, "spots");
-        foreach (
-            var owner in roles
-                .Where(pair => pair.Value is "region" or "instance")
-                .Select(pair => pair.Key)
-        )
+        foreach (var owner in roles.Where(pair => pair.Value == "region").Select(pair => pair.Key))
             Require(
-                spots.Any(spot => Text(spot, "kind") == "entry" && Text(spot, "owner") == owner),
-                "Object Server lacks its Entry Spot: " + owner
+                spots.Count(spot => Text(spot, "kind") == "entry" && Text(spot, "owner") == owner)
+                    == 1,
+                "Expected one application Entry Spot: " + owner
             );
         foreach (var type in new[] { GameNames.RegionType, GameNames.DungeonType })
             Require(

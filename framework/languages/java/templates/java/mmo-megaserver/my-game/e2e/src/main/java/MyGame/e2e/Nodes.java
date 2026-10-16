@@ -10,6 +10,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public final class Nodes implements AutoCloseable {
+    private static final int RUN_REGION_LIMIT = 2;
     private final Path root;
     private final String runId = UUID.randomUUID().toString();
     final Path logs;
@@ -82,7 +83,7 @@ public final class Nodes implements AutoCloseable {
                             declared.meshEndpoint(),
                             declared.streamEndpoint(),
                             declared.capacity(),
-                            declared.regionLimit());
+                            role.equals(Roles.REGION) ? RUN_REGION_LIMIT : declared.regionLimit());
             var path = logs.resolve(id + ".json");
             Json.MAPPER.writeValue(path.toFile(), config);
             configs.put(id, path);
@@ -104,10 +105,6 @@ public final class Nodes implements AutoCloseable {
         for (var stage :
                 List.of(Control.RELOCATION_REQUESTED, Control.RELOCATED, Control.SAFE_TO_SHUTDOWN))
             node.waitFor(stage);
-    }
-
-    boolean isLiveRegion(String id) {
-        return Roles.REGION.equals(modules.get(id)) && nodes.get(id).process.isAlive();
     }
 
     void replace(String id) throws Exception {

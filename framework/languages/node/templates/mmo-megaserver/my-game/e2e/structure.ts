@@ -80,10 +80,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     const host = owner(spot.owner);
     assert(['entry', 'user'].includes(text(spot.kind)), 'Unknown Spot kind');
     if (spot.kind === 'entry') {
-      assert(
-        host.role === 'region' || host.role === 'instance',
-        'Entry owner must be an Object Server'
-      );
+      assert(host.role === 'region', 'Entry owner must register the application Entry handler');
       assert.equal(spot.type, null);
       assert(!('dynamic' in spot) && !('logicalId' in spot));
     } else {
@@ -94,10 +91,10 @@ export function checkStructure(path = 'zlink.structure.json'): void {
       assert(!('logicalId' in spot));
     }
   }
-  for (const node of nodes.filter((n) => n.role === 'region' || n.role === 'instance'))
+  for (const node of nodes.filter((n) => n.role === 'region'))
     assert(
-      spots.some((s) => s.kind === 'entry' && s.owner === node.id),
-      `Object Server lacks Entry Spot: ${String(node.id)}`
+      spots.filter((s) => s.kind === 'entry' && s.owner === node.id).length === 1,
+      `Expected one application Entry Spot: ${String(node.id)}`
     );
   for (const type of [Names.region, Names.dungeon])
     assert(

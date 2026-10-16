@@ -23,6 +23,7 @@ class World
     std::string project_, redis_;
     std::vector<std::unique_ptr<Node>> nodes_;
     std::map<std::string, Node *> regions_;
+    static constexpr int run_region_limit = 2;
     bool compose_started_ = false;
     int command_index_ = 0;
     std::vector<std::string> compose (std::initializer_list<std::string> arguments) const
@@ -45,6 +46,8 @@ class World
     start_node (const std::string &name, const std::string &role, bool replacement = false)
     {
         auto config = read_json (root_ / "server/config" / (name + ".json"));
+        if (role == "region")
+            config["RegionLimit"] = run_region_limit;
         config["RedisEndpoint"] = redis_;
         config["KeyPrefix"] = project_ + ":";
         config["MeshEndpoint"] = "tcp://127.0.0.1:0";
@@ -115,11 +118,6 @@ class World
         return stream;
     }
     Process &region (const std::string &id) { return *regions_.at (id)->process; }
-    bool is_live_region (const std::string &id) const
-    {
-        const auto node = regions_.find (id);
-        return node != regions_.end () && !node->second->stopped;
-    }
     void replace_region (const std::string &id)
     {
         stop_node (*regions_.at (id));

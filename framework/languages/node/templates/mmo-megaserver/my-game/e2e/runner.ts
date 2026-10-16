@@ -19,9 +19,6 @@ class NodeProcess {
   private readonly lines: string[] = [];
   private readonly changed = new EventEmitter();
   private exited = false;
-  get isAlive(): boolean {
-    return !this.exited;
-  }
   readonly exit: Promise<Error | undefined>;
   constructor(
     readonly config: NodeConfig,
@@ -117,6 +114,8 @@ class NodeProcess {
     }
   }
 }
+const RunRegionLimit = 2;
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args[0] === '--check-structure') {
@@ -193,6 +192,7 @@ async function runScenario(name: string): Promise<boolean> {
     applicationNodes.sort((a, b) => Number(a.role === 'session') - Number(b.role === 'session'));
     for (const node of applicationNodes) {
       const cfg = node.config;
+      if (node.role === 'region') cfg.regionLimit = RunRegionLimit;
       cfg.redisEndpoint = redis;
       cfg.keyPrefix = `my-game:${runId}:`;
       cfg.meshEndpoint = 'tcp://127.0.0.1:0';
@@ -206,10 +206,6 @@ async function runScenario(name: string): Promise<boolean> {
     const endpoint = ready.find((r) => r.id === session.config.id)!.endpoint;
     const { scenario } = await import('./client.mjs');
     const control = {
-      isLiveRegion(id: string): boolean {
-        const node = nodes.get(id);
-        return node?.role === 'region' && node.isAlive;
-      },
       async drain(id: string): Promise<void> {
         const node = nodes.get(id);
         assert(node, `Unknown host ${id}`);

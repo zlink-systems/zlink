@@ -27,9 +27,6 @@ private class Node(val id: String, module: String, config: Path, root: Path, log
             .directory(root.toFile())
             .redirectError(logs.resolve("$id-stderr.log").toFile())
             .start()
-    val isAlive
-        get() = process.isAlive
-
     private val input = process.outputWriter()
 
     init {
@@ -88,6 +85,8 @@ private class Node(val id: String, module: String, config: Path, root: Path, log
 
 fun isWindows() = System.getProperty("os.name").startsWith("Windows")
 
+private const val RUN_REGION_LIMIT = 2
+
 class Nodes(private val root: Path) : AutoCloseable {
     private val runId = UUID.randomUUID().toString()
     val logs: Path = root.resolve(".logs/run-$runId").also { Files.createDirectories(it) }
@@ -143,7 +142,12 @@ class Nodes(private val root: Path) : AutoCloseable {
                     root.resolve(node["config"].asText()).toFile(),
                     NodeConfig::class.java,
                 )
-            val config = source.copy(redisEndpoint = redis, keyPrefix = "my-game:$runId:")
+            val config =
+                source.copy(
+                    redisEndpoint = redis,
+                    keyPrefix = "my-game:$runId:",
+                    regionLimit = if (role == Roles.REGION) RUN_REGION_LIMIT else source.regionLimit,
+                )
             val path = logs.resolve("$id.json")
             Json.mapper.writeValue(path.toFile(), config)
             configs[id] = path
@@ -169,8 +173,6 @@ class Nodes(private val root: Path) : AutoCloseable {
             listOf(Control.RELOCATION_REQUESTED, Control.RELOCATED, Control.SAFE_TO_SHUTDOWN)) node
             .waitFor(stage)
     }
-
-    fun isLiveRegion(id: String) = roles[id] == Roles.REGION && nodes[id]?.isAlive == true
 
     fun replace(id: String) {
         requireNotNull(nodes[id]).stop()

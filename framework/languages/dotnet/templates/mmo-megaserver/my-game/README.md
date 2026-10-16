@@ -55,7 +55,7 @@ Send `drain` to the Region process's stdin. Wait for `RELOCATION_REQUESTED`, `RE
 
 The demonstration trusts player IDs sent on the first packet. Add application authentication before deploying publicly. Disconnected players retain membership and position for reconnect; explicit lifecycle policies can extend the domain model. Repeating `EnterRegionRequest` for an already joined Actor returns its current Region view.
 
-The update scenario waits for the replacement process to report `READY`, then checks that a new Region is served by a live Region node. Object placement can choose either available Region node; it does not promise the replacement. Existing Region state and Session identity checks remain required. All Object Servers, including the Instance node's framework Entry, are declared in `zlink.structure.json`.
+The e2e fixture limits each Region node to two Region Spots and keeps forest-1 and forest-2 occupied before drain. After relocation the survivor is full. Once the replacement reports `READY`, a new desert Region must be served by that replacement. Existing Region state and Session identity checks remain required. Only Region nodes register the application Entry and its first admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
 
 Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is the follow duration plus the existing relocation budget; the relocation operation deadline is unchanged.
 

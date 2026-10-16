@@ -83,7 +83,7 @@ fun checkStructure(root: Path) {
         when (text(spot, "kind")) {
             "entry" ->
                 check(
-                    roles[owner(spot)] in objectServerRoles &&
+                    roles[owner(spot)] == Roles.REGION &&
                         spot["type"]?.isNull == true &&
                         !spot.has("logicalId") &&
                         !spot.has("dynamic")
@@ -102,9 +102,9 @@ fun checkStructure(root: Path) {
             else -> error("Unregistered Spot kind")
         }
     }
-    for (node in nodes.filter { roles[it["id"].asText()] in objectServerRoles }) {
+    for (node in nodes.filter { roles[it["id"].asText()] == Roles.REGION }) {
         val id = text(node, "id")
-        check(spots.any { it["owner"].asText() == id && it["kind"].asText() == "entry" })
+        check(spots.count { it["owner"].asText() == id && it["kind"].asText() == "entry" } == 1)
     }
     check(dynamicTypes.containsAll(setOf(Names.REGION, Names.DUNGEON))) {
         "Missing dynamic Spot family"

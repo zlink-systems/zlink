@@ -12,6 +12,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
         ".logs",
         "run-" + Guid.NewGuid().ToString("N")
     );
+    private const int RunRegionLimit = 2;
     private bool composeStarted;
     private string redisEndpoint = "";
     public Dictionary<string, ManagedProcess> Regions { get; } = new(StringComparer.Ordinal);
@@ -62,6 +63,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             ) ?? throw new InvalidOperationException($"Invalid {configName} configuration.");
         settings = settings with
         {
+            RegionLimit = assembly == "MyGame.Region" ? RunRegionLimit : settings.RegionLimit,
             RedisEndpoint = redisEndpoint,
             KeyPrefix = project + ":",
             MeshEndpoint = "tcp://127.0.0.1:0",

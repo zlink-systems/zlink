@@ -113,10 +113,10 @@ suspend fun scenarios(selected: List<String>, nodes: Nodes): Int {
                     val fresh = create(PLAYER_FOUR)
                     val admitted = fresh.join("desert")
                     check(
-                        nodes.isLiveRegion(admitted.nodeId) &&
+                        admitted.nodeId == moved.nodeId &&
                             admitted.players == listOf(PlayerPosition(PLAYER_FOUR, 0))
                     ) {
-                        "New Region was not accepted by a live Region node"
+                        "New Region was not accepted by the replacement Region node"
                     }
                 }
             }

@@ -50,7 +50,7 @@ export async function scenario(
   const failures: unknown[] = [];
   let a = create('p1');
   const b = create('p2');
-  const c = name === 'region' ? create('p3') : undefined;
+  const c = name === 'region' || name === 'update' ? create('p3') : undefined;
   try {
     const initial = await enter(a);
     const together = await enter(b);
@@ -126,8 +126,8 @@ export async function scenario(
       await control.replace(before.nodeId);
       const fresh = await enter(create('p4'), Test.freshRegion);
       assert(
-        control.isLiveRegion(fresh.nodeId),
-        'New region was not accepted by a live Region node'
+        fresh.nodeId === before.nodeId,
+        'New region was not accepted by the replacement Region node'
       );
       assert.deepEqual(await a.sessionInfo(), identity);
       assert.deepEqual(await b.sessionInfo(), otherIdentity);
@@ -145,7 +145,6 @@ export async function scenario(
     throw new AggregateError(failures, `Scenario ${name} or client cleanup failed`);
 }
 export interface NodeControl {
-  isLiveRegion(id: string): boolean;
   drain(id: string): Promise<void>;
   replace(id: string): Promise<void>;
 }

@@ -171,9 +171,9 @@ internal static class Scenarios
                     await using var fresh = await GameClient.ConnectAsync(endpoint, "p4", ct);
                     var created = await fresh.JoinAsync("desert", ct);
                     Require(
-                        run.Regions.ContainsKey(created.NodeId)
+                        created.NodeId == moved.NodeId
                             && created.Players.Any(p => p.PlayerId == "p4"),
-                        "New region was not accepted by a live Region node."
+                        "New region was not accepted by the replacement Region node."
                     );
                     Console.WriteLine("✓ update");
                     passed++;

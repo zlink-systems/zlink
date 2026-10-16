@@ -78,6 +78,9 @@ inline void update (const std::string &endpoint, World &world)
     const auto before = p1.wait_view (
       [] (const auto &view) { return at (view, "p1", 31) && view.players.size () == 2; });
     p2.wait_view ([] (const auto &view) { return at (view, "p1", 31); });
+    Client p3 (endpoint, "p3");
+    const auto isolated = p3.join ("forest");
+    require (isolated.regionId == "forest-2", "Second Region must occupy survivor capacity");
     const auto identity1 = p1.info (), identity2 = p2.info ();
     auto &owner = world.region (before.nodeId);
     owner.command (Control::drain);
@@ -97,12 +100,13 @@ inline void update (const std::string &endpoint, World &world)
     require (identity1 == p1.info () && identity2 == p2.info (),
              "Replacement changed Session identity");
     Client fresh (endpoint, "fresh");
-    const auto created = fresh.join ("new-region");
-    require (world.is_live_region (created.nodeId),
-             "New Region was not accepted by a live Region node");
+    const auto created = fresh.join ("desert");
+    require (created.nodeId == before.nodeId,
+             "New Region was not accepted by the replacement Region node");
     require (created.players.size () == 1 && created.players.front ().playerId == "fresh",
              "New Region membership mismatch");
     fresh.close ();
+    p3.close ();
     p1.close ();
     p2.close ();
 }

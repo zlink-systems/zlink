@@ -64,7 +64,7 @@ Start Redis, then the region and instance processes, then the Session process. E
 
 Send `drain` to the selected region process. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`. Send `shutdown`, verify `STOPPED` with outcome Stopped and reason None, then start the replacement with the same configuration. Capacity defaults to two players per Region and Region stable-type limit defaults to two instances per region process. Ensure the surviving host has capacity for relocation.
 
-The update scenario waits for the replacement process to report `READY`, then checks that a new Region is served by a live Region node. Object placement can choose either available Region node; it does not promise the replacement. Existing Region state and Session identity checks remain required. All Object Servers, including the Instance node's framework Entry, are declared in `zlink.structure.json`.
+The e2e fixture limits each Region node to two Region Spots and keeps forest-1 and forest-2 occupied before drain. After relocation the survivor is full. Once the replacement reports `READY`, a new desert Region must be served by that replacement. Existing Region state and Session identity checks remain required. Only Region nodes register the application Entry and its first admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
 
 Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is the follow duration plus the existing relocation budget; the relocation operation deadline is unchanged.
 

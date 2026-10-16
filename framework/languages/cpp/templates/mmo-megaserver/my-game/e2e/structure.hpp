@@ -109,8 +109,8 @@ inline void check_structure (const std::filesystem::path &root)
             require (spot.at ("type").is_null () && !spot.contains ("logicalId")
                        && !spot.contains ("dynamic"),
                      "Invalid Entry declaration");
-            require (roles.at (owner) == "region" || roles.at (owner) == "instance",
-                     "Entry owner must be an Object Server");
+            require (roles.at (owner) == "region",
+                     "Entry owner must register the application Entry handler");
             continue;
         }
         require (kind == "user", "Unknown application Spot kind");
@@ -130,12 +130,14 @@ inline void check_structure (const std::filesystem::path &root)
     }
     const auto &spots = j.at ("spots");
     for (const auto &[id, role] : roles) {
-        if (role == "region" || role == "instance")
-            require (std::any_of (spots.begin (), spots.end (),
-                                  [&id] (const auto &spot) {
-                                      return spot.at ("kind") == "entry" && spot.at ("owner") == id;
-                                  }),
-                     "Object Server lacks Entry Spot: " + id);
+        if (role == "region")
+            require (std::count_if (spots.begin (), spots.end (),
+                                    [&id] (const auto &spot) {
+                                        return spot.at ("kind") == "entry"
+                                               && spot.at ("owner") == id;
+                                    })
+                       == 1,
+                     "Expected one application Entry Spot: " + id);
     }
     for (const auto type : {Names::region, Names::dungeon})
         require (std::any_of (spots.begin (), spots.end (),

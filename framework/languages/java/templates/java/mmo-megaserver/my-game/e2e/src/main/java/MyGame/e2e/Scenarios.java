@@ -130,10 +130,10 @@ public final class Scenarios {
                         var fresh = create(nodes, clients, "p4");
                         var admitted = fresh.join("desert");
                         require(
-                                nodes.isLiveRegion(admitted.nodeId())
+                                admitted.nodeId().equals(moved.nodeId())
                                         && admitted.players()
                                                 .equals(List.of(new PlayerPosition("p4", 0))),
-                                "New Region was not accepted by a live Region node");
+                                "New Region was not accepted by the replacement Region node");
                     }
                 }
                 for (var client : clients)
