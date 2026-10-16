@@ -20,6 +20,94 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 {
+    private static readonly TimeSpan ClassificationCleanupTimeout = TimeSpan.FromMilliseconds(25);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Shutdown_Without_Actual_Failure_Reports_Completion_Or_Deadline(bool expires)
+    {
+        var probe = new DrainExecutionProbe();
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new AuditRuntimeFailureReporter(),
+            probe.Operations with
+            {
+                WaitForAcceptedOperations = () =>
+                    expires ? new TaskCompletionSource().Task : Task.CompletedTask,
+            },
+            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = ClassificationCleanupTimeout }
+        );
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            new AuditRuntimeFailureReporter(),
+            coordinator,
+            new ZLinkFrameworkHostLifecycleState(),
+            static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            static _ => ValueTask.FromResult(true),
+            static (_, _) => throw new NotSupportedException()
+        );
+        var result = await runtime.ShutdownAsync(TimeSpan.FromMilliseconds(25));
+        Assert.Equal(
+            expires
+                ? ZLinkFrameworkTerminationOutcome.ForceStopped
+                : ZLinkFrameworkTerminationOutcome.Stopped,
+            result.Outcome
+        );
+        Assert.Equal(
+            expires
+                ? ZLinkFrameworkTerminationReason.DeadlineExceeded
+                : ZLinkFrameworkTerminationReason.None,
+            result.Reason
+        );
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Actual_Shutdown_Failure_Survives_Later_Teardown_Deadline(
+        bool storeFailure,
+        bool callbackTimeout
+    )
+    {
+        var probe = new DrainExecutionProbe();
+        Exception failure = callbackTimeout
+            ? new TimeoutException("callback timeout")
+            : new InvalidOperationException(
+                storeFailure ? "Store delete failed" : "callback failed"
+            );
+        var operations = probe.Operations with
+        {
+            ForceStopRuntime = async token => await Task.Delay(Timeout.InfiniteTimeSpan, token),
+        };
+        operations = storeFailure
+            ? operations with
+            {
+                CleanupOwner = _ => ValueTask.FromException(failure),
+            }
+            : operations with
+            {
+                DrainSpots = (_, _, _, _) => ValueTask.FromException<ZLinkSpotDrainResult>(failure),
+            };
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new AuditRuntimeFailureReporter(),
+            operations,
+            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = ClassificationCleanupTimeout }
+        );
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            new AuditRuntimeFailureReporter(),
+            coordinator,
+            new ZLinkFrameworkHostLifecycleState(),
+            static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            static _ => ValueTask.FromResult(true),
+            static (_, _) => throw new NotSupportedException()
+        );
+        var result = await runtime.ShutdownAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, result.Outcome);
+        Assert.Equal(ZLinkFrameworkTerminationReason.TeardownFailed, result.Reason);
+    }
+
     [Fact]
     public async Task Completed_Drain_After_Deadline_Does_Not_Repeat_Teardown()
     {
