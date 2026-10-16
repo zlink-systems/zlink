@@ -2746,6 +2746,40 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   );
   assert.equal(runtime.abortSpotMessageFollowIngress(abortSeal), true);
   assert.equal(restored.length, 2);
+
+  runtime.restoreSpotAuthority('chained-room', 'user_spot', 'Room', 9n, 13n);
+  const chainedSource = {
+    ...source,
+    spot: { spotId: 'chained-room', generation: 9n },
+    authorityOwnerGeneration: 13n
+  };
+  const chainedSeal = runtime.sealSpotMessageFollowIngress(chainedSource);
+  assert.ok(chainedSeal);
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.spotRequest,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      sourceRoute: Buffer.from('reply-route'),
+      requestSequence: 18n,
+      parts: [encodeSpotHeader('spotRequest', 'source-spot', chainedSource, 92n), payload]
+    }),
+    'application'
+  );
+  const relayCount = relayed.length;
+  assert.equal(await runtime.commitSpotMessageFollowIngress(chainedSeal, null, 30_000), true);
+  assert.equal(
+    await runtime.commitSpotMessageFollowIngress(chainedSeal, null, 30_000),
+    false,
+    'the seal is consumed once'
+  );
+  assert.equal(relayed.length, relayCount, 'a chained commit sends no Follow');
+  assert.equal(restored.length, 2, 'a chained commit never restores ingress to the source');
+  assert.equal(replies.length, 2);
+  assert.equal(
+    decodeStatefulReply(replies[1]![0]!, 92n, 'spotRequest').failureCode,
+    ServiceWireFrameworkErrorCode.actorLocationStale
+  );
   runtime.close();
 });
 
@@ -6374,17 +6408,17 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     assert.equal(staleCompletion.failureErrno, 21);
   } finally {
     await authorityRoutes.stop();
-    backend.close();
+    await backend.close();
   }
 });
 
-test('closed raw backend accepts a completed Instance Close notification', () => {
+test('closed raw backend accepts a completed Instance Close notification', async () => {
   const backend = new ZLinkNodeRawMeshBackend(
     'm6b-mesh',
     'm6b-node',
     new ZLinkNodeRawBindingPort()
   );
-  backend.close();
+  await backend.close();
   assert.doesNotThrow(() => backend.completeClosedInstance('tenant:closed', 8n));
 });
 

@@ -356,7 +356,10 @@ void verify_generated_adoption_goldens ()
         for (const auto &item : fixture.at ("canonical")) {
             const auto bytes = from_hex (item.at ("hex").get<std::string> ());
             verify_generated_service_roundtrip (bytes);
-            verify_runtime_service_roundtrip (bytes);
+            if (item.value ("name", "") == "sessionRelocationBindingAbsent")
+                assert (runtime_service_rejects (bytes));
+            else
+                verify_runtime_service_roundtrip (bytes);
         }
         if (fixture.contains ("malformed")) {
             for (const auto &item : fixture.at ("malformed")) {
@@ -1413,7 +1416,7 @@ int main ()
         std::ifstream fixture (ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH);
         assert (fixture.good ());
         const auto vectors = nlohmann::json::parse (fixture);
-        assert (vectors.at ("canonical").size () == 4);
+        assert (vectors.at ("canonical").size () == 5);
         const auto &identity = vectors.at ("identity");
         const auto ordinal = [&identity] (const char *name) {
             return std::stoull (identity.at (name).get<std::string> ());

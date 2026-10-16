@@ -7,10 +7,7 @@ import {
   type ZLinkOwnerLeaseReadResult
 } from './internal-location-contracts';
 import type { ZLinkOwnerLeaseStore } from './internal-store-contracts';
-import { AsyncResource } from 'node:async_hooks';
-import { ZLinkStateLane } from '../execution/state-lane';
-
-const detachedLeaseRefreshResource = new AsyncResource('zlink:owner-lease-tracker');
+import { startOutsideStateLane, ZLinkStateLane } from '../execution/state-lane';
 
 export interface ZLinkOwnerLeaseTrackerOptions {
   readonly store: ZLinkOwnerLeaseStore;
@@ -108,7 +105,7 @@ export class ZLinkOwnerLeaseTracker {
     const prepared = await this.lane.run(() => this.prepareSnapshotRefresh(ownerId));
     if (prepared.snapshot !== undefined) return prepared.snapshot;
     if (prepared.start) {
-      void runDetachedLeaseRefresh(() => this.refreshSnapshot(ownerId, signal, prepared.refresh));
+      void startOutsideStateLane(() => this.refreshSnapshot(ownerId, signal, prepared.refresh));
     }
     return await prepared.refresh.promise;
   }
@@ -217,8 +214,4 @@ export class ZLinkLiveRowFilter {
     }
     return (await isLive(row, signal)) ? row : undefined;
   }
-}
-
-function runDetachedLeaseRefresh(work: () => Promise<void>): Promise<void> {
-  return detachedLeaseRefreshResource.runInAsyncScope(work);
 }

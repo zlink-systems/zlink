@@ -98,9 +98,9 @@ export interface ZLinkBackendMeshNode {
       'kind'
     >
   ): Promise<boolean>;
-  shutdown(timeoutMs: number): RequestResult;
+  shutdown(timeoutMs: number): Promise<RequestResult>;
   publishDraining?(): Promise<void>;
-  close(): void;
+  close(): Promise<void>;
   addChannelName(name: string): void;
   setChannelWeight(name: string, weight: number): Promise<void>;
   setPlacementWeight(weight: number): Promise<void>;
@@ -317,9 +317,10 @@ export interface ZLinkBackendMeshNode {
     source: ServiceDirectSpotRouteFence
   ): ServiceSpotMessageFollowSeal | undefined;
   abortSpotMessageFollowIngress?(seal: ServiceSpotMessageFollowSeal): boolean;
+  /** A null target consumes the committed seal without installing a Follow route. */
   commitSpotMessageFollowIngress?(
     seal: ServiceSpotMessageFollowSeal,
-    target: ServiceDirectSpotRouteFence,
+    target: ServiceDirectSpotRouteFence | null,
     durationMs: number
   ): Promise<boolean>;
   joinActorSpot(

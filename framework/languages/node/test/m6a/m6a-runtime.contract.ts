@@ -345,7 +345,7 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
       'tcp://127.0.0.1:28730'
     );
   } finally {
-    backend.close();
+    await backend.close();
   }
 });
 
@@ -1530,7 +1530,7 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
       ]
     );
   } finally {
-    backend.close();
+    await backend.close();
   }
 });
 
@@ -1649,7 +1649,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
     await publisher.publishAsync('alpha', 'topic', [Buffer.from('event')]);
     publisher.close();
   } finally {
-    backend.close();
+    await backend.close();
   }
 });
 

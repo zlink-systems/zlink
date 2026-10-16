@@ -1418,11 +1418,13 @@ public sealed partial class RelocationBehaviorConformanceTests
             Assert.Equal(1, stream.WriteCount);
             await WaitUntilAsync(
                 () =>
-                    source.Runtime.TryGetSessionActorBinding(actorId, out var binding)
+                    source.Runtime.TryGetSessionActorBinding(actorId, session, out var binding)
                     && binding.AppliedCanonicalRelocationRoute is not null,
                 TimeSpan.FromSeconds(2)
             );
-            Assert.True(source.Runtime.TryGetSessionActorBinding(actorId, out var routedBinding));
+            Assert.True(
+                source.Runtime.TryGetSessionActorBinding(actorId, session, out var routedBinding)
+            );
             Assert.NotNull(routedBinding.AppliedCanonicalRelocationRoute);
             Assert.Equal(targetProtocolErrorsBeforeJoin, targetMonitor.Status().ProtocolErrors);
         }
@@ -1953,7 +1955,8 @@ internal sealed class RelocationBehaviorTrace
     internal int TargetAuthorityMutationCount;
     internal long TargetAuthorityMutationTimestamp;
     internal bool SendTargetLifecyclePush { get; init; }
-    internal Action<IZLinkSpotContext>? ConfigureTarget { get; init; }
+    internal Action<IZLinkSpotContext>? ConfigureTarget { get; set; }
+    internal Func<IZLinkSpotContext, CancellationToken, ValueTask>? InitializeTarget { get; set; }
     internal Action<IZLinkEntrySpotContext>? ConfigureEntry { get; init; }
     internal int OrdinarySendCount;
     internal int OrdinarySendBatchSize { get; init; }
@@ -2527,6 +2530,9 @@ internal sealed class BehaviorTargetSpot(IZLinkSpotContext context, RelocationBe
     : IZLinkSpot<BehaviorActor>
 {
     public IZLinkSpotContext Context { get; } = context;
+
+    public ValueTask OnInitializeAsync(CancellationToken cancellationToken) =>
+        trace.InitializeTarget?.Invoke(Context, cancellationToken) ?? ValueTask.CompletedTask;
 
     public void Configure()
     {

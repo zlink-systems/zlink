@@ -450,3 +450,28 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
     }
   }
 });
+
+test('command 43 generated codec accepts both seal results and rejects malformed bytes', () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(path.join(protocolRoot, 'golden/session-relocation-barrier-v1.json'), 'utf8')
+  );
+  for (const entry of fixture.canonical.filter((entry) => entry.command === 43)) {
+    const bytes = Buffer.from(entry.hex, 'hex');
+    const value = codec.decodeSessionRelocationSealedCommand([bytes], context);
+    assert.equal(value.sealResult, entry.decoded.sealResult);
+    assert.deepEqual(
+      Buffer.from(codec.encodeSessionRelocationSealedCommand(value, context)[0]),
+      bytes
+    );
+    assert.throws(() =>
+      codec.encodeSessionRelocationSealedCommand({ ...value, sealResult: 'unknown' }, context)
+    );
+  }
+  for (const entry of fixture.malformed) {
+    assert.throws(
+      () => codec.decodeSessionRelocationSealedCommand([Buffer.from(entry.hex, 'hex')], context),
+      Error,
+      entry.name
+    );
+  }
+});

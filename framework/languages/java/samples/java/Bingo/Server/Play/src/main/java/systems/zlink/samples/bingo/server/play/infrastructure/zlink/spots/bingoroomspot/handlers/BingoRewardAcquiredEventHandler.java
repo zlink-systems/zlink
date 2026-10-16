@@ -9,7 +9,7 @@ import systems.zlink.samples.bingo.shared.contracts.Messages;
 import java.util.concurrent.CompletionStage;
 
 // --8<-- [start:doc-bingo-reward-subscribe]
-@ZLinkSpotSubscription(topic = SampleNames.WinnerTopic)
+@ZLinkSpotSubscription(channelName = SampleNames.RoomRewardChannel, topic = SampleNames.WinnerTopic)
 public final class BingoRewardAcquiredEventHandler
         implements ZLinkSpotSubscriptionHandler<BingoRoomSpot, Messages.BingoRewardAcquiredEvent> {
     @Override

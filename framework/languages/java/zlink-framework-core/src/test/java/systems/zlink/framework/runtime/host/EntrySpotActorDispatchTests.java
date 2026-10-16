@@ -1792,7 +1792,7 @@ final class EntrySpotActorDispatchTests {
         }
 
         @Override
-        public void setSubscription(String topic) {}
+        public void setSubscription(String channelName, String topic) {}
 
         @Override
         public ZLinkBackendTopicMessage subscribe(ZLinkBackendRecvMode mode) {

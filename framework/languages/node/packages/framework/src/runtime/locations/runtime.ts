@@ -414,7 +414,6 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       return await this.claimFreshOwnerLease(signal, shutdownSignal);
     }
 
-    const wasOwnerLeaseUsable = this.ownerLeaseUsable;
     try {
       const renewStartedAtMs = this.monotonicNowMs();
       this.leaseOperationStartedAtMs = renewStartedAtMs;
@@ -444,6 +443,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         // another heartbeat interval.
         return await this.claimFreshOwnerLease(signal, shutdownSignal);
       }
+      const wasOwnerLeaseUsable = this.ownerLeaseUsable;
       this.ownerLeaseHealthy = true;
       this.ownerLeaseRenewedAt = result.storeNow;
       this.setOwnerLeaseDeadline(

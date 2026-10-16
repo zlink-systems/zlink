@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import type {
@@ -3567,7 +3568,7 @@ function validateRemoteAdmissionCommit(
     expected.targetSpotGeneration !== (control.currentSpotGeneration ?? 0n) ||
     actorRef === undefined ||
     actorRef.actorId !== expected.actorRef.actorId ||
-    String(actorRef.nodeRid) !== String(expected.actorRef.nodeRid) ||
+    !routingIdsEqual(actorRef.nodeRid, expected.actorRef.nodeRid) ||
     actorRef.objectGeneration !== expected.actorRef.objectGeneration
   ) {
     throw new ZLinkConfigurationException(

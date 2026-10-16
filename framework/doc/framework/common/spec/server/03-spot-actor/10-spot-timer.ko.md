@@ -21,6 +21,8 @@ Service runtime은 platform timer의 만료를 callback work로 변환한다. Ca
 generation의 record는 callback을 실행하지 않는다 — 재등록 전에 예약된 tick이 재등록 뒤에
 실행되면 caller가 기대한 새 주기·새 callback과 다른 것이 실행되기 때문이다.
 
+**예외: relocation target의 `Configure`와 Ready 전 `OnInitializeAsync`가 복원된 key를 등록하면 새 generation을 만들지 않는다.** Relocation target은 Spot instance를 다시 만들고 이 두 callback을 실행한다([Spot model §5.2](01-spot-model.ko.md#52-user-spot-lifecycle)). 복원된 key는 source relocation payload에 들어 있던 logical timer의 key다. 이 두 callback이 그 key를 등록하면 등록은 복원된 registration에 handler를 다시 연결하는 것으로 끝나고, 주기·option·다음 실행 시각·pending tick·delivery·scheduled index와 등록이 돌려주는 timer handle은 복원된 값을 유지한다. 등록 인자의 주기나 option이 달라도 실패가 아니며 복원된 값이 우선한다. 등록 인자 자체가 유효하지 않으면 기존 검증대로 실패한다. 등록 인자의 handler type이 복원된 registration과 다르면 그 등록 호출만 `InvalidOperation`으로 실패하고, 복원된 registration과 handler는 그대로 남는다. 그 뒤의 결과는 등록한 callback의 시점이 정한다. `Configure`는 authority commit 전의 target 복원 단계에서 실행되므로([relocation §4.3](../05-location-relocation/04-relocation-flow.ko.md#43-target은-실행하지-않은-상태로-복원한다)), 예외가 `Configure` 밖으로 전파되면 target 복원이 실패하고 [host relocation §13](../05-location-relocation/05-host-relocation-flow.ko.md#13-relocate-완료와-실패)의 relocation 실패 결과가 적용된다. `OnInitializeAsync`는 CAS 성공 뒤의 lifecycle 단계에서 실행되므로([relocation §4.6](../05-location-relocation/04-relocation-flow.ko.md#46-target은-기존-작업부터-점진적으로-queue를-연다)), 이때의 등록 실패는 확정된 relocation 결과를 바꾸지 않으며 source로 되돌아가지 않는다. 이 복원 key 예외는 logical timer를 이전하는 relocation에만 적용한다. Spot-level timer를 이전하지 않는 `PerActor` relocation([host relocation §12](../05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다))에는 복원 key가 없다. 새 generation으로 처리하면 [host relocation §12](../05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다)가 이전하도록 정한 pending tick과 다음 실행 시각이 application 코드가 초기화에서 timer를 등록한다는 이유만으로 사라지기 때문이다. 복원되지 않은 key의 등록·재등록, 다른 callback(relocation 완료 callback 등)의 등록, Ready 뒤의 재등록에는 위 generation 규칙이 그대로 적용된다.
+
 **`cancel`은 해당 timer generation의 새 callback 시작을 막고, 이미 시작한 callback과 timer
 resource 정리가 끝난 뒤 그 generation에 하나뿐인 결과로 완료된다.** 이미 시작한 callback은
 강제로 중단하지 않는다 — cancel 시점에 실행 중인 handler를 강제 종료하면 handler가 다루던
@@ -47,7 +49,7 @@ timer의 두 callback이 같은 상태를 동시에 바꿀 수 있기 때문이�
 
 | 상황 | 동작 |
 |---|---|
-| 같은 key 재등록 | generation 증가 |
+| 같은 key 재등록 | generation 증가(relocation target 초기화의 복원된 key는 위 예외) |
 | 이전 generation의 queue record | callback 실행 안 함 |
 | cancel | 해당 generation의 새 callback 시작을 막고, 이미 시작한 callback과 timer resource 정리가 끝나면 모든 cancel 호출자를 같은 성공 또는 실패 결과로 완료한다 |
 | 반복 timer가 handler보다 빠르게 만료 | 같은 key의 callback을 동시 실행하지 않음, 중복 만료를 pending record 1개로 병합 가능 |
@@ -158,7 +160,7 @@ batch로 처리한다.
 **Generation과 cancel**
 
 - 같은 key를 다시 등록하면 이전 generation의 이미 대기 중인 tick은 callback을 실행하지
-  않는다.
+  않는다. Relocation target 초기화의 복원된 key는 §1 예외를 따른다.
 - Cancel 뒤에는 그 generation 이후의 tick이 callback을 시작하지 않지만, cancel 시점에 이미
   실행 중이던 callback은 끝까지 실행된다.
 - 같은 generation의 `cancel`을 동시에 여러 번 호출하면 모든 결과는 당시 실행 중이던 callback과

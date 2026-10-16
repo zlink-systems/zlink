@@ -50,11 +50,8 @@ import {
   endpointConnections
 } from '../../contracts/Configuration/RuntimeEndpointConnections';
 import type { ApplicationJobQueue } from '../host/application-job-queue';
-import { AsyncResource } from 'node:async_hooks';
-import { ZLinkStateLane } from '../execution/state-lane';
+import { startOutsideStateLane, ZLinkStateLane } from '../execution/state-lane';
 import { ZLinkSerialExecutionQueue } from '../execution/serial-execution-queue';
-
-const detachedStateLaneResource = new AsyncResource('zlink:channel-runtime-lifecycle');
 
 interface ManualFanoutSubscriberState {
   readonly channelName: string;
@@ -350,7 +347,7 @@ export class ZLinkChannelRuntimeLifecycle {
     meshName: string,
     record: ReceiveRecord,
     signal?: AbortSignal
-  ): Promise<void> {
+  ): void | Promise<void> {
     const channelName = record.channelName;
     if (channelName === null) {
       throw new ZLinkConfigurationException('MeshNode channel record is missing channelName.');
@@ -364,7 +361,11 @@ export class ZLinkChannelRuntimeLifecycle {
     return dispatcher.dispatchMesh(record, signal);
   }
 
-  dispatchMeshRoute(meshName: string, record: ReceiveRecord, signal?: AbortSignal): Promise<void> {
+  dispatchMeshRoute(
+    meshName: string,
+    record: ReceiveRecord,
+    signal?: AbortSignal
+  ): void | Promise<void> {
     const dispatcher = this.meshRouteDispatchers.get(meshName);
     if (dispatcher === undefined) {
       throw new ZLinkConfigurationException(
@@ -1059,8 +1060,4 @@ function hasFanoutLocationTopology(registration: ZLinkFrameworkRegistration): bo
     }
   }
   return false;
-}
-
-function startOutsideStateLane<T>(work: () => T): T {
-  return detachedStateLaneResource.runInAsyncScope(work);
 }
