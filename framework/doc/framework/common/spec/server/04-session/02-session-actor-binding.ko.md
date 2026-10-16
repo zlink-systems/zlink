@@ -596,8 +596,16 @@ binding이나 seal이 아니며 1단계 조회에만 쓴다. 같은 키의 comma
   같은 command 42가 도착하면 2단계부터 다시 판정한다. 그 사이 생긴 binding은 더 큰 binding
   generation을 가지므로 command 42와 일치하지 않고, 재판정 결과는 부재 또는 불일치만 될 수 있다. Seal은
   설치되지 않는다.
-- Binding이 제거되면 그 binding의 닫힌 기록도 사라진다. 그 뒤 같은 command 42는 부재로 판정된다. 이는
-  그 시점의 사실과 같다.
+- Binding이 제거되면 그 binding의 닫힌 기록도 사라진다. 그 뒤 같은 command 42는 2단계부터 다시
+  판정한다. Current binding이 없으면 부재, 같은 Actor에 다른 binding이 있으면 불일치다.
+
+**이전 relocation의 지연 요청.** 닫힌 기록을 다음 seal 설치 때 지울 수 있는 근거는 command 42의 전달
+순서다. Relocation coordinator는 relocation이 terminal에 도달한 뒤 그 relocation의 command 42를 다시
+보내지 않으며, 같은 Actor의 다음 relocation은 이전 relocation의 terminal 뒤에만 시작한다. 같은 source
+node가 보낸 command 42는 Session owner와의 한 transport 연결 안에서 보낸 순서대로 도착하고, 끊긴
+연결에 남은 message는 늦게 도착하지 않고 사라진다. 따라서 다음 relocation의 command 42가 도착한 뒤에는
+같은 source node의 이전 relocation 요청이 도착하지 않는다. 다른 node가 보낸 이전 relocation 요청은
+owner가 바뀌었으므로 위 `OwnerLeaseGeneration` fence로 불일치가 된다.
 
 별도 message ACK journal이나 두 번째 binding registry를 두지 않는다.
 

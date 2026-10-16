@@ -724,8 +724,18 @@ same key must match every field of the original request; otherwise it is rejecte
   command 42 arrives after the record is gone, the decision starts again from step 2. A binding created
   in between has a larger binding generation and doesn't match command 42, so the new decision can only
   be absent or mismatch. No seal is installed.
-- When a binding is removed, its closed record goes with it. A later identical command 42 is decided as
-  absent, which matches the facts at that point.
+- When a binding is removed, its closed record goes with it. A later identical command 42 is decided
+  again from step 2: absent if there is no current binding, mismatch if the same Actor has another
+  binding.
+
+**Late requests of an earlier relocation.** Removing a closed record when the next seal is installed
+relies on the delivery order of command 42. The relocation coordinator never resends a relocation's
+command 42 after that relocation reaches a terminal, and the next relocation of the same Actor starts
+only after the earlier one's terminal. Command 42s sent by the same source node arrive in send order
+within one transport connection to the Session owner, and messages left on a broken connection are lost
+rather than delivered late. So once the next relocation's command 42 has arrived, no request of an
+earlier relocation from the same source node arrives. An earlier relocation's request from another node
+belongs to a changed owner and is a mismatch under the `OwnerLeaseGeneration` fence above.
 
 No separate message ACK journal or second binding registry is kept.
 

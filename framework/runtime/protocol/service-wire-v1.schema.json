@@ -866,7 +866,8 @@
         "bindingAbsentLifetime": "SessionRelocationSealTimeout-from-decision",
         "afterExpiry": "bindingAbsent-only-reassess-current-binding-cannot-match-old-binding-generation",
         "duplicateFence": "original-request-fields-must-match-else-protocol-error",
-        "staleFence": "expectedOwnerLeaseGeneration-below-current-binding-route-owner-lease-generation-is-mismatch"
+        "staleFence": "expectedOwnerLeaseGeneration-below-current-binding-route-owner-lease-generation-is-mismatch",
+        "closedRecordReplacement": "next-seal-replaces-closed-record-earlier-relocation-42-cannot-follow-later-42-from-same-source-connection-order-and-no-resend-after-terminal"
       },
       "lateBindingAbsentRoute": "warning-late_session_route_update-ignore-without-changing-new-binding-or-another-relocation-seal"
     },
