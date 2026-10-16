@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.host;
 
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownDeadlineExceededException;
 import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
@@ -47,10 +48,11 @@ final class ZLinkFrameworkShutdown {
                     ignored ->
                             remaining > 0L
                                     ? action
-                                    : CompletableFuture.failedFuture(new DeadlineExpired()));
+                                    : CompletableFuture.failedFuture(
+                                            new ZLinkTeardownDeadlineExceededException()));
         }
         if (remaining <= 0L) {
-            return CompletableFuture.failedFuture(new DeadlineExpired());
+            return CompletableFuture.failedFuture(new ZLinkTeardownDeadlineExceededException());
         }
         CompletableFuture<Void> completion = new CompletableFuture<>();
         action.whenComplete(
@@ -66,14 +68,8 @@ final class ZLinkFrameworkShutdown {
                         error ->
                                 CompletableFuture.failedFuture(
                                         error instanceof TimeoutException
-                                                ? new DeadlineExpired()
+                                                ? new ZLinkTeardownDeadlineExceededException()
                                                 : error));
-    }
-
-    static final class DeadlineExpired extends TimeoutException {
-        DeadlineExpired() {
-            super("host teardown deadline expired");
-        }
     }
 
     static boolean hasTeardownFailure(Throwable error) {
@@ -85,7 +81,7 @@ final class ZLinkFrameworkShutdown {
                                         || value instanceof ExecutionException)
                                 && value.getCause() != null
                         ? hasTeardownFailure(value.getCause())
-                        : !(value instanceof DeadlineExpired)
+                        : !(value instanceof ZLinkTeardownDeadlineExceededException)
                                 && !(ZLinkFrameworkErrorOrigin.isFramework(value)
                                         && value instanceof ZLinkFrameworkException failure
                                         && (failure.kind()

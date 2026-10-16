@@ -41,6 +41,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorRe
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownDeadlineExceededException;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
@@ -1529,6 +1530,7 @@ public final class ZLinkChannelRuntime
         infrastructureExecutor.shutdown();
         boolean terminatedWithinDeadline = awaitTerminated(timeoutExecutor, deadline);
         terminatedWithinDeadline &= awaitTerminated(infrastructureExecutor, deadline);
+        Throwable cleanupFailure = null;
         try {
             CompletionStage<Void> clientServerStop = CompletableFuture.completedFuture(null);
             if (clientServerLocationRuntime != null) {
@@ -1541,9 +1543,19 @@ public final class ZLinkChannelRuntime
             if (manualFanoutRuntime != null) {
                 manualFanoutRuntime.close();
             }
-            awaitInfrastructureSettlement("ClientServer location", clientServerStop, deadline);
-            awaitInfrastructureSettlement("fanout location", fanoutStop, deadline);
-            awaitWithinDeadline(dispatchRegistry.awaitQuiescence(), deadline);
+            for (var settlement :
+                    List.of(clientServerStop, fanoutStop, dispatchRegistry.awaitQuiescence())) {
+                try {
+                    awaitWithinDeadline(settlement, deadline);
+                } catch (TimeoutException | ExecutionException | RuntimeException failure) {
+                    if (cleanupFailure == null) cleanupFailure = failure;
+                    else cleanupFailure.addSuppressed(failure);
+                }
+            }
+            if (cleanupFailure != null) throw new ExecutionException(cleanupFailure);
+        } catch (InterruptedException | ExecutionException | RuntimeException | Error failure) {
+            cleanupFailure = failure;
+            throw failure;
         } finally {
             receiveLoops.close();
             receiveLoops.awaitTermination();
@@ -1552,37 +1564,31 @@ public final class ZLinkChannelRuntime
             if (ownsContext) {
                 context.close();
             }
-            if (!terminatedWithinDeadline) {
-                throw new TimeoutException(
+            if (!terminatedWithinDeadline && cleanupFailure == null) {
+                throw new ZLinkTeardownDeadlineExceededException(
                         "host shutdown deadline expired stopping Channel infrastructure");
             }
         }
     }
 
-    private static void awaitInfrastructureSettlement(
-            String owner, CompletionStage<Void> settlement, Instant deadline)
-            throws InterruptedException, TimeoutException {
-        try {
-            awaitWithinDeadline(settlement, deadline);
-        } catch (ExecutionException failure) {
-            LOGGER.log(
-                    Level.WARNING,
-                    owner + " cleanup failed while closing the channel runtime",
-                    failure.getCause());
-        }
-    }
-
     private static void awaitWithinDeadline(CompletionStage<Void> stage, Instant deadline)
             throws InterruptedException, TimeoutException, ExecutionException {
-        if (deadline == null) {
+        if (deadline == null || stage.toCompletableFuture().isDone()) {
             stage.toCompletableFuture().get();
             return;
         }
         long remaining = Duration.between(Instant.now(), deadline).toNanos();
         if (remaining <= 0L) {
-            throw new TimeoutException("host shutdown deadline expired");
+            throw new ZLinkTeardownDeadlineExceededException("host shutdown deadline expired");
         }
-        stage.toCompletableFuture().get(remaining, TimeUnit.NANOSECONDS);
+        try {
+            stage.toCompletableFuture().get(remaining, TimeUnit.NANOSECONDS);
+        } catch (TimeoutException failure) {
+            var expired =
+                    new ZLinkTeardownDeadlineExceededException("host shutdown deadline expired");
+            expired.initCause(failure);
+            throw expired;
+        }
     }
 
     public void closeSpotRouteBridges() {
