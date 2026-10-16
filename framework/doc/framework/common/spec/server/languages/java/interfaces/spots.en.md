@@ -178,7 +178,7 @@ public interface ZLinkSpotManager {
 
 ```
 
-`addSubscribe(handlerType, channelName, topic)` registers the `ChannelName`/`topic` pair of [Spot messaging §5.1](../../../03-spot-actor/02-spot-messaging.en.md#51-subscription-registration-values-and-when-they-are-checked) at runtime. It shares the registration path of a constant topic declared with `@ZLinkSpotSubscription`; registering the same `ChannelName`, `topic` and packet name twice in one Spot activation is rejected. Kotlin calls the same Java method.
+`addSubscribe(handlerType, channelName, topic)` registers the `ChannelName`/`topic` pair of [Spot messaging §5.1](../../../03-spot-actor/02-spot-messaging.en.md#51-subscription-registration-values-and-when-they-are-checked) at runtime. The method arguments own the registered values, and `handlerType` doesn't need `@ZLinkSpotSubscription`. If the handler also carries the annotation, the annotation's registration and this call's registration are separate subscriptions. Duplicate rejection and its check timing follow §5.1. Kotlin calls the same Java method.
 
 The Java runtime creates each Spot packet/request/subscription/timer
 handler once per Spot activation and reuses it. An Actor send/request
