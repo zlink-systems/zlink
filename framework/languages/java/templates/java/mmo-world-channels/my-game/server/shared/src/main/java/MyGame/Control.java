@@ -15,5 +15,7 @@ public final class Control {
             STOPPED = "STOPPED",
             PROCESS_EXIT = "PROCESS_EXIT ";
     public static final Duration HOST_DEADLINE = Duration.ofSeconds(30);
+    public static final Duration MESSAGE_FOLLOW = Duration.ofSeconds(30);
+    public static final Duration SAFE_DEADLINE = MESSAGE_FOLLOW.plus(HOST_DEADLINE);
     public static final long PROCESS_SECONDS = 35;
 }

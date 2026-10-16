@@ -78,11 +78,11 @@ internal sealed class GameClient(IZlinkStreamConnector connector, string playerI
     public Task<PlayerView> EnterAsync(CancellationToken ct) =>
         SendAsync<PlayerView, EnterWorldRequest>(new(PlayerId), _ => true, ct);
 
-    public Task<PlayerView> ViewAsync(CancellationToken ct) =>
-        SendAsync<PlayerView, ViewRequest>(new(), _ => true, ct);
+    public Task<PlayerView> ViewAsync(PlayerView expected, CancellationToken ct) =>
+        SendAsync<PlayerView, ViewRequest>(new(), view => view == expected, ct);
 
-    public Task<PlayerView> EarnAsync(long amount, CancellationToken ct) =>
-        SendAsync<PlayerView, EarnRequest>(new(amount), _ => true, ct);
+    public Task<PlayerView> EarnAsync(long amount, long expectedGold, CancellationToken ct) =>
+        SendAsync<PlayerView, EarnRequest>(new(amount), view => view.Gold == expectedGold, ct);
 
     public Task<PlayerView> ChangeAsync(int channel, CancellationToken ct) =>
         SendAsync<PlayerView, ChangeChannelRequest>(

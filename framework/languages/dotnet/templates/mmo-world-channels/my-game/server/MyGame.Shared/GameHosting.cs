@@ -56,6 +56,7 @@ public static class GameHosting
         logging.AddSimpleConsole(options => options.SingleLine = true);
         services.AddZLinkFramework(options =>
         {
+            options.ConfigureLocations().MessageFollowDuration = NodeProtocol.MessageFollow;
             options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             configure(options);
         });

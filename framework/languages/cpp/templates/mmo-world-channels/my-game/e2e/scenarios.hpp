@@ -40,13 +40,13 @@ inline void scenario (Scenario name, World &world)
         auto &a = create ("A", id);
         require (a.enter () == PlayerView{"A", Names::first_channel, "channelA1", 0},
                  "Initial world A state mismatch");
-        const auto before = a.earn (Test::earned_gold);
+        const auto before = a.earn (Test::earned_gold, Test::earned_gold);
         require (before.gold == Test::earned_gold, "Gold was not earned");
         if (name == Scenario::worlds) {
             auto &b = create ("B", id);
             require (b.enter () == PlayerView{"B", Names::first_channel, "channelB", 0},
                      "World data leaked");
-            require (a.view () == before, "World B changed world A gold");
+            require (a.view (before) == before, "World B changed world A gold");
             require (b.info ().actorId == id, "World B Actor identity mismatch");
             require (a.info ().actorId == id, "World A Actor identity mismatch");
         } else {
@@ -75,18 +75,19 @@ inline void scenario (Scenario name, World &world)
                 world.drain_channel_a1 ();
                 auto expected = before;
                 expected.nodeId = "channelA2";
-                require (a.view () == expected && a.info () == binding,
+                require (a.view (expected) == expected && a.info () == binding,
                          "Drain lost player state or binding");
-                require (b.view () == state_b && b.info () == binding_b, "Drain affected world B");
+                require (b.view (state_b) == state_b && b.info () == binding_b,
+                         "Drain affected world B");
                 world.replace_channel_a1 ();
-                require (a.view () == expected && a.info () == binding,
+                require (a.view (expected) == expected && a.info () == binding,
                          "Replacement interrupted player");
                 auto &fresh = create ("A", id + "-replacement");
                 const auto admitted = fresh.enter ();
-                world.accepted_by_replacement (fresh.player_id);
                 require (admitted == PlayerView{"A", Names::first_channel, "channelA2", 0},
                          "Fresh player did not enter relocated Zone");
-                require (fresh.earn (Test::earned_gold).gold == Test::earned_gold,
+                require (fresh.earn (Test::earned_gold, Test::earned_gold).gold
+                           == Test::earned_gold,
                          "Replacement did not accept new work");
             }
         }

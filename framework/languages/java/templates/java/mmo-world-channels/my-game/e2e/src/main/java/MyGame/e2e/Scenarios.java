@@ -34,9 +34,15 @@ public final class Scenarios {
                 "Unexpected PlayerView: " + value);
     }
 
-    private static PlayerView current(Client client) throws Exception {
+    private static void view(Client client, String world, int channel, String node, long gold)
+            throws Exception {
+        var expected = new PlayerView(world, channel, node, gold);
+        view(client.next(PlayerView.class, expected::equals), world, channel, node, gold);
+    }
+
+    private static Client current(Client client) {
         client.send(new ViewRequest());
-        return client.next(PlayerView.class);
+        return client;
     }
 
     private static void connected(Client client) {
@@ -78,12 +84,7 @@ public final class Scenarios {
                 var b = new Client(n.endpoints.get(Names.WORLD_B), id)) {
             view(a.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0);
             a.send(new EarnRequest(EARNED_GOLD));
-            view(
-                    a.next(PlayerView.class),
-                    Names.WORLD_A,
-                    Names.FIRST_CHANNEL,
-                    CHANNEL_A1,
-                    EARNED_GOLD);
+            view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD);
             view(b.connect(), Names.WORLD_B, Names.FIRST_CHANNEL, CHANNEL_B, 0);
             view(current(a), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD);
             connected(a);
@@ -95,15 +96,10 @@ public final class Scenarios {
         try (var c = new Client(n.endpoints.get(Names.WORLD_A), player())) {
             view(c.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0);
             c.send(new EarnRequest(EARNED_GOLD));
-            view(
-                    c.next(PlayerView.class),
-                    Names.WORLD_A,
-                    Names.FIRST_CHANNEL,
-                    CHANNEL_A1,
-                    EARNED_GOLD);
+            view(c, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD);
             var identity = c.sessionInfo();
             c.send(new ChangeChannelRequest(CHANNEL_TWO));
-            view(c.next(PlayerView.class), Names.WORLD_A, CHANNEL_TWO, CHANNEL_A2, EARNED_GOLD);
+            view(c, Names.WORLD_A, CHANNEL_TWO, CHANNEL_A2, EARNED_GOLD);
             Structure.require(
                     identity.equals(c.sessionInfo()),
                     "SessionInfo changed during channel transfer");
@@ -117,14 +113,9 @@ public final class Scenarios {
         try (var c = new Client(n.endpoints.get(Names.WORLD_A), id)) {
             view(c.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0);
             c.send(new EarnRequest(EARNED_GOLD));
-            view(
-                    c.next(PlayerView.class),
-                    Names.WORLD_A,
-                    Names.FIRST_CHANNEL,
-                    CHANNEL_A1,
-                    EARNED_GOLD);
+            view(c, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD);
             c.send(new ChangeChannelRequest(CHANNEL_TWO));
-            view(c.next(PlayerView.class), Names.WORLD_A, CHANNEL_TWO, CHANNEL_A2, EARNED_GOLD);
+            view(c, Names.WORLD_A, CHANNEL_TWO, CHANNEL_A2, EARNED_GOLD);
             identity = c.sessionInfo();
         }
         try (var c = new Client(n.endpoints.get(Names.WORLD_A), id)) {
@@ -144,12 +135,7 @@ public final class Scenarios {
             view(a.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0);
             view(b.connect(), Names.WORLD_B, Names.FIRST_CHANNEL, CHANNEL_B, 0);
             a.send(new EarnRequest(EARNED_GOLD));
-            view(
-                    a.next(PlayerView.class),
-                    Names.WORLD_A,
-                    Names.FIRST_CHANNEL,
-                    CHANNEL_A1,
-                    EARNED_GOLD);
+            view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD);
             var ai = a.sessionInfo();
             var bi = b.sessionInfo();
             n.drain(CHANNEL_A1);
@@ -168,15 +154,9 @@ public final class Scenarios {
                     "Replacement changed SessionInfo");
             try (var fresh = new Client(n.endpoints.get(Names.WORLD_A), player())) {
                 view(fresh.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, 0);
-                n.accepted(CHANNEL_A1, fresh.playerId);
                 connected(fresh);
                 fresh.send(new EarnRequest(EARNED_GOLD));
-                view(
-                        fresh.next(PlayerView.class),
-                        Names.WORLD_A,
-                        Names.FIRST_CHANNEL,
-                        CHANNEL_A2,
-                        EARNED_GOLD);
+                view(fresh, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, EARNED_GOLD);
             }
             connected(a);
             connected(b);

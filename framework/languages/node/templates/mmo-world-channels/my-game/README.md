@@ -58,8 +58,11 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario worlds,channel,reconnect,update
 | reconnect | A new Session binds the original Actor with its saved channel and gold.                                       |
 | update    | Drain channelA1 into channelA2, preserve client state and world B, stop the source and start its replacement. |
 
-The update runner verifies that the replacement creates a new Player Actor,
-using its `PLAYER_CREATED` application lifecycle record.
+After replacement, update verifies replacement readiness and new Player work in the
+live world. Actor factory placement is selected by Framework; the new Player enters
+the relocated `field@1` on `channelA2`. Message Follow is explicitly 30 seconds;
+the safe shutdown observation budget is derived from that duration and the existing
+operation budget.
 
 The runner checks `zlink.structure.json` before creating its own Compose project.
 It preserves node stdout, stderr message-flow records, client events and Redis

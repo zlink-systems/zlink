@@ -53,7 +53,7 @@ internal static class Scenarios
         var initial = await a.EnterAsync(ct);
         Require(initial.WorldId == "A" && initial.Gold == 0, "World A initial data differs.");
         Require(
-            (await a.EarnAsync(EarnedGold, ct)).Gold == EarnedGold,
+            (await a.EarnAsync(EarnedGold, EarnedGold, ct)).Gold == EarnedGold,
             "World A earning was not persisted."
         );
         await using var b = await GameClient.ConnectAsync(run.Endpoints["B"], a.PlayerId, ct);
@@ -63,7 +63,7 @@ internal static class Scenarios
             "World B shares World A player data."
         );
         Require(
-            (await a.ViewAsync(ct)).Gold == EarnedGold,
+            (await a.ViewAsync(initial with { Gold = EarnedGold }, ct)).Gold == EarnedGold,
             "Entering World B changed World A data."
         );
     }
@@ -80,7 +80,7 @@ internal static class Scenarios
             initial.Channel == GameNames.FirstChannel && initial.NodeId == "channelA1",
             "Initial Zone is not channelA1."
         );
-        await client.EarnAsync(EarnedGold, ct);
+        await client.EarnAsync(EarnedGold, EarnedGold, ct);
         var binding = await client.SessionAsync(ct);
         var moved = await client.ChangeAsync(SecondChannel, ct);
         Require(
@@ -104,7 +104,7 @@ internal static class Scenarios
         await using (var client = await GameClient.ConnectAsync(run.Endpoints["A"], player, ct))
         {
             await client.EnterAsync(ct);
-            await client.EarnAsync(EarnedGold, ct);
+            await client.EarnAsync(EarnedGold, EarnedGold, ct);
             saved = await client.ChangeAsync(SecondChannel, ct);
             before = await client.SessionAsync(ct);
         }
@@ -123,7 +123,7 @@ internal static class Scenarios
     {
         await using var a = await GameClient.ConnectAsync(run.Endpoints["A"], "update-player", ct);
         await a.EnterAsync(ct);
-        var before = await a.EarnAsync(EarnedGold, ct);
+        var before = await a.EarnAsync(EarnedGold, EarnedGold, ct);
         Require(before.NodeId == "channelA1", "Update subject was not on channelA1.");
         var binding = await a.SessionAsync(ct);
         await using var b = await GameClient.ConnectAsync(run.Endpoints["B"], a.PlayerId, ct);
@@ -134,7 +134,7 @@ internal static class Scenarios
         await source.WaitLineAsync(NodeProtocol.RelocationRequested, ct);
         await source.WaitLineAsync(NodeProtocol.Relocated, ct);
         await source.WaitLineAsync(NodeProtocol.SafeToShutdown, ct);
-        var moved = await a.ViewAsync(ct);
+        var moved = await a.ViewAsync(before with { NodeId = "channelA2" }, ct);
         Require(
             moved == before with { NodeId = "channelA2" },
             "Host relocation lost Zone, Actor gold or world isolation."
@@ -145,13 +145,13 @@ internal static class Scenarios
         );
         Require(
             !b.Disconnected
-                && await b.ViewAsync(ct) == worldB
+                && await b.ViewAsync(worldB, ct) == worldB
                 && await b.SessionAsync(ct) == bindingB,
             "World B was affected by World A drain."
         );
         await run.ReplaceChannelAsync("channelA1", ct);
         Require(
-            await a.ViewAsync(ct) == moved && await a.SessionAsync(ct) == binding,
+            await a.ViewAsync(moved, ct) == moved && await a.SessionAsync(ct) == binding,
             "Replacement disturbed relocated state."
         );
         await using var newcomer = await GameClient.ConnectAsync(
@@ -160,11 +160,12 @@ internal static class Scenarios
             ct
         );
         Require(
-            (await newcomer.EnterAsync(ct)).WorldId == "A",
+            await newcomer.EnterAsync(ct)
+                == new PlayerView("A", GameNames.FirstChannel, "channelA2", 0),
             "Replacement deployment did not admit new player work."
         );
         Require(
-            (await newcomer.EarnAsync(EarnedGold, ct)).Gold == EarnedGold,
+            (await newcomer.EarnAsync(EarnedGold, EarnedGold, ct)).Gold == EarnedGold,
             "New work after replacement failed."
         );
     }

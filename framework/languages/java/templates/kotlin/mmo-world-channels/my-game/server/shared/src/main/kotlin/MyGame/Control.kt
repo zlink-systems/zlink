@@ -13,5 +13,7 @@ object Control {
     const val PROCESS_EXIT = "PROCESS_EXIT "
     const val PLAYER_CREATED = "PLAYER_CREATED "
     val HOST_DEADLINE: Duration = Duration.ofSeconds(30)
+    val MESSAGE_FOLLOW: Duration = Duration.ofSeconds(30)
+    val SAFE_DEADLINE: Duration = MESSAGE_FOLLOW.plus(HOST_DEADLINE)
     const val PROCESS_SECONDS = 35L
 }

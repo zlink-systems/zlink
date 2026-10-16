@@ -70,13 +70,17 @@ class Client(endpoint: String, val playerId: String) {
 
     inline fun <reified T> next(): T = next(T::class.java)
 
-    fun <T> next(type: Class<T>): T {
-        val event =
-            queue.poll(MESSAGE_SECONDS, TimeUnit.SECONDS)
-                ?: error("Timed out waiting for ${type.simpleName}")
-        if (event is Throwable) throw event
-        check(type.isInstance(event)) { "Unexpected event: $event" }
-        return type.cast(event)
+    fun <T> next(type: Class<T>, predicate: (T) -> Boolean = { true }): T {
+        val expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(MESSAGE_SECONDS)
+        while (true) {
+            val event =
+                queue.poll((expires - System.nanoTime()).coerceAtLeast(0), TimeUnit.NANOSECONDS)
+                    ?: error("Timed out waiting for ${type.simpleName}")
+            if (event is Throwable) throw event
+            check(type.isInstance(event)) { "Unexpected event: $event" }
+            val value = type.cast(event)
+            if (predicate(value)) return value
+        }
     }
 
     suspend fun close() {

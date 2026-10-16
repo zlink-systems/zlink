@@ -77,7 +77,7 @@ inline void check_structure (const std::filesystem::path &root)
             require (command.is_string () && !command.get<std::string> ().empty (),
                      "Empty command");
     }
-    std::set<std::string> nodes, spot_ids;
+    std::set<std::string> nodes, spot_ids, channels;
     std::map<std::string, nlohmann::json> configurations;
     require (j.at ("nodes").is_array () && j.at ("spots").is_array ()
                && j.at ("channels").is_array () && j.at ("edges").is_array (),
@@ -100,6 +100,8 @@ inline void check_structure (const std::filesystem::path &root)
                              "Accounts configuration required");
                 } else {
                     require (role == "session" || role == "channel", "Unknown application role");
+                    if (role == "channel")
+                        channels.insert (id);
                     const auto config = NodeConfig::load (path);
                     require ((role == "session") == config.StreamEndpoint.has_value (),
                              "Role and STREAM listener differ");
@@ -112,16 +114,18 @@ inline void check_structure (const std::filesystem::path &root)
     require (j.at ("channels").empty (), "World channels are User Spots, not named channels");
     std::set<std::pair<std::string, std::string>> identities;
     std::map<std::string, std::set<std::string>> zones;
+    std::map<std::string, int> entries;
     for (const auto &spot : j.at ("spots")) {
         require (spot_ids.insert (nonempty (spot, "id")).second, "Duplicate composition Spot ID");
         const auto owner = nonempty (spot, "owner"), kind = nonempty (spot, "kind");
         require (configurations.contains (owner), "Unknown Spot owner");
         const auto &config = configurations.at (owner);
-        require (config.contains ("ZoneIds"), "Spot owner must be a channel node");
+        require (channels.contains (owner), "Spot owner must be a channel node");
         if (kind == "entry") {
             require (spot.at ("type").is_null () && !spot.contains ("logicalId")
                        && !spot.contains ("dynamic"),
                      "Entry Spot cannot declare type or logical ID");
+            ++entries[owner];
             continue;
         }
         require (kind == "user" && nonempty (spot, "type") == Names::zone, "Invalid Zone type");
@@ -133,8 +137,9 @@ inline void check_structure (const std::filesystem::path &root)
         zones[owner].insert (id);
     }
     for (const auto &[id, config] : configurations) {
-        if (!config.contains ("ZoneIds"))
+        if (!channels.contains (id))
             continue;
+        require (entries[id] == 1, "Channel node requires one Entry Spot");
         const auto ids = config.at ("ZoneIds").get<std::vector<std::string>> ();
         const std::set<std::string> configured (ids.begin (), ids.end ());
         require (configured.size () == ids.size () && configured == zones[id],

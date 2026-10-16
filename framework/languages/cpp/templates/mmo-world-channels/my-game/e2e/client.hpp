@@ -1,6 +1,7 @@
 #pragma once
 #include "world.hpp"
 #include <zlink/stream_connector.hpp>
+#include <functional>
 
 namespace MyGame::E2E
 {
@@ -45,21 +46,37 @@ class Client
         std::lock_guard lock (error_mutex_);
         require (error_.empty (), "Connector error: " + error_);
     }
-    template <class Request, class Reply> Reply exchange (const Request &request)
+    template <class Request, class Reply>
+    Reply exchange (const Request &request, std::function<bool (const Reply &)> predicate = {})
     {
         healthy ();
         connector_.send (request).submit ();
-        const auto reply = checked (connector_.wait_for<Reply> ().submit ()).payload;
+        const auto reply =
+          checked (connector_.wait_for<Reply> ()
+                     .where ([predicate = std::move (predicate)] (const auto &message) {
+                         return !predicate || predicate (message.payload);
+                     })
+                     .submit ())
+            .payload;
         healthy ();
         return reply;
     }
     PlayerView enter () { return exchange<EnterWorldRequest, PlayerView> ({player_id}); }
-    PlayerView earn (std::int64_t amount) { return exchange<EarnRequest, PlayerView> ({amount}); }
+    PlayerView earn (std::int64_t amount, std::int64_t expected_gold)
+    {
+        return exchange<EarnRequest, PlayerView> (
+          {amount}, [expected_gold] (const auto &view) { return view.gold == expected_gold; });
+    }
     PlayerView change (int channel)
     {
-        return exchange<ChangeChannelRequest, PlayerView> ({channel});
+        return exchange<ChangeChannelRequest, PlayerView> (
+          {channel}, [channel] (const auto &view) { return view.channel == channel; });
     }
-    PlayerView view () { return exchange<ViewRequest, PlayerView> ({}); }
+    PlayerView view (const PlayerView &expected)
+    {
+        return exchange<ViewRequest, PlayerView> (
+          {}, [expected] (const auto &view) { return view == expected; });
+    }
     SessionInfo info () { return exchange<SessionInfoRequest, SessionInfo> ({}); }
     void close ()
     {

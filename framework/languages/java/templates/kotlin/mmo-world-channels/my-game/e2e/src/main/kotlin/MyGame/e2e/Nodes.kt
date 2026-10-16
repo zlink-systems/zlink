@@ -110,10 +110,6 @@ class Nodes(private val root: Path) : AutoCloseable {
         }
     }
 
-    fun accepted(id: String, player: String) {
-        nodes.getValue(id).waitFor(Control.PLAYER_CREATED + player)
-    }
-
     fun replace(id: String) {
         nodes.getValue(id).stop()
         startNode(id)
@@ -174,7 +170,10 @@ private class Node(private val id: String, module: String, config: Path, root: P
     }
 
     fun waitFor(prefix: String): String {
-        val expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS)
+        val expires =
+            System.nanoTime() +
+                if (prefix == Control.SAFE_TO_SHUTDOWN) Control.SAFE_DEADLINE.toNanos()
+                else TimeUnit.SECONDS.toNanos(Control.PROCESS_SECONDS)
         while (true) {
             val line =
                 output.poll((expires - System.nanoTime()).coerceAtLeast(0), TimeUnit.NANOSECONDS)

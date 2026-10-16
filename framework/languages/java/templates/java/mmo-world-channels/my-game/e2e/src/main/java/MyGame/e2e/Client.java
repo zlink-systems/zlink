@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 public final class Client implements AutoCloseable {
     static final long MESSAGE_SECONDS = 5;
@@ -85,13 +86,23 @@ public final class Client implements AutoCloseable {
     }
 
     <T> T next(Class<T> type) throws Exception {
-        Object event = queue.poll(MESSAGE_SECONDS, TimeUnit.SECONDS);
-        if (event == null)
-            throw new IllegalStateException(
-                    "Timed out waiting for " + type.getSimpleName() + ", received=" + history);
-        if (event instanceof Exception error) throw error;
-        if (!type.isInstance(event)) throw new IllegalStateException("Unexpected event: " + event);
-        return type.cast(event);
+        return next(type, value -> true);
+    }
+
+    <T> T next(Class<T> type, Predicate<T> predicate) throws Exception {
+        long expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(MESSAGE_SECONDS);
+        while (true) {
+            Object event =
+                    queue.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);
+            if (event == null)
+                throw new IllegalStateException(
+                        "Timed out waiting for " + type.getSimpleName() + ", received=" + history);
+            if (event instanceof Exception error) throw error;
+            if (!type.isInstance(event))
+                throw new IllegalStateException("Unexpected event: " + event);
+            T value = type.cast(event);
+            if (predicate.test(value)) return value;
+        }
     }
 
     public void close() throws Exception {

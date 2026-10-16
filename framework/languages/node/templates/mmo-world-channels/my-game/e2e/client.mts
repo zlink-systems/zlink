@@ -21,7 +21,6 @@ import {
 interface NodeControl {
   drain(id: string): Promise<void>;
   replace(id: string): Promise<void>;
-  accepted(id: string, playerId: string): Promise<void>;
 }
 class PlayerClient {
   readonly connector: ZlinkStreamConnector;
@@ -105,7 +104,7 @@ class PlayerClient {
     await this.connector.close();
   }
 }
-const Test = { earnedGold: 10, secondChannel: 2, firstChannel: Game.firstChannel } as const;
+const Test = { earnedGold: 10, secondChannel: 2 } as const;
 export async function scenario(
   name: string,
   endpoints: Record<string, string>,
@@ -195,9 +194,12 @@ export async function scenario(
       assert.deepEqual(await a.sessionInfo(), binding);
       const newcomer = create('A', 'new', `${name}-${runId}-new`);
       const admitted = await newcomer.enter();
-      await control.accepted(before.nodeId, newcomer.playerId);
-      assert.equal(admitted.worldId, 'A');
-      assert.equal(admitted.nodeId, 'channelA2');
+      assert.deepEqual(admitted, {
+        worldId: 'A',
+        channel: Game.firstChannel,
+        nodeId: 'channelA2',
+        gold: 0
+      });
       assert.equal((await newcomer.earn(Test.earnedGold)).gold, Test.earnedGold);
       assert.equal(newcomer.disconnects, 0);
       assert.equal(b.disconnects, 0);

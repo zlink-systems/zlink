@@ -185,6 +185,7 @@ internal static class StructureCheck
             Array(document, "channels").Count == 0,
             "No application mesh channels are registered."
         );
+        var entries = new Dictionary<string, int>();
         var spotIds = new HashSet<string>();
         var logicalIds = new HashSet<(string Mesh, string Id)>();
         var zones = new Dictionary<string, HashSet<string>>();
@@ -203,6 +204,7 @@ internal static class StructureCheck
                     spot!["type"] is null && spot["logicalId"] is null && spot["dynamic"] is null,
                     "Entry cannot claim stable type or identity."
                 );
+                entries[owner] = entries.GetValueOrDefault(owner) + 1;
                 continue;
             }
             Require(
@@ -233,6 +235,10 @@ internal static class StructureCheck
         }
         foreach (var (id, config) in settings)
         {
+            Require(
+                roles[id] != "channel" || entries.GetValueOrDefault(id) == 1,
+                "Channel node requires one Entry Spot."
+            );
             var configured = config.ZoneIds ?? [];
             Require(
                 configured.Distinct().Count() == configured.Length

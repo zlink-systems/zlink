@@ -135,19 +135,12 @@ class World
         process.command (Control::drain);
         process.wait_line (Control::requested, Limits::relocation);
         process.wait_line (Control::relocated, Limits::relocation);
-        process.wait_line (Control::safe, Limits::relocation);
+        process.wait_line (Control::safe, Limits::safe);
     }
     void replace_channel_a1 ()
     {
         stop_node (*channel_a1_);
         channel_a1_ = start_node ("channelA1", "channel", true).first;
-    }
-    void accepted_by_replacement (const std::string &id)
-    {
-        channel_a1_->process->wait_line (
-          std::string (Control::player_created)
-            + nlohmann::json{{"actorId", id}, {"nodeId", "channelA1"}}.dump (),
-          Limits::packet);
     }
     void close ()
     {

@@ -69,6 +69,12 @@ Player data writes use the Actor execution turn. Gold must be positive when earn
 
 This example trusts the supplied player ID and demonstrates server composition rather than account authentication. Production deployments must authenticate that identity before binding an Actor.
 
+After replacement, update verifies replacement readiness and new Player work in the
+live world. Actor factory placement is selected by Framework; the new Player enters
+the relocated `field@1` on `channelA2`. Message Follow is explicitly 30 seconds;
+the safe shutdown observation budget is derived from that duration and the existing
+operation budget.
+
 ## 한국어 실행 안내
 
 이 디렉터리에서 `dotnet build server/MyGame.sln`으로 빌드합니다. Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`, Linux에서는 `./run-e2e.sh`로 전체 시나리오를 실행합니다. 실행에 사용하는 Redis와 node는 매번 별도로 생성되며 로그는 `.logs/run-<id>/`에 보존됩니다.

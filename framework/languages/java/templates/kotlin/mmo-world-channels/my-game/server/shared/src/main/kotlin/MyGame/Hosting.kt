@@ -18,7 +18,7 @@ fun configure(
     relocations: ZLinkRedisRelocationStore,
 ) {
     options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-    options.configureLocations()
+    options.configureLocations().setMessageFollowDuration(Control.MESSAGE_FOLLOW)
     options.addLocationStore(locations)
     options.addRelocationStore(relocations)
 }
@@ -120,7 +120,7 @@ fun runNode(application: Class<*>, args: Array<String>) {
                                 result.toString()
                             }
                             println(Control.RELOCATED)
-                            safe.get(Control.HOST_DEADLINE.toSeconds(), TimeUnit.SECONDS)
+                            safe.get(Control.SAFE_DEADLINE.toSeconds(), TimeUnit.SECONDS)
                             println(Control.SAFE_TO_SHUTDOWN)
                         }
                         Control.SHUTDOWN -> {

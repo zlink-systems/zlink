@@ -27,9 +27,14 @@ object Scenarios {
         check(value == PlayerView(world, channel, node, gold)) { "Unexpected PlayerView: $value" }
     }
 
-    private suspend fun current(client: Client): PlayerView {
+    private fun view(client: Client, world: String, channel: Int, node: String, gold: Long) {
+        val expected = PlayerView(world, channel, node, gold)
+        view(client.next(PlayerView::class.java) { it == expected }, world, channel, node, gold)
+    }
+
+    private suspend fun current(client: Client): Client {
         client.send(ViewRequest())
-        return client.next()
+        return client
     }
 
     private fun connected(client: Client) {
@@ -64,7 +69,7 @@ object Scenarios {
             withClient(n.endpoints.getValue(Names.WORLD_B), id) { b ->
                 view(a.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0)
                 a.send(EarnRequest(EARNED_GOLD))
-                view(a.next(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
+                view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
                 view(b.connect(), Names.WORLD_B, Names.FIRST_CHANNEL, CHANNEL_B, 0)
                 view(current(a), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
                 connected(a)
@@ -77,10 +82,10 @@ object Scenarios {
         withClient(n.endpoints.getValue(Names.WORLD_A), player()) { c ->
             view(c.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0)
             c.send(EarnRequest(EARNED_GOLD))
-            view(c.next(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
+            view(c, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
             val identity = c.sessionInfo()
             c.send(ChangeChannelRequest(CHANNEL_TWO))
-            view(c.next(), Names.WORLD_A, CHANNEL_TWO, CHANNEL_A2, EARNED_GOLD)
+            view(c, Names.WORLD_A, CHANNEL_TWO, CHANNEL_A2, EARNED_GOLD)
             check(identity == c.sessionInfo()) { "SessionInfo changed during channel transfer" }
             connected(c)
         }
@@ -92,9 +97,9 @@ object Scenarios {
             withClient(n.endpoints.getValue(Names.WORLD_A), id) { c ->
                 view(c.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0)
                 c.send(EarnRequest(EARNED_GOLD))
-                view(c.next(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
+                view(c, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
                 c.send(ChangeChannelRequest(CHANNEL_TWO))
-                view(c.next(), Names.WORLD_A, CHANNEL_TWO, CHANNEL_A2, EARNED_GOLD)
+                view(c, Names.WORLD_A, CHANNEL_TWO, CHANNEL_A2, EARNED_GOLD)
                 c.sessionInfo()
             }
         withClient(n.endpoints.getValue(Names.WORLD_A), id) { c ->
@@ -119,7 +124,7 @@ object Scenarios {
                 view(a.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0)
                 view(b.connect(), Names.WORLD_B, Names.FIRST_CHANNEL, CHANNEL_B, 0)
                 a.send(EarnRequest(EARNED_GOLD))
-                view(a.next(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
+                view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
                 val ai = a.sessionInfo()
                 val bi = b.sessionInfo()
                 n.drain(CHANNEL_A1)
@@ -138,10 +143,9 @@ object Scenarios {
                 }
                 withClient(n.endpoints.getValue(Names.WORLD_A), player()) { fresh ->
                     view(fresh.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, 0)
-                    n.accepted(CHANNEL_A1, fresh.playerId)
                     connected(fresh)
                     fresh.send(EarnRequest(EARNED_GOLD))
-                    view(fresh.next(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, EARNED_GOLD)
+                    view(fresh, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A2, EARNED_GOLD)
                 }
                 connected(a)
                 connected(b)

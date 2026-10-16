@@ -52,6 +52,7 @@ public static class NodeControl
             switch (command.Trim())
             {
                 case NodeProtocol.Drain:
+                {
                     Console.WriteLine(NodeProtocol.RelocationRequested);
                     var relocated = await runtime.RelocateAsync(
                         new ZLinkFrameworkRelocationOptions
@@ -64,7 +65,8 @@ public static class NodeControl
                             $"Host relocation blocked: {relocated.Reason}."
                         );
                     Console.WriteLine(NodeProtocol.Relocated);
-                    await foreach (var observed in runtime.ObserveAsync())
+                    using var safeDeadline = new CancellationTokenSource(NodeProtocol.SafeDeadline);
+                    await foreach (var observed in runtime.ObserveAsync(safeDeadline.Token))
                     {
                         if (!observed.Status.SafeToShutdown)
                             continue;
@@ -72,6 +74,7 @@ public static class NodeControl
                         break;
                     }
                     break;
+                }
                 case NodeProtocol.Shutdown:
                     var stopped = await runtime.ShutdownAsync();
                     if (stopped.Outcome != ZLinkFrameworkTerminationOutcome.Stopped)

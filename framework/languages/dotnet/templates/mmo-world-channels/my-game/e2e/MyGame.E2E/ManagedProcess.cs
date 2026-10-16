@@ -6,7 +6,6 @@ namespace MyGame.E2E;
 
 internal sealed class ManagedProcess : IAsyncDisposable
 {
-    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(20);
     private readonly Process process;
     private readonly Task stdout;
@@ -90,7 +89,11 @@ internal sealed class ManagedProcess : IAsyncDisposable
     public async Task<string> WaitLineAsync(string prefix, CancellationToken ct)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(StartupTimeout);
+        deadline.CancelAfter(
+            prefix == NodeProtocol.SafeToShutdown
+                ? NodeProtocol.SafeDeadline
+                : NodeProtocol.StartupDeadline
+        );
         await foreach (var line in lines.Reader.ReadAllAsync(deadline.Token))
             if (line.StartsWith(prefix, StringComparison.Ordinal))
                 return line[prefix.Length..];

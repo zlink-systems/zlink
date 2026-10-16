@@ -99,7 +99,7 @@ class NodeProcess {
     this.child.stdin!.write(Control.drain + '\n');
     await this.wait(Control.requested, Limits.messageMs);
     await this.wait(Control.relocated, Limits.relocationMs);
-    await this.wait(Control.safe, Limits.relocationMs);
+    await this.wait(Control.safe, Limits.safeMs);
   }
   async stop(): Promise<void> {
     if (!this.exited) this.child.stdin!.end(Control.shutdown + '\n');
@@ -222,14 +222,6 @@ async function runScenario(name: string): Promise<boolean> {
     const accountsEndpoint = (await accounts.ready()).endpoint;
     const { scenario } = await import('./client.mjs');
     const control = {
-      async accepted(id: string, playerId: string): Promise<void> {
-        const node = nodes.get(id);
-        assert(node);
-        await node.wait(
-          Control.playerCreated + JSON.stringify({ actorId: playerId, nodeId: id }),
-          Limits.messageMs
-        );
-      },
       async drain(id: string): Promise<void> {
         const node = nodes.get(id);
         assert(node, `Unknown host ${id}`);

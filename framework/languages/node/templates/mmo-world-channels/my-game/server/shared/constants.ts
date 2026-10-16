@@ -19,11 +19,15 @@ export function channelOf(spotId: string): number {
   if (zoneId(channel) !== spotId) throw new Error('Invalid Zone ID');
   return channel;
 }
+const messageFollowMs = 30_000;
+const relocationMs = 25_000;
 export const Limits = {
+  messageFollowMs,
+  safeMs: messageFollowMs + relocationMs,
   observationCapacity: 64,
   messageMs: 10_000,
   startupMs: 30_000,
-  relocationMs: 25_000,
+  relocationMs,
   shutdownMs: 10_000
 } as const;
 export const Scenarios = ['worlds', 'channel', 'reconnect', 'update'] as const;

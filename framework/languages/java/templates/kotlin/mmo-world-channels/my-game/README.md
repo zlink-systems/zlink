@@ -49,7 +49,7 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 | worlds | HTTP world endpoints; equal player IDs have independent gold in A and B |
 | channel | Channel 1 to 2 preserves connection, SessionInfo, and gold |
 | reconnect | A new connection retains Actor identity, channel, and gold |
-| update | Drain channelA1; preserve both worlds; stop and replace it; observe new Actor creation there |
+| update | Drain channelA1; preserve both worlds; stop and replace it; verify replacement readiness and new Player work in world A |
 
 ## Known issues
 
@@ -62,6 +62,12 @@ Start dbA and dbB, then channelA1, channelA2, and channelB in that order so each
 World A uses mesh `my-game-world-a` and dbA; world B uses `my-game-world-b` and dbB. Keep the Redis endpoint and key prefix consistent within a world. Application data uses `<keyPrefix>player:<id>`; Framework Location and Relocation data use separate suffixes. Player IDs are supplied by this example client; a production Session must authenticate them.
 
 For a channel update, send `drain` on its stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Then send `shutdown`, require `STOPPED` and a successful process exit, and start its replacement with the same configuration. Channel servers register both Player and Zone relocation adapters. The replacement does not reclaim relocated Zones: existing Location Store authority remains authoritative.
+
+After replacement, update verifies replacement readiness and new Player work in the
+live world. Actor factory placement is selected by Framework; the new Player enters
+the relocated `field@1` on `channelA2`. Message Follow is explicitly 30 seconds;
+the safe shutdown observation budget is derived from that duration and the existing
+operation budget.
 
 ## 한국어 실행 안내
 
