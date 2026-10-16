@@ -4533,7 +4533,37 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
 }
 
 
-void test_pending_actor_turn_survives_queue_removal (test_context_t &test)
+void test_source_completion_wait_scope (test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+    std::promise<bool> terminal;
+    auto delivered = terminal.get_future ();
+    detail::actor_transfer_coordinator_t coordinator;
+    const std::string key = "player:source-completion";
+    test.require (coordinator.try_begin_source_remote (key, "source-completion"),
+                  "source completion fixture must begin its source move");
+    auto waiting = coordinator.wait_for_source_completion (key);
+    const bool suspended = !waiting.await_ready ();
+    detail::observe_task_terminal (waiting, [&] (const auto &) {
+        terminal.set_value (zlink::framework::runtime::state_lane_t::current () == nullptr);
+    });
+    coordinator.cancel_move (key);
+    const bool outside_lane = delivered.get ();
+    waiting.result ().value ();
+    test.require (suspended && outside_lane,
+                  "source cancellation must release its async waiter outside the state lane");
+
+    coordinator.mark_reconcile (key, std::chrono::seconds (30));
+    auto target_recovery = coordinator.wait_for_source_completion (key);
+    const bool no_source_wait = target_recovery.await_ready ();
+    coordinator.cancel_move (key);
+    target_recovery.result ().value ();
+    test.require (no_source_wait,
+                  "target reconciliation must not wait for its own materialization to finish");
+}
+
+void test_pending_actor_turn_survives_queue_removal (test_context_t &test,
+                                                     bool cancel_pending = false)
 {
     namespace runtime = zlink::framework::runtime;
     runtime::offload_executor_t executor (1);
@@ -4553,15 +4583,28 @@ void test_pending_actor_turn_survives_queue_removal (test_context_t &test)
     queue->post_async ("actor-join-awaiting-source-lane",
                        [&] (auto complete) { started.set_value (std::move (complete)); });
     auto finish = ready.get ();
+    std::atomic_int cancelled_work_ran{0};
+    if (cancel_pending) {
+        queue->post_async ("cancelled-actor-work", [&] (auto complete) {
+            ++cancelled_work_ran;
+            complete ([] {});
+        });
+        queue->cancel_pending ();
+    }
     queue.reset ();
     const bool retained = !weak.expired ();
     finish ([] {});
+    std::promise<void> completed;
+    auto completion_ready = completed.get_future ();
+    executor.submit ([&] { completed.set_value (); });
+    completion_ready.get ();
+    const bool released_on_completion = weak.expired ();
     finish = {};
     retirement_ready.get ();
     executor.drain ();
     const auto retirements = retired.load ();
     delete raw;
-    test.require (retained && retirements == 1,
+    test.require (retained && released_on_completion && retirements == 1 && cancelled_work_ran == 0,
                   "an accepted Actor turn must retain its queue until completion after removal");
 }
 
@@ -5811,8 +5854,8 @@ void test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test_co
  * the local instance is the departed source remnant; a newer Store-confirmed
  * target authority may replace it, while the old leave is sealed so it cannot
  * run against the newly materialized Actor. */
-void test_return_actor_relocation_replaces_departed_spot_instance (test_context_t &test,
-                                                                   bool source_leave_fails = false)
+void test_return_actor_relocation_replaces_departed_spot_instance (
+  test_context_t &test, bool source_leave_fails = false, bool delayed_source_completion = false)
 {
     std::atomic_int failed_leave_diagnostics{0};
     entry_relocation_test_actor_t::create_count = 0;
@@ -5893,28 +5936,34 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
       "returning-entry-actor", 1, zlink::routing_id_t::from ("node-b").to_bytes (), 1, 3, 5};
     const auto entry_id = state->spot_ids_by_name.at ("entry");
     state->actor_authority_fences.erase (key);
-    zlink::framework::detail::record_actor_route_unlocked (
-      *state, key,
-      zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
-                                     zlink::framework::spot_id_t ("spot-b"), "entry"},
-      1);
-    state->actor_transfer_coordinator.activate_message_follow (
-      key, source_fence, returned_source,
-      zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
-                                     zlink::framework::spot_id_t ("spot-b"), "entry"},
-      target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30), "return-a-b");
-    state->pending_remote_source_cleanups.push_back (
-      zlink::framework::detail::spot_node_builder_state_t::pending_remote_source_cleanup_t{
-        .source_actor = source_actor,
-        .source_fence = source_fence,
-        .transfer_id = "return-a-b",
-        .source_spot_id = entry_id,
-        .source_spot_generation = 1,
-        .target_spot_id = zlink::framework::spot_id_t ("spot-b"),
-        .not_before = std::chrono::steady_clock::now () + std::chrono::seconds (30),
-        .leave_submitted = false,
-        .leave_completed = false,
-        .leave_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30)});
+    if (delayed_source_completion) {
+        test.require (state->actor_transfer_coordinator.try_begin_source_remote (key, "return-a-b"),
+                      "fixture must retain the previous source Join until publication");
+    } else {
+        zlink::framework::detail::record_actor_route_unlocked (
+          *state, key,
+          zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
+                                         zlink::framework::spot_id_t ("spot-b"), "entry"},
+          1);
+        state->actor_transfer_coordinator.activate_message_follow (
+          key, source_fence, returned_source,
+          zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
+                                         zlink::framework::spot_id_t ("spot-b"), "entry"},
+          target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30),
+          "return-a-b");
+        state->pending_remote_source_cleanups.push_back (
+          zlink::framework::detail::spot_node_builder_state_t::pending_remote_source_cleanup_t{
+            .source_actor = source_actor,
+            .source_fence = source_fence,
+            .transfer_id = "return-a-b",
+            .source_spot_id = entry_id,
+            .source_spot_generation = 1,
+            .target_spot_id = zlink::framework::spot_id_t ("spot-b"),
+            .not_before = std::chrono::steady_clock::now () + std::chrono::seconds (30),
+            .leave_submitted = false,
+            .leave_completed = false,
+            .leave_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30)});
+    }
 
     const object_ref_t returning_source{.kind = object_kind_t::actor,
                                         .key = "returning-entry-actor",
@@ -5929,10 +5978,31 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
                                                  .timers = {}};
     auto returning_target = first_target;
     returning_target.authority_owner_generation = 4;
-    const auto returned =
-      runtime.materialize_relocation_state (returning_frozen, returning_target, std::nullopt, {})
-        .result ()
-        .value ();
+    auto returning =
+      runtime.materialize_relocation_state (returning_frozen, returning_target, std::nullopt, {});
+    if (delayed_source_completion) {
+        test.require (
+          !returning.await_ready () && state->actor_instances.at (key) == old_instance,
+          "return must await the previous source Join terminal before replacing its instance");
+        auto source_completion = runtime.complete_remote_actor_transfer (
+          source_actor, returned_source,
+          zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
+                                         zlink::framework::spot_id_t ("spot-b"), "entry"},
+          source_fence, target_fence, "return-a-b");
+        source_completion.result ().value ();
+    }
+    const auto returned = returning.result ().value ();
+    if (delayed_source_completion) {
+        (void) runtime.submit_remote_actor_leave ("return-a-b", source_actor, entry_id, 1,
+                                                  zlink::framework::spot_id_t ("spot-b"),
+                                                  target_fence);
+        zlink::framework::detail::spot_context_access_t::state (entry_created.context)
+          ->run_serial_task ("after-late-source-leave",
+                             [] () -> zlink::framework::task_t<void> { co_return; })
+          .result ()
+          .value ();
+    }
+
 
     const auto cleanup = std::find_if (
       state->pending_remote_source_cleanups.begin (), state->pending_remote_source_cleanups.end (),
@@ -5955,7 +6025,9 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
     runtime.cleanup_expired_actor_admissions_at (cleanup->not_before);
     test.require (entry_relocation_test_entry_spot_t::leave_count == 1
                     && failed_leave_diagnostics == (source_leave_fails ? 1 : 0)
-                    && state->actor_instances.contains (key),
+                    && state->actor_instances.contains (key)
+                    && state->actor_instances.at (key) != old_instance
+                    && state->actor_routes.at (key).node_rid.value () == "node-a",
                   "retired source cleanup must not rerun leave or erase newer local authority");
 
     // The ordinary source cleanup may have already erased the instance and
@@ -6999,7 +7071,13 @@ int main (int argc, char **argv)
     test_context_t test;
     if (argc == 2 && std::string_view (argv[1]) == "--queue-lifetime") {
         test_pending_actor_turn_survives_queue_removal (test);
-        std::cerr << "Queue lifetime cases=1 failures=" << test.failures << '\n';
+        test_pending_actor_turn_survives_queue_removal (test, true);
+        std::cerr << "Queue lifetime cases=2 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--source-return") {
+        test_return_actor_relocation_replaces_departed_spot_instance (test, false, true);
+        std::cerr << "Source return cases=1 failures=" << test.failures << '\n';
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--session-seal") {
@@ -7073,7 +7151,9 @@ int main (int argc, char **argv)
     test_cutover_replays_over_selected_network_route (test);
     test_source_relocation_settles_by_authority (test);
     test_relocation_target_cutover_and_authority_settlement (test);
+    test_source_completion_wait_scope (test);
     test_pending_actor_turn_survives_queue_removal (test);
+    test_pending_actor_turn_survives_queue_removal (test, true);
     test_application_relocation_remote_production_path (test);
     test_application_relocation_remote_production_path (test, false, true);
     test_application_relocation_remote_production_path (test, true);
@@ -7083,6 +7163,7 @@ int main (int argc, char **argv)
     test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test);
     test_return_actor_relocation_replaces_departed_spot_instance (test);
     test_return_actor_relocation_replaces_departed_spot_instance (test, true);
+    test_return_actor_relocation_replaces_departed_spot_instance (test, false, true);
     test_entry_spot_actor_relocation_restore_fails_without_local_entry_spot (test);
     test_relocation_hold_restores_without_dedicated_limits (test);
     test_stateful_application_queue_accepts_active_backlog (test);
