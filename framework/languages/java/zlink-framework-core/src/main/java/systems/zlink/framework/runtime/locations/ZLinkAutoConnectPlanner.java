@@ -42,7 +42,8 @@ final class ZLinkAutoConnectPlanner {
             String endpoint,
             Map<String, String> metadata,
             String ownerId,
-            long lifecycleGeneration) {}
+            long lifecycleGeneration,
+            ZLinkMeshNodeObjectRole objectRole) {}
 
     record PeerDecision(ZLinkAutoConnectPeer peer, Target target, String skipReason) {
 
@@ -136,7 +137,8 @@ final class ZLinkAutoConnectPlanner {
                 peer.endpoint(),
                 peer.metadata(),
                 peer.ownerId(),
-                lifecycleGenerationOf(peer));
+                lifecycleGenerationOf(peer),
+                peer.objectRole());
     }
 
     private static PeerDecision skip(ZLinkAutoConnectPeer peer, String reason) {

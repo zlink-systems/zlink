@@ -4,12 +4,12 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
@@ -32,7 +32,6 @@ public final class ZLinkFlowContext {
     private static final long RANDOM_A_MASK = (1L << RANDOM_A_BITS) - 1;
     private static final long VERSION_MASK = (long) UUID_VERSION << RANDOM_A_BITS;
     private static final long VARIANT_RANDOM_MASK = Long.MAX_VALUE >>> 1;
-    private static final SecureRandom RANDOM = new SecureRandom();
     private static final AtomicLong LAST_MILLIS = new AtomicLong();
     private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
 
@@ -128,12 +127,12 @@ public final class ZLinkFlowContext {
     public static Executor propagating(Executor delegate) {
         return command -> {
             State captured = current();
+            if (captured == null) {
+                delegate.execute(command);
+                return;
+            }
             delegate.execute(
                     () -> {
-                        if (captured == null) {
-                            command.run();
-                            return;
-                        }
                         try (Scope ignored = enter(captured)) {
                             command.run();
                         }
@@ -207,12 +206,13 @@ public final class ZLinkFlowContext {
     private static String uuidV7() {
         long now = Instant.now().toEpochMilli();
         long timestamp = LAST_MILLIS.updateAndGet(previous -> Math.max(now, previous));
-        long randomA = RANDOM.nextLong() & RANDOM_A_MASK;
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+        long randomA = random.nextLong() & RANDOM_A_MASK;
         long msb =
                 ((timestamp & TIMESTAMP_MASK) << (Long.SIZE - TIMESTAMP_BITS))
                         | VERSION_MASK
                         | randomA;
-        long lsb = (RANDOM.nextLong() & VARIANT_RANDOM_MASK) | Long.MIN_VALUE;
+        long lsb = (random.nextLong() & VARIANT_RANDOM_MASK) | Long.MIN_VALUE;
         return new UUID(msb, lsb).toString();
     }
 

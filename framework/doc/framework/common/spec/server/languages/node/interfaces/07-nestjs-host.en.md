@@ -257,7 +257,7 @@ export interface ZLinkNestMeshObjectClientBuilder extends ZLinkNestFrameworkOpti
 }
 
 export interface ZLinkNestMeshObjectServerBuilder extends ZLinkNestFrameworkOptionsBuilder {
- addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>): this;
+ addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>, actorType: string): this;
  addSpotFactory<TSpot extends ZLinkSpot>(
  spotType: string,
  implementation: Type<TSpot>,
@@ -426,7 +426,8 @@ listener's default `maxMessageSize` is
 `16_777_216` bytes.
 
 The NestJS builder also only registers the Entry Spot implementation
-type. The Entry Spot's `SpotId` is issued by the framework in the
+type and the Actor stable type that Entry Spot accepts (`actorType`), with the same meaning as in the
+[base builder](01-foundation-configuration.en.md). The Entry Spot's `SpotId` is issued by the framework in the
 format `<prefix>-entry-<lowercase-canonical-uuid-v4>`, and there's no
 caller-specified identity option.
 

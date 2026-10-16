@@ -18,7 +18,7 @@
 | Binding Node | `@zlink-systems/zlink` (linux-x64 prebuild 포함) | npm | `bindings-release.yml` | `node/v*` 태그 또는 dispatch | npm Trusted Publishing(OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` 태그 또는 dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*`(GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing(`NuGet/login`, 정책 `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256(`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol header를 `--check`로 검증), 4개 지원 플랫폼의 shared prebuilt archive + sha256(Framework shared library·header·CMake config와 해당 플랫폼의 Core prebuilt·C++ binding 포함). 모든 자산은 하나로 결정한 릴리스 ref(태그 실행은 `framework/v*` 또는 `framework-cpp/v*`, dispatch는 `framework-cpp/vA.B.C`)에서 빌드한다. | 결정된 릴리스 ref의 GitHub Release | `framework-release.yml`, runner·compiler matrix는 `framework/languages/cpp/packaging/prebuilt-platforms.json` | `framework/v*`·`framework-cpp/v*` 태그 또는 `target=cpp` dispatch(`cpp_platform`으로 단일 플랫폼 재실행) | `GITHUB_TOKEN` |
+| Framework C++ | source archive + sha256(`framework/languages/cpp/scripts/package-source.py`: `packaging/`을 뺀 `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, 커밋에서 바이트 단위로 재현, generated protocol header를 `--check`로 검증, 해시는 태그의 레시피 값과 같아야 한다), 4개 지원 플랫폼의 shared prebuilt archive + sha256(Framework shared library·header·CMake config와 해당 플랫폼의 Core prebuilt·C++ binding 포함). 모든 자산은 하나로 결정한 릴리스 ref(태그 실행은 `framework/v*` 또는 `framework-cpp/v*`, dispatch는 `framework-cpp/vA.B.C`)에서 빌드한다. | 결정된 릴리스 ref의 GitHub Release | `framework-release.yml`, runner·compiler matrix는 `framework/languages/cpp/packaging/prebuilt-platforms.json` | `framework/v*`·`framework-cpp/v*` 태그 또는 `target=cpp` dispatch(`cpp_platform`으로 단일 플랫폼 재실행) | `GITHUB_TOKEN` |
 | Framework Node | `@zlink-systems/*` 8개 | npm | `framework-release.yml` | `framework-node/v*` 태그 또는 `target=node` dispatch | npm Trusted Publishing(패키지별 등록) |
 | Framework JVM | `systems.zlink:zlink-framework-*` 13개(Kotlin 포함) | Maven Central | `framework-release.yml` | `framework-java/v*` 태그 또는 `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
 | Framework .NET | `Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector` 등 9개 | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing |
@@ -63,6 +63,14 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 3. Framework: 대상 언어 VERSION을 갱신하고 `framework-<language>/vA.B.C` 태그를 push한다.
    C++·Node·JVM은 `framework-release.yml`, .NET은 `release-dotnet.yml`이 해당 언어 패키지만
    배포한다. 워크플로우는 pin한 binding 패키지가 레지스트리에서 실제로 제공될 때까지 기다린다.
+   C++는 태그 전에 릴리스 브랜치에서 레시피를 쓴다(#1941). 버전 갱신을 커밋한 뒤
+   `scripts/dev/release-check.sh --write framework cpp A.B.C`를 실행하고, 바뀐 레시피를 커밋한 다음
+   그 커밋에 태그를 건다. 이 명령은 `framework/languages/cpp/scripts/package-source.py`로 그 커밋의
+   소스 아카이브를 만들고, 버전·SHA512·sha256을 `vcpkg/ports/zlink-framework`와
+   `framework/languages/cpp/packaging/conan`에 쓴다. `conandata.yml`에는 이 릴리스의 항목 하나만 남긴다.
+   아카이브는 커밋에서 바이트 단위로 재현되고 `packaging/`을 담지 않으므로 레시피 커밋이 아카이브를
+   바꾸지 않는다. `framework-release.yml`은 태그에서 같은 명령을 다시 실행하며, 레시피가 바뀌면 게시 전에
+   실패한다.
 
    > **태그는 한 번에 세 개까지만 push한다.** GitHub은 한 push에 태그가 셋을 넘으면
    > workflow 이벤트를 만들지 않는다. 태그는 정상적으로 생기므로 겉보기에는 성공이고,
@@ -70,10 +78,11 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
    > 태그를 하나씩 push한다. 이미 셋을 넘겨 밀었다면 원격 태그를 지우고 다시 밀어야
    > 이벤트가 생긴다(0.12.0에서 실제로 겪었다).
 
-4. Conan·vcpkg: **릴리스가 끝나면 `sync-recipes` job이 `release-check.sh --write`로
+4. Conan·vcpkg(Core·binding C++): **릴리스가 끝나면 `sync-recipes` job이 `release-check.sh --write`로
    `conandata.yml`과 `portfile.cmake`를 갱신해 `main`으로 PR을 연다**(Issue #378).
    사람이 할 일은 그 PR의 값을 확인하고 merge하는 것이다. 값은 릴리스 자산의 해시라
-   태그가 나온 뒤에만 계산할 수 있으므로 이 단계는 3번 뒤에 온다.
+   태그가 나온 뒤에만 계산할 수 있으므로 이 단계는 3번 뒤에 온다. Framework C++ 레시피는 3번에서
+   태그 전에 쓴다.
    upstream 저장소(`microsoft/vcpkg`·`conan-io/conan-center-index`)에 PR을 내는 것은 여전히
    사람이 한다. 초안 본문은 `doc/building/pr-drafts/`에 있다.
 5. Node lockfile: Framework Node를 게시한 뒤 `framework/languages/node`의 `tutorial`·`tutorial/StreamClient`·

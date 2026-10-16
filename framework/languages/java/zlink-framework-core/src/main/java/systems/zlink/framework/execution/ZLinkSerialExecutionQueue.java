@@ -52,12 +52,10 @@ public final class ZLinkSerialExecutionQueue {
     private static final ThreadLocal<ZLinkSerialExecutionQueue> CURRENT = new ThreadLocal<>();
     private static final ThreadLocal<CompletableFuture<Void>> CURRENT_GATE = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> CURRENT_RELEASE_DEFERRED = new ThreadLocal<>();
-    // A queue never runs a drain on its submitter's stack.  This is shared by
-    // every owner; it is deliberately not an executor per Spot, Actor, or
-    // session.
+    // Arbitrary executors may block or execute inline; worker services already
+    // provide the asynchronous boundary. Compatibility dispatch is process-wide.
     private static final ExecutorService DRAIN_EXECUTOR =
             Executors.newVirtualThreadPerTaskExecutor();
-
     private final Executor executor;
     private final ExecutorService ownedExecutor;
     private final ZLinkExecutionLanePolicy lanePolicy;
@@ -223,18 +221,7 @@ public final class ZLinkSerialExecutionQueue {
         }
 
         private void schedule() {
-            try {
-                DRAIN_EXECUTOR.execute(
-                        () -> {
-                            try {
-                                spot.executor.execute(this::drain);
-                            } catch (RuntimeException rejected) {
-                                rejectReady(rejected);
-                            }
-                        });
-            } catch (RuntimeException rejected) {
-                rejectReady(rejected);
-            }
+            spot.submitWorker(this::drain, this::rejectReady);
         }
 
         private void rejectReady(RuntimeException failure) {
@@ -1301,34 +1288,47 @@ public final class ZLinkSerialExecutionQueue {
             sharedSpotGate.post(this);
             return;
         }
-        try {
-            DRAIN_EXECUTOR.execute(this::drainScheduled);
-        } catch (RuntimeException rejected) {
-            throw new IllegalStateException("serial queue drain executor rejected", rejected);
+        submitWorker(
+                () -> {
+                    Entry next;
+                    synchronized (this) {
+                        drainScheduled = false;
+                        next = takeNextForDrainLocked();
+                    }
+                    if (next != null) drainBatch(next);
+                },
+                this::rejectDrain);
+    }
+
+    private void submitWorker(Runnable work, Consumer<RuntimeException> reject) {
+        Runnable submit =
+                () -> {
+                    try {
+                        executor.execute(work);
+                    } catch (RuntimeException rejected) {
+                        reject.accept(rejected);
+                    }
+                };
+        if (executor instanceof ExecutorService) {
+            submit.run();
+        } else {
+            try {
+                DRAIN_EXECUTOR.execute(submit);
+            } catch (RuntimeException rejected) {
+                reject.accept(rejected);
+            }
         }
     }
 
-    private void drainScheduled() {
-        try {
-            executor.execute(
-                    () -> {
-                        Entry entry;
-                        synchronized (this) {
-                            drainScheduled = false;
-                            entry = takeNextForDrainLocked();
-                        }
-                        if (entry != null) drainBatch(entry);
-                    });
-        } catch (RuntimeException rejected) {
-            Entry entry;
-            synchronized (this) {
-                drainScheduled = false;
-                entry = takeNextForDrainLocked();
-            }
-            if (entry != null) {
-                entry.result.completeExceptionally(rejected);
-                finish(entry, false);
-            }
+    private void rejectDrain(RuntimeException rejected) {
+        Entry entry;
+        synchronized (this) {
+            drainScheduled = false;
+            entry = takeNextForDrainLocked();
+        }
+        if (entry != null) {
+            entry.result.completeExceptionally(rejected);
+            finish(entry, false);
         }
     }
 

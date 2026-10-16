@@ -515,6 +515,15 @@ internal sealed class ZLinkActorRelocationFailureException : Exception
             ZLinkRelocationDataLostException => ZLinkFrameworkRelocationReason.StateIncompatible,
             ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.DeadlineExceeded } =>
                 ZLinkFrameworkRelocationReason.DeadlineExceeded,
+            //  A correlated failure reply from the target (FrameworkFailureCode
+            //  set) is the target's explicit Restore refusal before relay-ready,
+            //  including the Shutdown admission seal (host relocation flow 05).
+            //  It is not a Store failure.
+            ZLinkFrameworkException
+            {
+                Kind: ZLinkFrameworkErrorKind.Unavailable,
+                FrameworkFailureCode: > 0
+            } => ZLinkFrameworkRelocationReason.RelocationFailed,
             ZLinkFrameworkException
             {
                 Kind: ZLinkFrameworkErrorKind.Unavailable or ZLinkFrameworkErrorKind.NotFound

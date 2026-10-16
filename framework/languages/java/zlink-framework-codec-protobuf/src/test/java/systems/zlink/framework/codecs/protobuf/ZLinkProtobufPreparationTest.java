@@ -19,6 +19,20 @@ import java.io.OutputStream;
 
 final class ZLinkProtobufPreparationTest {
     @Test
+    void ownedCodecWritesIntoNativeStorageAndParsesItsView() throws Exception {
+        CountingMessage.byteArrayEncodes = 0;
+        var serializer = ZLinkProtobufMessageSerializer.INSTANCE;
+        var original = StringValue.of("owned-message");
+        StringValue decoded;
+        try (var payload = serializer.serializeOwned(new CountingMessage(original))) {
+            assertEquals(0, CountingMessage.byteArrayEncodes);
+            assertEquals(original.getSerializedSize(), payload.size());
+            decoded = serializer.deserializeBorrowed(payload, StringValue.class);
+        }
+        assertEquals(original, decoded);
+    }
+
+    @Test
     void registeredParserIsPreparedOnceAndReusedForEveryDecode() {
         var serializer = ZLinkProtobufMessageSerializer.INSTANCE;
         CountingMessage.parserSelections = 0;
@@ -35,6 +49,7 @@ final class ZLinkProtobufPreparationTest {
 
     public static final class CountingMessage implements MessageLite {
         static int parserSelections;
+        static int byteArrayEncodes;
         private final StringValue value;
 
         CountingMessage(StringValue value) {
@@ -76,6 +91,7 @@ final class ZLinkProtobufPreparationTest {
 
         @Override
         public byte[] toByteArray() {
+            byteArrayEncodes++;
             return value.toByteArray();
         }
 

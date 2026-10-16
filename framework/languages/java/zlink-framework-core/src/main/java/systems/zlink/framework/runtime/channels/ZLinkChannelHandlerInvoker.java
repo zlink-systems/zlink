@@ -223,8 +223,7 @@ final class ZLinkChannelHandlerInvoker {
                     .thenApply(
                             reply ->
                                     ZLinkMessagePayloads.message(
-                                            ZLinkCodecRegistration.serializeForDeclaredType(
-                                                    serializer, reply, registration.replyType())));
+                                            serializer, reply, registration.replyType()));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -431,12 +430,9 @@ final class ZLinkChannelHandlerInvoker {
                                     .thenApply(
                                             reply ->
                                                     ZLinkMessagePayloads.message(
-                                                            ZLinkCodecRegistration
-                                                                    .serializeForDeclaredType(
-                                                                            serializer,
-                                                                            reply,
-                                                                            registration
-                                                                                    .replyType()))));
+                                                            serializer,
+                                                            reply,
+                                                            registration.replyType())));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
