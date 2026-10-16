@@ -49,6 +49,7 @@ import { RequestResult, SubmitResult, ZLinkBackendResultError } from '../backend
 import type { ZLinkFrameworkRegistration } from '../configuration';
 import {
   type ZLinkRuntimeEventPublisher,
+  type ZLinkRelocationMetricOperation,
   type ZLinkRuntimeMetrics,
   isRelocationDebugEnabled,
   relocationDebug
@@ -607,9 +608,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
 
   /** Spec 28 §4.4: the target owner alone orders shutdown seal and verified cutover. */
   private targetStageSealed(stage: LocalStage): boolean {
-    return (
-      !stage.cutoverReceived && (this.disposed || this.options.targetAdmissionSealed?.() === true)
-    );
+    return !stage.cutoverReceived && this.targetAdmissionSealed();
+  }
+
+  /** The Shutdown admission seal: closed once the target owner starts shutdown. */
+  private targetAdmissionSealed(): boolean {
+    return this.disposed || this.options.targetAdmissionSealed?.() === true;
   }
 
   completeActorJoinSourceCleanup(actorId: string): void {
@@ -1602,19 +1606,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       objectGeneration: spotAuthority.objectGeneration,
       authorityOwnerGeneration: spotAuthority.authorityOwnerGeneration,
       seal: async (captureSignal) => {
-        const { spotCaptureOperation } = await this.afterSpotCloseDecision(
-          meshName,
-          activation.spotId,
-          () => {
-            interruptionStartedAt = performance.now();
-            spotMessageFollowSeal = this.sealSpotMessageFollow(meshName, spotAuthority, activation);
-            // Both seals run in the same event-loop turn after the Close decision.
-            return { spotCaptureOperation: activation.captureRelocation(captureSignal) };
-          }
-        );
-        const [capture, ...preparations] = await Promise.allSettled([
-          spotCaptureOperation,
-          ...actorStates.map(async (state) => ({
+        // Relocation 04 §4.1: every bound member's Session is sealed before
+        // the Spot capture stops member dispatch.
+        const preparations = await Promise.allSettled(
+          actorStates.map(async (state) => ({
             state,
             actor: state.actor!,
             prepared: await this.options.actorTransfer.prepareMaintenanceSession(
@@ -1625,10 +1620,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               relocationWireId(aggregateId)
             )
           }))
-        ] as const);
+        );
         const failures: unknown[] = [];
-        if (capture.status === 'fulfilled') spotCapture = capture.value;
-        else failures.push(capture.reason);
         for (const preparation of preparations) {
           if (preparation.status === 'fulfilled') sessions.push(preparation.value);
           else failures.push(preparation.reason);
@@ -1637,6 +1630,17 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         if (failures.length > 1) {
           throw new AggregateError(failures, 'Spot relocation source preparation failed.');
         }
+        const { spotCaptureOperation } = await this.afterSpotCloseDecision(
+          meshName,
+          activation.spotId,
+          () => {
+            interruptionStartedAt = performance.now();
+            spotMessageFollowSeal = this.sealSpotMessageFollow(meshName, spotAuthority, activation);
+            // Both Spot seals run in the same event-loop turn after the Close decision.
+            return { spotCaptureOperation: activation.captureRelocation(captureSignal) };
+          }
+        );
+        spotCapture = await spotCaptureOperation;
         return {
           boundSessionState: Buffer.alloc(0),
           queuedMessages: [],
@@ -1768,6 +1772,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       spotObjectGeneration: spotAuthority.objectGeneration,
       membershipEpoch: state.spotMembershipEpoch > 0n ? state.spotMembershipEpoch : 1n
     }));
+    const relocationMetric =
+      spotRegistration.relocation.kind === 'disabled'
+        ? undefined
+        : this.options.metrics?.startRelocation(meshName, kind, spotRegistration.relocation.kind);
     let outcome = 'completed';
     try {
       const waitForRelocationBoundary = (
@@ -1817,7 +1825,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           )
         ]),
         signal,
-        sessions
+        sessions,
+        undefined,
+        undefined,
+        relocationMetric
       );
     } catch (error) {
       outcome = 'failed';
@@ -1832,14 +1843,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
       throw error;
     } finally {
+      relocationMetric?.complete(signal?.aborted === true ? 'shutdown' : outcome);
       this.sourceRelocationIds.delete(aggregateId);
       if (interruptionStartedAt !== undefined) {
         this.recordRelocationInterruption(
           meshName,
           kind,
           kind === 'user_spot' ? 'spot_wide' : undefined,
-          interruptionStartedAt,
-          outcome
+          interruptionStartedAt
         );
       }
     }
@@ -1870,6 +1881,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       encodeAuthorityKey('actor', state.actorId),
       signal
     );
+    const actorPolicy = this.actorRegistration(
+      state.meshName ?? meshName,
+      authority.allocation.stableType
+    ).relocation.kind;
     target ??= await this.selectTarget(
       meshName,
       this.requireMeshNode(meshName).status().routingId,
@@ -1878,10 +1893,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         {
           objectKind: 'actor',
           stableType: authority.allocation.stableType,
-          policy: this.actorRegistration(
-            state.meshName ?? meshName,
-            authority.allocation.stableType
-          ).relocation.kind,
+          policy: actorPolicy,
           count: 1
         }
       ],
@@ -1919,6 +1931,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         return unit.seal(captureSignal);
       }
     };
+    const relocationMetric =
+      actorPolicy === 'disabled'
+        ? undefined
+        : this.options.metrics?.startRelocation(meshName, 'actor', actorPolicy);
     let outcome = 'completed';
     try {
       if (isRelocationDebugEnabled()) {
@@ -1950,21 +1966,17 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         signal,
         sessions,
         advertisedReceiveChunkLimitBytes,
-        deadlineAtMs
+        deadlineAtMs,
+        relocationMetric
       );
     } catch (error) {
       outcome = 'failed';
       throw error;
     } finally {
+      relocationMetric?.complete(signal?.aborted === true ? 'shutdown' : outcome);
       this.sourceRelocationIds.delete(aggregateId);
       if (interruptionStartedAt !== undefined) {
-        this.recordRelocationInterruption(
-          meshName,
-          'actor',
-          undefined,
-          interruptionStartedAt,
-          outcome
-        );
+        this.recordRelocationInterruption(meshName, 'actor', undefined, interruptionStartedAt);
       }
     }
   }
@@ -2076,6 +2088,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
     };
     const aggregateId = this.reserveRelocationId();
+    const relocationMetric =
+      spotRegistration.relocation.kind === 'disabled'
+        ? undefined
+        : this.options.metrics?.startRelocation(
+            meshName,
+            'user_spot',
+            spotRegistration.relocation.kind
+          );
     let outcome = 'completed';
     try {
       await this.waitForRelocationBudgetHeadroom(String(target.rid), signal);
@@ -2094,20 +2114,23 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         captured,
         new Map([[spotKey.value, spotAuthority]]),
         signal,
-        []
+        [],
+        undefined,
+        undefined,
+        relocationMetric
       );
     } catch (error) {
       outcome = 'failed';
       throw error;
     } finally {
+      relocationMetric?.complete(signal?.aborted === true ? 'shutdown' : outcome);
       this.sourceRelocationIds.delete(aggregateId);
       if (interruptionStartedAt !== undefined) {
         this.recordRelocationInterruption(
           meshName,
           'user_spot',
           'per_actor',
-          interruptionStartedAt,
-          outcome
+          interruptionStartedAt
         );
       }
     }
@@ -2281,7 +2304,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     sessions: readonly SourceActorSession[] = [],
     /** Target's advertised relocation state chunk cap (Actor Join only; spec 15 §4.2). */
     advertisedReceiveChunkLimitBytes?: number,
-    controlDeadlineAtMs = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS
+    controlDeadlineAtMs = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS,
+    relocationMetric?: ZLinkRelocationMetricOperation
   ): Promise<void> {
     if (isRelocationDebugEnabled()) {
       relocationDebug('coordinator.begin', {
@@ -2337,6 +2361,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             primary
           );
     const encoded = encodeServiceRelocationEnvelope(transportEnvelope, target.applicationVersion);
+    relocationMetric?.recordBytes(encoded.byteLength);
     const limits = this.relocationLimits();
     // Actor Join threads the target's admission-time advertised cap in;
     // other relocation paths have no such negotiation and fall back to the
@@ -2876,6 +2901,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     sourceNodeRid: RoutingId,
     signal?: AbortSignal
   ): Promise<ServiceMaintenanceRelocationReady> {
+    // Host relocation flow 05: a sealed target refuses a new PREPARE before any
+    // staging. The typed ShuttingDown reaches the source as relocationFailed.
+    if (this.targetAdmissionSealed()) {
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.ShuttingDown,
+        'Relocation target admission is sealed for shutdown.'
+      );
+    }
     const targetStatus = this.requireMeshNode(meshName).status();
     const targetOwner = this.options.currentOwner();
     const targetDescriptor = this.options.localDescriptor?.(meshName);
@@ -4326,8 +4359,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     meshName: string,
     unitKind: 'actor' | 'user_spot' | 'instance_spot',
     executionMode: 'spot_wide' | 'per_actor' | undefined,
-    startedAt: number,
-    outcome: string
+    startedAt: number
   ): void {
     const seconds = Math.max(0, performance.now() - startedAt) / MILLISECONDS_PER_SECOND;
     const attributes = {
@@ -4335,12 +4367,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       ...(executionMode === undefined ? {} : { execution_mode: executionMode })
     };
     this.options.metrics?.duration(METRIC_NAMES.RelocationInterruption, seconds, attributes);
-    this.options.metrics?.count(METRIC_NAMES.RelocationCompleted, 1, {
-      mesh_name: meshName,
-      object_kind: unitKind,
-      policy: unitKind === 'user_spot' && executionMode === 'per_actor' ? 'recreate' : 'configured',
-      outcome
-    });
     if (seconds <= 1) return;
     console.warn(
       `[zlink.runtime.relocation.changed] ${unitKind} admission interruption ` +

@@ -664,6 +664,117 @@ test('framework host without an owner lease stays Preparing until it publishes d
   }
 });
 
+// Location runtime §5: the lease is held but the Store does not confirm the
+// descriptor write (provider error, or no answer within the renew timeout).
+// Startup ends in Preparing and the next renew publishes the descriptor.
+for (const fault of ['error', 'noAnswer']) {
+  test(`framework host with an unconfirmed descriptor write (${fault}) starts Preparing and serves after the next renew`, async () => {
+    const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+    const inner = new framework.ZLinkInMemoryProviderLocationStore(now);
+    const store = new framework.ZLinkLocationStoreRepository(inner, now);
+    let descriptorFault = true;
+    let faultedWrites = 0;
+    const provider = {
+      read: (key, signal) => inner.read(key, signal),
+      scan: (request, signal) => inner.scan(request, signal),
+      write(request, signal) {
+        const meshNodeWrite = request.mutations.some(
+          mutation => mutation.kind === 'put' && mutation.key.value.startsWith('mesh-node')
+        );
+        if (!descriptorFault || !meshNodeWrite) return inner.write(request, signal);
+        faultedWrites += 1;
+        if (fault === 'error') return Promise.reject(new Error('descriptor write failed'));
+        // No answer: pending until the fault clears, then the write applies.
+        return new Promise(resolve => {
+          held.push(() => resolve(inner.write(request, signal)));
+        });
+      }
+    };
+    const held = [];
+    const clearFault = () => {
+      descriptorFault = false;
+      for (const release of held.splice(0)) release();
+    };
+    const calls = [];
+    const runtime = new framework.ZLinkFrameworkRuntimeHost({
+      registration: framework.createFrameworkRegistration({
+        locations: {
+          storeInstance: provider,
+          options: {
+            ownerLeaseRenewIntervalMs: 20,
+            ownerLeaseRenewTimeoutMs: 50,
+            pollingIntervalMs: 20
+          }
+        },
+        spotNodes: {
+          play: {
+            router: { bind: 'tcp://local-play', routingId: 'play-node' }
+          }
+        }
+      })
+    }, {
+      backendAdapterFactory: fakeBackendAdapterFactory(calls, rid('play-node'))
+    });
+
+    const observation = new AbortController();
+    try {
+      await runtime.start();
+      assert.ok(faultedWrites > 0);
+      assert.equal(runtime.locationOwner.currentRuntime.currentOwnerToken !== undefined, true);
+      assert.equal(runtime.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+      assert.equal(runtime.status.isReady, false);
+      assert.equal((await store.listMeshNodes('play')).items.length, 0);
+
+      const observed = runtime.observe(observation.signal);
+      clearFault();
+      for await (const event of observed) {
+        if (event.status.state === framework.ZLinkFrameworkRuntimeState.Serving) break;
+      }
+
+      assert.equal(runtime.status.isReady, true);
+      const [descriptor] = (await store.listMeshNodes('play')).items;
+      assert.equal(descriptor.state, framework.ZLinkFrameworkRuntimeState.Serving);
+    } finally {
+      observation.abort();
+      clearFault();
+      await runtime.stop();
+    }
+  });
+}
+
+test('framework host whose descriptor is claimed by another owner fails startup', async () => {
+  const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new framework.ZLinkInMemoryProviderLocationStore(now);
+  const createHost = () => new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      locations: {
+        storeInstance: inner,
+        options: {
+          ownerLeaseRenewIntervalMs: 20,
+          ownerLeaseRenewTimeoutMs: 50,
+          pollingIntervalMs: 20
+        }
+      },
+      spotNodes: {
+        play: {
+          router: { bind: 'tcp://local-play', routingId: 'play-node' }
+        }
+      }
+    })
+  }, {
+    backendAdapterFactory: fakeBackendAdapterFactory([], rid('play-node'))
+  });
+  const first = createHost();
+  const second = createHost();
+  try {
+    await first.start();
+    await assert.rejects(second.start());
+  } finally {
+    await second.stop().catch(() => {});
+    await first.stop();
+  }
+});
+
 test('framework host retries recovery publication after the first owner lease publication fails', async () => {
   const scenario = recoverableHostScenario();
   let publicationAttempts = 0;

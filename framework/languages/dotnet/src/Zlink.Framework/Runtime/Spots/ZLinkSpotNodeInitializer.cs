@@ -152,8 +152,20 @@ internal sealed class ZLinkSpotNodeInitializer(
                 // Location runtime §5: a host that finished its Location
                 // startup without an owner lease defers the owner-bound step;
                 // the auto-connect host runs it after the heartbeat claims.
+                // A descriptor claim the Store does not confirm defers the step
+                // the same way: the auto-connect host repeats it on the next renew.
                 if (locationLifecycle is null || locationLifecycle.IsOwnerAdmissionOpen)
-                    await nodeRuntime.StartOwnerBoundAsync().ConfigureAwait(false);
+                    try
+                    {
+                        await nodeRuntime.StartOwnerBoundAsync().ConfigureAwait(false);
+                    }
+                    catch (ZLinkDescriptorPublicationUnconfirmedException claimFailure)
+                    {
+                        state.ErrorSink.ReportRuntimeTaskException(
+                            "location-descriptor-publication",
+                            claimFailure
+                        );
+                    }
             }
             catch (Exception initializationFailure)
             {

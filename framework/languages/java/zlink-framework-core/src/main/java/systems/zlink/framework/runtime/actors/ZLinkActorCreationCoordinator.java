@@ -148,19 +148,26 @@ public final class ZLinkActorCreationCoordinator
                                         deadline,
                                         excludedTargets);
                             }
-                            //  A Ready Actor is found without the new-Actor candidate
-                            //  condition (Actor model section 6.3).
+                            // A live Ready Actor is found without the new-Actor candidate
+                            // condition (Actor model section 6.3; Location runtime section 7).
                             return locations
                                     .read(ZLinkAuthorityKeyCodec.actor(actorId), OPEN)
                                     .thenCompose(
                                             current ->
                                                     current
-                                                                            instanceof
-                                                                            ZLinkAuthoritySnapshot
-                                                                                    snapshot
-                                                                    && isReady(
-                                                                            snapshot, actorId,
-                                                                            actorType)
+                                                                    instanceof
+                                                                    ZLinkAuthoritySnapshot snapshot
+                                                            ? isReady(snapshot, actorId, actorType)
+                                                                    .thenApply(
+                                                                            ready ->
+                                                                                    ready
+                                                                                            ? snapshot
+                                                                                            : null)
+                                                            : CompletableFuture.completedFuture(
+                                                                    null))
+                                    .thenCompose(
+                                            snapshot ->
+                                                    snapshot != null
                                                             ? existing(snapshot, actorId, actorType)
                                                             : createOnNewTarget(
                                                                     operation,
@@ -379,11 +386,23 @@ public final class ZLinkActorCreationCoordinator
         return Duration.ofMillis(remainingMillis);
     }
 
-    private boolean isReady(ZLinkAuthoritySnapshot snapshot, String actorId, String actorType) {
-        return authorities
+    private CompletionStage<Boolean> isReady(
+            ZLinkAuthoritySnapshot snapshot, String actorId, String actorType) {
+        if (authorities
                 .decode(snapshot.payload())
                 .filter(authority -> isReady(authority, actorId, actorType))
-                .isPresent();
+                .isEmpty()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        return locations
+                .readOwnerLease(snapshot.ownerId())
+                .thenApply(
+                        owner ->
+                                owner instanceof ZLinkOwnerLeaseFound found
+                                        && found.token().ownerId().equals(snapshot.ownerId())
+                                        && found.token().leaseGeneration()
+                                                == snapshot.ownerLeaseGeneration()
+                                        && found.leaseExpiresAt().isAfter(found.storeNow()));
     }
 
     private static boolean isReady(

@@ -79,7 +79,9 @@ internal sealed class ZLinkLocationAutoConnectHost
     /// Starts this generation's descriptor publication. <paramref name="published"/>
     /// runs once every local descriptor is published. Location runtime §5: a
     /// host without an owner lease defers the whole start, so it stays
-    /// Preparing until the start resumes after the lease is claimed.
+    /// Preparing until the start resumes after the lease is claimed. A
+    /// publication the Store does not confirm defers it the same way; only a
+    /// settled rejection fails the start.
     /// </summary>
     internal async ValueTask StartAsync(
         ZLinkFrameworkComponentState state,
@@ -108,78 +110,80 @@ internal sealed class ZLinkLocationAutoConnectHost
             // Location runtime §5: MeshNodes of a host that started without
             // an owner lease run their owner-bound startup step here, once the
             // lease is held, before their descriptors are published.
-            foreach (var node in state.SpotNodes.Values)
-                await node.StartOwnerBoundAsync().ConfigureAwait(false);
-            var registration = state.Registration;
-            if (
-                registration.Channels.Values.Any(static channel =>
-                    channel.ClientServerRole is not null
-                )
-            )
-            {
-                _clientServerDiscovery = new ZLinkClientServerDiscovery(
-                    _store,
-                    _runtime,
-                    _options,
-                    _leaseTracker
-                );
-                await _clientServerDiscovery
-                    .StartAsync(state, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            if (
-                registration.Channels.Values.Any(static channel =>
-                    channel.AutoConnectType == ZLinkLocationAutoConnectType.Fanout
-                    && (
-                        channel.Publisher is not null
-                        || channel.Subscriber?.AcquisitionMode
-                            == ZLinkPeerAcquisitionMode.AutoConnect
-                    )
-                )
-            )
-            {
-                _fanoutDiscovery = new ZLinkFanoutDiscovery(
-                    _store,
-                    _runtime,
-                    _options,
-                    _leaseTracker
-                );
-                await _fanoutDiscovery.StartAsync(state, cancellationToken).ConfigureAwait(false);
-            }
-
-            foreach (var (name, spot) in registration.SpotNodes)
-            {
-                if (!state.SpotNodes.TryGetValue(name, out var node) || spot.Router is null)
-                    continue;
-                if (node.StartupState is not { } startupState)
-                    continue;
-
-                var meshName = ZLinkMeshName.FromBoundary(
-                    spot.SpotMeshChannelName ?? spot.SpotNodeName,
-                    nameof(spot.SpotMeshChannelName)
-                );
-                AddLoop(
-                    state.ErrorSink,
-                    ZLinkLocationAutoConnectType.SpotMesh,
-                    meshName,
-                    ZLinkLocationRole.Spot,
-                    startupState,
-                    new SpotRouterExecutor(
-                        node,
-                        spot.Router.AcquisitionMode == ZLinkPeerAcquisitionMode.AutoConnect
-                    ),
-                    retainRemovedMembers: spot.Router.AcquisitionMode
-                        == ZLinkPeerAcquisitionMode.Manual,
-                    objectRole: spot.ObjectRole,
-                    hasChannelMemberships: spot.ChannelMemberships.Any(static membership =>
-                        membership.IsServer
-                    )
-                );
-            }
-
             try
             {
+                foreach (var node in state.SpotNodes.Values)
+                    await node.StartOwnerBoundAsync().ConfigureAwait(false);
+                var registration = state.Registration;
+                if (
+                    registration.Channels.Values.Any(static channel =>
+                        channel.ClientServerRole is not null
+                    )
+                )
+                {
+                    _clientServerDiscovery = new ZLinkClientServerDiscovery(
+                        _store,
+                        _runtime,
+                        _options,
+                        _leaseTracker
+                    );
+                    await _clientServerDiscovery
+                        .StartAsync(state, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                if (
+                    registration.Channels.Values.Any(static channel =>
+                        channel.AutoConnectType == ZLinkLocationAutoConnectType.Fanout
+                        && (
+                            channel.Publisher is not null
+                            || channel.Subscriber?.AcquisitionMode
+                                == ZLinkPeerAcquisitionMode.AutoConnect
+                        )
+                    )
+                )
+                {
+                    _fanoutDiscovery = new ZLinkFanoutDiscovery(
+                        _store,
+                        _runtime,
+                        _options,
+                        _leaseTracker
+                    );
+                    await _fanoutDiscovery
+                        .StartAsync(state, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                foreach (var (name, spot) in registration.SpotNodes)
+                {
+                    if (!state.SpotNodes.TryGetValue(name, out var node) || spot.Router is null)
+                        continue;
+                    if (node.StartupState is not { } startupState)
+                        continue;
+
+                    var meshName = ZLinkMeshName.FromBoundary(
+                        spot.SpotMeshChannelName ?? spot.SpotNodeName,
+                        nameof(spot.SpotMeshChannelName)
+                    );
+                    AddLoop(
+                        state.ErrorSink,
+                        ZLinkLocationAutoConnectType.SpotMesh,
+                        meshName,
+                        ZLinkLocationRole.Spot,
+                        startupState,
+                        new SpotRouterExecutor(
+                            node,
+                            spot.Router.AcquisitionMode == ZLinkPeerAcquisitionMode.AutoConnect
+                        ),
+                        retainRemovedMembers: spot.Router.AcquisitionMode
+                            == ZLinkPeerAcquisitionMode.Manual,
+                        objectRole: spot.ObjectRole,
+                        hasChannelMemberships: spot.ChannelMemberships.Any(static membership =>
+                            membership.IsServer
+                        )
+                    );
+                }
+
                 foreach (var loop in _loops)
                     await loop.StartAsync(cancellationToken).ConfigureAwait(false);
                 foreach (var reconciler in _reconcilers)
@@ -191,7 +195,6 @@ internal sealed class ZLinkLocationAutoConnectHost
                                 + "."
                         );
                 }
-                published?.Invoke();
             }
             catch (Exception startFailure)
             {
@@ -204,8 +207,19 @@ internal sealed class ZLinkLocationAutoConnectHost
                     throw new AggregateException(startFailure, cleanupFailure);
                 }
 
-                throw;
+                if (startFailure is not ZLinkDescriptorPublicationUnconfirmedException)
+                    throw;
+                // Location runtime §5: the Store did not confirm the descriptor
+                // publication, so the host stays Preparing and the next owner
+                // lease renew resumes this start, as for a host without a lease.
+                state.ErrorSink.ReportRuntimeTaskException(
+                    "location-descriptor-publication",
+                    startFailure
+                );
+                Interlocked.Exchange(ref _deferredStart, new DeferredStart(state, published));
+                return;
             }
+            published?.Invoke();
         }
         finally
         {
