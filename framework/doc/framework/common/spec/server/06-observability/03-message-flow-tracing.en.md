@@ -219,7 +219,7 @@ The application sets the diagnostics level to one of four values.
 | Level | Scope the framework records |
 |---|---|
 | `Off` | Doesn't record message flow or dispatch error. |
-| `Errors` | Only records dispatch error, backpressure, and drop. |
+| `Errors` | Only records dispatch error, backpressure, and drop. Message-flow tracing is off, so no `flow_id` is built or propagated ([04 "4"](04-flow-correlation.en.md#4-when-a-flow-is-created)). |
 | `Normal` | Records errors and §2.1's main stages. |
 | `Detailed` | Can add message byte size and terminal elapsed time to `Normal` records. |
 
@@ -307,11 +307,11 @@ call site assembles a string before the gate.
 **Language-specific discretion** — how the gate is expressed differs by
 language. C++ uses a template lambda, .NET uses an interpolated-string
 handler and `Func<>`, Java uses `Supplier<>`, Node uses a thunk. As long
-as the observed result is the same — that when tracing is off, no string,
+as the observed result is the same — that at diagnostics level `Off`, no string,
 event, or lambda is built, so the cost is zero — the method is
 discretionary. The criterion for this discretion is confirmation in the
 call-site code that, after adding a new trace, the path builds no string,
-event, or lambda while tracing is off.
+event, or lambda at level `Off`.
 
 ## 6. Completion, Failure, and Lifetime
 
