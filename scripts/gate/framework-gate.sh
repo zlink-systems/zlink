@@ -19,6 +19,8 @@ for s in $SAMPLES; do
   TMPDIR=/dev/shm/zlink-tmp-java run "java-sample-$s" framework/languages/java bash "samples/java/$s/run_sample.sh"
   TMPDIR=/dev/shm/zlink-tmp-java run "kotlin-sample-$s" framework/languages/java bash "samples/kotlin/$s/run_sample.sh"
 done
+# run_sample.sh runs a sample without compiling its tests; the examples mirror builds them (#1971).
+TMPDIR=/dev/shm/zlink-tmp-java run jvm-sample-tests framework/languages/java ./gradlew --no-daemon -p samples test
 # Node names its TypeScript samples with a .Ts suffix; ZoneWorld has none.
 for s in $SAMPLES; do
   d="$s.Ts"; [ -d "framework/languages/node/samples/$d" ] || d="$s"
