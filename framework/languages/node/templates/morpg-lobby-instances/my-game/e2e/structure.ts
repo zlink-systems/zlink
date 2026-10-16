@@ -1,0 +1,122 @@
+import { readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
+import assert from 'node:assert/strict';
+import { Names, Scenarios, NodeEntrypoints } from '../server/shared/constants';
+function object(value: unknown): Record<string, unknown> {
+  assert(value !== null && typeof value === 'object' && !Array.isArray(value), 'Expected object');
+  return value as Record<string, unknown>;
+}
+function text(value: unknown): string {
+  assert(typeof value === 'string' && value.trim().length > 0, 'Expected nonempty string');
+  return value;
+}
+function array(value: unknown): unknown[] {
+  assert(Array.isArray(value), 'Expected array');
+  return value;
+}
+function unique(values: string[], label: string): void {
+  assert.equal(new Set(values).size, values.length, `Duplicate ${label}`);
+}
+export function checkStructure(path = 'zlink.structure.json'): void {
+  const root = realpathSync('.');
+  const s = object(JSON.parse(readFileSync(path, 'utf8')));
+  assert.equal(s.version, 1, 'Unknown structure version');
+  for (const key of ['id', 'name', 'language']) text(s[key]);
+  assert.equal(s.language, 'node');
+  const run = object(s.run),
+    commands = object(run.commands);
+  assert.deepEqual(Object.keys(commands).sort(), ['powershell', 'sh']);
+  for (const command of Object.values(commands)) {
+    const a = array(command);
+    assert(a.length);
+    a.forEach(text);
+  }
+  assert.deepEqual(run.scenarios, [...Scenarios]);
+  const nodes = array(s.nodes).map(object);
+  const ids = nodes.map((n) => text(n.id));
+  unique(ids, 'node ID');
+  function owner(value: unknown): Record<string, unknown> {
+    const node = nodes.find((n) => n.id === text(value));
+    assert(node, 'Unknown owner');
+    return node;
+  }
+  for (const node of nodes) {
+    text(node.role);
+    if (text(node.role) in NodeEntrypoints)
+      realpathSync(resolve(root, NodeEntrypoints[node.role as keyof typeof NodeEntrypoints]));
+    text(node.title);
+    if (node.config === null) {
+      assert.equal(node.role, 'external');
+      continue;
+    }
+    const config = text(node.config);
+    assert(
+      !isAbsolute(config) && !win32.isAbsolute(config) && !config.includes('\\'),
+      'Config path must be relative with /'
+    );
+    const file = realpathSync(resolve(root, config));
+    const rel = relative(root, file);
+    assert(
+      rel && rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel),
+      'Config escapes project root'
+    );
+    if (node.role !== 'location-store') {
+      const cfg = object(JSON.parse(readFileSync(file, 'utf8')));
+      assert.equal(cfg.id, node.id, 'Config ID mismatch');
+    }
+  }
+  const channels = array(s.channels).map(object);
+  unique(
+    channels.map((c) => `${text(c.name)}:${text(c.owner)}`),
+    'channel'
+  );
+  assert.equal(channels.length, 0, 'This application registers no channels');
+  const spots = array(s.spots).map(object);
+  unique(
+    spots.map((n) => text(n.id)),
+    'Spot ID'
+  );
+  // These roles explicitly register the shared Entry and first-admission handlers.
+  const applicationEntryRoles = new Set(['lobby', 'instance']);
+  const entryOwners = new Set<string>();
+  for (const spot of spots) {
+    const host = owner(spot.owner);
+    assert(host.role === 'lobby' || host.role === 'instance', 'Invalid Spot host');
+    if (spot.kind === 'entry') {
+      assert(!entryOwners.has(text(spot.owner)), 'Duplicate Entry owner');
+      entryOwners.add(text(spot.owner));
+      assert.equal(spot.type, null);
+      assert(!('dynamic' in spot) && !('logicalId' in spot));
+    } else {
+      assert.equal(spot.kind, 'user');
+      assert([Names.party, Names.dungeon].includes(text(spot.type) as typeof Names.party));
+      assert.equal(host.role, spot.type === Names.party ? 'lobby' : 'instance');
+      assert.equal(spot.dynamic, true, 'Expected dynamic User Spot family');
+      assert(!('logicalId' in spot), 'Dynamic Spot family must omit logicalId');
+    }
+  }
+  assert.deepEqual(
+    entryOwners,
+    new Set(nodes.filter((n) => applicationEntryRoles.has(text(n.role))).map((n) => text(n.id))),
+    'Entry owners differ from application Entry registrations'
+  );
+  for (const type of [Names.party, Names.dungeon])
+    assert(
+      spots.some((s) => s.type === type),
+      `Missing ${type} type`
+    );
+  for (const node of nodes.filter((n) => n.role === 'instance')) {
+    const cfg = object(JSON.parse(readFileSync(text(node.config), 'utf8')));
+    assert(
+      Number.isSafeInteger(cfg.dungeonCapacity) && Number(cfg.dungeonCapacity) > 0,
+      'Invalid Dungeon capacity'
+    );
+  }
+  for (const edge of array(s.edges).map(object)) {
+    owner(edge.from);
+    owner(edge.to);
+    text(edge.label);
+    if (edge.semantic !== undefined) text(edge.semantic);
+  }
+  console.log('Structure: valid');
+}

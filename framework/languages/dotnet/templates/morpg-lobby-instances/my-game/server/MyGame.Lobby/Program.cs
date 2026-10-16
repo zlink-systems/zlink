@@ -1,0 +1,37 @@
+using Microsoft.Extensions.Hosting;
+using MyGame.Lobby;
+using MyGame.Shared;
+using Zlink.Framework.Contracts.Configuration;
+
+var settings = NodeSettings.Load(args);
+var builder = Host.CreateApplicationBuilder();
+GameHosting.Configure(
+    builder,
+    settings,
+    options =>
+    {
+        options.AddHandlersFromAssemblyOf<PartySpot>();
+        options.AddHandlersFromAssemblyOf<LobbyEntry>();
+        options
+            .AddRouteMesh(GameNames.WorldMesh)
+            .SetRoutingIdPrefix(settings.Id)
+            .Listen(settings.MeshEndpoint)
+            .Objects()
+            .Server()
+            .AddEntrySpot<LobbyEntry>()
+            .AddActorFactory<PlayerActor, PlayerFactory>(
+                GameNames.PlayerType,
+                factory => factory.PreserveStateWith<PlayerRelocation>()
+            )
+            .AddSpotFactory<PartySpot>(
+                GameNames.PartyType,
+                factory =>
+                    factory
+                        .StableTypeLimit(settings.PartyCapacity)
+                        .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
+                        .PreserveStateWith<PartyRelocation>()
+            );
+    }
+);
+using var host = builder.Build();
+await NodeControl.RunAsync(host, settings);
