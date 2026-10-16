@@ -1,6 +1,7 @@
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
+import { ZLinkDescriptorPublicationUnconfirmedError } from '../locations/descriptor-publication';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -1426,7 +1427,6 @@ export class ZLinkFrameworkRuntimeHost
     let spotNodeRuntime: ZLinkSpotNodeRuntimeManager | undefined;
     let streamRuntime: ZLinkStreamRuntimeManager | undefined;
     let startedLocationRuntime: ZLinkLocationRuntime | undefined;
-    let statefulAuthorityRoutes: ZLinkStatefulAuthorityRouteRuntime | undefined;
     try {
       this.executionState = new ZLinkFrameworkExecutionState(context);
       // Seed the shared live-mode cell from the configured mode (default errorsOnly).
@@ -1468,18 +1468,23 @@ export class ZLinkFrameworkRuntimeHost
       }
       const locationStore = this.locationOwner.currentStores?.locationStore;
       if (locationStore !== undefined && locationRuntime?.ownerLeaseUsable !== false) {
-        await spotNodeRuntime.publishMeshNodeState(
-          ZLinkFrameworkRuntimeState.Preparing,
-          this.executionState.abortController.signal
+        const published = await this.publishOrStayPreparing(
+          locationRuntime,
+          async (publishSignal) => {
+            await spotNodeRuntime!.startLocationAutoConnect(publishSignal);
+            await channelRuntime!.startLocationAutoConnect(publishSignal);
+            await spotNodeRuntime!.publishMeshNodeState(
+              ZLinkFrameworkRuntimeState.Preparing,
+              publishSignal
+            );
+          }
         );
-        if (this.requiresStatefulAuthorityRuntime()) {
-          this.installLocationBackedAuthorities(locationStore, spotNodeRuntime);
-          statefulAuthorityRoutes = this.createStatefulAuthorityRoutes(
+        if (published) {
+          await this.startStatefulAuthority(
             locationStore,
-            spotNodeRuntime
+            spotNodeRuntime,
+            this.executionState.abortController.signal
           );
-          await statefulAuthorityRoutes.start(this.executionState.abortController.signal);
-          this.statefulAuthorityRoutes = statefulAuthorityRoutes;
         }
       }
       streamRuntime = new ZLinkStreamRuntimeManager({
@@ -1505,12 +1510,14 @@ export class ZLinkFrameworkRuntimeHost
       // Location runtime §5: a host without an owner lease stays Preparing;
       // owner lease recovery enters Serving once it publishes descriptors.
       if (locationRuntime === undefined || locationRuntime.ownerLeaseUsable) {
-        await this.enterServing(spotNodeRuntime, this.executionState.abortController.signal);
+        await this.publishOrStayPreparing(locationRuntime, (publishSignal) =>
+          this.enterServing(spotNodeRuntime!, publishSignal)
+        );
       }
       this.lifecycleSink?.push('framework:started');
     } catch (error) {
       if (this.shutdownDeadline !== undefined && isAbortError(error)) throw error;
-      await statefulAuthorityRoutes?.stop();
+      await this.statefulAuthorityRoutes?.stop();
       try {
         await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
           rollbackRuntimeStart({
@@ -1661,15 +1668,8 @@ export class ZLinkFrameworkRuntimeHost
     const signal = this.executionState?.abortController.signal;
     await spotNodeRuntime.publishMeshNodeState(ZLinkFrameworkRuntimeState.Preparing, signal);
     const store = this.locationOwner.currentStores?.locationStore;
-    if (
-      this.statefulAuthorityRoutes === undefined &&
-      store !== undefined &&
-      this.executionState !== undefined &&
-      this.requiresStatefulAuthorityRuntime()
-    ) {
-      const routes = this.createStatefulAuthorityRoutes(store, spotNodeRuntime);
-      await routes.start(signal);
-      this.statefulAuthorityRoutes = routes;
+    if (store !== undefined && this.executionState !== undefined) {
+      await this.startStatefulAuthority(store, spotNodeRuntime, signal);
     }
     if (runtime.ownerLeaseUsable === false) return;
     if (this.runtimeState !== ZLinkFrameworkRuntimeState.Preparing) {
@@ -1693,6 +1693,45 @@ export class ZLinkFrameworkRuntimeHost
     await spotNodeRuntime.publishMeshNodeState(ZLinkFrameworkRuntimeState.Serving, signal);
     this.routeMeshCoordinator.markServing();
     this.setRuntimeState(ZLinkFrameworkRuntimeState.Serving);
+  }
+
+  // Location runtime §5: a startup publication the Store does not confirm (a
+  // provider error, or no answer within the renew timeout) leaves the host in
+  // Preparing. Closing owner admission makes the next renew run the same owner
+  // lease recovery as for a host without a lease; only a settled rejection
+  // fails startup.
+  private async publishOrStayPreparing(
+    runtime: ZLinkLocationRuntime | undefined,
+    publish: (signal: AbortSignal | undefined) => Promise<void>
+  ): Promise<boolean> {
+    const signal = this.executionState?.abortController.signal;
+    try {
+      await publish(signal);
+      return true;
+    } catch (error) {
+      if (runtime === undefined || !(error instanceof ZLinkDescriptorPublicationUnconfirmedError))
+        throw error;
+      runtime.closeOwnerLeaseAdmission(error);
+      this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+        'startup descriptor publication',
+        error
+      );
+      return false;
+    }
+  }
+
+  private async startStatefulAuthority(
+    locationStore: import('../locations/domain-store-contract').ZLinkDomainLocationStore,
+    spotNodeRuntime: ZLinkSpotNodeRuntimeManager,
+    signal: AbortSignal | undefined
+  ): Promise<void> {
+    if (this.statefulAuthorityRoutes !== undefined || !this.requiresStatefulAuthorityRuntime()) {
+      return;
+    }
+    this.installLocationBackedAuthorities(locationStore, spotNodeRuntime);
+    const routes = this.createStatefulAuthorityRoutes(locationStore, spotNodeRuntime);
+    await routes.start(signal);
+    this.statefulAuthorityRoutes = routes;
   }
 
   private createStatefulAuthorityRoutes(
