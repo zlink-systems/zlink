@@ -240,9 +240,9 @@ interface ZLinkHostRelocationOptions {
     receiveSeal(
       value: ServiceSessionRelocationSeal,
       signal?: AbortSignal
-    ): Promise<ServiceSessionRelocationSealed>;
+    ): Promise<ServiceSessionRelocationSealed | undefined>;
     receiveRoute(value: ServiceSessionRelocationRoute): Promise<void>;
-    clear?(): void;
+    clear?(): void | Promise<void>;
   };
   readonly trackInstanceSpot?: (input: ZLinkTrackedInstanceAuthority) => void;
   readonly invalidateActorRoute?: (actorId: string) => void;
@@ -370,9 +370,8 @@ interface PendingSessionRelocation {
 
 interface TerminalSessionRelocationControl {
   readonly targetNodeRid: string;
-  readonly request: ServiceSessionRelocationSeal;
   readonly requestFingerprint: string;
-  readonly responseFingerprint: string;
+  readonly response: ServiceSessionRelocationSealed;
 }
 
 /** Production host bridge from Retire inventory to remote RouteMesh owners. */
@@ -568,7 +567,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     this.failedSessionRouteSubmits.clear();
     this.sourceActorJoinProfiles.clear();
     this.terminalActorJoinSourceLeaves.clear();
-    this.options.boundSessionRelocation?.clear?.();
+    await this.options.boundSessionRelocation?.clear?.();
     this.relocationAuthorityKeys.clear();
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Relocation runtime stop failed.');
@@ -869,11 +868,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         record.sourceNodeRid,
         signal
       );
-      await this.sendSessionRelocationResponse(
-        meshName,
-        record.sourceNodeRid,
-        encodeSessionRelocationSealed(response)
-      );
+      if (response !== undefined) {
+        await this.sendSessionRelocationResponse(
+          meshName,
+          record.sourceNodeRid,
+          encodeSessionRelocationSealed(response)
+        );
+      }
       return true;
     }
     if (command === M6bServiceWireCommand.sessionRelocationRoute) {
@@ -1205,6 +1206,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         );
       }
       this.terminalSessionRelocations.touch(key);
+      return Promise.resolve(terminal.response);
     }
     const existing = this.pendingSessionRelocations.get(key);
     if (existing !== undefined) {
@@ -1276,7 +1278,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             localRid,
             signal
           );
-          pending.resolve(response);
+          if (response !== undefined) pending.resolve(response);
         } catch (error) {
           pending.reject(error);
         }
@@ -1327,9 +1329,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         finish(() => {
           this.terminalSessionRelocations.remember(key, {
             targetNodeRid: expectedTarget,
-            request,
             requestFingerprint,
-            responseFingerprint: sessionRelocationResponseFingerprint(response)
+            response
           });
           resolvePromise(response);
         }),
@@ -1375,18 +1376,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (pending === undefined) {
       const terminal = this.terminalSessionRelocations.get(key);
       if (terminal === undefined) return;
-      if (
-        sourceNodeRid === null ||
-        encodeRoutingIdStorageHex(sourceNodeRid) !== terminal.targetNodeRid
-      ) {
-        throw new ServiceWireProtocolError(`Session relocation ACK '${key}' source node changed.`);
-      }
-      validateSessionRelocationResponse(terminal.request, response);
-      if (sessionRelocationResponseFingerprint(response) !== terminal.responseFingerprint) {
-        throw new ServiceWireProtocolError(
-          `Session relocation ACK '${key}' repeated with different bytes.`
-        );
-      }
+      // Session–Actor binding §8.3: the first command 43 is final for this participant.
       this.terminalSessionRelocations.touch(key);
       return;
     }
@@ -1431,7 +1421,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     request: ServiceSessionRelocationSeal,
     sourceNodeRid: RoutingId | null,
     signal?: AbortSignal
-  ): Promise<ServiceSessionRelocationSealed> {
+  ): Promise<ServiceSessionRelocationSealed | undefined> {
     if (
       sourceNodeRid === null ||
       !routingIdsEqual(sourceNodeRid, request.coordinator.nodeRid) ||
@@ -5889,10 +5879,6 @@ function sessionRelocationRouteSubmitKey(
 
 function sessionRelocationResponseKey(response: ServiceSessionRelocationSealed): string {
   return sessionRelocationIdentityKey(response);
-}
-
-function sessionRelocationResponseFingerprint(response: ServiceSessionRelocationSealed): string {
-  return encodeSessionRelocationSealed(response).toString('base64');
 }
 
 function sessionRelocationIdentityKey(
