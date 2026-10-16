@@ -1,6 +1,8 @@
 package MyGame.instance;
 
 import MyGame.*;
+import MyGame.admission.EnterWorld;
+import MyGame.admission.Entry;
 
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
