@@ -792,12 +792,14 @@ request started, the Framework re-reads the same key to confirm the result, as i
 and that confirmation also stays within the same renew timeout. A host that has not
 confirmed its lease by the renew timeout finishes startup as a host without a deadline:
 it blocks every target above, keeps claiming at each renew interval, and once it holds
-the lease computes the deadline and publishes descriptors as after a first renewal. A host
-can't take new application work before it confirms its descriptor publication, so its host state
-is [`Preparing`](05-host-relocation-flow.en.md#3-host-state-and-completion-results) until then,
-and `Serving` after that. If a descriptor publication after the lease is held isn't stored even
-after the §10 confirmation, that isn't a startup error: the host finishes startup as `Preparing`
-and retries the publication at each renew interval. The
+the lease computes the deadline and publishes descriptors as after a first renewal. A confirmed
+descriptor publication is required for `Serving`: the host stays
+[`Preparing`](05-host-relocation-flow.en.md#3-host-state-and-completion-results) until it confirms
+the publication, and its move to `Serving` follows the readiness conditions in that section. If,
+after the lease is held, a timeout or provider error leaves the publication result unknown, the
+host confirms it again as in §10; if it still can't confirm it, the host finishes startup as
+`Preparing` and retries the publication at each renew interval. A definite rejection because
+another owner holds the row is a startup error. The
 claim results `Conflict` and `GenerationExhausted` are startup errors. If the caller
 cancels startup, startup ends as cancelled; this rule does not turn it into a success.
 A claim that already started is confirmed by re-reading the same key as in §10; a
