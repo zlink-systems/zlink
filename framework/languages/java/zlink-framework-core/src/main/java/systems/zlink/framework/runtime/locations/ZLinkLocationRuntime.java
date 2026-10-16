@@ -652,6 +652,16 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                         : CompletableFuture.failedFuture(failure));
     }
 
+    /**
+     * Bounds the complete descriptor repository operation, including confirmation reads, by the
+     * existing renew timeout. The Store stage and its input remain alive after the caller's
+     * deadline; only this wait completes, so late Store results can finish normally.
+     */
+    public <T> CompletionStage<T> writeDescriptor(Supplier<CompletionStage<T>> write) {
+        return withinDeadline(
+                write, saturatingAdd(monotonicNow.getAsLong(), ownerLeaseRenewTimeout.toNanos()));
+    }
+
     private <T> CompletionStage<T> withinDeadline(
             CompletionStage<T> operation, long deadlineNanos) {
         long remainingNanos = deadlineNanos - monotonicNow.getAsLong();

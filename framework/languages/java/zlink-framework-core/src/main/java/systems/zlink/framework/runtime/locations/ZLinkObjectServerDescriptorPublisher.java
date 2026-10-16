@@ -19,6 +19,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -72,7 +73,10 @@ public final class ZLinkObjectServerDescriptorPublisher {
         for (ZLinkMeshNodeDescriptor descriptor : descriptors) {
             writes.add(
                     CompletableFuture.completedFuture(null)
-                            .thenCompose(ignored -> store.updateMeshNode(descriptor, intent))
+                            .thenCompose(
+                                    ignored ->
+                                            runtime.writeDescriptor(
+                                                    () -> store.updateMeshNode(descriptor, intent)))
                             .thenAccept(
                                     result -> {
                                         if (result.status() != ZLinkLocationWriteStatus.STORED) {
@@ -227,6 +231,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                     continue;
                                 }
                                 if (failure instanceof UnconfirmedPublicationException
+                                        || failure instanceof TimeoutException
                                         || failure
                                                         instanceof
                                                         ZLinkFrameworkException frameworkFailure
