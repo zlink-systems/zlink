@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.internal.dispatch;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -10,6 +12,8 @@ import java.util.Optional;
  */
 public final class ZLinkApplicationJobContext {
     private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
+    // Restores an empty context; shared because it captures nothing.
+    private static final Scope CLEAR = CURRENT::remove;
 
     private ZLinkApplicationJobContext() {}
 
@@ -72,21 +76,16 @@ public final class ZLinkApplicationJobContext {
     public static void beforeFirstApplicationInstruction() {
         State state = CURRENT.get();
         if (state != null) {
+            QueuedOwnership ownership = state.ownership;
             state.ownership = null;
-            state.permit.handlerStarted();
+            if (ownership != null) ownership.close();
         }
     }
 
     private static Scope enter(State next) {
         State previous = CURRENT.get();
         CURRENT.set(next);
-        return () -> {
-            if (previous == null) {
-                CURRENT.remove();
-            } else {
-                CURRENT.set(previous);
-            }
-        };
+        return previous == null ? CLEAR : () -> CURRENT.set(previous);
     }
 
     @FunctionalInterface
@@ -97,22 +96,31 @@ public final class ZLinkApplicationJobContext {
 
     /** One queue/executor boundary's exact ownership of a queued permit. */
     public static final class QueuedOwnership implements AutoCloseable {
+        private static final VarHandle HANDED_OFF;
+
+        static {
+            try {
+                HANDED_OFF =
+                        MethodHandles.lookup()
+                                .findVarHandle(QueuedOwnership.class, "handedOff", boolean.class);
+            } catch (ReflectiveOperationException failure) {
+                throw new ExceptionInInitializerError(failure);
+            }
+        }
+
         private final ZLinkApplicationJobQueue.Permit permit;
-        private boolean handedOff;
+        // C3 flag: set exactly once, by the handoff or the close that wins it.
+        private volatile boolean handedOff;
 
         private QueuedOwnership(ZLinkApplicationJobQueue.Permit permit) {
             this.permit = permit;
         }
 
-        private synchronized boolean handoff() {
-            if (handedOff) {
-                return false;
-            }
-            handedOff = true;
-            return true;
+        private boolean handoff() {
+            return HANDED_OFF.compareAndSet(this, false, true);
         }
 
-        private synchronized boolean canHandoff() {
+        private boolean canHandoff() {
             return !handedOff;
         }
 
@@ -123,12 +131,7 @@ public final class ZLinkApplicationJobContext {
 
         @Override
         public void close() {
-            boolean release;
-            synchronized (this) {
-                release = !handedOff;
-                handedOff = true;
-            }
-            if (release) {
+            if (HANDED_OFF.compareAndSet(this, false, true)) {
                 permit.close();
             }
         }

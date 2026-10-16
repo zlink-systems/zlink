@@ -210,7 +210,7 @@ export interface ZLinkMeshObjectClientBuilder {
 }
 
 export interface ZLinkMeshObjectServerBuilder {
- addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>): this;
+ addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>, actorType: string): this;
  addSpotFactory<TSpot extends ZLinkSpot>(
  spotType: string,
  implementation: Type<TSpot>,
@@ -267,6 +267,8 @@ export interface ZLinkCodecRegistryBuilder {
 }
 ```
 
+The `actorType` of `addEntrySpot` is the Actor stable type that Entry Spot type accepts, named the same way as the `actorType` of `addActorFactory`. The TypeScript Actor type argument doesn't survive at run time, so Node.js learns the accepted type from this value. [Actor model §6.3](../../../03-spot-actor/04-actor-model.en.md#63-selecting-mesh-and-placement-target) owns new-Actor candidate selection.
+
 The codec registrar's `contentType` takes a parameter-free ASCII `type/subtype`. At
 startup, the registry removes leading and trailing SP and TAB and converts ASCII uppercase
 letters to lowercase. The result is the canonical content type used as the registry key.
@@ -294,7 +296,8 @@ The receive path performs an serializer lookup using the canonical content type 
 the wire. An unregistered or noncanonical value isn't reinterpreted as JSON and completes
 with `ZLinkFrameworkErrorKind.ProtocolError`.
 
-Entry Spot registration only takes the implementation type. The Entry
+Entry Spot registration only takes the implementation type and the Actor stable
+type that Entry Spot accepts. The Entry
 Spot's `SpotId` is issued by the framework in the format
 `<prefix>-entry-<lowercase-canonical-uuid-v4>`. An option for the
 caller to specify a fixed `RoutingId` or `SpotId` isn't provided.

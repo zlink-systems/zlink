@@ -19,6 +19,86 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkHandlerInstanceOwnerTest {
     @Test
+    void concurrentCloseWaitsForTheOneActivationCleanup() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var cleanupCalls = new AtomicInteger();
+        var activator =
+                new ZLinkHandlerActivator() {
+                    @Override
+                    public Object create(Class<?> type) {
+                        return new TestHandler();
+                    }
+
+                    @Override
+                    public Activation openActivation() {
+                        return new Activation() {
+                            @Override
+                            public Object create(Class<?> type) {
+                                return new TestHandler();
+                            }
+
+                            @Override
+                            public void destroy(Object instance) {}
+
+                            @Override
+                            public void close() {
+                                if (cleanupCalls.incrementAndGet() != 1) return;
+                                entered.countDown();
+                                try {
+                                    assertTrue(release.await(3, TimeUnit.SECONDS));
+                                } catch (InterruptedException failure) {
+                                    Thread.currentThread().interrupt();
+                                    throw new AssertionError(failure);
+                                }
+                            }
+                        };
+                    }
+                };
+        var owner = new ZLinkHandlerInstanceOwner(activator);
+        owner.instance(TestHandler.class);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var first = executor.submit(owner::close);
+            try {
+                assertTrue(entered.await(3, TimeUnit.SECONDS));
+                var second = executor.submit(owner::close);
+                assertThrows(
+                        java.util.concurrent.TimeoutException.class,
+                        () -> second.get(100, TimeUnit.MILLISECONDS));
+                release.countDown();
+                first.get(3, TimeUnit.SECONDS);
+                second.get(3, TimeUnit.SECONDS);
+                assertEquals(1, cleanupCalls.get());
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    @Test
+    void unusedDispatchDoesNotOpenAnActivation() {
+        AtomicInteger opened = new AtomicInteger();
+        var activator =
+                new ZLinkHandlerActivator() {
+                    @Override
+                    public Object create(Class<?> type) {
+                        return new TestHandler();
+                    }
+
+                    @Override
+                    public Activation openActivation() {
+                        opened.incrementAndGet();
+                        return ZLinkHandlerActivator.super.openActivation();
+                    }
+                };
+        try (var owner = new ZLinkHandlerInstanceOwner(activator)) {
+            owner.prepare(TestHandler.class);
+            assertEquals(0, opened.get());
+        }
+        assertEquals(0, opened.get());
+    }
+
+    @Test
     void activationRunsOnTheCallingHandlerTurn() {
         Thread handlerThread = Thread.currentThread();
         AtomicReference<Thread> activationThread = new AtomicReference<>();

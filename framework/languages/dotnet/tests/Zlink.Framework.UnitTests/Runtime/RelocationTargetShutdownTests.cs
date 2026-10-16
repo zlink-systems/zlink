@@ -58,6 +58,83 @@ public sealed partial class RelocationBehaviorConformanceTests
         );
     }
 
+    // Host relocation flow 05 result table: a target whose Shutdown admission
+    // seal is closed rejects the canonical PREPARE before any relay-ready reply.
+    // That is an explicit Restore refusal (RelocationFailed), not a Store failure,
+    // and the source workload is restored.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Source_relocate_to_shutdown_sealed_target_blocks_with_relocation_failed(
+        bool spot
+    )
+    {
+        var trace = new RelocationBehaviorTrace();
+        trace.ReleaseJoinHandler.TrySetResult();
+        trace.ReleaseTargetLifecycle.TrySetResult();
+        trace.ReleaseSourceLeave.TrySetResult();
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var roots = new SynchronizedRelocationStore();
+        var objectId = $"sealed-{Guid.NewGuid():N}";
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            store,
+            roots,
+            spot,
+            relocateSpots: spot
+        );
+        if (spot)
+            _ = await source
+                .Services.GetRequiredService<IZLinkSpotManager>()
+                .GetOrCreate(objectId, RelocationBehaviorHost.SpotType)
+                .InMesh(RelocationBehaviorHost.MeshName)
+                .Request(ZLinkMessage.Empty)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .Async();
+        else
+            _ = await source
+                .Services.GetRequiredService<IZLinkActorManager>()
+                .GetOrCreate(objectId, RelocationBehaviorHost.ActorType)
+                .InMesh(RelocationBehaviorHost.MeshName)
+                .Request(new BehaviorCreate(7))
+                .Timeout(TimeSpan.FromSeconds(10))
+                .Async();
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            store,
+            roots,
+            spot,
+            relocateSpots: spot
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
+        target.Runtime.DrainAdmission.ClaimShutdown();
+
+        var result = await source
+            .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+            .RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                    Deadline = TimeSpan.FromSeconds(10),
+                },
+                CancellationToken.None
+            );
+
+        Assert.Equal(ZLinkFrameworkRelocationOutcome.Blocked, result.Outcome);
+        Assert.Equal(ZLinkFrameworkRelocationReason.RelocationFailed, result.Reason);
+    }
+
     // Common relocation §4.4 and Location runtime §10: the owner orders seal
     // against verification, including a successful CAS whose response is lost.
     [Theory]

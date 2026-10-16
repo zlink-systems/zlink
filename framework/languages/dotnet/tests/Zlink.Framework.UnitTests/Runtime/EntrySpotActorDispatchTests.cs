@@ -358,7 +358,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.EnsureKnownRouteMeshPeer(
                     "entry",
                     RoutingId.From("remote-node"),
-                    "SPOT 'remote'"
+                    "SPOT",
+                    "remote"
                 )
             );
 
@@ -389,7 +390,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime.EnsureKnownRouteMeshPeer(
                     "entry",
                     RoutingId.From("remote-node"),
-                    "SPOT 'remote'"
+                    "SPOT",
+                    "remote"
                 )
             );
 
@@ -431,7 +433,7 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         try
         {
-            runtime.EnsureKnownRouteMeshPeer("entry", targetRid, "packet 'GetNodeStatus'");
+            runtime.EnsureKnownRouteMeshPeer("entry", targetRid, "packet", "GetNodeStatus");
             Assert.Equal(0, node.MeshPeerSnapshotReads);
         }
         finally
@@ -2668,6 +2670,82 @@ public sealed partial class EntrySpotActorDispatchTests
         finally
         {
             runtime.GetOrCreateActorState(actorRef.ActorId).Handoff.AbortCapture();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(40ul, 51ul, (byte)1)]
+    [InlineData(41ul, 50ul, (byte)1)]
+    [InlineData(41ul, 51ul, (byte)0)]
+    [InlineData(41ul, 51ul, (byte)9)]
+    public async Task RemoteActorFrameReceiver_RejectsInvalidOrdinaryDirectRelayFence(
+        ulong authorityGeneration,
+        ulong ownerLeaseGeneration,
+        byte hopCount
+    )
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            RegisterProbeActor(runtime, actorRef);
+            var relayNode = RoutingId.From("relay-source-node");
+            node.AdmittedMeshPeers.Add(
+                new MeshNodePeer(
+                    1,
+                    MeshPeerSource.Discovery,
+                    MeshPeerState.Admitted,
+                    relayNode,
+                    61,
+                    1,
+                    "inproc://relay-source-node",
+                    1,
+                    0,
+                    1
+                )
+            );
+            node.SetLocalActorAuthorityFence(actorRef, 41, 51);
+            var source = new ZLinkServiceWireCodec.RequestSourceFence(
+                "caller-owner",
+                71,
+                RoutingId.From("caller-node"),
+                72
+            );
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                runtime
+                    .DispatchRemoteActorFrameAsync(
+                        actorRef.ActorId,
+                        actorRef.Generation,
+                        actorRef.NodeRid,
+                        1,
+                        authorityGeneration,
+                        ownerLeaseGeneration,
+                        relayNode,
+                        relayNode,
+                        61,
+                        source.NodeRid,
+                        source.NodeGeneration,
+                        default,
+                        source,
+                        Array.Empty<byte>(),
+                        new MeshOperationId(81, 82),
+                        hopCount,
+                        83,
+                        1,
+                        "reply-capability",
+                        0,
+                        ZLinkStreamProtocolDefaults.EncodeHeader(CreateHeader("request")).ToArray(),
+                        Encoding.UTF8.GetBytes("payload"),
+                        CancellationToken.None
+                    )
+                    .AsTask()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            Assert.Contains("direct relay", failure.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
             await runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -7907,7 +7985,12 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task Retained_BoundSession_Preserves_The_Ambient_Lifecycle_Flow()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        // Flow-correlation §4: flow IDs are carried only while message-flow
+        // tracing is on, at Normal or Detailed.
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
         try
         {
             runtime.GetOrCreateActorState(actor.ActorId).BindNativeActorRef(actor);
@@ -9645,7 +9728,12 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         const string flowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        // Flow-correlation §4: flow IDs are carried only while message-flow
+        // tracing is on, at Normal or Detailed.
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);

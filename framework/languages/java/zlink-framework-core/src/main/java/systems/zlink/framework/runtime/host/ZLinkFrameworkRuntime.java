@@ -2115,7 +2115,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 drained.complete(new InternalDrained());
                             }
                             if (failure != null) {
-                                publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
+                                if (!drainStarted.get()) {
+                                    publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
+                                }
                             } else if (!drainStarted.get()) {
                                 publishRuntimeState(ZLinkFrameworkRuntimeState.STOPPED);
                             } else if (activeTermination.get() == null) {
@@ -2398,11 +2400,15 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         traceDrainStage("owner_cleanup", closeAsync())
                 .whenComplete(
                         (ignored, failure) -> {
-                            if (failure == null) {
+                            if (failure == null
+                                    && Instant.now().isBefore(terminationDeadline.get())) {
                                 drained.complete(new InternalDrained());
                             } else {
                                 completeForcedStop(
-                                        InternalDrainForceReason.OWNER_CLEANUP_FAILED, failure);
+                                        failure == null
+                                                ? InternalDrainForceReason.DEADLINE_EXCEEDED
+                                                : InternalDrainForceReason.OWNER_CLEANUP_FAILED,
+                                        failure);
                             }
                         });
     }
@@ -2445,7 +2451,16 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private void completeForcedStop(InternalDrainForceReason reason, Throwable failure) {
-        drained.complete(new InternalForceStopped(reason, failure));
+        Throwable cause = unwrapCompletionFailure(failure);
+        if (cause instanceof ZLinkFrameworkShutdown.Failure staged) {
+            cause = unwrapCompletionFailure(staged.getCause());
+        }
+        drained.complete(
+                new InternalForceStopped(
+                        cause instanceof TimeoutException
+                                ? InternalDrainForceReason.DEADLINE_EXCEEDED
+                                : reason,
+                        failure));
     }
 
     private void closeHandlerExecutor() {

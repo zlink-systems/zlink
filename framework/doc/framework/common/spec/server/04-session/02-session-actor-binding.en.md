@@ -497,6 +497,16 @@ doesn't iterate bound Actors itself. The framework verifies the route and
 generation stored in the binding and delivers the notification to the
 Actor queue, without querying the Location Store in this process either.
 
+The notification carries its binding's identity. The body of packet
+`zlink.framework.actor.session_disconnected` holds three values in this order: the length of the
+Session owner Node RID (u8, 1–255) followed by its bytes, the Session owner lifecycle generation
+(u64 big-endian), and the binding generation (u64 big-endian). A notification can arrive through
+another node by Message Follow, so the Actor owner reads the identity from the body, not from the
+transport source. In the Actor's turn, the Actor owner compares this identity with the current
+binding: it drops the notification when a different current binding exists, and runs the callback
+when there is no current binding or the binding is the same one. A body in any other form drops the
+notification with a `ProtocolError` Warning.
+
 Even if one Actor's submission or callback fails, the framework uses an
 all-settled rule that continues notifying the remaining Actors and session
 cleanup. When the automatic notification and a public
@@ -610,6 +620,14 @@ the failure is recorded once in that message's flow
 ([Message-Flow Tracing §6](../06-observability/03-message-flow-tracing.en.md#6-completion-failure-and-lifetime)).
 
 The Restore, relay, cutover, CAS, and queue-merge order follows [common relocation §4](../05-location-relocation/04-relocation-flow.en.md#4-normal-processing-order). The Session seal and route transition here follow the validation values above and timeout rule below.
+
+When installing a seal for command 42, if the target node carried in command 42 (`targetNodeRid` and
+`targetNodeGeneration`) is not the Session owner itself, the Session owner checks whether a
+[ready](../00-foundation/02-glossary.en.md#ready) route exists to that node and, if not, asks its auto-connect owner to reconcile that peer
+immediately ([MeshNode §7.1](../03-spot-actor/03-mesh-node.en.md#71-peer-connection)). This request
+doesn't make the seal result or command 43 wait. Together with the target-side preparation,
+[relocation §4.3](../05-location-relocation/04-relocation-flow.en.md#43-restore-the-target-without-running-it)
+gets the route ready before the target is ready to receive relay.
 
 The Session owner applies a configurable `SessionRelocationSealTimeout`
 from the moment the seal is installed. Its default is 3,000 ms and can be
@@ -770,8 +788,7 @@ notification may not have reached the Actor yet. De-duplication of notifications
 callback at most once remain owned by §7's Session owner per binding identity. The notification is
 handled like an ordinary Actor message. If the source accepted it before capture, it moves to the
 target as saved work; if it arrives after capture, Message Follow forwards it to the target. The
-Actor owner drops a notification when a current binding other than the notification's binding
-identity exists, and runs the callback when there is no current binding. The coordinator never
+Actor owner judges the notification by §7's identity comparison. The coordinator never
 creates or resubmits a disconnect notification.
 
 **Failure.** If command 42 is rejected as a mismatch or the seal wait reaches its deadline, the
@@ -1053,6 +1070,10 @@ here.
   membership stays the same.
 - When a client reconnects, the previous binding isn't restored and a new
   bind is required.
+- Even when the Session owner and the Actor owner use different languages, the
+  disconnect notification carries the same binding identity in §7's body form, and
+  the Actor owner runs the callback for the same binding and drops the notification
+  when a different current binding exists.
 
 **Actor relocation**
 

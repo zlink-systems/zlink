@@ -320,24 +320,39 @@ final class ZLinkJavaDurableRequestTest {
     @Test
     void admissionHistorySurvivesLaterSubmitFailures() throws Exception {
         AtomicInteger attempts = new AtomicInteger();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
         var last = new ZlinkSubmitException(SubmitResult.NOT_CONNECTED);
         List<byte[]> header = encode(Operation.ACTOR_CREATE);
-        var source = new Source();
+        // Both route observations finish before deadline registration. The fake clock then
+        // consumes the original budget in the second attempt, without waiting for a timer.
+        var source =
+                new Source(clock::get) {
+                    @Override
+                    AutoCloseable observe(Runnable signal) {
+                        var registration = super.observe(signal);
+                        route = new PeerRouteObservation(1, true);
+                        signal.run();
+                        return registration;
+                    }
+                };
         var completion =
                 source.request(
                         () -> header,
-                        (frames, remaining) ->
-                                CompletableFuture.failedFuture(
-                                        attempts.incrementAndGet() == 1
-                                                ? new ZlinkRequestException(
-                                                        RequestResult.NOT_CONNECTED)
-                                                : last),
+                        (frames, remaining) -> {
+                            if (attempts.incrementAndGet() == 1) {
+                                source.route = new PeerRouteObservation(1, false);
+                                return CompletableFuture.failedFuture(
+                                        new ZlinkRequestException(RequestResult.NOT_CONNECTED));
+                            }
+                            clock.addAndGet(remaining.toNanos());
+                            return CompletableFuture.failedFuture(last);
+                        },
                         () -> false,
                         Duration.ofMillis(80));
         source.signal();
         assertFailure(
                 completion.toCompletableFuture(), ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, last);
-        assertTrue(attempts.get() > 1);
+        assertEquals(2, attempts.get());
     }
 
     @Test
@@ -375,11 +390,12 @@ final class ZLinkJavaDurableRequestTest {
                                 () -> false,
                                 Duration.ofSeconds(5));
         pending.completeExceptionally(ZLinkJavaRawMeshNode.requestFailure(failure));
-        assertTrue(completion.toCompletableFuture().isDone());
+        // Caller publication follows the terminal owner's turn (state-ownership §5).
         assertFailure(
                 completion.toCompletableFuture(),
                 ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                 failure);
+        assertTrue(completion.toCompletableFuture().isDone());
         assertEquals(1, attempts.get(), "binding writable timeout is already terminal");
     }
 
@@ -559,7 +575,7 @@ final class ZLinkJavaDurableRequestTest {
                 completion.toCompletableFuture(), ZLinkFrameworkErrorKind.SHUTTING_DOWN, failure);
     }
 
-    private static final class Source {
+    private static class Source {
         volatile PeerRouteObservation route = new PeerRouteObservation(1, true);
         private final systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane =
                 new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane();

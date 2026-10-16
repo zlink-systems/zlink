@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.actors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -776,6 +777,113 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @Test
+    void closedSealRecordIgnoresTheSameCommand42WithoutReplyOrReseal() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor actor =
+                runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        var relocation = relocation();
+        var command42 = seal(relocation, 7, NODE_A, 9);
+        var first = runtime.applyRelocationSealCommand(command42).toCompletableFuture().join();
+        assertTrue(first.echoes(command42));
+        assertTrue(
+                runtime.applyRelocationSealCommand(command42)
+                        .toCompletableFuture()
+                        .join()
+                        .echoes(command42),
+                "an open sealed record answers the same command 42 again");
+
+        runtime.applyRelocationRouteCommand(abort(relocation)).toCompletableFuture().join();
+
+        assertNull(
+                runtime.applyRelocationSealCommand(command42).toCompletableFuture().join(),
+                "Session-Actor binding §8.3: a closed record is not answered");
+        relay(runtime, actor, "after-closed-duplicate").toCompletableFuture().join();
+        assertEquals(
+                "actor-1:after-closed-duplicate",
+                stream.relays.getLast(),
+                "the closed relocation's seal is not installed again");
+    }
+
+    @Test
+    void command42ThatChangesFieldsOfTheRecordedRelocationIsAProtocolError() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        var relocation = relocation();
+        runtime.applyRelocationSealCommand(seal(relocation, 7, NODE_A, 9))
+                .toCompletableFuture()
+                .join();
+
+        var changed = seal(relocation, NODE_A, 9, 4, BINDING_GENERATION + 1);
+        var failure =
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                runtime.applyRelocationSealCommand(changed)
+                                        .toCompletableFuture()
+                                        .join());
+        assertEquals(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        runtime.applyRelocationRouteCommand(abort(relocation)).toCompletableFuture().join();
+    }
+
+    @Test
+    void command42WithAnOlderOwnerLeaseThanTheCommittedRouteIsAMismatch() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        var moved = relocation();
+        runtime.applyRelocationSealCommand(seal(moved, 7, NODE_A, 9)).toCompletableFuture().join();
+        // The committed route stores the target OwnerLeaseGeneration 5.
+        runtime.applyRelocationRouteCommand(route(moved)).toCompletableFuture().join();
+
+        var stale =
+                seal(
+                        new ZLinkServiceM6BWireCodec.RelocationIdentity(8, 10),
+                        NODE_B,
+                        10,
+                        4,
+                        BINDING_GENERATION);
+        assertThrows(
+                CompletionException.class,
+                () -> runtime.applyRelocationSealCommand(stale).toCompletableFuture().join(),
+                "a command 42 fenced by an older owner lease belongs to a finished relocation");
+        var current =
+                seal(
+                        new ZLinkServiceM6BWireCodec.RelocationIdentity(8, 11),
+                        NODE_B,
+                        10,
+                        5,
+                        BINDING_GENERATION);
+        assertTrue(
+                runtime.applyRelocationSealCommand(current)
+                        .toCompletableFuture()
+                        .join()
+                        .echoes(current));
+    }
+
+    @Test
+    void theNextSealDeletesTheClosedRecordSoAnOldCommand42IsJudgedAgain() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        var first = relocation();
+        var firstSeal = seal(first, 7, NODE_A, 9);
+        runtime.applyRelocationSealCommand(firstSeal).toCompletableFuture().join();
+        runtime.applyRelocationRouteCommand(abort(first)).toCompletableFuture().join();
+        var second = new ZLinkServiceM6BWireCodec.RelocationIdentity(8, 12);
+        runtime.applyRelocationSealCommand(seal(second, 7, NODE_A, 9)).toCompletableFuture().join();
+
+        assertThrows(
+                CompletionException.class,
+                () -> runtime.applyRelocationSealCommand(firstSeal).toCompletableFuture().join(),
+                "the binding now carries another relocation's seal");
+        runtime.applyRelocationRouteCommand(abort(second)).toCompletableFuture().join();
+    }
+
+    @Test
     void exactSourceAbortReleasesHeldIngressWithoutReply() {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime = runtime(stream);
@@ -916,6 +1024,26 @@ final class ZLinkSessionActorBindingContractTest {
                         4),
                 new ZLinkServiceM6BWireCodec.SessionOwnerFence(
                         NODE_A, 3, "session-owner", 4, SESSION, BINDING_GENERATION));
+    }
+
+    private static ZLinkServiceM6BWireCodec.SessionRelocationSeal seal(
+            ZLinkServiceM6BWireCodec.RelocationIdentity relocation,
+            RoutingId actorNodeRid,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            long bindingGeneration) {
+        return new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+                relocation,
+                new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                        "coordinator", 2, actorNodeRid, 3, "store-v4"),
+                ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        new ZLinkBackendActorRef(actorNodeRid, "actor-1", 7),
+                        3,
+                        authorityOwnerGeneration,
+                        ownerLeaseGeneration),
+                new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                        NODE_A, 3, "session-owner", 4, SESSION, bindingGeneration));
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute route(

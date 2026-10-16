@@ -1,3 +1,5 @@
+import { ZLinkDescriptorPublicationUnconfirmedError } from './descriptor-publication';
+import { isIndeterminateLocationStoreFailure } from './location-store-failure';
 import { listAllMeshNodeDescriptors } from './location-store-pages';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
@@ -214,6 +216,19 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   get currentOwnerToken(): ZLinkLocationOwnerToken | undefined {
     return this.ownerToken;
+  }
+
+  /** Location runtime §5: a startup Store request ends within the renew timeout. */
+  async writeDescriptor<T>(
+    action: (signal?: AbortSignal) => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    try {
+      return await withTimeout(action, this.options.ownerLeaseRenewTimeoutMs, signal);
+    } catch (error) {
+      if (!isIndeterminateLocationStoreFailure(error, signal)) throw error;
+      throw new ZLinkDescriptorPublicationUnconfirmedError(error);
+    }
   }
 
   closeOwnerLeaseAdmission(error: unknown): void {
@@ -693,7 +708,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       updatedAt: new Date()
     };
     let result = await this.guardWrite(() =>
-      this.stores.locationStore.updateMeshNode(stamped, intent, signal)
+      this.writeDescriptor(
+        (writeSignal) => this.stores.locationStore.updateMeshNode(stamped, intent, writeSignal),
+        signal
+      )
     );
     if (
       intent === ZLinkLocationWriteIntent.Renew &&
@@ -705,7 +723,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       // NewClaim as a bounded fallback. If another owner has recreated the
       // row, NewClaim remains rejected and the caller keeps the conflict.
       result = await this.guardWrite(() =>
-        this.stores.locationStore.updateMeshNode(stamped, ZLinkLocationWriteIntent.NewClaim, signal)
+        this.writeDescriptor(
+          (writeSignal) =>
+            this.stores.locationStore.updateMeshNode(
+              stamped,
+              ZLinkLocationWriteIntent.NewClaim,
+              writeSignal
+            ),
+          signal
+        )
       );
     }
     this.notifyIfStale(

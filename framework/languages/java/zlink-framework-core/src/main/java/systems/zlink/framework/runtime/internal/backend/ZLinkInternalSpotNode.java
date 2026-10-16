@@ -8,6 +8,7 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferPrepare;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferToken;
 import systems.zlink.framework.runtime.internal.binding.spot.PrepareActorTransferResult;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
@@ -22,6 +23,11 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
+    /** Node-owned JVM source turn; backends without a separate owner use the selector turn. */
+    default ZLinkStateLane sourceTransportLane() {
+        return null;
+    }
+
     RoutingId routingId();
 
     void setRoutingId(RoutingId routingId);

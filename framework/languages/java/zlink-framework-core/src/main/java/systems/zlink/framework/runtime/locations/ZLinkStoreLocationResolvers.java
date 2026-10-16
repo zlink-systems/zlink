@@ -79,61 +79,6 @@ public final class ZLinkStoreLocationResolvers
                 .thenCompose(read -> resolveReadyActor(actorId, read));
     }
 
-    public CompletionStage<DirectJoinSessionFence> resolveDirectJoinSessionFence(
-            String actorId, RoutingId sessionOwnerNodeRid, RoutingId targetNodeRid) {
-        invalidateActorRoute(actorId);
-        return stores.unifiedStore()
-                .read(ZLinkAuthorityKeyCodec.actor(actorId), () -> false)
-                .thenCompose(
-                        read -> {
-                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "Actor authority is unavailable: " + actorId));
-                            }
-                            var authority =
-                                    actorAuthorityCodec
-                                            .decode(snapshot.payload())
-                                            .orElseThrow(
-                                                    () ->
-                                                            new IllegalStateException(
-                                                                    "Actor authority payload is"
-                                                                            + " invalid: "
-                                                                            + actorId));
-                            return listMeshNodes(authority.meshName())
-                                    .thenApply(
-                                            nodes ->
-                                                    new DirectJoinSessionFence(
-                                                            snapshot.storeVersion(),
-                                                            snapshot.authorityOwnerGeneration(),
-                                                            snapshot.ownerId(),
-                                                            snapshot.ownerLeaseGeneration(),
-                                                            requireNode(
-                                                                    nodes,
-                                                                    authority.nodeRid(),
-                                                                    "source Actor owner"),
-                                                            requireNode(
-                                                                    nodes,
-                                                                    sessionOwnerNodeRid,
-                                                                    "Session owner"),
-                                                            requireNode(
-                                                                    nodes,
-                                                                    targetNodeRid,
-                                                                    "target Actor owner")));
-                        });
-    }
-
-    private static ZLinkMeshNodeDescriptor requireNode(
-            List<ZLinkMeshNodeDescriptor> nodes, RoutingId rid, String role) {
-        return nodes.stream()
-                .filter(node -> node.rid().equals(rid))
-                .findFirst()
-                .orElseThrow(
-                        () ->
-                                new IllegalStateException(
-                                        role + " descriptor is unavailable: " + rid));
-    }
-
     @Override
     public CompletionStage<List<ZLinkAutoConnectPeer>> listPeers(
             ZLinkAutoConnectType type, String meshName, ZLinkLocationRole role) {
@@ -527,15 +472,6 @@ public final class ZLinkStoreLocationResolvers
             long targetNodeGeneration,
             long authorityOwnerGeneration,
             long ownerLeaseGeneration) {}
-
-    public record DirectJoinSessionFence(
-            String sourceAuthorityStoreVersion,
-            long sourceAuthorityOwnerGeneration,
-            String sourceAuthorityOwnerId,
-            long sourceAuthorityOwnerLeaseGeneration,
-            ZLinkMeshNodeDescriptor sourceActorOwner,
-            ZLinkMeshNodeDescriptor sessionOwner,
-            ZLinkMeshNodeDescriptor targetActorOwner) {}
 
     private record CachedRoute<V>(
             V value,

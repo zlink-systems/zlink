@@ -219,21 +219,6 @@ export class ZLinkSpotActorMembership {
     );
   }
 
-  async restoreActorAfterFailedTransfer(
-    spotId: RoutingId,
-    actor: ZLinkActor,
-    signal?: AbortSignal
-  ): Promise<void> {
-    throwIfAborted(signal);
-    const activation = this.requireActivation(spotId);
-    await this.runLifecycleOperation(activation, () =>
-      activation.serial.execute(async () => {
-        activation.cancelActorTransfer(actor.context.actorId);
-        await activation.spot.onJoinedActor(actor);
-      })
-    );
-  }
-
   async beginActorTransfer(spotId: RoutingId, actorId: string): Promise<void> {
     const activation = this.requireActivation(spotId);
     await this.runLifecycleOperation(activation, () =>
