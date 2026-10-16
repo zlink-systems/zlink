@@ -50,11 +50,8 @@ import {
   endpointConnections
 } from '../../contracts/Configuration/RuntimeEndpointConnections';
 import type { ApplicationJobQueue } from '../host/application-job-queue';
-import { AsyncResource } from 'node:async_hooks';
-import { ZLinkStateLane } from '../execution/state-lane';
+import { startOutsideStateLane, ZLinkStateLane } from '../execution/state-lane';
 import { ZLinkSerialExecutionQueue } from '../execution/serial-execution-queue';
-
-const detachedStateLaneResource = new AsyncResource('zlink:channel-runtime-lifecycle');
 
 interface ManualFanoutSubscriberState {
   readonly channelName: string;
@@ -1063,8 +1060,4 @@ function hasFanoutLocationTopology(registration: ZLinkFrameworkRegistration): bo
     }
   }
   return false;
-}
-
-function startOutsideStateLane<T>(work: () => T): T {
-  return detachedStateLaneResource.runInAsyncScope(work);
 }

@@ -1,4 +1,3 @@
-import { AsyncResource } from 'node:async_hooks';
 import type {
   ZLinkLocationRuntimeQuery,
   ZLinkLocationRuntimeStatus,
@@ -18,7 +17,7 @@ import type {
   ZLinkSpotLocation
 } from '../../contracts/Locations/Rows';
 import type { ZLinkBackendSocketMonitor, ZLinkBackendSocketMonitorEvent } from '../backend';
-import { ZLinkStateLane } from '../execution/state-lane';
+import { startOutsideStateLane, ZLinkStateLane } from '../execution/state-lane';
 import { normalizeOpaqueRoutingId } from '../routing-id';
 import {
   ZLinkLocationActorEventKind as ActorLocationEventKind,
@@ -54,7 +53,6 @@ export {
 } from './internal-event-contracts';
 
 const ZLINK_DISCONNECT_REASON_HANDSHAKE_FAILED = 3;
-const detachedStateLaneResource = new AsyncResource('zlink:location-runtime-monitoring-source');
 
 export interface ZLinkActorOwnerLeaseObservation {
   readonly actorId: string;
@@ -459,10 +457,6 @@ async function publishLocationRuntimeChange<T>(
             serviceSummary: snapshot as readonly ZLinkLocationServiceSummary[]
           };
   await publisher.publish(runtimeEvent);
-}
-
-function startOutsideStateLane<T>(work: () => T): T {
-  return detachedStateLaneResource.runInAsyncScope(work);
 }
 
 function stableSnapshot(value: unknown): string {

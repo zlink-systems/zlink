@@ -25,10 +25,7 @@ import {
 } from '../handlers/handler-instance-scope';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkExecutionBarrier } from '../execution';
-import { ZLinkStateLane } from '../execution/state-lane';
-import { AsyncResource } from 'node:async_hooks';
-
-const detachedTimerStateLaneResource = new AsyncResource('zlink:spot-timer');
+import { startOutsideStateLane, ZLinkStateLane } from '../execution/state-lane';
 
 export interface ZLinkTimerClock {
   now(): number;
@@ -434,17 +431,18 @@ export class ZLinkManagedTimer implements ZLinkTimer {
       this.options.overrunPolicy === ZLinkTimerOverrunPolicy.DelayNextTick
         ? this.periodMs
         : Math.max(0, Number(this.lastScheduledIndex + 1n) * this.periodMs - this.elapsedMs());
-    this.timeout = this.clock.setTimeout(() => {
-      this.timeout = undefined;
-      const execution = startOutsideStateLane(() => this.fire());
-      this.running = execution.then(
-        () => undefined,
-        (cause) =>
-          this.lane.run(() => {
-            this.dispatchFailure ??= { cause };
-          })
-      );
-    }, delayMs);
+    this.timeout = startOutsideStateLane(() =>
+      this.clock.setTimeout(() => {
+        this.timeout = undefined;
+        this.running = this.fire().then(
+          () => undefined,
+          (cause) =>
+            this.lane.run(() => {
+              this.dispatchFailure ??= { cause };
+            })
+        );
+      }, delayMs)
+    );
   }
 
   private async fire(): Promise<void> {
@@ -578,10 +576,6 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   private elapsedMs(): number {
     return this.clock.now() - this.startedAtMs;
   }
-}
-
-function startOutsideStateLane<T>(work: () => T): T {
-  return detachedTimerStateLaneResource.runInAsyncScope(work);
 }
 
 export function createTimerDiagnostics(
