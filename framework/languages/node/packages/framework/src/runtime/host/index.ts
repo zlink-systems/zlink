@@ -1508,14 +1508,11 @@ export class ZLinkFrameworkRuntimeHost
       });
       streamRuntime.start();
       this.streamRuntime = streamRuntime;
+      // Location runtime §5: a host without an owner lease stays Preparing;
+      // owner lease recovery enters Serving once it publishes descriptors.
       if (locationRuntime === undefined || locationRuntime.ownerLeaseUsable) {
-        await spotNodeRuntime.publishMeshNodeState(
-          ZLinkFrameworkRuntimeState.Serving,
-          this.executionState.abortController.signal
-        );
+        await this.enterServing(spotNodeRuntime, this.executionState.abortController.signal);
       }
-      this.routeMeshCoordinator.markServing();
-      this.setRuntimeState(ZLinkFrameworkRuntimeState.Serving);
       this.lifecycleSink?.push('framework:started');
     } catch (error) {
       if (this.shutdownDeadline !== undefined && isAbortError(error)) throw error;
@@ -1681,11 +1678,27 @@ export class ZLinkFrameworkRuntimeHost
       this.statefulAuthorityRoutes = routes;
     }
     if (runtime.ownerLeaseUsable === false) return;
-    await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
+    if (this.runtimeState !== ZLinkFrameworkRuntimeState.Preparing) {
+      await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
+    }
     await spotNodeRuntime.startLocationAutoConnect(signal);
     await channelRuntime.startLocationAutoConnect(signal);
     await channelRuntime.reclaimLocationOwnerRows(signal);
     await this.locationOwner.currentLifecycle?.reclaimOwnerRows();
+    if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
+      await this.enterServing(spotNodeRuntime, signal);
+    }
+  }
+
+  // The one transition from Preparing to Serving: the host publishes its
+  // Serving descriptors first, then takes new application work.
+  private async enterServing(
+    spotNodeRuntime: ZLinkSpotNodeRuntimeManager,
+    signal: AbortSignal | undefined
+  ): Promise<void> {
+    await spotNodeRuntime.publishMeshNodeState(ZLinkFrameworkRuntimeState.Serving, signal);
+    this.routeMeshCoordinator.markServing();
+    this.setRuntimeState(ZLinkFrameworkRuntimeState.Serving);
   }
 
   private createStatefulAuthorityRoutes(
