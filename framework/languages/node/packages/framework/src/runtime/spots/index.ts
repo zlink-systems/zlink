@@ -514,6 +514,7 @@ export class DefaultZLinkSpotManager {
     spotId: RoutingId,
     objectGeneration: bigint,
     authorityOwnerGeneration: bigint,
+    restoredTimers: readonly import('./spot-timer').ZLinkTimerRelocationState[],
     signal?: AbortSignal
   ): Promise<ZLinkSpotActivation> {
     this.activations.stage(meshName, spotId);
@@ -526,6 +527,7 @@ export class DefaultZLinkSpotManager {
         spotId,
         objectGeneration,
         authorityOwnerGeneration,
+        restoredTimers,
         signal
       );
     } catch (error) {
@@ -538,9 +540,14 @@ export class DefaultZLinkSpotManager {
     activation: ZLinkSpotActivation,
     beforeAdmission?: () => Promise<void>
   ): Promise<void> {
-    await activation.serial.execute(() => activation.spot.onInitialize?.());
+    // Spot timer §1: OnInitialize before Ready reattaches restored keys; the
+    // relocation-ready completion and later callbacks use the ordinary rule.
+    await activation.serial.execute(() =>
+      activation.timers.runRelocationInitialization(() => activation.spot.onInitialize?.())
+    );
     await beforeAdmission?.();
     this.activations.publish(activation.meshName, activation.spotId);
+    await activation.timers.publishRelocation();
   }
 
   async abortRelocationSpot(activation: ZLinkSpotActivation): Promise<void> {
