@@ -102,15 +102,17 @@ for (const operation of ['relocation', 'relocation-sync-native', 'instance']) {
       registerActivation() { assert.fail('failed startup must not register an activation'); }
     });
     const pending = operation !== 'instance'
-      ? lifecycle.materializeRelocation('r3-mesh', 'user_spot', 'r3-spot', Spot, 'r3-spot', 1n, 1n)
+      ? lifecycle.materializeRelocation('r3-mesh', 'user_spot', 'r3-spot', Spot, 'r3-spot', 1n, 1n, [])
       : lifecycle.materializeInstance('r3-mesh', 'r3-spot', Spot, 'r3-spot', 1n);
+    // A relocation target starts its timers only at Ready (Spot timer §1), so a
+    // Configure failure has no platform timer handle to clear.
     await assert.rejects(pending, error => {
       assert.ok(error instanceof AggregateError);
       assert.deepEqual(error.errors, operation !== 'instance'
-        ? [original, timerFailure, handlerFailure, nativeFailure]
+        ? [original, handlerFailure, nativeFailure]
         : [original, timerFailure, handlerFailure]);
       return true;
     });
-    assert.deepEqual(cleaned.sort(), operation !== 'instance' ? ['handler', 'native', 'timer'] : ['handler', 'timer']);
+    assert.deepEqual(cleaned.sort(), operation !== 'instance' ? ['handler', 'native'] : ['handler', 'timer']);
   });
 }

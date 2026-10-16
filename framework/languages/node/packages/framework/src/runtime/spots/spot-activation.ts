@@ -70,7 +70,8 @@ import {
 import {
   addSpotTimerRegistrations,
   ZLinkSpotTimerRegistry,
-  type ZLinkTimerClock
+  type ZLinkTimerClock,
+  type ZLinkTimerRelocationState
 } from './spot-timer';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
@@ -201,6 +202,7 @@ export class ZLinkSpotActivationLifecycle {
     spotId: RoutingId,
     objectGeneration: bigint,
     authorityOwnerGeneration: bigint,
+    restoredTimers: readonly ZLinkTimerRelocationState[],
     signal?: AbortSignal
   ): Promise<ZLinkSpotActivation> {
     const executionMode =
@@ -241,6 +243,9 @@ export class ZLinkSpotActivationLifecycle {
       (name) => serialExecutor.isTimerExecuting(name),
       this.options.timerClock
     );
+    // Spot timer §1: the source schedule exists before Configure so its
+    // registrations reattach to the restored keys.
+    timers.stageRelocation(restoredTimers);
     const outbound = new DefaultZLinkSpotOutbound({
       serial,
       channelClient: this.options.channelClient,
@@ -305,20 +310,23 @@ export class ZLinkSpotActivationLifecycle {
         enumerable: false,
         value: context
       });
-      await instance.configure?.();
-      await addSpotTimerRegistrations(
-        timers,
-        implementation as unknown as Type<ZLinkSpot>,
-        spotId,
-        instance as unknown as ZLinkSpot,
-        serial,
-        { timerHandlers: this.options.spotTimerHandlers },
-        {
-          providerResolver: this.options.providerResolver,
-          runtimeEventPublisher: this.options.runtimeEventPublisher,
-          signal
-        }
-      );
+      const configured = instance;
+      await timers.runRelocationInitialization(async () => {
+        await configured.configure?.();
+        await addSpotTimerRegistrations(
+          timers,
+          implementation as unknown as Type<ZLinkSpot>,
+          spotId,
+          configured as unknown as ZLinkSpot,
+          serial,
+          { timerHandlers: this.options.spotTimerHandlers },
+          {
+            providerResolver: this.options.providerResolver,
+            runtimeEventPublisher: this.options.runtimeEventPublisher,
+            signal
+          }
+        );
+      });
       activation = new ZLinkSpotActivation({
         meshName,
         spotId,

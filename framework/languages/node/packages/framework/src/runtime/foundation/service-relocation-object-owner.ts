@@ -253,7 +253,6 @@ export interface ServiceRelocationTargetObjectPort<THidden extends ServiceReloca
     message: ServiceRelocationQueuedMessage,
     signal?: AbortSignal
   ): Promise<void>;
-  restoreTimer(hidden: THidden, timer: ServiceRelocationTimer, signal?: AbortSignal): Promise<void>;
   normalize(
     hidden: THidden,
     authority: ZLinkAuthoritySnapshot,
@@ -351,9 +350,6 @@ export class ServiceRelocationObjectRestoreOwner<
       await this.target.restoreBoundSession(hidden, participant.boundSessionState, signal);
       for (const message of participant.queuedMessages) {
         await this.target.replayQueuedMessage(hidden, message, signal);
-      }
-      for (const timer of participant.timers) {
-        await this.target.restoreTimer(hidden, timer, signal);
       }
     }
   }
