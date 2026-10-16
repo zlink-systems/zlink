@@ -446,7 +446,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private Supplier<CompletionStage<Boolean>> ownerLeaseRenewalCore(
             CompletableFuture<Void> lifecycle) {
-        RenewState state = new RenewState(nodeRid, ownerToken, isOwnerAdmissionOpenCore());
+        RenewState state = new RenewState(nodeRid, ownerToken);
         return () -> renewOwnerLease(state, lifecycle);
     }
 
@@ -492,12 +492,14 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                             .locations
                                                                             .ZLinkOwnerLeaseRenewed
                                                                     renewed) {
+                                                        boolean admissionWasOpen =
+                                                                isOwnerAdmissionOpenCore();
                                                         recordSuccessfulRenewalCore(
                                                                 renewed.leaseExpiresAt(),
                                                                 renewed.storeNow(),
                                                                 operationStartedNanos);
                                                         return () ->
-                                                                state.admissionOpen()
+                                                                admissionWasOpen
                                                                         ? CompletableFuture
                                                                                 .completedFuture(
                                                                                         true)
@@ -1034,8 +1036,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         }
     }
 
-    private record RenewState(
-            RoutingId nodeRid, ZLinkLocationOwnerToken token, boolean admissionOpen) {}
+    private record RenewState(RoutingId nodeRid, ZLinkLocationOwnerToken token) {}
 
     private static String failureMessage(Throwable failure) {
         Throwable current = unwrap(failure);
