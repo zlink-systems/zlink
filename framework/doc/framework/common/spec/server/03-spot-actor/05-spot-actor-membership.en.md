@@ -991,7 +991,8 @@ owner lease, and local admission deadline.
 ## 9. Message Follow
 
 After commit and within `MessageFollowDuration`, the source relays
-messages arriving at the old address to the committed target. Relay
+messages arriving at the old address to the committed target (except under
+[Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received)'s chained-move exception). Relay
 doesn't read the Store or run an application handler, and it preserves
 original operation identity, generation, payload, and reply route. After
 route duration ends, a request arriving at the old address ends with

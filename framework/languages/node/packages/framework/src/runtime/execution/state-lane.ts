@@ -12,6 +12,13 @@ export function isStructuralGuardEnabled(): boolean {
   return process.env.ZLINK_NODE_STRUCTURAL_GUARD === '1' || process.env.NODE_ENV === 'test';
 }
 
+/** Detaches lane ownership while preserving the caller's other execution contexts. */
+export function startOutsideStateLane<T>(work: () => T): T {
+  return currentLaneStorage.exit(() =>
+    diagnosticTurnStorage === undefined ? work() : diagnosticTurnStorage.exit(work)
+  );
+}
+
 const currentLaneStorage = new AsyncLocalStorage<ZLinkStateLane>();
 const diagnosticPending = isStructuralGuardEnabled() ? new Map<number, string>() : undefined;
 let nextDiagnosticWork = 0;

@@ -158,10 +158,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         closeRouteReceived(received);
     }
 
-    final boolean hasActiveRouteReceives() {
-        return !activeRouteReceives.isEmpty();
-    }
-
     CompletionStage<Void> dispatchResolvedActorPacket(
             ZLinkActor actor,
             ActorPacketFrames.Header packetHeader,
@@ -259,7 +255,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                     ZLinkActor actor = localActor.get();
                     var control =
                             host.dispatchActorControlPacket(
-                                    packetHeader, headerPart, actor, pendingHeader);
+                                    packetHeader, headerPart, bodyPart, actor, pendingHeader);
                     if (control != null) {
                         dispatches.add(control);
                         continue;
@@ -704,7 +700,10 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             }
             CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
             List<SpotSubscriptionHandlerRegistration> matchingHandlers =
-                    context.handlerCatalog().subscriptionHandlers(received.topic()).stream()
+                    context
+                            .handlerCatalog()
+                            .subscriptionHandlers(received.channelName(), received.topic())
+                            .stream()
                             .filter(handler -> handler.packetName().equals(packet.packetName()))
                             .toList();
             if (!matchingHandlers.isEmpty()) {

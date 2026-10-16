@@ -316,8 +316,14 @@ class app_state_t
     }
     ~app_state_t ()
     {
+        delays.stop_and_join ();
+        wait_relocation_preflights ();
         if (application_job_queue)
             application_job_queue->stop ();
+        if (relocation_operation.worker.joinable ())
+            relocation_operation.worker.join ();
+        if (termination_operation.worker.joinable ())
+            termination_operation.worker.join ();
         const char *trace_value = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
         const bool trace_enabled = trace_value != nullptr && std::string_view (trace_value) != "0"
                                    && std::string_view (trace_value) != "";
@@ -477,12 +483,50 @@ class app_state_t
     std::shared_ptr<std::atomic_bool> draining = std::make_shared<std::atomic_bool> (false);
     std::atomic<framework_runtime_state_t> runtime_state = framework_runtime_state_t::preparing;
     std::shared_ptr<app_state_access_t> status_access;
+    std::mutex termination_teardown_mutex;
+    delay_owner_t delays{termination_teardown_mutex};
     relocation_operation_t relocation_operation;
     termination_operation_t termination_operation;
-    std::mutex termination_teardown_mutex;
     std::condition_variable termination_teardown_changed;
+    std::size_t active_relocation_preflights = 0;
     bool run_active = false;
     bool teardown_complete = false;
+
+    class relocation_preflight_guard_t
+    {
+      public:
+        explicit relocation_preflight_guard_t (app_state_t &state) : _state (&state)
+        {
+            std::lock_guard lock (_state->termination_teardown_mutex);
+            ++_state->active_relocation_preflights;
+        }
+
+        relocation_preflight_guard_t (const relocation_preflight_guard_t &) = delete;
+        relocation_preflight_guard_t &operator= (const relocation_preflight_guard_t &) = delete;
+
+        ~relocation_preflight_guard_t () { release (); }
+
+        void release () noexcept
+        {
+            if (!_state)
+                return;
+            {
+                std::lock_guard lock (_state->termination_teardown_mutex);
+                --_state->active_relocation_preflights;
+            }
+            _state->termination_teardown_changed.notify_all ();
+            _state = nullptr;
+        }
+
+      private:
+        app_state_t *_state;
+    };
+
+    void wait_relocation_preflights ()
+    {
+        std::unique_lock lock (termination_teardown_mutex);
+        termination_teardown_changed.wait (lock, [&] { return active_relocation_preflights == 0; });
+    }
 
     service_collection_t services;
     handler_registry_t handlers;
@@ -521,6 +565,7 @@ bool same_runtime_status (const framework_runtime_status_t &left,
 {
     return left.state == right.state && left.is_ready == right.is_ready
            && left.accepting_work == right.accepting_work
+           && left.safe_to_shutdown == right.safe_to_shutdown
            && left.operation_deadline == right.operation_deadline
            && left.relocation_result == right.relocation_result
            && left.termination_result == right.termination_result
@@ -549,6 +594,15 @@ class framework_runtime_status_source_t
         result.state = state->runtime_state.load (std::memory_order_acquire);
         result.is_ready = result.state == framework_runtime_state_t::serving;
         result.accepting_work = result.state == framework_runtime_state_t::serving;
+        result.safe_to_shutdown = true;
+        for (const auto &registration : detail::mesh_node_runtime_t::registrations (state->zlink)) {
+            if (!registration || !registration->spot_state)
+                continue;
+            const auto node = detail::spot_node_runtime_t (registration->spot_state).native_node ();
+            if (node)
+                result.safe_to_shutdown =
+                  result.safe_to_shutdown && node->status ().safe_to_shutdown;
+        }
         {
             std::lock_guard lock (state->relocation_operation.mutex);
             const auto &operation = state->relocation_operation;
@@ -945,10 +999,19 @@ namespace zlink::framework
 
 app_t::app_t () : _state (std::make_unique<detail::app_state_t> ())
 {
+    _state->services.add_factory<detail::delay_owner_t> (
+      [owner = &_state->delays] (service_provider_t &) {
+          return std::shared_ptr<detail::delay_owner_t> (owner, [] (auto *) noexcept {});
+      },
+      service_lifetime_t::singleton);
 }
 
 app_t::~app_t ()
 {
+    if (_state) {
+        _state->delays.stop_and_join ();
+        _state->wait_relocation_preflights ();
+    }
 }
 
 app_t::app_t (app_t &&) noexcept = default;
@@ -1485,6 +1548,7 @@ void app_t::_apply_zlink_framework ()
                 location_store);
         }
         for (const auto &mesh_node : mesh_nodes) {
+            mesh_node->bind_delay_owner (_state->delays);
             mesh_node->configure_session_route_owner (
               [&location_runtime] { return location_runtime.current_owner_token (); });
             if (relocation_authority && relocation_store) {
@@ -1550,8 +1614,7 @@ void app_t::_apply_zlink_framework ()
                             route->node_generation,
                             {owner->owner_id, owner->lease_generation},
                             *route->session_rid,
-                            route->binding_generation,
-                            route->session_sequence};
+                            route->binding_generation};
                       }
                       page.continuation_token = std::move (listed.continuation_token);
                   } while (page.continuation_token);
@@ -2728,12 +2791,12 @@ void app_t::_apply_zlink_framework ()
     }
     if (!_state->services.contains (std::type_index (typeid (actor_client_t)))) {
         _state->services.add_factory<actor_client_t> (
-          [mesh_nodes, actor_location_observer,
+          [mesh_nodes, actor_location_observer, delays = &_state->delays,
            location_options = options.location_options ()] (service_provider_t &provider) mutable {
               return runtime::make_actor_client (
                 provider.get_required<runtime::live_location_reader_t> (),
                 provider.get_required<serializer_registry_t> (), mesh_nodes,
-                actor_location_observer, location_options);
+                actor_location_observer, location_options, *delays);
           },
           service_lifetime_t::singleton);
     }
@@ -2829,6 +2892,7 @@ void app_t::_apply_zlink_framework ()
           mesh_nodes.empty () ? nullptr : mesh_nodes.front (), stream_runtime.advertise_hosts (),
           _state->listener_statuses, _state->application_job_queue);
         stream_service->bind_drain_flag (_state->draining);
+        stream_service->bind_delay_owner (_state->delays);
         stream_service->bind_monitoring (_state->monitoring);
         add_hosted_service (std::move (stream_service));
     }
@@ -2921,6 +2985,7 @@ try {
         catch (...) {
         }
         while (!_state->stop_requested.load (std::memory_order_acquire)) {
+            _state->delays.reap_completed ();
             if (g_stop_signal_requested != 0) {
                 g_stop_signal_requested = 0;
                 (void) shutdown ();
@@ -2930,6 +2995,8 @@ try {
     }
     catch (...) {
         _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
+        _state->delays.stop_and_join ();
+        _state->wait_relocation_preflights ();
         _state->stop_hosted_services (started);
         _state->close_framework_resources (provider);
         {
@@ -2941,6 +3008,8 @@ try {
         throw;
     }
 
+    _state->delays.stop_and_join ();
+    _state->wait_relocation_preflights ();
     _state->stop_hosted_services (started);
     _state->close_framework_resources (provider);
     {
@@ -3197,15 +3266,18 @@ relocation_topology_preflight_until (detail::app_state_t &state,
             || std::chrono::steady_clock::now () >= deadline_at) {
             co_return result;
         }
-        co_await detail::delay (std::chrono::ceil<std::chrono::milliseconds> (
-          std::min (deadline_at, std::chrono::steady_clock::now () + polling_interval)
-          - std::chrono::steady_clock::now ()));
+        co_await detail::delay (
+          state.delays,
+          std::chrono::ceil<std::chrono::milliseconds> (
+            std::min (deadline_at, std::chrono::steady_clock::now () + polling_interval)
+            - std::chrono::steady_clock::now ()));
     }
 }
 
 template <typename Predicate>
 task_t<std::optional<mesh_node_descriptor_t>>
 wait_for_relocation_target (runtime::store_location_resolvers_t &peers,
+                            detail::delay_owner_t &delays,
                             std::string mesh_name,
                             std::chrono::steady_clock::time_point deadline_at,
                             std::chrono::milliseconds polling_interval,
@@ -3248,11 +3320,20 @@ wait_for_relocation_target (runtime::store_location_resolvers_t &peers,
             failure_reason = relocation_reason_t::target_unavailable;
             co_return std::nullopt;
         }
-        co_await detail::delay (
-          std::max (std::chrono::milliseconds::zero (),
-                    std::chrono::ceil<std::chrono::milliseconds> (
-                      std::min<std::chrono::steady_clock::duration> (
-                        deadline_at - std::chrono::steady_clock::now (), polling_interval))));
+        try {
+            co_await detail::delay (
+              delays,
+              std::max (std::chrono::milliseconds::zero (),
+                        std::chrono::ceil<std::chrono::milliseconds> (
+                          std::min<std::chrono::steady_clock::duration> (
+                            deadline_at - std::chrono::steady_clock::now (), polling_interval))));
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () != framework_error_kind_t::shutting_down)
+                throw;
+            failure_reason = relocation_reason_t::shutdown_requested;
+            co_return std::nullopt;
+        }
     }
 }
 
@@ -3333,6 +3414,7 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
 task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
                                                    std::stop_token wait_cancellation)
 {
+    detail::app_state_t::relocation_preflight_guard_t preflight_guard (*_state);
     const auto preflight_deadline_at = std::chrono::steady_clock::now () + *options.deadline;
 
     auto &operation = _state->relocation_operation;
@@ -3351,8 +3433,15 @@ task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
     if (runtime_state () != framework_runtime_state_t::serving) {
         preflight.blocker = relocation_reason_t::runtime_not_ready;
     } else {
-        preflight =
-          co_await relocation_topology_preflight_until (*_state, options, preflight_deadline_at);
+        try {
+            preflight = co_await relocation_topology_preflight_until (*_state, options,
+                                                                      preflight_deadline_at);
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () != framework_error_kind_t::shutting_down)
+                throw;
+            preflight.blocker = relocation_reason_t::shutdown_requested;
+        }
         if (!preflight.blocker
             && (!_state->services.contains (std::type_index (typeid (relocation_repository_t)))
                 || !_state->services.contains (std::type_index (typeid (location_repository_t))))) {
@@ -3431,6 +3520,7 @@ task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
         operation.waiters.push_back (waiter);
     }
     waiter->arm (wait_cancellation);
+    preflight_guard.release ();
     co_return co_await runtime::await_result (std::move (task));
 }
 
@@ -3576,8 +3666,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             std::set<std::string> aggregate_actor_ids;
             for (const auto &unit : application_units) {
                 const auto target = co_await wait_for_relocation_target (
-                  peers->get (), node->mesh_name (), deadline_at, topology_poll_interval,
-                  shutdown_requested,
+                  peers->get (), state.delays, node->mesh_name (), deadline_at,
+                  topology_poll_interval, shutdown_requested,
                   [&] (const mesh_node_descriptor_t &peer) {
                       if (local_rid && peer.rid.to_hex () == local_rid->to_hex ())
                           return false;
@@ -3687,8 +3777,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     co_return;
                 }
                 const auto target = co_await wait_for_relocation_target (
-                  peers->get (), node->mesh_name (), deadline_at, topology_poll_interval,
-                  shutdown_requested,
+                  peers->get (), state.delays, node->mesh_name (), deadline_at,
+                  topology_poll_interval, shutdown_requested,
                   [&] (const mesh_node_descriptor_t &peer) {
                       if (local_rid && peer.rid.to_hex () == local_rid->to_hex ())
                           return false;
@@ -3742,6 +3832,11 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
         terminal.outcome = relocation_outcome_t::relocated;
         terminal.reason = relocation_reason_t::none;
     }
+    catch (const framework_exception_t &error) {
+        terminal.reason = error.kind () == framework_error_kind_t::shutting_down
+                            ? relocation_reason_t::shutdown_requested
+                            : relocation_reason_t::store_unavailable;
+    }
     catch (...) {
         terminal.reason = relocation_reason_t::store_unavailable;
     }
@@ -3773,6 +3868,7 @@ task_t<termination_result_t> app_t::shutdown (std::chrono::milliseconds deadline
             operation.started = true;
             operation.deadline = deadline;
             operation.deadline_at = std::chrono::system_clock::now () + deadline;
+            _state->delays.request_stop ();
             _state->runtime_state.store (framework_runtime_state_t::draining,
                                          std::memory_order_release);
             _state->draining->store (true, std::memory_order_release);
@@ -3940,12 +4036,21 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
 
     if (std::holds_alternative<shutdown_completed_t> (result)) {
         bool spots_closed = true;
-        for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
-            auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
-            if (runtime && !runtime->close_all_user_spots (deadline_at)) {
-                spots_closed = false;
-                break;
+        try {
+            for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
+                auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
+                if (runtime && !runtime->close_all_user_spots (deadline_at)) {
+                    spots_closed = false;
+                    state.monitoring->diagnostics_logger.error (
+                      "Host shutdown Spot teardown did not complete");
+                    break;
+                }
             }
+        }
+        catch (const std::exception &error) {
+            spots_closed = false;
+            state.monitoring->diagnostics_logger.error (
+              std::string ("Host shutdown Spot teardown failed: ") + error.what ());
         }
         if (!spots_closed)
             force (std::chrono::steady_clock::now () >= deadline_at
@@ -4065,6 +4170,7 @@ void app_t::stop () noexcept
         (void) shutdown ();
     }
     catch (...) {
+        _state->delays.request_stop ();
         _state->stop_requested.store (true, std::memory_order_release);
     }
 }

@@ -1035,7 +1035,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
                             meshName,
                             request.spotType(),
                             request.spotId(),
-                            request.objectGeneration())
+                            request.objectGeneration(),
+                            request.timerEnvelope())
                     .thenApply(value -> value);
         }
 
@@ -1052,11 +1053,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                     request.spotState(),
                                     cancellation)
                             : CompletableFuture.completedFuture(null);
-            return restore.thenRun(
-                    () -> {
-                        validateJournal(request.acceptedJournal());
-                        spots.stageReservedTimers(prepared, request.timerEnvelope());
-                    });
+            return restore.thenRun(() -> validateJournal(request.acceptedJournal()));
         }
 
         @Override

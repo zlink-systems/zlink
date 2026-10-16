@@ -13,14 +13,22 @@ export class MeshRouterResolver {
     );
   }
 
+  /**
+   * Runs on every node-direct send: a direct scan of the registered manual
+   * peers, without temporary arrays or a predicate closure per call.
+   */
   classifyManualNodeTarget(meshName: string, targetNodeRid: RoutingId): boolean | undefined {
     const router = this.registration.spotNodes.get(meshName)?.router;
     if (router === undefined) return undefined;
-    const manualConnections = router.manualConnections ?? [];
-    const manualPeers = router.manualPeerConnections ?? [];
-    if (manualConnections.length === 0 && manualPeers.length === 0) return undefined;
-    if (manualPeers.some((peer) => routingIdsEqual(peer.peerRid, targetNodeRid))) return true;
-    return manualConnections.length === 0 ? false : undefined;
+    const manualPeers = router.manualPeerConnections;
+    if (manualPeers !== undefined) {
+      for (const peer of manualPeers) {
+        if (routingIdsEqual(peer.peerRid, targetNodeRid)) return true;
+      }
+    }
+    const manualConnectionCount = router.manualConnections?.length ?? 0;
+    if (manualConnectionCount === 0 && (manualPeers?.length ?? 0) === 0) return undefined;
+    return manualConnectionCount === 0 ? false : undefined;
   }
 
   defaultRouterChannelId(): string | undefined {

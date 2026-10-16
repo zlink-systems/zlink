@@ -14,11 +14,15 @@ import type {
 import { submitToRequestResult } from '../messaging/submission-result';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
-import { OperationRegistry, type PendingOperation } from './operation-registry';
+import { SERVICE_WIRE_PREFIX_SIZE } from './service-wire-binary-primitives';
+import {
+  OperationRegistry,
+  type OperationObserver,
+  type PendingOperation
+} from './operation-registry';
 import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liveness-registry';
 import { ServiceMailbox, type ServiceMailboxRecord } from './service-mailbox';
 import {
-  sameServiceNodeDescriptor,
   ServiceTopologyRegistry,
   validateDescriptor,
   type AdmittedServicePeer,
@@ -66,6 +70,19 @@ export interface RawServiceRequestResult {
   readonly terminalResult: number;
   readonly failureCode: number;
   readonly payload?: ServiceApplicationPayload;
+}
+
+/** Receives observed request terminals; the context is the caller's operation kind. */
+export type RawServiceRequestObserver = OperationObserver<RawServiceRequestResult, number>;
+
+/**
+ * A registered request. An observed remote request has no Promise; its
+ * terminal reaches the observer. Local and Promise-contract requests carry
+ * the Promise.
+ */
+export interface RawServiceObservedRequest {
+  readonly id: bigint;
+  readonly promise?: Promise<RawServiceRequestResult>;
 }
 
 type RawServiceChannelTargetSelection =
@@ -143,6 +160,14 @@ const livenessCodec = createServiceWireCodec({
   commands: M6aServiceWireCommand
 });
 
+interface ControlSendState {
+  task?: Promise<boolean>;
+  next?: () => boolean | Promise<boolean>;
+  current?: () => boolean;
+  // Admission owns the first HELLO until ADMIT or route termination.
+  hello?: Uint8Array;
+}
+
 /**
  * RouteMesh M6A runtime built only on the public raw binding package.
  * It owns protocol, admission, mailbox, request and liveness state.
@@ -152,7 +177,7 @@ export class RawServiceMeshRuntime {
   readonly mailbox: ServiceMailbox;
   readonly liveness: ServiceLivenessRegistry;
 
-  private readonly operations: OperationRegistry<RawServiceRequestResult>;
+  private readonly operations: OperationRegistry<RawServiceRequestResult, number>;
   private readonly expectedPeers = new Map<
     string,
     {
@@ -179,14 +204,7 @@ export class RawServiceMeshRuntime {
   private receiveAcquisition?: Promise<ApplicationJobPermitPort>;
   private receivePermit?: ApplicationJobPermitPort;
   private receiveRotation?: ApplicationJobReceiveRotationPort;
-  private readonly controlSends = new Map<
-    string,
-    {
-      readonly task: Promise<boolean>;
-      next?: () => boolean | Promise<boolean>;
-      current?: () => boolean;
-    }
-  >();
+  private readonly controlSends = new Map<string, ControlSendState>();
   private infrastructureFailure?: { readonly error: unknown };
   private readonly onReceiveReady?: () => void;
   private readonly infrastructureTaskRunner?: RawServiceMeshRuntimeOptions['infrastructureTaskRunner'];
@@ -426,6 +444,7 @@ export class RawServiceMeshRuntime {
   }
 
   announcePeer(nodeRoutingId: string): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false);
     const generation = this.selectedRoutes.get(nodeRoutingId);
     if (generation === undefined) return Promise.resolve(false);
     const current = () => {
@@ -439,16 +458,23 @@ export class RawServiceMeshRuntime {
         this.peerAdmissionSealed?.() !== true
       );
     };
-    if (!current()) return Promise.resolve(false);
+    const key = controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello);
+    if (!current()) {
+      this.controlSends.delete(key);
+      return Promise.resolve(false);
+    }
+    const existing = this.controlSends.get(key);
+    const hello =
+      existing?.current?.() === true
+        ? existing.hello!
+        : encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
     return Promise.resolve(
       this.startControlSend(
         nodeRoutingId,
         M6aServiceWireCommand.hello,
-        () =>
-          this.submitControl(nodeRoutingId, [
-            encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())
-          ]),
-        current
+        () => this.submitControl(nodeRoutingId, [hello]),
+        current,
+        hello
       )
     );
   }
@@ -503,12 +529,18 @@ export class RawServiceMeshRuntime {
     // placement and channel selectors therefore need the new mutable fields
     // on that same connection before the next request is selected; waiting for
     // a reconnect would leave a race where a drained node is selected again.
+    await this.publishLocalDescriptor(
+      this.topology.peers().map((peer) => peer.descriptor.nodeRoutingId)
+    );
+  }
+
+  private async publishLocalDescriptor(targets: readonly string[]): Promise<void> {
     const update = encodeRouteMeshAdmission(
       M6aServiceWireCommand.update,
       this.topology.localDescriptor()
     );
-    for (const peer of this.topology.peers()) {
-      await this.sendService(peer.descriptor.nodeRoutingId, [update]);
+    for (const target of targets) {
+      await this.sendService(target, [update]);
     }
   }
 
@@ -548,8 +580,32 @@ export class RawServiceMeshRuntime {
     payload: ServiceApplicationPayloadInput,
     timeoutMs: number,
     onAdmitted?: () => void
-  ): PendingOperation<RawServiceRequestResult> {
-    return this.requestToTarget(targetNodeRoutingId, payload, timeoutMs, undefined, onAdmitted);
+  ): PendingOperation<RawServiceRequestResult>;
+  requestToNode(
+    targetNodeRoutingId: string,
+    payload: ServiceApplicationPayloadInput,
+    timeoutMs: number,
+    onAdmitted: (() => void) | undefined,
+    observer: RawServiceRequestObserver,
+    operationKind: number
+  ): RawServiceObservedRequest;
+  requestToNode(
+    targetNodeRoutingId: string,
+    payload: ServiceApplicationPayloadInput,
+    timeoutMs: number,
+    onAdmitted?: () => void,
+    observer?: RawServiceRequestObserver,
+    operationKind?: number
+  ): RawServiceObservedRequest {
+    return this.requestToTarget(
+      targetNodeRoutingId,
+      payload,
+      timeoutMs,
+      undefined,
+      onAdmitted,
+      observer,
+      operationKind
+    );
   }
 
   requestToChannel(
@@ -557,11 +613,27 @@ export class RawServiceMeshRuntime {
     payload: ServiceApplicationPayloadInput,
     timeoutMs: number,
     onAdmitted?: () => void
-  ): PendingOperation<RawServiceRequestResult> {
+  ): PendingOperation<RawServiceRequestResult>;
+  requestToChannel(
+    channelName: string,
+    payload: ServiceApplicationPayloadInput,
+    timeoutMs: number,
+    onAdmitted: (() => void) | undefined,
+    observer: RawServiceRequestObserver,
+    operationKind: number
+  ): RawServiceObservedRequest;
+  requestToChannel(
+    channelName: string,
+    payload: ServiceApplicationPayloadInput,
+    timeoutMs: number,
+    onAdmitted?: () => void,
+    observer?: RawServiceRequestObserver,
+    operationKind?: number
+  ): RawServiceObservedRequest {
     const selection = this.selectChannelTarget(channelName);
     if (selection.kind !== 'selected') {
-      const pending = this.operations.register(timeoutMs);
-      this.operations.complete(pending.id, selection.requestResult);
+      const pending = this.registerRequest(timeoutMs, observer, operationKind);
+      this.completeRequest(pending, selection.requestResult);
       return pending;
     }
     return this.requestToTarget(
@@ -569,8 +641,43 @@ export class RawServiceMeshRuntime {
       payload,
       timeoutMs,
       channelName,
-      onAdmitted
+      onAdmitted,
+      observer,
+      operationKind
     );
+  }
+
+  /**
+   * One pending entry per request: an observed request reports its terminal
+   * to the caller's observer; any other request keeps the Promise contract.
+   */
+  private registerRequest(
+    timeoutMs: number,
+    observer: RawServiceRequestObserver | undefined,
+    operationKind: number | undefined
+  ): RawServiceObservedRequest {
+    return observer === undefined
+      ? this.operations.register(timeoutMs)
+      : { id: this.operations.registerObserved(timeoutMs, observer, operationKind) };
+  }
+
+  /**
+   * An observed caller learns the operation id only when the request call
+   * returns, so a terminal decided inside that call is delivered after it.
+   */
+  private completeRequest(
+    pending: RawServiceObservedRequest,
+    result: RawServiceRequestResult
+  ): void {
+    if (pending.promise === undefined)
+      queueMicrotask(() => this.operations.complete(pending.id, result));
+    else this.operations.complete(pending.id, result);
+  }
+
+  private failRequest(pending: RawServiceObservedRequest, error: unknown): void {
+    if (pending.promise === undefined)
+      queueMicrotask(() => this.operations.fail(pending.id, error));
+    else this.operations.fail(pending.id, error);
   }
 
   private selectChannelTarget(channelName: string): RawServiceChannelTargetSelection {
@@ -985,12 +1092,15 @@ export class RawServiceMeshRuntime {
       ]);
       return 'infrastructure';
     }
+    const helloKey = controlSendKey(received.sourceRid, M6aServiceWireCommand.hello);
+    const exchange = this.controlSends.get(helloKey);
     const result = this.admitPeer(
       descriptor,
       received.routeGeneration,
       nowMs,
       expected,
-      header.command === M6aServiceWireCommand.admit
+      header.command,
+      received.parts[0]!.subarray(SERVICE_WIRE_PREFIX_SIZE)
     );
     if (result !== 'admitted' && result !== 'notRequired') {
       const detail =
@@ -1013,11 +1123,31 @@ export class RawServiceMeshRuntime {
       // Hello supplies only the sender's descriptor. Even NotRequired
       // peers must receive ours before the intent owner closes transport;
       // submitting a response does not guarantee delivery before close.
+      const local =
+        exchange?.current?.() === true && exchange.hello !== undefined
+          ? decodeRouteMeshAdmission(
+              exchange.hello,
+              M6aServiceWireCommand.hello,
+              this.descriptor.nodeRoutingId
+            )
+          : this.topology.localDescriptor();
       await this.sendControl(received.sourceRid, [
-        encodeRouteMeshAdmission(M6aServiceWireCommand.admit, this.topology.localDescriptor())
+        encodeRouteMeshAdmission(M6aServiceWireCommand.admit, local)
       ]);
-    } else if (result === 'notRequired') {
-      this.retireNotRequiredExpectedPeer(received.sourceRid, descriptor.advertisedEndpoint);
+    } else if (header.command === M6aServiceWireCommand.admit) {
+      this.controlSends.delete(helloKey);
+      if (result === 'notRequired') {
+        this.retireNotRequiredExpectedPeer(received.sourceRid, descriptor.advertisedEndpoint);
+      } else if (
+        exchange?.hello !== undefined &&
+        decodeRouteMeshAdmission(
+          exchange.hello,
+          M6aServiceWireCommand.hello,
+          this.descriptor.nodeRoutingId
+        ).descriptorRevision < this.descriptor.descriptorRevision
+      ) {
+        await this.publishLocalDescriptor([received.sourceRid]);
+      }
     }
     return 'infrastructure';
   }
@@ -1089,12 +1219,7 @@ export class RawServiceMeshRuntime {
       if (
         header.flags !== 0 ||
         received.parts.length !== 2 ||
-        ![
-          M6aServiceWireCommand.nodeSend,
-          M6aServiceWireCommand.nodeRequest,
-          M6aServiceWireCommand.channelSend,
-          M6aServiceWireCommand.channelRequest
-        ].includes(header.command as never)
+        !isApplicationEnvelopeCommand(header.command)
       ) {
         return 'protocolError';
       }
@@ -1133,9 +1258,9 @@ export class RawServiceMeshRuntime {
       parts: received.parts,
       sourceRoutingId: received.sourceRid,
       sourceRoute: received.sourceRoute,
-      ...(received.reply === undefined ? {} : { reply: received.reply }),
+      reply: received.reply,
       requestSequence: received.requestSeq,
-      ...(correlation === undefined ? {} : { correlation }),
+      correlation,
       applicationJob
     });
     if (accepted) return 'application';
@@ -1161,6 +1286,20 @@ export class RawServiceMeshRuntime {
 
   get pendingOperationCount(): number {
     return this.operations.size;
+  }
+
+  /**
+   * The next management deadline of this node (spec 08 §4.2): request expiry,
+   * liveness probe or timeout, or an owned HELLO exchange still awaiting
+   * ADMIT, which keeps the existing announce cadence.
+   */
+  nextMaintenanceDeadlineMs(nowMs: number): number {
+    if (!this.closed) {
+      for (const exchange of this.controlSends.values()) {
+        if (exchange.hello !== undefined && exchange.current?.() === true) return nowMs;
+      }
+    }
+    return Math.min(this.operations.nextDeadlineMs(), this.liveness.nextDeadlineMs());
   }
 
   tickLiveness(nowMs = performance.now()): ServiceLivenessTick {
@@ -1203,6 +1342,7 @@ export class RawServiceMeshRuntime {
     let changes = 0;
     for (const [nodeRoutingId, generation] of this.selectedRoutes) {
       if (observed.get(nodeRoutingId) === generation) continue;
+      this.controlSends.delete(controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello));
       changes++;
       const peer = this.topology.peer(nodeRoutingId);
       if (peer?.liveness?.connectionId === generation) {
@@ -1232,6 +1372,7 @@ export class RawServiceMeshRuntime {
     this.receivePermit?.releaseStorage?.();
     this.receivePermit = undefined;
     for (const send of this.controlSends.values()) delete send.next;
+    this.controlSends.clear();
     this.mailbox.close();
     this.operations.close('Raw service runtime closed.');
     this.serviceIngress = undefined;
@@ -1250,15 +1391,16 @@ export class RawServiceMeshRuntime {
     payload: ServiceApplicationPayloadInput,
     timeoutMs: number,
     channelName?: string,
-    onAdmitted?: () => void
-  ): PendingOperation<RawServiceRequestResult> {
+    onAdmitted?: () => void,
+    observer?: RawServiceRequestObserver,
+    operationKind?: number
+  ): RawServiceObservedRequest {
     const correlation = this.nextCorrelation++;
     const header =
       channelName === undefined
         ? encodeNodeRequestHeader(correlation)
         : encodeChannelRequestHeader(correlation, channelName);
     const encodedPayload = this.applicationFrame(payload);
-    const pending = this.operations.register(timeoutMs);
     let selectedTargetNodeRoutingId = targetNodeRoutingId;
     if (
       selectedTargetNodeRoutingId !== this.descriptor.nodeRoutingId &&
@@ -1286,6 +1428,9 @@ export class RawServiceMeshRuntime {
       }
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
+      // The local admission path aborts its capacity wait on the terminal
+      // Promise, so a local request always keeps the Promise entry.
+      const pending = this.operations.register(timeoutMs);
       const parts = [header, encodedPayload];
       const capacityStop = new AbortController();
       void pending.promise.finally(() => capacityStop.abort()).catch(() => undefined);
@@ -1330,12 +1475,13 @@ export class RawServiceMeshRuntime {
       })().catch((error) => this.operations.fail(pending.id, error));
       return pending;
     }
+    const pending = this.registerRequest(timeoutMs, observer, operationKind);
     const selectedPeer = this.topology.admittedPeer(selectedTargetNodeRoutingId);
     if (selectedPeer === undefined) {
       // Logical target selection is the requester's decision: an RID that is
       // not an admitted peer is not a target. Whether an admitted target's
       // route can carry the request is Core's REQUEST result.
-      this.operations.complete(pending.id, {
+      this.completeRequest(pending, {
         terminalResult: RequestResult.NotFound,
         failureCode: REQUEST_TARGET_NOT_FOUND_FAILURE_CODE
       });
@@ -1352,7 +1498,7 @@ export class RawServiceMeshRuntime {
         onAdmitted
       );
     } catch (error) {
-      this.operations.fail(pending.id, error);
+      this.failRequest(pending, error);
       return pending;
     }
     void request.then(
@@ -1417,20 +1563,10 @@ export class RawServiceMeshRuntime {
       readonly securityIdentity?: string;
       readonly lifecycleGeneration?: bigint;
     },
-    remoteAdmitReceived = false
+    command: number = M6aServiceWireCommand.hello,
+    descriptorBytes?: Uint8Array
   ): PeerAdmissionResult {
     const previous = this.topology.peer(descriptor.nodeRoutingId);
-    if (
-      previous !== undefined &&
-      previous.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
-      (descriptor.descriptorRevision < previous.descriptor.descriptorRevision ||
-        (descriptor.descriptorRevision === previous.descriptor.descriptorRevision &&
-          !sameServiceNodeDescriptor(previous.descriptor, descriptor)))
-    ) {
-      throw new ServiceWireProtocolError(
-        `RouteMesh peer '${descriptor.nodeRoutingId}' descriptor revision is stale or conflicting.`
-      );
-    }
     const topologyConnectionId =
       typeof connectionId === 'bigint' ? routeConnectionId(connectionId) : connectionId;
     const result = this.topology.admit(
@@ -1442,8 +1578,14 @@ export class RawServiceMeshRuntime {
         this.liveness.recordReceived(admission, nowMs);
         return admission;
       },
-      remoteAdmitReceived
+      command,
+      descriptorBytes
     );
+    if (result === 'staleDescriptor') {
+      throw new ServiceWireProtocolError(
+        `RouteMesh peer '${descriptor.nodeRoutingId}' descriptor revision is stale or conflicting.`
+      );
+    }
     if (result === 'notRequired' && previous !== undefined) {
       this.liveness.disconnect(
         descriptor.nodeRoutingId,
@@ -1529,12 +1671,14 @@ export class RawServiceMeshRuntime {
     target: string,
     command: number,
     attempt: () => boolean | Promise<boolean>,
-    current?: () => boolean
+    current?: () => boolean,
+    hello?: Uint8Array
   ): boolean {
-    const key = JSON.stringify([target, command]);
+    const key = controlSendKey(target, command);
     const existing = this.controlSends.get(key);
     if (
       existing !== undefined &&
+      existing.task !== undefined &&
       (command !== M6aServiceWireCommand.hello || existing.current?.() === true)
     ) {
       if (command !== M6aServiceWireCommand.hello) {
@@ -1544,39 +1688,45 @@ export class RawServiceMeshRuntime {
       return true;
     }
     const first = attempt();
-    if (typeof first === 'boolean') return first;
+    if (typeof first === 'boolean') {
+      if (hello !== undefined) this.controlSends.set(key, { current, hello });
+      return first;
+    }
     const owner = this;
-    const state: {
-      task: Promise<boolean>;
-      next?: () => boolean | Promise<boolean>;
-      current?: () => boolean;
-    } = {
-      current,
-      task: first.then(function drain(accepted): boolean | Promise<boolean> {
-        if (!owner.closed && state.next !== undefined) {
-          const next = state.next;
-          delete state.next;
-          return Promise.resolve(next()).then(drain);
-        }
-        if (owner.controlSends.get(key) === state) owner.controlSends.delete(key);
-        return accepted;
-      })
+    const state: ControlSendState = { current, hello };
+    const completeSend = () => {
+      if (owner.controlSends.get(key) !== state) return;
+      if (hello !== undefined && current?.() === true) delete state.task;
+      else owner.controlSends.delete(key);
     };
+    const task = first.then(function drain(accepted): boolean | Promise<boolean> {
+      if (!owner.closed && state.next !== undefined) {
+        const next = state.next;
+        delete state.next;
+        return Promise.resolve(next()).then(drain);
+      }
+      completeSend();
+      return accepted;
+    });
+    state.task = task;
     this.controlSends.set(key, state);
-    state.task.then(
+    task.then(
       () => {},
       (error) => {
-        if (this.controlSends.get(key) === state) this.controlSends.delete(key);
-        if (this.infrastructureTaskRunner === undefined) this.reportInfrastructureFailure(error);
+        completeSend();
+        this.reportInfrastructureFailure(error);
       }
     );
-    this.infrastructureTaskRunner?.runDetached('RouteMesh control SEND', async () => {
-      await state.task;
-    });
     return true;
   }
 
-  private reportInfrastructureFailure(error: unknown): void {
+  reportInfrastructureFailure(error: unknown): void {
+    if (this.infrastructureTaskRunner !== undefined) {
+      this.infrastructureTaskRunner.runDetached('RouteMesh infrastructure', async () => {
+        throw error;
+      });
+      return;
+    }
     this.infrastructureFailure = {
       error:
         this.infrastructureFailure === undefined
@@ -1621,29 +1771,44 @@ export class RawServiceMeshRuntime {
   }
 }
 
+function controlSendKey(target: string, command: number): string {
+  return JSON.stringify([target, command]);
+}
+
+function routeConnectionId(generation: bigint): string {
+  return `route:${generation}`;
+}
+
 /**
  * Relocation and bound-Session controls are service-wire records themselves,
  * not application NodeSend(16) envelopes. Keep this list closed: a bare
  * record outside the frozen control vocabulary remains a protocol error.
  */
-function routeConnectionId(generation: bigint): string {
-  return `route:${generation}`;
-}
+const BARE_INFRASTRUCTURE_CONTROLS: ReadonlySet<number> = new Set<number>([
+  ServiceWireCommand.relocationReady,
+  ServiceWireCommand.relocationData,
+  ServiceWireCommand.replyRelay,
+  ServiceWireCommand.relocationCutover,
+  ServiceWireCommand.relocationPrepare,
+  ServiceWireCommand.sessionRelocationSeal,
+  ServiceWireCommand.sessionRelocationSealed,
+  ServiceWireCommand.sessionRelocationRoute,
+  ServiceWireCommand.replyRelayAck,
+  ServiceWireCommand.relocationState,
+  ServiceWireCommand.relocationFailed
+]);
 
 function isBareInfrastructureControl(command: number): boolean {
-  return [
-    ServiceWireCommand.relocationReady,
-    ServiceWireCommand.relocationData,
-    ServiceWireCommand.replyRelay,
-    ServiceWireCommand.relocationCutover,
-    ServiceWireCommand.relocationPrepare,
-    ServiceWireCommand.sessionRelocationSeal,
-    ServiceWireCommand.sessionRelocationSealed,
-    ServiceWireCommand.sessionRelocationRoute,
-    ServiceWireCommand.replyRelayAck,
-    ServiceWireCommand.relocationState,
-    ServiceWireCommand.relocationFailed
-  ].includes(command as never);
+  return BARE_INFRASTRUCTURE_CONTROLS.has(command);
+}
+
+function isApplicationEnvelopeCommand(command: number): boolean {
+  return (
+    command === M6aServiceWireCommand.nodeSend ||
+    command === M6aServiceWireCommand.nodeRequest ||
+    command === M6aServiceWireCommand.channelSend ||
+    command === M6aServiceWireCommand.channelRequest
+  );
 }
 
 function protocolCommand(parts: readonly Uint8Array[]): { readonly command?: number } {

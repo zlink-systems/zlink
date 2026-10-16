@@ -364,6 +364,17 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             ZLinkSpotRetireControl.TargetEndpoint observedEndpoint =
                     new ZLinkSpotRetireControl.TargetEndpoint() {
                         @Override
+                        public CompletionStage<Void> beginPrepare(
+                                UUID id, CompletionStage<Void> terminal, Runnable superseded) {
+                            return endpoint.beginPrepare(id, terminal, superseded);
+                        }
+
+                        @Override
+                        public CompletionStage<Void> endPrepare(UUID id) {
+                            return endpoint.endPrepare(id);
+                        }
+
+                        @Override
                         public ZLinkSpotRetireControl.TargetProfile applyTargetProfile(
                                 ZLinkSpotRetireControl.StageRequest request,
                                 long defaultActorSpotGeneration) {
@@ -634,6 +645,25 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                 .STOPPED,
                         sourceShutdown.get(7, TimeUnit.SECONDS).outcome(),
                         "source events: " + EVENTS);
+                return;
+            }
+            if (scenario == Scenario.BINDING_ABSENT) {
+                //  Session-Actor binding §8.3: the Session owner reported that the binding
+                //  is already gone, so the Actor moves without a Session binding.
+                var submission = moved.get(5, TimeUnit.SECONDS);
+                assertEquals(TARGET_RID, submission.targetActor().nodeRid());
+                link.targetCompletion.get(4, TimeUnit.SECONDS);
+                assertEquals(1, EVENTS.stream().filter("command42"::equals).count());
+                assertTrue(
+                        ZLinkServiceRelocationEnvelopeCodec.decode(
+                                        link.targetRequest.get().relocationPayload())
+                                .sessionBindings()
+                                .isEmpty(),
+                        "a bindingAbsent participant has no envelope Session binding");
+                assertTrue(link.targetRequest.get().sessionRoutes().isEmpty());
+                assertFalse(EVENTS.contains("command44"), "no command 44 for bindingAbsent");
+                assertFalse(EVENTS.contains("command44.abort"));
+                assertEquals(1, targetCommits.get());
                 return;
             }
             if (scenario.joinedFailure() != null || scenario == Scenario.COMPLETION_FAILURE) {
@@ -1094,7 +1124,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         JOINED_TYPED_FAILURE(LeaveMode.DELIVER),
         JOINED_GENERIC_FAILURE(LeaveMode.DELIVER),
         COMPLETION_FAILURE(LeaveMode.DELIVER),
-        SHUTDOWN_DURING_RESTORE(LeaveMode.DELIVER);
+        SHUTDOWN_DURING_RESTORE(LeaveMode.DELIVER),
+        BINDING_ABSENT(LeaveMode.DELIVER);
 
         private final LeaveMode leaveMode;
 
@@ -1354,17 +1385,28 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                         }
                                         case "requestSessionRelocationSeal" -> {
                                             var seal =
-                                                    codec.decodeSessionRelocationSeal(
-                                                            (byte[]) arguments[1]);
+                                                    ServiceWirePilotCodec
+                                                            .decodeSessionRelocationSeal42(
+                                                                    (byte[]) arguments[1]);
                                             EVENTS.add("command42");
                                             yield CompletableFuture.completedFuture(
-                                                    codec.encodeSessionRelocationSealed(
-                                                            new ZLinkServiceM6BWireCodec
-                                                                    .SessionRelocationSealed(
-                                                                    seal.relocation(),
-                                                                    seal.coordinator(),
-                                                                    seal.actor(),
-                                                                    seal.session())));
+                                                    ServiceWirePilotCodec
+                                                            .encodeSessionRelocationSealed43(
+                                                                    new ServiceWirePilotCodec
+                                                                            .SessionRelocationSealed43(
+                                                                            seal.relocation(),
+                                                                            seal.coordinator(),
+                                                                            seal.actor(),
+                                                                            seal.session(),
+                                                                            scenario
+                                                                                            == Scenario
+                                                                                                    .BINDING_ABSENT
+                                                                                    ? ServiceWirePilotCodec
+                                                                                            .SessionSealResult
+                                                                                            .BINDING_ABSENT
+                                                                                    : ServiceWirePilotCodec
+                                                                                            .SessionSealResult
+                                                                                            .SEALED)));
                                         }
                                         case "sendSessionRelocationRoute" -> {
                                             var route =
@@ -1670,6 +1712,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             ACCEPTED.set(accepted.operationId());
             ACCEPTED_STAGE.get().complete(accepted.operationId());
             EVENTS.add("target.accepted");
+            if (currentScenario == Scenario.BINDING_ABSENT) {
+                return CompletableFuture.completedFuture(null);
+            }
             return context.boundSession().send(new JoinGameStatePush("WaitingForPlayers")).submit();
         }
     }

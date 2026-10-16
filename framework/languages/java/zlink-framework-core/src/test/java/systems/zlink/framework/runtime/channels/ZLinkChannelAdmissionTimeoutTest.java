@@ -141,6 +141,7 @@ final class ZLinkChannelAdmissionTimeoutTest {
         var rejected = new java.util.concurrent.atomic.AtomicInteger();
         var released = new java.util.concurrent.atomic.AtomicInteger();
         var binding = new CompletableFuture<String>();
+        var bindingReleased = new CompletableFuture<Void>();
         try (var payload = systems.zlink.contracts.messaging.Message.from("binding-owned");
                 var worker = java.util.concurrent.Executors.newSingleThreadExecutor()) {
             var pending =
@@ -161,6 +162,7 @@ final class ZLinkChannelAdmissionTimeoutTest {
                                                 (value, failure) -> {
                                                     released.incrementAndGet();
                                                     payload.close();
+                                                    bindingReleased.complete(null);
                                                 });
                                         return binding;
                                     },
@@ -187,6 +189,9 @@ final class ZLinkChannelAdmissionTimeoutTest {
                 resume.countDown();
             }
             ready.get(1, TimeUnit.SECONDS);
+            // Registry admission can return before its queued binding-start turn finishes.
+            // Observe binding-owned cleanup before checking cancellation and payload release.
+            bindingReleased.get(1, TimeUnit.SECONDS);
             assertTrue(binding.isCancelled());
             assertTrue(payload.empty());
             assertEquals(1, released.get());

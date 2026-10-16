@@ -141,13 +141,13 @@ class service_topology_registry_t
                                    std::vector<std::uint8_t> connection_id,
                                    service_liveness_registry_t::clock_t::time_point now =
                                      service_liveness_registry_t::clock_t::now (),
-                                   bool remote_admit = true);
+                                   protocol::command command = protocol::command::admit);
     peer_admission_result_t admit (service_node_descriptor_t descriptor,
                                    std::vector<std::uint8_t> connection_id,
                                    const service_node_descriptor_t &expected_descriptor,
                                    service_liveness_registry_t::clock_t::time_point now =
                                      service_liveness_registry_t::clock_t::now (),
-                                   bool remote_admit = true);
+                                   protocol::command command = protocol::command::admit);
     bool disconnect (const std::vector<std::uint8_t> &node_routing_id,
                      const std::vector<std::uint8_t> &connection_id);
 
@@ -180,7 +180,7 @@ class service_topology_registry_t
                                         std::vector<std::uint8_t> connection_id,
                                         const service_node_descriptor_t *expected_descriptor,
                                         service_liveness_registry_t::clock_t::time_point now,
-                                        bool remote_admit);
+                                        protocol::command command);
     struct topology_state_t;
     std::function<void ()> publish_topology (std::shared_ptr<topology_state_t> next);
 

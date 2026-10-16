@@ -970,8 +970,16 @@ test('managed timer pauses and restores its logical schedule without native hand
   assert.equal(captured.handlerType, '');
   assert.deepEqual(captured.pendingTicks, []);
 
-  const target = new ZLinkManagedTimer('heartbeat', 60_000, options, async () => {});
-  target.restoreRelocation(captured);
+  const target = new ZLinkManagedTimer(
+    'heartbeat',
+    60_000,
+    options,
+    async () => {},
+    undefined,
+    undefined,
+    undefined,
+    { paused: true, cursor: captured }
+  );
   const restored = await target.captureRelocation();
   assert.deepEqual(restored, captured);
   await source.dispose();
@@ -1073,7 +1081,6 @@ test('SpotWide Capture and Restore callbacks run eight at a time and preserve pa
       async publish() {},
       async restoreBoundSession() {},
       async replayQueuedMessage() {},
-      async restoreTimer() {},
       async normalize() {},
       async openAdmission() {},
       abort() {}
@@ -1135,7 +1142,6 @@ test('concrete standalone Actor owner preserves external membership and exact ge
       async publish() {},
       async restoreBoundSession() {},
       async replayQueuedMessage() {},
-      async restoreTimer() {},
       async normalize() {},
       async openAdmission() {},
       abort() {

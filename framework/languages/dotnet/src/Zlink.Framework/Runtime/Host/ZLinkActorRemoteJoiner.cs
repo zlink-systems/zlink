@@ -338,18 +338,18 @@ internal sealed class ZLinkActorRemoteJoiner(
                     if (targetReservationRoute is { } reservation)
                         await AbortTargetReservationBestEffortAsync(reservation)
                             .ConfigureAwait(false);
-                    await AbortBoundSessionRouteSealBestEffortAsync(
-                            actor.Context.ActorId,
-                            actorState,
-                            targetReservationRoute?.HandoffId ?? handoffId
-                        )
-                        .ConfigureAwait(false);
                     await RollbackSourceHandoffAsync(
                             actor,
                             actorState,
                             sourceActivation,
                             sourceLeft,
                             sourceCaptureStarted
+                        )
+                        .ConfigureAwait(false);
+                    await AbortBoundSessionRouteSealBestEffortAsync(
+                            actor.Context.ActorId,
+                            actorState,
+                            targetReservationRoute?.HandoffId ?? handoffId
                         )
                         .ConfigureAwait(false);
                 }
@@ -378,6 +378,13 @@ internal sealed class ZLinkActorRemoteJoiner(
                     : ZLinkRelocationMetricOutcome.Failed
             );
             throw;
+        }
+        finally
+        {
+            runtime.CompleteSessionRelocation(
+                actor.Context.MeshName,
+                Guid.ParseExact(targetReservationRoute?.HandoffId ?? handoffId, "N")
+            );
         }
     }
 
@@ -681,7 +688,6 @@ internal sealed class ZLinkActorRemoteJoiner(
             );
             if (hasBoundSession)
             {
-                actorState.RememberSourceSessionRelocation(handoffId, sessionRelocationContext);
                 boundSession = boundSession with
                 {
                     BindingGeneration =
@@ -695,7 +701,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                             )
                             : boundSession.SessionOwnerNodeGeneration,
                 };
-                await SealBoundSessionRouteAsync(
+                hasBoundSession = await SealBoundSessionRouteAsync(
                         actor.Context.ActorId,
                         actorRef.NodeRid,
                         boundSession,
@@ -703,19 +709,25 @@ internal sealed class ZLinkActorRemoteJoiner(
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-                actorState.BindSession(
-                    boundSession.SessionNodeRid,
-                    boundSession.SessionRid,
-                    boundSession.BindingToken,
-                    boundSession.BindingGeneration,
-                    boundSession.ObjectGeneration,
-                    boundSession.AuthorityOwnerGeneration,
-                    boundSession.MeshName,
-                    boundSession.TargetNodeGeneration,
-                    boundSession.OwnerLeaseGeneration,
-                    boundSession.SessionOwnerNodeGeneration,
-                    boundSession.AcceptedHighWater
-                );
+                if (hasBoundSession)
+                {
+                    actorState.RememberSourceSessionRelocation(handoffId, sessionRelocationContext);
+                    actorState.BindSession(
+                        boundSession.SessionNodeRid,
+                        boundSession.SessionRid,
+                        boundSession.BindingToken,
+                        boundSession.BindingGeneration,
+                        boundSession.ObjectGeneration,
+                        boundSession.AuthorityOwnerGeneration,
+                        boundSession.MeshName,
+                        boundSession.TargetNodeGeneration,
+                        boundSession.OwnerLeaseGeneration,
+                        boundSession.SessionOwnerNodeGeneration,
+                        boundSession.AcceptedHighWater,
+                        boundSession.SessionOwnerId,
+                        boundSession.SessionOwnerLeaseGeneration
+                    );
+                }
             }
 
             ZLinkCapturedActorRelocationState relocationState;
@@ -990,10 +1002,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                     authorityStore,
                     authorityKey,
                     sourceAuthoritySnapshot,
-                    prepared.Relocation,
                     relocationId,
                     targetDescriptor,
-                    prepare.TargetAttemptGeneration,
                     deadline.Monotonic,
                     () => runtime.LocationLifecycle?.IsOwnerLeaseValid(sourceOwner) == true,
                     token =>
@@ -1032,7 +1042,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                     )
                 );
             }
-            var published = settlement.Snapshot!;
             var resultActorRef = targetActor;
             setTargetAccepted(resultActorRef, admissionReplyMessage);
             if (resultActorRef.Generation != actorRef.Generation)
@@ -1048,7 +1057,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 sourceAuthority.NodeGeneration,
                 admission.Snapshot.NodeGeneration,
                 actorAuthorityOwnerGeneration,
-                published.AuthorityOwnerGeneration,
+                settlement.Snapshot?.AuthorityOwnerGeneration,
                 checked((ulong)runtime.LocationLifecycle!.OwnerToken.LeaseGeneration),
                 admission.Snapshot.OwnerLeaseGeneration,
                 registration.Locations.Options.MessageFollowDuration,
@@ -1469,7 +1478,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         );
     }
 
-    private async ValueTask SealBoundSessionRouteAsync(
+    private async ValueTask<bool> SealBoundSessionRouteAsync(
         string actorId,
         RoutingId actorNodeRid,
         ZLinkActorBoundSession session,
@@ -1485,7 +1494,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"bound_seal_begin actor={actorId} session_node={sessionOwnerNode} local={sessionOwnerNode == runtime.GetMeshNodeRuntime(meshName).Node.RoutingId}"
         );
-        _ = await runtime
+        var response = await runtime
             .SealSessionRelocationAsync(
                 meshName,
                 sessionOwnerNode,
@@ -1493,6 +1502,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 cancellationToken
             )
             .ConfigureAwait(false);
+        return response.SealResult == ServiceWirePilotCodec.SessionSealResult.Sealed;
     }
 
     private async ValueTask AbortBoundSessionRouteSealBestEffortAsync(

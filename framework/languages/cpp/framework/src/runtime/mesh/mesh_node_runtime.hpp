@@ -39,6 +39,7 @@ class zlink_builder_t;
 
 namespace zlink::framework::detail
 {
+class delay_owner_t;
 
 std::string canonical_actor_join_handoff_id (const std::vector<std::uint8_t> &source_actor_node_rid,
                                              std::string_view actor_id,
@@ -159,10 +160,6 @@ struct bound_session_relocation_route_t
     location_owner_token_t session_owner;
     zlink::routing_id_t session;
     std::uint64_t binding_generation = 0;
-    std::uint64_t observed_sequence = 0;
-
-    friend bool operator== (const bound_session_relocation_route_t &,
-                            const bound_session_relocation_route_t &) = default;
 };
 
 class mesh_node_runtime_t
@@ -184,6 +181,7 @@ class mesh_node_runtime_t
     void cancel_pending_dispatch_waits () noexcept;
     void signal_dispatch_activity ();
     void bind_serializers (serializer_registry_t &serializers) noexcept;
+    void bind_delay_owner (delay_owner_t &owner) noexcept { _delay_owner = &owner; }
     void bind_descriptor_publisher (
       std::function<void (const std::map<std::string, int> &, int, std::uint64_t)> publisher);
     void configure_user_spot_operations (std::shared_ptr<location_repository_t> store,
@@ -524,10 +522,8 @@ class mesh_node_runtime_t
     struct session_relocation_checkpoint_t
     {
         runtime::stateful::object_ref_t source;
-        authority_snapshot_t authority;
         bound_session_relocation_route_t session;
         host::session_relocation_seal_result_t seal;
-        std::uint64_t seal_boundary_sequence = 0;
     };
 
     struct session_relocation_seal_outcome_t
@@ -665,6 +661,7 @@ class mesh_node_runtime_t
     std::function<void (const std::map<std::string, int> &, int, std::uint64_t)>
       _descriptor_publisher;
     std::shared_ptr<host::public_host_runtime_t> _node;
+    delay_owner_t *_delay_owner = nullptr;
     std::shared_ptr<peer_callback_gate_t> _peer_callback_gate =
       std::make_shared<peer_callback_gate_t> ();
     runtime::offload_executor_t _message_follow_subscription_lane_executor;

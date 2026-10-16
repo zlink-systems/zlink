@@ -43,7 +43,7 @@ function descriptor(nodeRoutingId) {
   };
 }
 
-function selectedRouteRuntime(routes) {
+function selectedRouteRuntime(routes, submit) {
   const sent = [];
   const requested = [];
   const disconnected = [];
@@ -69,11 +69,12 @@ function selectedRouteRuntime(routes) {
     routesSnapshot: () =>
       [...routes].map(([routingId, routeGeneration]) => ({ routingId, routeGeneration })),
     submitSend(target, parts) {
-      sent.push([target, parts[0][3]]);
+      sent.push([target, wire.decodeHeader(parts[0]).command, Buffer.from(parts[0])]);
+      if (submit) return submit(target, parts);
       return { result: SubmitResult.Ok, admitted: Promise.resolve() };
     },
     async send(target, parts) {
-      sent.push([target, parts[0][3]]);
+      sent.push([target, wire.decodeHeader(parts[0]).command, Buffer.from(parts[0])]);
     },
     async request(target) {
       //  Core decides whether the selected route carries the request.
@@ -105,6 +106,154 @@ function selectedRouteRuntime(routes) {
       )
   };
 }
+
+for (const deferred of [false, true]) {
+  test(`HELLO retains its first bytes until ADMIT and then publishes UPDATE (deferred=${deferred})`, async () => {
+    let complete;
+    const h = selectedRouteRuntime(
+      new Map([['peer', 11n]]),
+      deferred
+        ? (_target, parts) =>
+            wire.decodeHeader(parts[0]).command === wire.M6aServiceWireCommand.hello
+              ? {
+                  result: SubmitResult.Backpressured,
+                  admitted: new Promise((resolve) => {
+                    complete = resolve;
+                  })
+                }
+              : { result: SubmitResult.Ok, admitted: Promise.resolve() }
+        : undefined
+    );
+    const receive = (command) =>
+      h.processReceived({
+        sourceRid: 'peer',
+        routeGeneration: 11n,
+        parts: [wire.encodeRouteMeshAdmission(command, descriptor('peer'))]
+      });
+    try {
+      h.runtime.connectPeerByRoutingId(descriptor('peer').advertisedEndpoint, 'peer');
+      await h.runtime.observeSelectedRoutes();
+      const first = h.sent[0][2];
+      const revision = wire.decodeRouteMeshAdmission(
+        first,
+        wire.M6aServiceWireCommand.hello,
+        'local'
+      ).descriptorRevision;
+      await h.runtime.updateLocalDescriptor({ channelName: 'alpha', channelWeight: 50 });
+      if (deferred) {
+        h.runtime.tickLiveness(0);
+        assert.equal(h.sent.length, 1, 'pending submission is not submitted twice');
+        complete();
+        await turn();
+      }
+      h.runtime.tickLiveness(0);
+      await turn();
+      const hellos = h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello);
+      assert.equal(hellos.length, 2);
+      assert.deepEqual(hellos[1][2], first);
+      complete?.();
+      await turn();
+      // A crossed HELLO must respond with the same admission snapshot.
+      await receive(wire.M6aServiceWireCommand.hello);
+      const admit = h.sent.find(([, command]) => command === wire.M6aServiceWireCommand.admit)[2];
+      assert.equal(
+        wire.decodeRouteMeshAdmission(admit, wire.M6aServiceWireCommand.admit, 'local')
+          .descriptorRevision,
+        revision
+      );
+      complete?.();
+      await turn();
+      const unsubscribe = h.runtime.observePeerRouteChanged((rid) => {
+        void h.runtime.announcePeer(rid);
+      });
+      await receive(wire.M6aServiceWireCommand.admit);
+      unsubscribe();
+      const update = h.sent.find(
+        ([, command]) => command === wire.M6aServiceWireCommand.update
+      )?.[2];
+      assert.ok(update, 'ADMIT publishes the current descriptor through UPDATE');
+      assert.equal(
+        wire.decodeRouteMeshAdmission(update, wire.M6aServiceWireCommand.update, 'local')
+          .descriptorRevision,
+        revision + 1n
+      );
+      complete?.();
+      await turn();
+      h.runtime.tickLiveness(0);
+      assert.equal(
+        h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length,
+        2
+      );
+    } finally {
+      complete?.();
+      h.runtime.close();
+    }
+  });
+}
+
+for (const command of [wire.M6aServiceWireCommand.hello, wire.M6aServiceWireCommand.admit]) {
+  test(`wire admission rejects an increased revision for command ${command}`, async () => {
+    const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+    const receive = (revision) =>
+      h.processReceived({
+        sourceRid: 'peer',
+        routeGeneration: 11n,
+        parts: [
+          wire.encodeRouteMeshAdmission(command, {
+            ...descriptor('peer'),
+            descriptorRevision: revision
+          })
+        ]
+      });
+    try {
+      await h.runtime.observeSelectedRoutes();
+      assert.equal(await receive(1n), 'infrastructure');
+      assert.equal(await receive(2n), 'protocolError');
+      assert.equal(h.runtime.topology.peer('peer').descriptor.descriptorRevision, 1n);
+    } finally {
+      h.runtime.close();
+    }
+  });
+}
+
+test('route replacement retires a pending HELLO snapshot before its send completes', async () => {
+  const routes = new Map([['peer', 11n]]);
+  let complete;
+  let submitted = 0;
+  const h = selectedRouteRuntime(routes, () =>
+    ++submitted === 1
+      ? {
+          result: SubmitResult.Backpressured,
+          admitted: new Promise((resolve) => {
+            complete = resolve;
+          })
+        }
+      : { result: SubmitResult.Ok, admitted: Promise.resolve() }
+  );
+  try {
+    await h.runtime.observeSelectedRoutes();
+    await h.runtime.updateLocalDescriptor({ channelName: 'alpha', channelWeight: 50 });
+    routes.set('peer', 12n);
+    await h.runtime.observeSelectedRoutes();
+    const replacement = h.sent.at(-1)[2];
+    assert.notDeepEqual(replacement, h.sent[0][2]);
+    complete();
+    await turn();
+    h.runtime.tickLiveness(0);
+    assert.deepEqual(
+      h.sent.at(-1)[2],
+      replacement,
+      'old completion cannot retire the new exchange'
+    );
+    routes.clear();
+    await h.runtime.observeSelectedRoutes();
+    assert.equal(h.runtime.controlSends.size, 0);
+  } finally {
+    complete?.();
+    h.runtime.close();
+  }
+  assert.equal(h.runtime.controlSends.size, 0);
+});
 
 test('RouteMesh admission follows the observed Core selected route (FW01)', async () => {
   const peer = descriptor('peer');
@@ -401,6 +550,38 @@ test('inbound selected route sends HELLO without an outbound intent', async () =
     assert.equal(h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length, 1);
   } finally { h.runtime.close(); }
 });
+// MeshNode §7.1 and hot-path §4.2: an inbound-only route must retain its
+// management wake until ADMIT, even after a crossed HELLO admits its descriptor.
+for (const crossedHello of [false, true]) {
+  test(`maintenance stays due until inbound selected route receives ADMIT (crossedHello=${crossedHello})`, async (t) => {
+    const now = 1000;
+    t.mock.method(performance, 'now', () => now);
+    const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+    const receive = (command) => h.processReceived({
+      sourceRid: 'peer',
+      routeGeneration: 11n,
+      parts: [wire.encodeRouteMeshAdmission(command, descriptor('peer'))]
+    });
+    try {
+      await h.runtime.observeSelectedRoutes();
+      if (crossedHello) await receive(wire.M6aServiceWireCommand.hello);
+      h.runtime.liveness.tick(now);
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), now);
+      const hellos = () => h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length;
+      const initial = hellos();
+      h.runtime.tickLiveness(now);
+      assert.equal(hellos(), initial + 1);
+      await receive(wire.M6aServiceWireCommand.admit);
+      h.runtime.liveness.tick(now);
+      assert.ok(h.runtime.nextMaintenanceDeadlineMs(now) > now);
+      h.runtime.tickLiveness(now);
+      assert.equal(hellos(), initial + 1);
+    } finally {
+      h.runtime.close();
+    }
+  });
+}
+
 test('liveness maintenance resends HELLO until the selected route receives ADMIT', async () => {
   const h = selectedRouteRuntime(new Map([['peer', 11n]]));
   try {

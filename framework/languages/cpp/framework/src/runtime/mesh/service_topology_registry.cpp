@@ -302,10 +302,9 @@ peer_admission_result_t
 service_topology_registry_t::admit (service_node_descriptor_t descriptor,
                                     std::vector<std::uint8_t> connection_id,
                                     service_liveness_registry_t::clock_t::time_point now,
-                                    bool remote_admit)
+                                    protocol::command command)
 {
-    return admit_impl (std::move (descriptor), std::move (connection_id), nullptr, now,
-                       remote_admit);
+    return admit_impl (std::move (descriptor), std::move (connection_id), nullptr, now, command);
 }
 
 peer_admission_result_t
@@ -313,10 +312,10 @@ service_topology_registry_t::admit (service_node_descriptor_t descriptor,
                                     std::vector<std::uint8_t> connection_id,
                                     const service_node_descriptor_t &expected_descriptor,
                                     service_liveness_registry_t::clock_t::time_point now,
-                                    bool remote_admit)
+                                    protocol::command command)
 {
     return admit_impl (std::move (descriptor), std::move (connection_id), &expected_descriptor, now,
-                       remote_admit);
+                       command);
 }
 
 peer_admission_result_t
@@ -324,7 +323,7 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                                          std::vector<std::uint8_t> connection_id,
                                          const service_node_descriptor_t *expected_descriptor,
                                          service_liveness_registry_t::clock_t::time_point now,
-                                         bool remote_admit)
+                                         protocol::command command)
 {
     if (!valid_descriptor (descriptor) || connection_id.empty ()) {
         return peer_admission_result_t::invalid_descriptor;
@@ -352,9 +351,10 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                                   : not_required != _not_required_peers.end ()
                                     ? &not_required->second
                                     : nullptr;
-            if (current != nullptr
-                && descriptor.lifecycle_generation != current->lifecycle_generation
-                && expected_descriptor == nullptr) {
+            if ((current == nullptr
+                 || descriptor.lifecycle_generation != current->lifecycle_generation)
+                && (command == protocol::command::update
+                    || (current != nullptr && expected_descriptor == nullptr))) {
                 return std::pair{peer_admission_result_t::stale_descriptor,
                                  std::function<void ()>{}};
             }
@@ -362,14 +362,10 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                 && descriptor.lifecycle_generation == current->lifecycle_generation
                 && (descriptor.descriptor_revision < current->descriptor_revision
                     || (descriptor.descriptor_revision == current->descriptor_revision
-                        && *current != descriptor))) {
-                return std::pair{peer_admission_result_t::stale_descriptor,
-                                 std::function<void ()>{}};
-            }
-            if (current != nullptr
-                && descriptor.lifecycle_generation == current->lifecycle_generation
-                && descriptor.descriptor_revision > current->descriptor_revision
-                && !immutable_fields_match (*current, descriptor)) {
+                        && *current != descriptor)
+                    || (descriptor.descriptor_revision > current->descriptor_revision
+                        && (command != protocol::command::update
+                            || !immutable_fields_match (*current, descriptor))))) {
                 return std::pair{peer_admission_result_t::stale_descriptor,
                                  std::function<void ()>{}};
             }
@@ -395,7 +391,7 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                 connection->record_received (now);
             }
             const bool ready =
-              remote_admit
+              command == protocol::command::admit
               || (admitted != topology->peers.end ()
                   && admitted->second.connection_id == connection_id && admitted->second.ready);
             const bool same_admission = admitted != topology->peers.end ()

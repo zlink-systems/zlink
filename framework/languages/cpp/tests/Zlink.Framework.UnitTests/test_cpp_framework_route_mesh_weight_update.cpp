@@ -102,7 +102,9 @@ TEST (ServiceTopologyPreparedFacts, PublishesChangesBeforeNotification)
 
     ++remote.descriptor_revision;
     remote.channels.front ().weight = 50;
-    ASSERT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (remote, {1}));
+    ASSERT_EQ (mesh::peer_admission_result_t::admitted,
+               topology.admit (remote, {1}, mesh::service_liveness_registry_t::clock_t::now (),
+                               protocol::command::update));
     ASSERT_TRUE (notified_peer);
     EXPECT_EQ (remote, notified_peer->descriptor);
     EXPECT_GT (notified_peer->admission_epoch, retained->admission_epoch);
@@ -159,7 +161,9 @@ TEST (ServiceTopologyPreparedFacts, ConcurrentReadsRetainCompleteDescriptors)
     for (int update = 0; update < update_count; ++update) {
         ++remote.descriptor_revision;
         remote.active_capacity_used = static_cast<std::uint32_t> (remote.descriptor_revision);
-        EXPECT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (remote, {1}));
+        EXPECT_EQ (mesh::peer_admission_result_t::admitted,
+                   topology.admit (remote, {1}, mesh::service_liveness_registry_t::clock_t::now (),
+                                   protocol::command::update));
     }
     writer_done.store (true);
     reader.join ();

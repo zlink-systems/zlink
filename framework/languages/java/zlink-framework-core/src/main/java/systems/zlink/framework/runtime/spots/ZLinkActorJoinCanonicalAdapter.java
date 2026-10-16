@@ -46,7 +46,12 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
     private final ConcurrentMap<UUID, CanonicalAdmission> canonicalAdmissions =
             new ConcurrentHashMap<>();
     private final ConcurrentMap<String, SourceAttempt> sources = new ConcurrentHashMap<>();
-    private final ZLinkActorJoinPrewarmRegistry prewarm = new ZLinkActorJoinPrewarmRegistry();
+    private final ZLinkActorJoinPrewarmRegistry prewarm =
+            new ZLinkActorJoinPrewarmRegistry(
+                    relocationId -> {
+                        canonicalAdmissions.remove(relocationId);
+                        admissions.remove(relocationId);
+                    });
 
     ZLinkActorJoinCanonicalAdapter(ZLinkActorRuntime actors, ZLinkSpotRuntime spots) {
         this.actors = Objects.requireNonNull(actors, "actors");
@@ -225,30 +230,15 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             //  attempted the same object is evicted first — newest
             //  attempt wins (spec 15 §4.2 "같은 object의 relocation
             //  temporary queue는 하나만 존재한다").
+            actors.resolveActorFactoryType(admission.actorType());
             prewarm.register(
                     admission.relocationId(),
                     admission.actorId(),
                     admission.objectGeneration(),
-                    admission.actorType(),
-                    actors.resolveActorFactoryType(admission.actorType()),
-                    evicted -> {
-                        admissions.remove(evicted.relocationId());
-                        LOGGER.info(
-                                "Actor Join prewarm for "
-                                        + evicted.objectKey().actorId()
-                                        + " evicted by a newer RelocationId: "
-                                        + admission.relocationId());
-                    });
-            //  Same validity-window timer covers both the admission
-            //  record and its prewarm so an accepted-but-never-started
-            //  move (DisableRelocation, capacity, compat failure) cleans
-            //  both up together (spec 15 §4.2).
+                    evicted -> {});
             spots.scheduleRelocationCleanup(
                     Instant.now().plus(admission.timeout()),
-                    () -> {
-                        admissions.remove(admission.relocationId(), admission);
-                        prewarm.release(admission.relocationId());
-                    });
+                    () -> prewarm.expire(admission.relocationId()));
         }
     }
 
@@ -264,23 +254,24 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             }
             return;
         }
+        actors.resolveActorFactoryType(admission.actorType());
         prewarm.register(
                 admission.relocationId(),
                 admission.actorId(),
                 admission.objectGeneration(),
-                admission.actorType(),
-                actors.resolveActorFactoryType(admission.actorType()),
-                evicted -> {
-                    canonicalAdmissions.remove(evicted.relocationId());
-                    admissions.remove(evicted.relocationId());
-                });
+                evicted -> {});
         spots.scheduleRelocationCleanup(
                 Instant.now().plus(admission.timeout()),
-                () -> {
-                    canonicalAdmissions.remove(admission.relocationId(), admission);
-                    admissions.remove(admission.relocationId());
-                    prewarm.release(admission.relocationId());
-                });
+                () -> prewarm.expire(admission.relocationId()));
+    }
+
+    CompletionStage<Void> beginTarget(
+            UUID relocationId, CompletionStage<Void> terminal, Runnable superseded) {
+        return prewarm.begin(relocationId, terminal, superseded);
+    }
+
+    CompletionStage<Void> endTarget(UUID relocationId) {
+        return prewarm.releaseAsync(relocationId);
     }
 
     /**
@@ -304,17 +295,21 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             }
             return false;
         }
-        if (candidate == null) {
-            throw recoveryRejected(
-                    "canonical Actor Join recovery has no matching command-28 admission", null);
-        }
         ZLinkActorJoinRecoveryCodec.Recovery recovery = decoded.orElseThrow();
+        if (candidate == null) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "canonical Actor Join preparation admission is no longer available");
+        }
         var participant = request.participants().getFirst();
         requireRecoveryFence(recovery.relocationId().equals(relocationId), "handoff id");
         requireRecoveryFence(recovery.actorId().equals(candidate.actorId()), "actor id");
         requireRecoveryFence(recovery.actorType().equals(candidate.actorType()), "actor type");
-        requireRecoveryFence(
-                recovery.actorGeneration() == candidate.objectGeneration(), "actor generation");
+        if (recovery.actorGeneration() != candidate.objectGeneration()) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "canonical Actor Join recovery actor generation conflicts");
+        }
         requireRecoveryFence(
                 recovery.sourceNodeRid().equals(candidate.sourceNodeRid()),
                 "source node routing id");
@@ -410,10 +405,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return true;
     }
 
-    /**
-     * Looks up the attempt registered at admission time so PREPARE (Restore) can verify the object
-     * identity (ActorId + ObjectGeneration) before installing the real stage.
-     */
+    /** Returns the reservation still owned by the canonical target attempt. */
     Optional<ZLinkActorJoinPrewarmRegistry.Attempt> findPrewarm(UUID relocationId) {
         return prewarm.find(relocationId);
     }
@@ -447,13 +439,9 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         prewarm.completeMigration(relocationId, deliver, installed, liveAbort);
     }
 
-    /**
-     * Releases the attempt reserved at admission time. Callers use this once it has been consumed
-     * into the real staged Actor (normal PREPARE handling), when PREPARE is aborted, or for any
-     * other cleanup of the admission-time reservation.
-     */
+    /** Ends ingress forwarding when the stage closes; the target terminal releases admission. */
     void releasePrewarm(UUID relocationId) {
-        prewarm.release(relocationId);
+        prewarm.detachIngress(relocationId);
     }
 
     Optional<Admission> findAdmission(ZLinkSpotRetireControl.StageRequest request) {
@@ -462,6 +450,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             return Optional.empty();
         }
         if (!admission.actorId().equals(request.participants().getFirst().objectId())
+                || admission.objectGeneration()
+                        != request.participants().getFirst().objectGeneration()
                 || !admission.targetSpotId().equals(request.spotId())) {
             throw new IllegalStateException(
                     "canonical Actor Join target admission fence conflicts");
@@ -585,12 +575,6 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return actors.invokeActorLifecycle(actor, () -> actor.onJoinCompleted(completion));
     }
 
-    void completeTarget(Admission admission) {
-        admissions.remove(admission.relocationId(), admission);
-        canonicalAdmissions.remove(admission.relocationId());
-        prewarm.release(admission.relocationId());
-    }
-
     private static boolean sameCanonicalAdmission(
             CanonicalAdmission left, CanonicalAdmission right) {
         return left.relocationId().equals(right.relocationId())
@@ -620,7 +604,9 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
 
     private static void requireRecoveryFence(boolean condition, String field) {
         if (!condition) {
-            throw recoveryRejected("canonical Actor Join recovery " + field + " conflicts", null);
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "canonical Actor Join recovery " + field + " conflicts");
         }
     }
 

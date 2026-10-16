@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Systems.Zlink.Runtime.Native;
 
 namespace Systems.Zlink;
@@ -67,22 +66,6 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         if (dest == IntPtr.Zero)
             throw new InvalidOperationException("Message data is null.");
         data.CopyTo(new Span<byte>((void*)dest, data.Length));
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Message AllocateCoreValidated(int size)
-    {
-        var message = RentFromPool();
-        try
-        {
-            message.InitSizeOnInvalidMessage(size);
-            return message;
-        }
-        catch
-        {
-            message.ReturnToPoolOrRelease();
-            throw;
-        }
     }
 
     private unsafe Span<byte> AsSpanCore()
@@ -174,23 +157,6 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         _knownSize = size;
     }
 
-    internal Message Move()
-    {
-        var moved = RentFromPool();
-        try
-        {
-            MoveTo(ref moved.NativeMsg);
-            moved._knownSize = _knownSize;
-            moved.IsValid = true;
-            return moved;
-        }
-        catch
-        {
-            moved.ReturnToPoolOrRelease();
-            throw;
-        }
-    }
-
     /// <summary>
     ///     Creates a new message sharing this message's native payload; the caller
     ///     owns and must dispose it.
@@ -252,14 +218,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         }
         catch
         {
-            try
-            {
-                NativeMethods.zlink_msg_close(ref dest);
-            }
-            catch
-            {
-            }
-
+            NativeMethods.zlink_msg_close(ref dest);
             throw;
         }
     }
@@ -284,14 +243,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         }
         catch
         {
-            try
-            {
-                NativeMethods.zlink_msg_close(ref NativeMsg);
-            }
-            catch
-            {
-            }
-
+            NativeMethods.zlink_msg_close(ref NativeMsg);
             throw;
         }
     }
@@ -310,40 +262,9 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         }
         catch
         {
-            try
-            {
-                NativeMethods.zlink_msg_close(ref dest);
-            }
-            catch
-            {
-            }
-
+            NativeMethods.zlink_msg_close(ref dest);
             throw;
         }
-    }
-
-    internal static Message AdoptNative(ref ZlinkMsg source)
-    {
-        return AdoptNativeFromPool(ref source);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static unsafe Message CopyFromNativeSingle(IntPtr message)
-    {
-        if (message == IntPtr.Zero)
-            throw new ArgumentNullException(nameof(message));
-
-        var src = (ZlinkMsg*)message;
-        var size = GetNativeSize(ref *src);
-        if (size <= 0)
-            return new Message(0);
-
-        var payloadPtr = NativeMethods.zlink_msg_data(ref *src);
-        if (payloadPtr == IntPtr.Zero)
-            return new Message(0);
-
-        var payload = new ReadOnlySpan<byte>((void*)payloadPtr, size);
-        return new Message(payload);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -1000,7 +1000,8 @@ internal sealed class ZLinkSpotNodeCatalog(
         ulong authorityOwnerGeneration,
         ZLinkMessage request,
         CancellationToken cancellationToken,
-        bool invokeCreate = true
+        bool invokeCreate = true,
+        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null
     )
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1065,7 +1066,8 @@ internal sealed class ZLinkSpotNodeCatalog(
                         spotType,
                         nativeSpot,
                         requestedSpotId,
-                        cancellationToken
+                        cancellationToken,
+                        logicalTimers
                     )
                     .ConfigureAwait(false);
                 response = null;
@@ -1106,7 +1108,8 @@ internal sealed class ZLinkSpotNodeCatalog(
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
         CancellationToken cancellationToken,
-        bool restoreLogicalTimers = false
+        bool restoreLogicalTimers = false,
+        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -1169,7 +1172,8 @@ internal sealed class ZLinkSpotNodeCatalog(
                     nativeSpot,
                     requestedSpotId,
                     cancellationToken,
-                    restoreLogicalTimers
+                    restoreLogicalTimers,
+                    logicalTimers
                 )
                 .ConfigureAwait(false);
             await _lane

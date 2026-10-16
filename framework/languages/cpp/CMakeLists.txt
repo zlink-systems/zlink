@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.30.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.30.1 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
@@ -1247,8 +1247,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
     target_link_libraries(test_cpp_framework_close_failure PRIVATE zlink_framework zlink::cpp Threads::Threads)
     target_link_options(test_cpp_framework_close_failure PRIVATE
-      -Wl,--wrap=zlink_poller_destroy -Wl,--wrap=zlink_close -Wl,--wrap=zlink_poller_wait -Wl,--wrap=zlink_socket)
-    foreach(owner delay-close delay-wait delay-success timer-self-close timer-concurrent-close native-channel-continue cleanup-continue cleanup-multiple server-close-lane client-close-lane server-close-retry client-close-retry route dealer timer mesh mesh-close-lane fanout-poller fanout-publisher fanout-subscriber channel-publisher channel-poller host-stop host-timer host-runtime-report timer-destructor stream-worker stream-worker-no-monitoring destructor-publisher destructor-mesh)
+      -Wl,--wrap=zlink_poller_destroy -Wl,--wrap=zlink_close -Wl,--wrap=zlink_poller_wait -Wl,--wrap=zlink_socket -Wl,--wrap=zlink_timer_start)
+    foreach(owner delay-close delay-wait delay-success host-pending-delay delay-after-stop delay-stop-registration-race delay-reap-completed delay-preflight-host-teardown timer-self-close timer-concurrent-close native-channel-continue cleanup-continue cleanup-multiple server-close-lane client-close-lane server-close-retry client-close-retry route dealer timer mesh mesh-close-lane fanout-poller fanout-publisher fanout-subscriber channel-publisher channel-poller host-stop host-timer host-runtime-report timer-destructor stream-worker stream-worker-no-monitoring destructor-publisher destructor-mesh)
       zlink_framework_cpp_add_test(
         NAME test_cpp_framework_close_failure_${owner}
         COMMAND test_cpp_framework_close_failure ${owner}
@@ -2160,6 +2160,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_backpressure_reliability
     tests/Zlink.Framework.UnitTests/test_cpp_framework_backpressure_reliability.cpp
     "framework-unit;framework-regression;backpressure;reliability")
+  add_zlink_framework_test(
+    test_cpp_framework_stream_typed_reply
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_typed_reply.cpp
+    "framework-unit;framework-contract;stream;reply"
+    unit)
   add_zlink_framework_test(
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp

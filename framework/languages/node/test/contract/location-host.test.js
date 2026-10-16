@@ -1225,8 +1225,8 @@ function fakeBackendAdapterFactory(calls, nodeRid) {
               };
             },
             peers() { return []; },
-            shutdown() {},
-            close() {
+            async shutdown() {},
+            async close() {
               calls.push('spot:dispose');
             }
           };

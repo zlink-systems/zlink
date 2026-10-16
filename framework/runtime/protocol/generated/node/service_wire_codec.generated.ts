@@ -1332,6 +1332,27 @@ function writeSourceCleanupState(input: SourceCleanupState, writer: Writer, cont
 export function decodeSourceCleanupState(bytes: Uint8Array, context: ServiceWireDecoderContext): SourceCleanupState { const reader = new Reader(bytes); const value = readSourceCleanupState(reader, context, {}, 0); reader.done("source-cleanup-state"); return value; }
 export function encodeSourceCleanupState(value: SourceCleanupState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSourceCleanupState(value, writer, context, {}, 0); return writer.result(); }
 
+export type SessionSealResult = "sealed" | "bindingAbsent";
+export function enumWireSessionSealResult(value: SessionSealResult): number { switch (value) {
+  case "sealed": return 1;
+  case "bindingAbsent": return 2;
+} }
+function readSessionSealResult(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): SessionSealResult {
+  void context; void enclosing; void flags;
+  const raw = reader.u(1); switch (Number(raw)) {
+    case 1: return "sealed";
+    case 2: return "bindingAbsent";
+    default: fail("session-seal-result enum");
+  }
+}
+
+function writeSessionSealResult(input: SessionSealResult, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
+  void context; void enclosing; void flags; const value: any = input;
+  writer.u(numeric(enumWireSessionSealResult(value)), 1);
+}
+export function decodeSessionSealResult(bytes: Uint8Array, context: ServiceWireDecoderContext): SessionSealResult { const reader = new Reader(bytes); const value = readSessionSealResult(reader, context, {}, 0); reader.done("session-seal-result"); return value; }
+export function encodeSessionSealResult(value: SessionSealResult, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSessionSealResult(value, writer, context, {}, 0); return writer.result(); }
+
 export type ReplyRelayAckStatus = "terminalReceived" | "alreadyTerminal";
 export function enumWireReplyRelayAckStatus(value: ReplyRelayAckStatus): number { switch (value) {
   case "terminalReceived": return 1;
@@ -9015,7 +9036,7 @@ const frames: Uint8Array[] = [writer.result()];
 return frames; }
 export function validateSessionRelocationSealCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
-export type SessionRelocationSealedCommand = { readonly command: "sessionRelocationSealed"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly actor: ActorRouteFence; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; };
+export type SessionRelocationSealedCommand = { readonly command: "sessionRelocationSealed"; readonly flags: number; readonly relocation: RelocationId; readonly coordinator: RelocationCoordinatorFence; readonly actor: ActorRouteFence; readonly sessionOwnerNodeRid: Rid; readonly sessionOwnerNodeGeneration: NonzeroU64; readonly sessionOwnerId: Text8; readonly sessionOwnerLeaseGeneration: NonzeroU64; readonly sessionRid: Rid; readonly bindingGeneration: NonzeroU64; readonly sealResult: SessionSealResult; };
 export function decodeSessionRelocationSealedCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): SessionRelocationSealedCommand { if (!frames.length) fail("sessionRelocationSealed frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 43) fail("sessionRelocationSealed header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("sessionRelocationSealed flags"); const value: any = { command: "sessionRelocationSealed", flags };
   value["relocation"] = readRelocationId(reader, context, value, flags);
 
@@ -9042,6 +9063,9 @@ export function decodeSessionRelocationSealedCommand(frames: readonly Uint8Array
 
 
   value["bindingGeneration"] = readNonzeroU64(reader, context, value, flags);
+
+
+  value["sealResult"] = readSessionSealResult(reader, context, value, flags);
 
 
 reader.done("sessionRelocationSealed"); let frameIndex = 1;
@@ -9086,6 +9110,10 @@ export function encodeSessionRelocationSealedCommand(value: SessionRelocationSea
 
 
   writeNonzeroU64(numeric(value["bindingGeneration"]), writer, context, value, value.flags);
+  if (value["sealResult"] === undefined) fail("sealResult required");
+
+
+  writeSessionSealResult(value["sealResult"], writer, context, value, value.flags);
 const frames: Uint8Array[] = [writer.result()];
 
 return frames; }

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
 
@@ -39,6 +40,17 @@ const nlohmann::json &completion_terminal_fixture ()
 foundation::call_id_t id (std::uint8_t value)
 {
     return foundation::call_id_t{0, value};
+}
+
+foundation::operation_registry_t::clock_t::time_point injected_now{};
+foundation::operation_registry_t::clock_t::duration injected_step{};
+
+// Each read advances the injected clock by the configured step.
+foundation::operation_registry_t::clock_t::time_point read_injected_clock ()
+{
+    const auto now = injected_now;
+    injected_now += injected_step;
+    return now;
 }
 
 template <typename Predicate> bool wait_until (Predicate predicate)
@@ -261,6 +273,113 @@ int main ()
 
     foundation::operation_registry_t registry;
     const auto now = foundation::operation_registry_t::clock_t::now ();
+    {
+        foundation::operation_registry_t ordered;
+        std::array<bool, 128> active{};
+        active.fill (true);
+        for (std::size_t index = 0; index < active.size (); ++index)
+            assert (ordered.register_operation (id (static_cast<std::uint8_t> (index + 1)),
+                                                now + std::chrono::microseconds (index ^ 63),
+                                                [] (auto, auto) {}));
+        const auto first_tick = *ordered.next_deadline ();
+        assert (first_tick >= now && first_tick <= now + std::chrono::milliseconds (1));
+        // Hot-path E3: next_deadline is the bitmap-selected occupied 1ms wheel tick.
+        for (std::size_t step = 0; step < active.size (); ++step) {
+            std::optional<foundation::operation_registry_t::clock_t::time_point> expected;
+            for (std::size_t index = 0; index < active.size (); ++index) {
+                const auto deadline = now + std::chrono::microseconds (index ^ 63);
+                if (active[index] && (!expected || deadline < *expected))
+                    expected = deadline;
+            }
+            if (expected)
+                expected = first_tick
+                           + std::chrono::ceil<std::chrono::milliseconds> (*expected - first_tick);
+            assert (ordered.next_deadline () == expected);
+            const auto removed = step * 37 % active.size ();
+            assert (ordered.unregister (id (static_cast<std::uint8_t> (removed + 1))));
+            active[removed] = false;
+        }
+        assert (!ordered.next_deadline ());
+    }
+    {
+        foundation::operation_registry_t wheel;
+        const auto deadline =
+          foundation::operation_registry_t::clock_t::now () + std::chrono::milliseconds (513);
+        assert (wheel.register_operation (id (1), deadline, [] (auto, auto) {}));
+        const auto first_tick = *wheel.next_deadline ();
+        // Hot-path E3: remaining rounds prevent early expiry; the deadline rounds up by at most 1ms.
+        assert (wheel.expire (first_tick) == 0);
+        assert (*wheel.next_deadline () == first_tick + std::chrono::milliseconds (256));
+        assert (wheel.expire (first_tick + std::chrono::milliseconds (256)) == 0);
+        const auto expiry_tick = first_tick + std::chrono::milliseconds (512);
+        assert (expiry_tick >= deadline && expiry_tick <= deadline + std::chrono::milliseconds (1));
+        assert (wheel.expire (deadline - std::chrono::nanoseconds (1)) == 0);
+        assert (wheel.expire (expiry_tick) == 1);
+        assert (!wheel.next_deadline ());
+    }
+    {
+        injected_now = {};
+        injected_step = {};
+        foundation::operation_registry_t yielding (&read_injected_clock);
+        const auto origin = injected_now;
+        for (std::size_t index = 0; index < 8; ++index)
+            assert (yielding.register_operation (foundation::call_id_t{3, index + 1},
+                                                 origin + std::chrono::milliseconds (257),
+                                                 [] (auto, auto) {}));
+        assert (yielding.register_operation (
+          foundation::call_id_t{3, 9}, origin + std::chrono::milliseconds (1),
+          [] (auto terminal, auto) {
+              assert (terminal == foundation::operation_terminal_t::timed_out);
+          }));
+        // §4.2: every slot visit, a rounds-only one included, reads the management budget
+        // counted from entry; four reads exhaust it.
+        injected_step =
+          std::chrono::duration_cast<foundation::operation_registry_t::clock_t::duration> (
+            runtime::dispatch_limits::receive_batch_time)
+          / 4;
+        const auto tick = origin + std::chrono::milliseconds (1);
+        assert (yielding.expire (tick) == 0);
+        assert (yielding.contains (foundation::call_id_t{3, 9}));
+        std::size_t turns = 1;
+        while (yielding.expire (tick) == 0)
+            assert (++turns < 9);
+        assert (!yielding.contains (foundation::call_id_t{3, 9}));
+        assert (yielding.size () == 8);
+        injected_step = {};
+        assert (yielding.expire (origin + std::chrono::milliseconds (257)) == 8);
+        assert (yielding.size () == 0);
+    }
+    {
+        injected_now = {};
+        injected_step = {};
+        foundation::operation_registry_t budgeted (&read_injected_clock);
+        constexpr std::size_t pending_count = 10;
+        const auto deadline = injected_now + std::chrono::milliseconds (1);
+        for (std::size_t index = 0; index < pending_count; ++index)
+            assert (budgeted.register_operation (
+              foundation::call_id_t{1, index + 1}, deadline, [] (auto terminal, auto) {
+                  assert (terminal == foundation::operation_terminal_t::timed_out);
+              }));
+        const auto tick = *budgeted.next_deadline ();
+        // Hot-path E3 / §4.2: four budget reads on the injected clock end the turn after three
+        // expiries; the rest of the slot resumes on the next turn.
+        injected_step =
+          std::chrono::duration_cast<foundation::operation_registry_t::clock_t::duration> (
+            runtime::dispatch_limits::receive_batch_time)
+          / 4;
+        auto expired = budgeted.expire (tick);
+        assert (expired == 3);
+        assert (budgeted.unregister (foundation::call_id_t{1, expired + 1}));
+        assert (
+          budgeted.register_operation (foundation::call_id_t{2, 1}, deadline, [] (auto, auto) {}));
+        while (budgeted.size () != 0) {
+            const auto resumed = budgeted.expire (tick);
+            assert (resumed > 0);
+            expired += resumed;
+        }
+        assert (expired == pending_count);
+        assert (!budgeted.next_deadline ());
+    }
     bool zero_rejected = false;
     try {
         (void) registry.register_operation (foundation::call_id_t{}, now, [] (auto, auto) {});
@@ -288,7 +407,8 @@ int main ()
     assert (registry.unregister (id (3)));
     assert (registry.complete (id (1), zlink::message_t::from (std::vector<std::uint8_t>{7})));
     assert (!registry.complete (id (1), zlink::message_t::from (std::vector<std::uint8_t>{8})));
-    assert (registry.expire (now) == 1);
+    // Hot-path E3: the first occupied wheel tick is no later than deadline+1ms.
+    assert (registry.expire (now + std::chrono::milliseconds (1)) == 1);
     assert (wait_until ([&] {
         return first_terminal.load (std::memory_order_acquire) == 1
                && second_terminal.load (std::memory_order_acquire) == 1;
@@ -370,7 +490,7 @@ int main ()
     });
     std::thread timeout ([&] {
         race_start.arrive_and_wait ();
-        (void) race_registry.expire (now);
+        (void) race_registry.expire (now + std::chrono::milliseconds (1));
     });
     race_start.arrive_and_wait ();
     reply.join ();
@@ -497,7 +617,11 @@ int main ()
               expired_batch_callbacks.fetch_add (1, std::memory_order_release);
           }));
     }
-    assert (expiry_batch_registry.expire (now) == operation_count);
+    // Hot-path E3: a budgeted slot resumes on subsequent management turns.
+    std::size_t expired_count = expiry_batch_registry.expire (now + std::chrono::milliseconds (1));
+    while (expired_count < operation_count)
+        expired_count += expiry_batch_registry.expire (now + std::chrono::milliseconds (1));
+    assert (expired_count == operation_count);
     assert (expiry_batch_registry.size () == 0);
     assert (wait_until (
       [&] { return expired_batch_callbacks.load (std::memory_order_acquire) == operation_count; }));
