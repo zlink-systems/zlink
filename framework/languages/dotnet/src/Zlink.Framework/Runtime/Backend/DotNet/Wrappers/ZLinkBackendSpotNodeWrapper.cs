@@ -79,6 +79,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     public void ObserveRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source) =>
         _pump.ObserveRequestSourceFence(source);
 
+    public ZLinkServiceWireCodec.RequestSourceFence? ResolveRequestSourceFence(
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration
+    ) => _pump.ResolveRequestSourceFence(sourceNodeRid, sourceNodeGeneration);
+
     public void SetActorMessageFollowIngressHandler(
         Func<IReadOnlyList<ZLinkBackendActorPart>, bool> handler
     ) => _messageFollowIngress.SetHandler(handler);

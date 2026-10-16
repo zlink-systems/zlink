@@ -47,7 +47,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
     private DateTimeOffset? _deadline;
     private ZLinkFrameworkRelocationMode? _activeMode;
     private long? _activeTargetVersion;
-    private ulong _sequence;
+    private ZLinkFrameworkRuntimeStatus? _publishedStatus;
     private int _disposed;
 
     internal ZLinkFrameworkMaintenanceRuntime(
@@ -113,7 +113,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
 
     public ZLinkFrameworkRuntimeStatus Status
     {
-        get { return RunState(() => CreateStatusUnderLock(DateTimeOffset.UtcNow)); }
+        get { return RunState(() => PublishUnderLock()); }
     }
 
     public void ResetCapacityMetrics()
@@ -158,7 +158,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         var observer = RunState(() =>
         {
             ThrowIfDisposed();
-            var initial = CreateStatusUnderLock(DateTimeOffset.UtcNow);
+            var initial = PublishUnderLock();
             var subscription = new ZLinkObservationQueue<ZLinkFrameworkRuntimeStatus>(
                 initial,
                 IsTerminal(initial),
@@ -655,13 +655,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
             LogRelocationChanged(result);
             if (reason != ZLinkFrameworkRelocationReason.ShutdownRequested)
             {
-                _sequence = checked(_sequence + 1);
-                PublishStatusUnderLock(
-                    CreateStatusUnderLock(DateTimeOffset.UtcNow) with
-                    {
-                        RelocationResult = result,
-                    }
-                );
+                PublishUnderLock(result);
             }
             RecordRelocationCompletion(metricStarted, result);
             return result;
@@ -720,41 +714,43 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         );
     }
 
-    private ZLinkFrameworkRuntimeStatus CreateStatusUnderLock(DateTimeOffset observedAt)
-    {
-        var state = _hostLifecycle.State;
-        var accepting = state == ZLinkFrameworkRuntimeState.Serving && _acceptingWorkSnapshot();
-        return new ZLinkFrameworkRuntimeStatus(
-            state,
-            state == ZLinkFrameworkRuntimeState.Serving,
-            accepting,
-            _deadline,
-            _relocationResult,
-            _terminationResult,
-            _sequence,
-            observedAt,
-            _capacitySnapshot() ?? default,
-            _safeToShutdownSnapshot()
-        );
-    }
-
     private void TransitionUnderLock(ZLinkFrameworkRuntimeState state)
     {
         _hostLifecycle.TransitionTo(state);
         PublishUnderLock();
     }
 
-    private void PublishUnderLock()
+    private ZLinkFrameworkRuntimeStatus PublishUnderLock(
+        ZLinkFrameworkRelocationResult? relocationResult = null
+    )
     {
-        _sequence = checked(_sequence + 1);
-        var status = CreateStatusUnderLock(DateTimeOffset.UtcNow);
-        PublishStatusUnderLock(status);
-    }
+        var previous = _publishedStatus;
+        var state = _hostLifecycle.State;
+        var accepting = state == ZLinkFrameworkRuntimeState.Serving && _acceptingWorkSnapshot();
+        var status = new ZLinkFrameworkRuntimeStatus(
+            state,
+            state == ZLinkFrameworkRuntimeState.Serving,
+            accepting,
+            _deadline,
+            relocationResult ?? _relocationResult,
+            _terminationResult,
+            previous?.Sequence ?? 0,
+            previous?.ObservedAt ?? default,
+            _capacitySnapshot() ?? default,
+            _safeToShutdownSnapshot()
+        );
+        if (previous is not null && status == previous)
+            return previous;
 
-    private void PublishStatusUnderLock(ZLinkFrameworkRuntimeStatus status)
-    {
+        status = status with
+        {
+            Sequence = checked(status.Sequence + 1),
+            ObservedAt = DateTimeOffset.UtcNow,
+        };
+        _publishedStatus = status;
         foreach (var observer in _observers)
             observer.Publish(status, IsTerminal(status));
+        return status;
     }
 
     private static bool IsTerminal(ZLinkFrameworkRuntimeStatus status) =>

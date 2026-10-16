@@ -4198,20 +4198,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         );
         if (routeContext.IsDirectRoute)
         {
-            if (
-                messageFollowHopCount is 0 or > 8
-                || targetNode is not IZLinkBackendLocalActorAuthorityReader authorityReader
-                || !authorityReader.TryGetLocalActorAuthority(
-                    actorRef,
-                    out var currentAuthorityOwnerGeneration,
-                    out var currentOwnerLeaseGeneration
-                )
-                || currentAuthorityOwnerGeneration != authorityOwnerGeneration
-                || currentOwnerLeaseGeneration != ownerLeaseGeneration
-            )
+            if (messageFollowHopCount is 0 or > 8)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
-                    $"Actor '{actorId}' direct relay authority identity is stale."
+                    $"Actor '{actorId}' direct relay hop count is invalid."
                 );
         }
         else if (
@@ -4317,11 +4307,30 @@ internal sealed partial class ZLinkFrameworkRuntime
         );
         if (batch.Count == 0)
         {
-            //  A frame for an Actor mid-handoff is captured for replay instead
-            //  of dispatched. Returning quietly makes that indistinguishable
-            //  from delivery, and the frame is lost outright if the handoff
-            //  never completes.
+            // Handoff owns ingress before ordinary dispatch. In particular,
+            // the committed source can follow a frame before the target has
+            // received its Store commit response and refreshed local authority.
             return;
+        }
+        if (
+            routeContext.IsDirectRoute
+            && (
+                targetNode is not IZLinkBackendLocalActorAuthorityReader authorityReader
+                || !authorityReader.TryGetLocalActorAuthority(
+                    actorRef,
+                    out var currentAuthorityOwnerGeneration,
+                    out var currentOwnerLeaseGeneration
+                )
+                || currentAuthorityOwnerGeneration != authorityOwnerGeneration
+                || currentOwnerLeaseGeneration != ownerLeaseGeneration
+            )
+        )
+        {
+            batch.Dispose();
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{actorId}' direct relay authority identity is stale."
+            );
         }
         await DispatchRemoteFrameAsync(batch, deadlineUnixMs, cancellationToken, CurrentOperation)
             .ConfigureAwait(false);

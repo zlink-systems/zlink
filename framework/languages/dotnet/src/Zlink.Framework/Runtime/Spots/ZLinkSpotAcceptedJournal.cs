@@ -48,7 +48,8 @@ internal static class ZLinkSpotAcceptedJournal
     // The record itself is materialized only after the serial queue has sealed.
     internal static int MeasureEncodedLength(
         ZLinkBackendRouteReceived received,
-        ulong replyRouteId = 0
+        ulong replyRouteId = 0,
+        ZLinkServiceWireCodec.RequestSourceFence? ingressSource = null
     )
     {
         ArgumentNullException.ThrowIfNull(received);
@@ -62,7 +63,7 @@ internal static class ZLinkSpotAcceptedJournal
                 "An accepted Spot journal record requires an exact operation and authority fence."
             );
         if (
-            received.RequestSource is not { } requestSource
+            (ingressSource ?? received.RequestSource) is not { } requestSource
             || received.SourceNodeRid is not { } sourceNodeRid
             || requestSource.NodeRid != sourceNodeRid
             || requestSource.NodeGeneration != received.SourceNodeGeneration
@@ -123,10 +124,14 @@ internal static class ZLinkSpotAcceptedJournal
         return length;
     }
 
-    internal static byte[] Encode(ZLinkBackendRouteReceived received, ulong replyRouteId = 0)
+    internal static byte[] Encode(
+        ZLinkBackendRouteReceived received,
+        ulong replyRouteId = 0,
+        ZLinkServiceWireCodec.RequestSourceFence? ingressSource = null
+    )
     {
-        var length = MeasureEncodedLength(received, replyRouteId);
-        var requestSource = received.RequestSource!.Value;
+        var length = MeasureEncodedLength(received, replyRouteId, ingressSource);
+        var requestSource = (ingressSource ?? received.RequestSource)!.Value;
         using var stream = new MemoryStream(length);
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         writer.Write(Magic);
