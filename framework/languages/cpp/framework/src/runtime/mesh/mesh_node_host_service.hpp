@@ -177,7 +177,6 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     service_provider_t *_services = nullptr;
     std::shared_ptr<location_repository_t> _location_store;
     location_runtime_t *_location_runtime = nullptr;
-    std::optional<location_owner_token_t> _location_owner;
     std::vector<mesh_node_descriptor_key_t> _published_mesh_nodes;
     std::vector<mesh_node_descriptor_t> _published_mesh_descriptors;
     std::mutex _descriptor_publish_mutex;

@@ -349,6 +349,20 @@ class app_state_t
         }
     }
 
+    // Location runtime §5 allows startup to finish before owner-bound publication.
+    static task_t<void> enter_serving_after_publication (std::shared_ptr<app_state_access_t> access,
+                                                         task_t<bool> published)
+    {
+        if (co_await published) {
+            std::shared_lock lock (access->mutex);
+            if (auto *state = access->state) {
+                auto expected = framework_runtime_state_t::preparing;
+                (void) state->runtime_state.compare_exchange_strong (
+                  expected, framework_runtime_state_t::serving, std::memory_order_acq_rel);
+            }
+        }
+    }
+
     void close_framework_resources (service_provider_t &provider) noexcept
     {
         const auto &failures = monitoring->runtime_failures;
@@ -482,6 +496,9 @@ class app_state_t
 
     std::shared_ptr<std::atomic_bool> draining = std::make_shared<std::atomic_bool> (false);
     std::atomic<framework_runtime_state_t> runtime_state = framework_runtime_state_t::preparing;
+    std::function<task_t<bool> ()> startup_publication = [] {
+        return task_t<bool> (result_t<bool>::success (true));
+    };
     std::shared_ptr<app_state_access_t> status_access;
     std::mutex termination_teardown_mutex;
     delay_owner_t delays{termination_teardown_mutex};
@@ -2867,7 +2884,7 @@ void app_t::_apply_zlink_framework ()
           },
           service_lifetime_t::singleton);
     }
-    add_hosted_service (std::make_unique<runtime::location_auto_connect_host_service_t> (
+    auto auto_connect_service = std::make_unique<runtime::location_auto_connect_host_service_t> (
       _state->monitoring->runtime_failures, _state->zlink.message_bus (), channel_snapshot,
       _state->handlers, _state->serializers, options.runtime_client_server_advertise_hosts (),
       options.runtime_fanout_advertise_hosts (), options.route_mesh_client_channels (), mesh_nodes,
@@ -2875,7 +2892,11 @@ void app_t::_apply_zlink_framework ()
           return mesh_node_service == nullptr
                  || mesh_node_service->republish_after_store_recovery ();
       },
-      std::move (client_server_runtime), std::move (fanout_runtime), _state->listener_statuses));
+      std::move (client_server_runtime), std::move (fanout_runtime), _state->listener_statuses);
+    _state->startup_publication = [service = auto_connect_service.get ()] {
+        return service->descriptors_published ();
+    };
+    add_hosted_service (std::move (auto_connect_service));
     if (detail::has_inbound_channel (channel_snapshot)) {
         add_hosted_service (std::make_unique<runtime::channel_host_service_t> (
           _state->monitoring->runtime_failures, _state->zlink.message_bus (), channel_snapshot,
@@ -2971,9 +2992,8 @@ try {
         runtime::configure_handler_coroutine_executor (
           _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0);
         _state->start_hosted_services (provider, started);
-        auto expected = framework_runtime_state_t::preparing;
-        (void) _state->runtime_state.compare_exchange_strong (
-          expected, framework_runtime_state_t::serving, std::memory_order_acq_rel);
+        (void) detail::app_state_t::enter_serving_after_publication (
+          _state->status_access, _state->startup_publication ());
         try {
             runtime::runtime_metrics_t drain_metrics (_state->monitoring);
             if (drain_metrics.enabled ()) {

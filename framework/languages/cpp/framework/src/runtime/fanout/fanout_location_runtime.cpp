@@ -301,12 +301,12 @@ void fanout_location_runtime_t::wait_for_activity (std::chrono::milliseconds tim
     }
 }
 
-void fanout_location_runtime_t::publish_descriptors ()
+bool fanout_location_runtime_t::publish_descriptors ()
 {
     std::lock_guard publish_lock (_descriptor_publish_mutex);
     const auto owner = _locations->current_owner_token ();
     if (!owner)
-        return;
+        return false;
     struct pending_descriptor_t
     {
         std::string channel_name;
@@ -338,25 +338,26 @@ void fanout_location_runtime_t::publish_descriptors ()
                                                               : location_write_intent_t::renew});
         }
     }
+    bool published = true;
     for (auto &item : pending) {
         const auto written =
           _store->update_fanout_publisher (item.descriptor, item.intent).result ().value ();
-        if (written.status != location_write_status_t::stored)
+        if (written.status != location_write_status_t::stored) {
+            published = false;
             continue;
+        }
         std::lock_guard lock (_gate);
         const auto found = _publishers.find (item.channel_name);
         if (found == _publishers.end ())
             continue;
-        const auto &current = found->second->descriptor;
-        if (current.descriptor_revision < item.descriptor.descriptor_revision)
-            found->second->descriptor = std::move (item.descriptor);
+        found->second->descriptor = std::move (item.descriptor);
     }
+    return published;
 }
 
 bool fanout_location_runtime_t::republish_after_store_recovery ()
 {
-    publish_descriptors ();
-    return _locations->current_owner_token ().has_value ();
+    return publish_descriptors ();
 }
 
 void fanout_location_runtime_t::reconcile_subscribers ()

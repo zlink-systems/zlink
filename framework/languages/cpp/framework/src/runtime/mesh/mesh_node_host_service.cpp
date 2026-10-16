@@ -1818,8 +1818,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
         }
         auto &location_runtime = services.get_required<location_runtime_t> ();
         _location_runtime = &location_runtime;
-        _location_owner = location_runtime.current_owner_token ();
-        _accept_application_dispatch.store (_location_owner.has_value (),
+        _accept_application_dispatch.store (location_runtime.owner_lease_usable (),
                                             std::memory_order_release);
         std::shared_ptr<stateful::relocation_store_port_t> instance_relocations;
         const auto has_instance_factories = std::any_of (
@@ -3017,7 +3016,6 @@ void mesh_node_host_service_t::stop () noexcept
         });
     if (_published_mesh_nodes.empty ()) {
         _published_mesh_descriptors.clear ();
-        _location_owner.reset ();
         _location_runtime = nullptr;
     }
     for (auto &node : _nodes) {
