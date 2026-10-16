@@ -73,7 +73,7 @@ Server public contract의 단일 규범 원천은 `framework/doc/framework/commo
   멈췄는지** 찾는다.
 - message-flow는 dispatch diagnostics 레벨(`Normal`/`Detailed`)로 켠다. 크로스랭 dotnet TestHost는
   `<EventFilePath>.flow`에 기록하고, 시나리오 configurator가 listener를 안 건 경우 stream-raw 노드처럼
-  거는 것도 "기존 기능 켜기"다. 보조 trace: .NET `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY`,
+  거는 것도 "기존 기능 켜기"다. 보조 trace: .NET `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY`, cpp `ZLINK_CPP_MESH_TRACE=1`·`ZLINK_CPP_AUTO_CONNECT_TRACE=1`,
   java/kotlin `ZLINK_JAVA_STREAM_TRACE=1`, node OTel flow exporter + `ZLINK_DEBUG_FRAMEWORK_RELOCATION=1`.
   run dir 보존 `ZLINK_CPP_CROSS_KEEP_RUN_DIR=1`. **첫 재현부터 로그를 보존한다.**
 - **주의: message-flow(spec 26)는 application dispatch 표면만 덮는다.** RouteMesh control-plane
