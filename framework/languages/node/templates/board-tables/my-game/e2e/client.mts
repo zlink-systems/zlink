@@ -210,6 +210,7 @@ export async function scenario(
   };
   const p1 = create('p1');
   let p2 = create('p2');
+  const failures: unknown[] = [];
   try {
     const first = await p1.join(ids[0], tableId),
       second = await p2.join(ids[1], tableId);
@@ -312,13 +313,12 @@ export async function scenario(
       await control.replace(b1.nodeId);
       await scenario('table', endpoint, `${runId}-replacement`, logDir, control, b1.nodeId);
     }
+  } catch (error) {
+    failures.push(error);
   } finally {
-    const closed = await Promise.allSettled(clients.map((c) => c.close()));
-    for (const result of closed)
-      if (result.status === 'rejected') console.error('Client cleanup failed', result.reason);
-    assert(
-      closed.every((r) => r.status === 'fulfilled'),
-      'Client cleanup failed'
-    );
+    const results = await Promise.allSettled(clients.map((c) => c.close()));
+    for (const result of results) if (result.status === 'rejected') failures.push(result.reason);
   }
+  if (failures.length)
+    throw new AggregateError(failures, `Scenario ${name} or client cleanup failed`);
 }

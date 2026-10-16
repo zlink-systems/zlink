@@ -17,14 +17,15 @@ export const Game = {
   maximumPartyMembers: 4
 } as const;
 export const Rejection = { invalidParty: 'INVALID_PARTY', notLeader: 'NOT_LEADER' } as const;
-const MessageFollowMs = 20_000;
+const messageFollowMs = 30_000;
+const relocationMs = 25_000;
 export const Limits = {
-  messageFollowMs: MessageFollowMs,
-  safeShutdownMs: MessageFollowMs + 10_000,
+  messageFollowMs,
+  safeShutdownMs: messageFollowMs + relocationMs,
   observationCapacity: 64,
   messageMs: 10_000,
   startupMs: 30_000,
-  relocationMs: 25_000,
+  relocationMs,
   shutdownMs: 10_000
 } as const;
 export const Scenarios = ['field', 'dungeon', 'reconnect', 'update'] as const;

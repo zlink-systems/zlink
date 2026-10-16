@@ -106,7 +106,19 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     for (const key of ['capacity', 'regionLimit'])
       assert(Number.isSafeInteger(cfg[key]) && Number(cfg[key]) > 0, `Invalid ${key}`);
   }
-  for (const edge of array(s.edges).map(object)) {
+  const requiredEdges = [
+    { from: 'players', to: 'session', label: 'STREAM' },
+    { from: 'session', to: 'regionA', label: 'relay' },
+    { from: 'regionA', to: 'instance', label: 'GetOrCreate' },
+    { from: 'regionA', to: 'location', label: 'Location / lease', semantic: 'location-authority' }
+  ];
+  const edges = array(s.edges).map(object);
+  for (const required of requiredEdges)
+    assert(
+      edges.some((edge) => Object.entries(required).every(([key, value]) => edge[key] === value)),
+      `Missing required edge: ${required.from} -> ${required.to} (${required.label})`
+    );
+  for (const edge of edges) {
     owner(edge.from);
     owner(edge.to);
     text(edge.label);

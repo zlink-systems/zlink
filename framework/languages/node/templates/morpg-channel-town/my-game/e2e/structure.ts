@@ -146,7 +146,20 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     spots.some((s) => s.type === Names.dungeon),
     'Missing Dungeon type'
   );
-  for (const edge of array(s.edges).map(object)) {
+  const requiredEdges = [
+    { from: 'players', to: 'session', label: 'STREAM' },
+    { from: 'session', to: 'townA', label: 'relay' },
+    { from: 'townA', to: 'townB', label: 'relocation' },
+    { from: 'townB', to: 'instanceA', label: 'GetOrCreate' },
+    { from: 'townB', to: 'location', label: 'Location / lease', semantic: 'location-authority' }
+  ];
+  const edges = array(s.edges).map(object);
+  for (const required of requiredEdges)
+    assert(
+      edges.some((edge) => Object.entries(required).every(([key, value]) => edge[key] === value)),
+      `Missing required edge: ${required.from} -> ${required.to} (${required.label})`
+    );
+  for (const edge of edges) {
     owner(edge.from);
     owner(edge.to);
     text(edge.label);
