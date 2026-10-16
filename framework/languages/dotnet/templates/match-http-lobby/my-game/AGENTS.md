@@ -20,4 +20,6 @@ Relocation adapters serialize application state only. Do not copy Framework rout
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly`) to build Docker images. The default `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` runs nodes and the e2e runner in Docker. Use `--local` or `-Local` for host process debugging with the .NET 8 SDK; only that mode accepts `--no-build` or `-NoBuild`. Pass `--check-structure` to check without starting nodes. Preserve stdin lifecycle control and inspect `.logs/docker-<project>/` and `.logs/run-<id>/`.
+
 Keep the declared scenarios in canonical order: lobby, hit, reconnect, update. Run the structure check before startup and verify the affected scenario on Windows and WSL. A single intermittent failure is a defect; a successful rerun does not invalidate it. Build and execution logs belong to `.logs/`; never commit logs, package caches, bin, obj or license files. Keep package versions centralized and the project independently copyable. README commands and `run.commands` must agree. Code comments are English.

@@ -19,4 +19,6 @@ Do not use internal APIs, reflection, raw frames, manual codecs, transport retry
 
 ## Changes and verification
 
+Run `./run-e2e.sh --build-only` (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly`) to build Docker images. The default `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` runs nodes and the e2e runner in Docker. Use `--local` or `-Local` for host process debugging with the .NET 8 SDK; only that mode accepts `--no-build` or `-NoBuild`. Pass `--check-structure` to check without starting nodes. Preserve stdin lifecycle control and inspect `.logs/docker-<project>/` and `.logs/run-<id>/`.
+
 Preserve the hit, reconnect and update scenarios and their order. Validate the structure before starting infrastructure. Run builds and e2e on Windows and Linux. A single intermittent failure is a defect. Logs are in `.logs/run-<id>/`; clean only processes and Compose projects owned by that run. Domain state is serialized by the Framework SpotWide execution gate; do not add parallel locks or queues for it.

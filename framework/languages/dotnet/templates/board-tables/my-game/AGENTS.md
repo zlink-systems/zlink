@@ -25,6 +25,8 @@ The Table Spot owns seats, chips, deck, cards, turns, and pot. The Player Actor 
 
 ## Verification
 
+Run `./run-e2e.sh --build-only` (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly`) to build Docker images. The default `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` runs nodes and the e2e runner in Docker. Use `--local` or `-Local` for host process debugging with the .NET 8 SDK; only that mode accepts `--no-build` or `-NoBuild`. Pass `--check-structure` to check without starting nodes. Preserve stdin lifecycle control and inspect `.logs/docker-<project>/` and `.logs/run-<id>/`.
+
 When you change the composition, update `zlink.structure.json` and the configurations together. Run the structure check and the table, reconnect, and update scenarios. Keep the checks for card privacy, chip conservation, the Actor generation in `SessionInfo`, and connection continuity. Do not add a self-test to the structure check; during development, confirm with a temporary modified file that invalid input is rejected.
 
 Verify the build and e2e on both Windows and WSL. Read `.logs/` from the first run to classify a failure. An intermittent failure is a defect even if it happens once. Clean up only the Compose project and processes the runner owns. Do not commit `.logs/`, `bin/`, `obj/`, or licenses.

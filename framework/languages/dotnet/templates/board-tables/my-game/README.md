@@ -13,7 +13,9 @@ flowchart LR
 
 ## Prerequisites
 
-- .NET SDK 8 or later with the .NET and ASP.NET Core 8 runtimes.
+Default execution requires Docker Linux containers; no host .NET SDK is needed.
+
+- .NET 8 SDK and ASP.NET Core 8 runtime for `--local` / `-Local` debugging only.
 - Docker Engine with Docker Compose v2.
 - Bash on Linux or WSL, or PowerShell 7 on Windows.
 - An operating system and architecture supported by the published Zlink native package.
@@ -22,15 +24,44 @@ flowchart LR
 
 ## Build
 
-Build the solution from the project root.
+Run commands from this project root:
 
 ```sh
-dotnet build server/MyGame.sln
+./run-e2e.sh --build-only
 ```
 
-The solution includes the Shared, Session, and Table servers and the C# e2e client. `TreatWarningsAsErrors` is enabled.
+PowerShell builds the same Dockerfile targets:
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+```
+
+`Dockerfile` owns fixed `SDK_IMAGE`, `RUNTIME_IMAGE`, and `DOCKER_CLI_IMAGE` defaults. Replace the appropriate base ARG when adopting a ZLink base image. All node roles share the node image because their runtime dependencies match; each retains its own executable entry point. The ASP.NET Core runtime supplies shared hosting dependencies. The runner target adds Docker CLI and structure inputs without including the SDK.
+
+Scripts remove unique image tags after each invocation. Docker retains build layers for subsequent runs.
 
 ## Local e2e
+
+Both scripts build images and call the same C# orchestrator inside a runner container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.
+
+The runner creates each node with interactive stdin, copies its configuration with `docker cp`, and attaches through `docker start -a -i`. `ManagedProcess` retains readiness, drain, shutdown, and replacement controls. Only the runner mounts the Docker socket; use a trusted local daemon. Scripts remove their labeled containers, Compose project, and image tags. Cleanup failure returns exit code 1.
+
+Node stderr logs (`<node>.err.log`) include Framework message flow records because dispatch diagnostics use `Normal`. Inspect these logs from the first failing run.
+
+On Unix sockets, Bash runs the runner with the caller's UID/GID and the socket's group so retained logs remain writable by the caller. Windows uses Docker Desktop's filesystem mapping. Build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`; node settings and control logs are in `.logs/run-<id>/`.
+
+For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. Redis remains in Docker. After a local build, `--no-build` or `-NoBuild` skips compilation:
+
+```sh
+./run-e2e.sh --local
+./run-e2e.sh --local --no-build
+```
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -Local
+pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
+```
+
 
 On Bash, run:
 
@@ -56,7 +87,7 @@ The runner checks the structure, then starts Redis, Table A and B, and Session i
 
 Selected scenarios run in the order shown above. Results are printed with `✓`/`✗` and `Scenarios: N/M passed`. Failures and cleanup errors are reported with exit code 1. A rerun that passes without a known cause does not cancel an intermittent failure.
 
-To skip the build, use `--no-build` on Bash or `-NoBuild` on PowerShell. You can also run only the structure check:
+After a local build, use the following command to check structure without starting nodes:
 
 ```sh
 dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
@@ -108,7 +139,7 @@ The e2e runner sets each node's optional `TableCapacity` to the number of select
 
 ## 한국어 실행 안내
 
-이 프로젝트는 Session node 하나, Table node A·B, Redis Location Store를 실행합니다. Session이 STREAM 연결을 받아 Player Actor에 bind하고, 좌석·칩·카드·차례·결산은 Table node의 Table Spot이 맡습니다. 게임 규칙은 `MyGame.Table/TableSpot.cs`에서, 공개 API 사용 규칙은 `AGENTS.md`에서 확인하십시오.
+기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. 이 프로젝트는 Session node 하나, Table node A·B, Redis Location Store를 실행합니다. Session이 STREAM 연결을 받아 Player Actor에 bind하고, 좌석·칩·카드·차례·결산은 Table node의 Table Spot이 맡습니다. 게임 규칙은 `MyGame.Table/TableSpot.cs`에서, 공개 API 사용 규칙은 `AGENTS.md`에서 확인하십시오.
 
 e2e는 `./run-e2e.sh` 또는 `pwsh -NoProfile -File ./run-e2e.ps1`로 실행합니다. 실행기는 구조를 검사한 뒤 Redis와 각 node를 순서대로 기동하고, `table`·`reconnect`·`update` 시나리오를 확인하고, 자신이 만든 process와 container를 정리합니다. 특정 시나리오만 돌리려면 `--scenario`(PowerShell은 `-Scenario`)를 사용합니다.
 
