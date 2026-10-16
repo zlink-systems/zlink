@@ -8,7 +8,6 @@ export interface NodeConfig {
   streamEndpoint: string | null;
   zoneIds?: string[];
   zoneCapacity?: number;
-  bootstrap?: boolean;
 }
 export function readConfig(path: string): NodeConfig {
   const value = JSON.parse(readFileSync(path, 'utf8')) as NodeConfig;

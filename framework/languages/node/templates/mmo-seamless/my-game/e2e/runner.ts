@@ -244,7 +244,7 @@ async function main(): Promise<void> {
         const node = nodes.get(id);
         assert(node);
         await node.stop();
-        const replacement = await start({ ...node.config, bootstrap: false }, node.role);
+        const replacement = await start(node.config, node.role);
         await replacement.ready();
       }
     };

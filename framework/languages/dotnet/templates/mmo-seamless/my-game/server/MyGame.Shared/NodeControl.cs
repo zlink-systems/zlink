@@ -16,7 +16,7 @@ public static class NodeControl
         using var lifetime = new CancellationTokenSource();
         await host.StartAsync(lifetime.Token);
         var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
-        if (settings.Bootstrap && bootstrap is not null)
+        if (bootstrap is not null)
             await bootstrap(lifetime.Token);
         var mesh = runtime.GetListenerStatus(ZLinkListenerKind.RouteMesh, GameNames.WorldMesh);
         var stream = settings.StreamEndpoint is null

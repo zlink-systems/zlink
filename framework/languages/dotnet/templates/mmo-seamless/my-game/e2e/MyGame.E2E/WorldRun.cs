@@ -47,11 +47,11 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
         }
         else
             redisEndpoint = "location:6379";
-        var zoneA = await StartNodeAsync("zone-a", "MyGame.Zone", true, ct);
+        var zoneA = await StartNodeAsync("zone-a", "MyGame.Zone", false, ct);
         ZoneA = zoneA.Process;
-        await StartNodeAsync("zone-b", "MyGame.Zone", true, ct);
-        await StartNodeAsync("instance", "MyGame.Instance", true, ct);
-        var session = await StartNodeAsync("session", "MyGame.Session", true, ct);
+        await StartNodeAsync("zone-b", "MyGame.Zone", false, ct);
+        await StartNodeAsync("instance", "MyGame.Instance", false, ct);
+        var session = await StartNodeAsync("session", "MyGame.Session", false, ct);
         Endpoint =
             session.Ready.StreamEndpoint
             ?? throw new InvalidOperationException("Session stream endpoint was not published.");
@@ -60,7 +60,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
     private async Task<(ManagedProcess Process, NodeReady Ready)> StartNodeAsync(
         string configName,
         string assembly,
-        bool bootstrap,
+        bool replacement,
         CancellationToken ct
     )
     {
@@ -78,9 +78,8 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
             KeyPrefix = (dockerProject ?? project) + ":",
             MeshEndpoint = "tcp://127.0.0.1:0",
             StreamEndpoint = settings.StreamEndpoint is null ? null : "ws://127.0.0.1:0",
-            Bootstrap = bootstrap,
         };
-        var suffix = bootstrap ? configName : configName + "-replacement";
+        var suffix = replacement ? configName + "-replacement" : configName;
         var config = Path.Combine(runDirectory, suffix + ".json");
         await File.WriteAllTextAsync(config, JsonSerializer.Serialize(settings), ct);
         ManagedProcess node;
@@ -163,7 +162,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
     public async Task ReplaceZoneAAsync(CancellationToken ct)
     {
         await ZoneA.StopAsync();
-        var replacement = await StartNodeAsync("zone-a", "MyGame.Zone", false, ct);
+        var replacement = await StartNodeAsync("zone-a", "MyGame.Zone", true, ct);
         ZoneA = replacement.Process;
     }
 

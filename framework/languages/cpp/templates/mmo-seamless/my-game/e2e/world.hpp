@@ -50,7 +50,7 @@ class World
         return process.output ();
     }
     std::pair<Node *, nlohmann::json>
-    start_node (const std::string &name, const std::string &role, bool bootstrap = true)
+    start_node (const std::string &name, const std::string &role, bool replacement = false)
     {
         auto config = read_json (root_ / "server/config" / (name + ".json"));
         if (role == "zone" && name == "zone-b")
@@ -60,9 +60,7 @@ class World
         config["MeshEndpoint"] = "tcp://127.0.0.1:0";
         if (role == "session")
             config["StreamEndpoint"] = "tcp://127.0.0.1:0";
-        if (config.contains ("Bootstrap"))
-            config["Bootstrap"] = bootstrap;
-        const auto suffix = name + (bootstrap ? "" : "-replacement");
+        const auto suffix = name + (replacement ? "-replacement" : "");
         const auto config_path = logs_ / (suffix + ".json");
         {
             std::ofstream output (config_path);
@@ -76,7 +74,8 @@ class World
 #endif
         std::vector<std::string> arguments{executable.string (), config_path.string ()};
         if (!docker_project_.empty ()) {
-            const auto container = docker_project_ + "-" + logs_.filename ().string () + "-" + suffix;
+            const auto container =
+              docker_project_ + "-" + logs_.filename ().string () + "-" + suffix;
             constexpr auto container_config = "/app/node.json";
             const auto image = environment ("MY_GAME_NODE_IMAGE");
             const auto runner = environment ("MY_GAME_RUNNER_CONTAINER");
@@ -85,11 +84,12 @@ class World
                           "my-game.e2e=" + docker_project_, "--network", "container:" + runner,
                           image, "/app/bin/my-game-" + role, container_config});
             containers_.push_back (container);
-            run_command ({"docker", "cp", config_path.string (), container + ":" + container_config});
+            run_command (
+              {"docker", "cp", config_path.string (), container + ":" + container_config});
             arguments = {"docker", "start", "-a", "-i", container};
         }
-        node->process = std::make_unique<Process> (
-          arguments, logs_ / (suffix + ".out.log"), logs_ / (suffix + ".err.log"));
+        node->process = std::make_unique<Process> (arguments, logs_ / (suffix + ".out.log"),
+                                                   logs_ / (suffix + ".err.log"));
         auto *result = node.get ();
         nodes_.push_back (std::move (node));
         const auto line = result->process->wait_line (Control::ready);
@@ -148,7 +148,7 @@ class World
     void replace_zone_a ()
     {
         stop_node (*zone_a_);
-        zone_a_ = start_node ("zone-a", "zone", false).first;
+        zone_a_ = start_node ("zone-a", "zone", true).first;
     }
     void close ()
     {

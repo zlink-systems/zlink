@@ -161,7 +161,7 @@ Framework 실패는 실제 reply·event·lifecycle 결과를 근거로 조사한
 
 ### 실행별 로그
 
-첫 실패 실행을 보존하고 로그를 읽은 뒤 재실행 여부를 결정한다. 간헐 실패도 실제로 관찰한 결함이며 이후 통과로 첫 실패를 제외하지 않는다. runner는 시작할 때 `Logs: <path>`를 출력한다. `.logs/run-<id>/`에는 `Nodes.kt`가 node 시작 시 작성한 실제 설정(`session.json`, `zoneA.json`, `zoneB.json`, `instance.json`)과 node 시작마다 만드는 `<node>-<uuid>/` 디렉터리가 있으며, 그 안의 `<node>-stdout.log`는 준비·제어 줄을, `<node>-stderr.log`는 Framework 로그와 message flow를 기록한다. 교체한 Zone A는 `bootstrap`을 끈 `zoneA.json`을 다시 쓰고 새 `zoneA-<uuid>/` 디렉터리에서 시작한다.
+첫 실패 실행을 보존하고 로그를 읽은 뒤 재실행 여부를 결정한다. 간헐 실패도 실제로 관찰한 결함이며 이후 통과로 첫 실패를 제외하지 않는다. runner는 시작할 때 `Logs: <path>`를 출력한다. `.logs/run-<id>/`에는 `Nodes.kt`가 node 시작 시 작성한 실제 설정(`session.json`, `zoneA.json`, `zoneB.json`, `instance.json`)과 node 시작마다 만드는 `<node>-<uuid>/` 디렉터리가 있으며, 그 안의 `<node>-stdout.log`는 준비·제어 줄을, `<node>-stderr.log`는 Framework 로그와 message flow를 기록한다. 교체한 Zone A는 같은 `zoneA.json`으로 새 `zoneA-<uuid>/` 디렉터리에서 시작한다.
 
 로컬 모드에서는 `compose.log`가 Compose 명령 출력을, `.logs/build.log`가 로컬 빌드 출력을 기록한다. Docker 모드의 빌드, Redis, 바깥 정리 로그는 `.logs/docker-<project>/`(`build.log`, `redis-start.log`, `redis.log`, `cleanup.log`)에 있다.
 

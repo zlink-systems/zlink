@@ -19,7 +19,6 @@ struct NodeConfig
     std::optional<std::string> StreamEndpoint;
     std::vector<std::string> ZoneIds;
     int ZoneCapacity = 0;
-    bool Bootstrap = true;
     static NodeConfig load (const std::filesystem::path &path)
     {
         const auto j = read_json (path);
@@ -32,7 +31,6 @@ struct NodeConfig
             c.StreamEndpoint = j.at ("StreamEndpoint").get<std::string> ();
         c.ZoneIds = j.value ("ZoneIds", std::vector<std::string>{});
         c.ZoneCapacity = j.value ("ZoneCapacity", 0);
-        c.Bootstrap = j.value ("Bootstrap", true);
         if (c.Id.empty () || c.RedisEndpoint.empty () || c.KeyPrefix.empty ()
             || c.MeshEndpoint.empty ())
             throw std::invalid_argument ("Node configuration fields must be nonempty");

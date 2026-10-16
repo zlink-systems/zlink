@@ -188,9 +188,6 @@ class Nodes(private val root: Path) : AutoCloseable {
 
     fun replace(id: String) {
         requireNotNull(nodes[id]).stop()
-        val path = requireNotNull(configs[id])
-        val config = Json.mapper.readValue(path.toFile(), NodeConfig::class.java)
-        Json.mapper.writeValue(path.toFile(), config.copy(bootstrap = false))
         startNode(id)
     }
 
