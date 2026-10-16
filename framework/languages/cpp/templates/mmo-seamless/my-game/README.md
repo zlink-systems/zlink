@@ -59,7 +59,7 @@ The runner and nodes execute in containers. The script checks structure before R
 
 The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
 
-The C++ runner checks `zlink.structure.json`, starts Redis and the four node containers, runs scenarios, and shuts down its own resources. Logs and generated configurations remain in `.logs/run-<id>/`. A scenario or cleanup failure returns exit code 1. The default scenario order is:
+The scripts and C++ runner check `zlink.structure.json`, start Redis and the four node containers, run scenarios, and shut down their own resources. Logs and generated configurations remain in `.logs/run-<id>/`. A scenario or cleanup failure returns exit code 1. The default scenario order is:
 
 | Scenario | Assertion |
 | --- | --- |

@@ -56,7 +56,7 @@ The runner and nodes execute in containers. The script checks structure before R
 
 The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
 
-The runner validates the actual structure files, starts Redis with an OS-assigned loopback port, starts five node containers, executes the selected scenarios and cleans up its own resources. Each run uses a unique Compose project and Redis key prefix. Configurations and stdout/stderr logs, including Normal message-flow diagnostics, remain in `.logs/run-<id>/`. Cleanup failure returns exit code 1.
+The scripts and runner validate the actual structure files, start Redis with an OS-assigned loopback port, start five node containers, execute the selected scenarios and clean up their own resources. Each run uses a unique Compose project and Redis key prefix. Configurations and stdout/stderr logs, including Normal message-flow diagnostics, remain in `.logs/run-<id>/`. Cleanup failure returns exit code 1.
 
 | Scenario | Assertions |
 | --- | --- |

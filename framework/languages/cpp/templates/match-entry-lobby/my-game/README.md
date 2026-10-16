@@ -56,7 +56,7 @@ The runner and nodes execute in containers. The script checks structure before R
 
 The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
 
-The runner checks `zlink.structure.json`, starts a uniquely named Redis Compose project on an ephemeral loopback port, starts Match A before Match B and Session, and saves configuration, stdout, stderr message-flow records and typed client observations in `.logs/run-<id>/`. It cleans up only its own processes and Compose project. Cleanup failures cause a failing exit code.
+The scripts and runner check `zlink.structure.json`, start a uniquely named Redis Compose project on an ephemeral loopback port, start Match A before Match B and Session, and save configuration, stdout, stderr message-flow records and typed client observations in `.logs/run-<id>/`. They clean up only their own processes and Compose project. Cleanup failures cause a failing exit code.
 
 | Scenario | Assertions |
 | --- | --- |

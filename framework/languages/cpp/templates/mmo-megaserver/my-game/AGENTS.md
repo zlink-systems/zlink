@@ -23,6 +23,6 @@ Use public host relocation and SafeToShutdown observation. Report missing contra
 
 Use `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for the default Docker build and e2e. Build-only uses `--build-only` or `-BuildOnly`. For local process debugging, use `--local` or `-Local`; add `--no-build` or `-NoBuild` to reuse a local build. Preserve stdin/stdout lifecycle control in both modes. Keep Docker build and cleanup logs in `.logs/docker-<project>/` and node logs in `.logs/run-<id>/`. Cleanup must remove only this run's containers, network and image tags, and must fail the run on errors.
 
-Keep the scenario order `region,dungeon,reconnect,update` in the runner and structure metadata. Validate actual files before starting Docker. Exercise structure changes with valid and invalid temporary copies outside tracked files. Keep build and formatter commands inside this project.
+Keep the scenario order `region,dungeon,reconnect,update` in the runner and structure metadata. Validate actual files before starting Redis or game nodes. Exercise structure changes with valid and invalid temporary copies outside tracked files. Keep build and formatter commands inside this project.
 
 Run build and e2e on Windows and Linux. Treat every intermittent failure as a defect. Preserve `.logs/run-<id>/` including message-flow output. Cleanup must affect only the deployment's own processes and Compose project; cleanup failure returns exit code 1.

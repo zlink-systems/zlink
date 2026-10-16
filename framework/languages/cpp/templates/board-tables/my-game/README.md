@@ -53,7 +53,7 @@ The runner and nodes execute in containers. The script checks structure before R
 
 The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
 
-The C++ runner validates actual structure files, starts an isolated Redis Compose project with an ephemeral loopback port, starts Table A, Table B and Session, and runs the selected scenarios in canonical order. Generated configurations and node logs, including message flow, remain in `.logs/run-<id>/`. Scenario and cleanup failures return exit code 1. Windows child processes have no console window.
+The scripts and C++ runner validate actual structure files, start an isolated Redis Compose project with an ephemeral loopback port, start Table A, Table B and Session, and run the selected scenarios in canonical order. Generated configurations and node logs, including message flow, remain in `.logs/run-<id>/`. Scenario and cleanup failures return exit code 1. Windows child processes have no console window.
 
 | Scenario | Assertions |
 | --- | --- |
