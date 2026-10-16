@@ -530,6 +530,75 @@ TEST (ActorMaintenanceJoin, ApplicationSignaledSpotCaptureCompletes)
       << "reason=" << static_cast<int> (result->value ().reason);
 }
 
+class ActorHostRelocation : public testing::TestWithParam<bool>
+{
+};
+
+TEST_P (ActorHostRelocation, AfterRemoteActorJoin)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t entry, source, target;
+    configure (entry, first_rid, store, relocations, source_follow_duration, 0, true);
+    entry.start ();
+    ASSERT_TRUE (ready (entry));
+    auto entry_services = entry.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (entry_services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    auto &entry_options = entry_services.get_required<fw::route_mesh_runtime_options_t> ();
+    const auto entry_weight = entry_options.mesh (mesh_name).placement_weight ();
+    entry_options.mesh (mesh_name).placement_weight (0);
+    configure (source, second_rid, store, relocations, source_follow_duration, 0, true);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (peer_ready (entry_services.get_required<fw::route_mesh_runtime_t> ()));
+    ASSERT_TRUE (
+      move_to (entry_services.get_required<fw::actor_client_t> (), evidence, local_spot, 1));
+    {
+        std::lock_guard lock (evidence.mutex);
+        ASSERT_TRUE (
+          std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.back ()));
+        ASSERT_EQ (std::get<fw::actor_join_accepted_t> (evidence.completions.back ())
+                     .actor.node_rid ()
+                     .value (),
+                   second_rid);
+    }
+    if (GetParam ()) {
+        entry_options.mesh (mesh_name).placement_weight (entry_weight);
+    } else {
+        configure (target, "join-third", store, relocations, source_follow_duration, 0, true);
+        target.start ();
+        ASSERT_TRUE (ready (target));
+    }
+    auto relocation = source.app.relocate (
+      {.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget});
+    auto &runtime = services.get_required<fw::framework_runtime_t> ();
+    const auto readiness_deadline = std::chrono::steady_clock::now () + wait_budget;
+    while (runtime.status ().state != fw::framework_runtime_state_t::relocating
+           && std::chrono::steady_clock::now () < readiness_deadline)
+        std::this_thread::yield ();
+    ASSERT_EQ (runtime.status ().state, fw::framework_runtime_state_t::relocating);
+    auto client = source.app.advanced ().zlink ().route_client (
+      services.get_required<fw::serializer_registry_t> ());
+    ASSERT_TRUE (client.send_to_spot (fw::spot_id_t (local_spot), ready_t{}).async ().result ());
+    const auto result = relocation.result_for (wait_budget);
+    ASSERT_TRUE (result.has_value ());
+    ASSERT_TRUE (*result);
+    EXPECT_EQ (result->value ().outcome, fw::relocation_outcome_t::relocated)
+      << "reason=" << static_cast<int> (result->value ().reason);
+}
+
+INSTANTIATE_TEST_SUITE_P (FreshAndPreviousOwner, ActorHostRelocation, testing::Bool ());
+
 TEST (ActorMaintenanceJoin, ReservedLifecycleCaptureKeepsTurn)
 {
     for (const bool early : {true, false}) {
@@ -1109,7 +1178,8 @@ TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
                    .timeout (wait_budget)
                    .async<probe_t> ()
                    .result ();
-    ASSERT_TRUE (probe);
+    ASSERT_TRUE (probe) << "kind=" << static_cast<int> (probe.error_kind ())
+                        << " message=" << (probe.error () ? probe.error ()->what () : "");
     EXPECT_EQ (probe.value ().value, 17);
 }
 
