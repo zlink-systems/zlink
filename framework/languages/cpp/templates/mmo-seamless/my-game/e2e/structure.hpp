@@ -1,6 +1,8 @@
 #pragma once
 #include "server/shared/config.hpp"
+#include <algorithm>
 #include <set>
+#include <tuple>
 #include <array>
 
 namespace MyGame::E2E
@@ -160,12 +162,23 @@ inline void check_structure (const std::filesystem::path &root)
         require (config.at ("ZoneCapacity").get<int> () >= static_cast<int> (ids.size ()),
                  "Zone capacity smaller than initial placement");
     }
+    std::set<std::tuple<std::string, std::string, std::string, std::string>> edges;
     for (const auto &edge : j.at ("edges")) {
-        require (nodes.contains (nonempty (edge, "from")) && nodes.contains (nonempty (edge, "to")),
-                 "Unknown edge endpoint");
-        (void) nonempty (edge, "label");
-        if (edge.contains ("semantic"))
-            (void) nonempty (edge, "semantic");
+        const auto from = nonempty (edge, "from"), to = nonempty (edge, "to"),
+                   label = nonempty (edge, "label");
+        require (nodes.contains (from) && nodes.contains (to), "Unknown edge endpoint");
+        const auto semantic = edge.contains ("semantic") ? nonempty (edge, "semantic") : "";
+        edges.emplace (from, to, label, semantic);
     }
+    const decltype (edges) required_edges{
+      {"players", "session", "STREAM", ""},
+      {"session", "zoneA", "relay", ""},
+      {"zoneA", "zoneB", "relocation", ""},
+      {"zoneB", "zoneA", "border pub/sub", "border-updates"},
+      {"zoneB", "instance", "GetOrCreate", ""},
+      {"zoneB", "location", "Location / lease", "location-authority"}};
+    require (
+      std::includes (edges.begin (), edges.end (), required_edges.begin (), required_edges.end ()),
+      "Missing required structure edge");
 }
 }
