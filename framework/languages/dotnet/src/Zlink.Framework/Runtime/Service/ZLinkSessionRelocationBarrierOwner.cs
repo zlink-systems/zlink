@@ -6,7 +6,7 @@ namespace Zlink.Framework.Runtime.Service;
 internal sealed class ZLinkSessionRelocationBarrierOwner(ZLinkFrameworkRuntime runtime)
     : ISessionRelocationBarrierTarget
 {
-    public ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord> SealAsync(
+    public ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord?> SealAsync(
         ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
         RoutingId authenticatedSourceNodeRid,
         CancellationToken cancellationToken

@@ -711,7 +711,9 @@ Startup의 최초 owner lease claim도 갱신과 같은 Store 요청이며 renew
 확인하되, 이 확인도 같은 renew timeout 안에서 한다. Renew timeout까지 lease를 확인하지
 못한 host는 deadline이 없는 host로 startup을 마친다 — 위 차단 대상을 모두 막은 채 renew
 interval마다 claim을 계속하고, 확보한 뒤에는 첫 갱신과 같이 deadline을 계산하고 descriptor를
-게시한다. Claim 결과 `Conflict`와 `GenerationExhausted`는 startup error다. Caller가 startup을
+게시한다. 이 host는 새 application work를 받을 수 없으므로 lease를 확보해 descriptor를 게시하기 전까지 host state가
+[`Preparing`](05-host-relocation-flow.ko.md#3-host-state와-완료-결과)이고, 게시한 뒤 `Serving`이 된다.
+Claim 결과 `Conflict`와 `GenerationExhausted`는 startup error다. Caller가 startup을
 cancellation하면 startup은 취소로 끝나며 이 규칙으로 성공이 되지 않는다. 이미 시작한 claim은
 §10대로 같은 key를 다시 읽어 확인하고, 확인된 lease는 정상 해제하며 heartbeat를 시작하지 않는다.
 
