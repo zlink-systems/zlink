@@ -941,7 +941,8 @@ public final class ZLinkInMemoryLocationStore
                     || !left.stableType().equals(right.stableType())
                     || left.policy() != right.policy()
                     || left.hasSnapshotAdapter() != right.hasSnapshotAdapter()
-                    || left.spotLimit() != right.spotLimit()) {
+                    || left.spotLimit() != right.spotLimit()
+                    || left.entryAccepted() != right.entryAccepted()) {
                 return false;
             }
         }

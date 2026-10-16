@@ -113,7 +113,8 @@ public record ZLinkMeshNodeMonitoringProjection(
                                                 ZLinkPlacementObjectKind.USER_SPOT,
                                                 factory.stableType(),
                                                 factory.options().stableTypeLimit(),
-                                                factory.relocationPolicy())));
+                                                factory.relocationPolicy(),
+                                                false)));
         registration
                 .relocatableInstanceSpotFactories()
                 .values()
@@ -124,7 +125,8 @@ public record ZLinkMeshNodeMonitoringProjection(
                                                 ZLinkPlacementObjectKind.INSTANCE_SPOT,
                                                 factory.stableType(),
                                                 factory.options().stableTypeLimit(),
-                                                factory.relocationPolicy())));
+                                                factory.relocationPolicy(),
+                                                false)));
         registration
                 .relocatableActorFactories()
                 .values()
@@ -135,7 +137,9 @@ public record ZLinkMeshNodeMonitoringProjection(
                                                 ZLinkPlacementObjectKind.ACTOR,
                                                 factory.stableType(),
                                                 0,
-                                                factory.relocationPolicy())));
+                                                factory.relocationPolicy(),
+                                                registration.acceptsNewActor(
+                                                        factory.stableType()))));
         return List.copyOf(capabilities);
     }
 
@@ -143,7 +147,8 @@ public record ZLinkMeshNodeMonitoringProjection(
             ZLinkPlacementObjectKind kind,
             String stableType,
             int stableTypeLimit,
-            RelocationPolicy policy) {
+            RelocationPolicy policy,
+            boolean entryAccepted) {
         return new ZLinkObjectCapability(
                 kind,
                 stableType,
@@ -153,6 +158,7 @@ public record ZLinkMeshNodeMonitoringProjection(
                                 ? ZLinkObjectMaintenancePolicyKind.RECREATE
                                 : ZLinkObjectMaintenancePolicyKind.DISABLED,
                 policy instanceof RelocationPolicy.PreserveState,
-                kind == ZLinkPlacementObjectKind.ACTOR ? 0 : stableTypeLimit);
+                kind == ZLinkPlacementObjectKind.ACTOR ? 0 : stableTypeLimit,
+                entryAccepted);
     }
 }
