@@ -286,11 +286,7 @@ export class ZLinkSpotTimerRegistry {
    */
   async resolveRelocationHandlers(
     declared: readonly Type[],
-    register: (
-      name: string,
-      periodMs: number,
-      handlerType: Type
-    ) => Promise<unknown>
+    register: (name: string, periodMs: number, handlerType: Type) => Promise<unknown>
   ): Promise<void> {
     if (!this.frozen || !this.initializing || this.relocationHandlersResolved) {
       throw new Error('Timer relocation handler resolution is not active.');
@@ -311,11 +307,7 @@ export class ZLinkSpotTimerRegistry {
         );
       }
       if (entry.slot.binding === undefined) {
-        await register(
-          name,
-          entry.timer.periodMs,
-          matches[0]!
-        );
+        await register(name, entry.timer.periodMs, matches[0]!);
       }
     }
   }

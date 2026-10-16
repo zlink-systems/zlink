@@ -466,8 +466,10 @@ for (const [objectKind, declare] of [
           // The same constructor declared twice is one declaration.
           this.context.handlers.addTimerHandler(TickHandler);
         } else {
-          // addTimer in configure() announces the constructor for another key.
+          // addTimer in configure() announces the constructor for another key;
+          // announcing the same constructor object again is still one candidate.
           await this.context.addTimer('other', 5_000, TickHandler);
+          this.context.handlers.addTimerHandler(TickHandler);
           await this.context.addTimer('unrelated', 5_000, OtherKeyHandler);
         }
       }
