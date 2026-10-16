@@ -148,15 +148,14 @@ internal static class ZLinkActorRequestSourceFenceValidator
         IReadOnlyList<MeshNodePeer> peers
     )
     {
-        var isCurrent =
-            fence.NodeRid == localNode.RoutingId
-                ? fence.NodeGeneration == localNode.LifecycleGeneration
-                : peers.Any(peer =>
-                    peer.State == MeshPeerState.Admitted
-                    && peer.RoutingId == fence.NodeRid
-                    && peer.LifecycleGeneration == fence.NodeGeneration
-                );
-        if (!isCurrent)
+        if (
+            !ZLinkFrameworkRuntime.MatchesAdmittedNodeLifecycle(
+                localNode,
+                peers,
+                fence.NodeRid,
+                fence.NodeGeneration
+            )
+        )
             throw Stale(fence);
     }
 
