@@ -1,0 +1,11 @@
+{
+  "Id": "fieldB",
+  "RedisEndpoint": "127.0.0.1:6379",
+  "KeyPrefix": "my-game:",
+  "MeshEndpoint": "tcp://127.0.0.1:0",
+  "FieldIds": [
+    "field-3",
+    "field-4"
+  ],
+  "FieldCapacity": 2
+}
