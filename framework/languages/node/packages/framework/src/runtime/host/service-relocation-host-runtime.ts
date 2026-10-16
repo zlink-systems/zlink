@@ -49,6 +49,7 @@ import { RequestResult, SubmitResult, ZLinkBackendResultError } from '../backend
 import type { ZLinkFrameworkRegistration } from '../configuration';
 import {
   type ZLinkRuntimeEventPublisher,
+  type ZLinkRelocationMetricOperation,
   type ZLinkRuntimeMetrics,
   isRelocationDebugEnabled,
   relocationDebug
@@ -1771,6 +1772,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       spotObjectGeneration: spotAuthority.objectGeneration,
       membershipEpoch: state.spotMembershipEpoch > 0n ? state.spotMembershipEpoch : 1n
     }));
+    const relocationMetric =
+      spotRegistration.relocation.kind === 'disabled'
+        ? undefined
+        : this.options.metrics?.startRelocation(meshName, kind, spotRegistration.relocation.kind);
     let outcome = 'completed';
     try {
       const waitForRelocationBoundary = (
@@ -1820,7 +1825,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           )
         ]),
         signal,
-        sessions
+        sessions,
+        undefined,
+        undefined,
+        relocationMetric
       );
     } catch (error) {
       outcome = 'failed';
@@ -1835,14 +1843,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
       throw error;
     } finally {
+      relocationMetric?.complete(signal?.aborted === true ? 'shutdown' : outcome);
       this.sourceRelocationIds.delete(aggregateId);
       if (interruptionStartedAt !== undefined) {
         this.recordRelocationInterruption(
           meshName,
           kind,
           kind === 'user_spot' ? 'spot_wide' : undefined,
-          interruptionStartedAt,
-          outcome
+          interruptionStartedAt
         );
       }
     }
@@ -1873,6 +1881,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       encodeAuthorityKey('actor', state.actorId),
       signal
     );
+    const actorPolicy = this.actorRegistration(
+      state.meshName ?? meshName,
+      authority.allocation.stableType
+    ).relocation.kind;
     target ??= await this.selectTarget(
       meshName,
       this.requireMeshNode(meshName).status().routingId,
@@ -1881,10 +1893,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         {
           objectKind: 'actor',
           stableType: authority.allocation.stableType,
-          policy: this.actorRegistration(
-            state.meshName ?? meshName,
-            authority.allocation.stableType
-          ).relocation.kind,
+          policy: actorPolicy,
           count: 1
         }
       ],
@@ -1922,6 +1931,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         return unit.seal(captureSignal);
       }
     };
+    const relocationMetric =
+      actorPolicy === 'disabled'
+        ? undefined
+        : this.options.metrics?.startRelocation(meshName, 'actor', actorPolicy);
     let outcome = 'completed';
     try {
       if (isRelocationDebugEnabled()) {
@@ -1953,21 +1966,17 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         signal,
         sessions,
         advertisedReceiveChunkLimitBytes,
-        deadlineAtMs
+        deadlineAtMs,
+        relocationMetric
       );
     } catch (error) {
       outcome = 'failed';
       throw error;
     } finally {
+      relocationMetric?.complete(signal?.aborted === true ? 'shutdown' : outcome);
       this.sourceRelocationIds.delete(aggregateId);
       if (interruptionStartedAt !== undefined) {
-        this.recordRelocationInterruption(
-          meshName,
-          'actor',
-          undefined,
-          interruptionStartedAt,
-          outcome
-        );
+        this.recordRelocationInterruption(meshName, 'actor', undefined, interruptionStartedAt);
       }
     }
   }
@@ -2079,6 +2088,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
     };
     const aggregateId = this.reserveRelocationId();
+    const relocationMetric =
+      spotRegistration.relocation.kind === 'disabled'
+        ? undefined
+        : this.options.metrics?.startRelocation(
+            meshName,
+            'user_spot',
+            spotRegistration.relocation.kind
+          );
     let outcome = 'completed';
     try {
       await this.waitForRelocationBudgetHeadroom(String(target.rid), signal);
@@ -2097,20 +2114,23 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         captured,
         new Map([[spotKey.value, spotAuthority]]),
         signal,
-        []
+        [],
+        undefined,
+        undefined,
+        relocationMetric
       );
     } catch (error) {
       outcome = 'failed';
       throw error;
     } finally {
+      relocationMetric?.complete(signal?.aborted === true ? 'shutdown' : outcome);
       this.sourceRelocationIds.delete(aggregateId);
       if (interruptionStartedAt !== undefined) {
         this.recordRelocationInterruption(
           meshName,
           'user_spot',
           'per_actor',
-          interruptionStartedAt,
-          outcome
+          interruptionStartedAt
         );
       }
     }
@@ -2284,7 +2304,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     sessions: readonly SourceActorSession[] = [],
     /** Target's advertised relocation state chunk cap (Actor Join only; spec 15 §4.2). */
     advertisedReceiveChunkLimitBytes?: number,
-    controlDeadlineAtMs = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS
+    controlDeadlineAtMs = performance.now() + RELOCATION_OPERATION_TIMEOUT_MS,
+    relocationMetric?: ZLinkRelocationMetricOperation
   ): Promise<void> {
     if (isRelocationDebugEnabled()) {
       relocationDebug('coordinator.begin', {
@@ -2340,6 +2361,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             primary
           );
     const encoded = encodeServiceRelocationEnvelope(transportEnvelope, target.applicationVersion);
+    relocationMetric?.recordBytes(encoded.byteLength);
     const limits = this.relocationLimits();
     // Actor Join threads the target's admission-time advertised cap in;
     // other relocation paths have no such negotiation and fall back to the
@@ -4337,8 +4359,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     meshName: string,
     unitKind: 'actor' | 'user_spot' | 'instance_spot',
     executionMode: 'spot_wide' | 'per_actor' | undefined,
-    startedAt: number,
-    outcome: string
+    startedAt: number
   ): void {
     const seconds = Math.max(0, performance.now() - startedAt) / MILLISECONDS_PER_SECOND;
     const attributes = {
@@ -4346,12 +4367,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       ...(executionMode === undefined ? {} : { execution_mode: executionMode })
     };
     this.options.metrics?.duration(METRIC_NAMES.RelocationInterruption, seconds, attributes);
-    this.options.metrics?.count(METRIC_NAMES.RelocationCompleted, 1, {
-      mesh_name: meshName,
-      object_kind: unitKind,
-      policy: unitKind === 'user_spot' && executionMode === 'per_actor' ? 'recreate' : 'configured',
-      outcome
-    });
     if (seconds <= 1) return;
     console.warn(
       `[zlink.runtime.relocation.changed] ${unitKind} admission interruption ` +
