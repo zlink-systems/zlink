@@ -26,6 +26,7 @@ public final class Scenarios {
 
     public static void run(Scenario scenario, Nodes nodes) throws Exception {
         var clients = new ArrayList<Client>();
+        Throwable primary = null;
         try {
             var client = create(nodes, clients, scenario.id() + "-" + UUID.randomUUID());
             switch (scenario) {
@@ -147,6 +148,9 @@ public final class Scenarios {
             }
             if (scenario != Scenario.RECONNECT)
                 require(client.disconnects.get() == 0, "Client disconnected");
+        } catch (Exception | Error error) {
+            primary = error;
+            throw error;
         } finally {
             Exception failure = null;
             for (var client : clients.reversed())
@@ -156,7 +160,10 @@ public final class Scenarios {
                     if (failure == null) failure = error;
                     else failure.addSuppressed(error);
                 }
-            if (failure != null) throw failure;
+            if (failure != null) {
+                if (primary != null) primary.addSuppressed(failure);
+                else throw failure;
+            }
         }
     }
 }

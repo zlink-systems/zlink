@@ -119,8 +119,12 @@ public final class Client implements AutoCloseable {
     }
 
     public void close() throws Exception {
-        connector.close().submit().toCompletableFuture().join();
         Exception failure = null;
+        try {
+            connector.close().submit().toCompletableFuture().join();
+        } catch (Exception error) {
+            failure = error;
+        }
         for (var registration : registrations)
             try {
                 registration.close();

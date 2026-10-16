@@ -108,7 +108,7 @@ public final class Scenarios {
         String suffix = UUID.randomUUID().toString(), tableId = "table-" + suffix;
         var p1 = new Client(nodes.endpoint, "p1-" + suffix, tableId);
         var p2 = new Client(nodes.endpoint, "p2-" + suffix, tableId);
-        Exception primary = null;
+        Throwable primary = null;
         try {
             var first = p1.connect();
             var second = p2.connect();
@@ -216,7 +216,7 @@ public final class Scenarios {
                 nodes.replace(before1.nodeId());
                 run(Scenario.TABLE, nodes, before1.nodeId());
             }
-        } catch (Exception failure) {
+        } catch (Exception | Error failure) {
             primary = failure;
             throw failure;
         } finally {

@@ -250,12 +250,21 @@ public final class Nodes implements AutoCloseable {
         }
 
         void cleanup() throws Exception {
+            Throwable primary = null;
             try {
                 stop();
+            } catch (Exception | Error error) {
+                primary = error;
+                throw error;
             } finally {
-                if (process.isAlive()) {
-                    process.destroyForcibly();
-                    process.waitFor();
+                try {
+                    if (process.isAlive()) {
+                        process.destroyForcibly();
+                        process.waitFor();
+                    }
+                } catch (Exception | Error error) {
+                    if (primary != null) primary.addSuppressed(error);
+                    else throw error;
                 }
             }
         }
