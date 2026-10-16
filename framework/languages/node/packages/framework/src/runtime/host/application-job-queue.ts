@@ -137,9 +137,9 @@ export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
   constructor(
     private readonly owner: ApplicationJobQueue,
     readonly origin: ApplicationJobOrigin,
-    private readonly reusable = false
+    private readonly storage?: ApplicationJobReceiveRotation
   ) {
-    this.state = reusable ? 'idle' : 'reserved';
+    this.state = storage === undefined ? 'reserved' : 'idle';
   }
 
   reserveStorage(): boolean {
@@ -150,10 +150,11 @@ export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
   }
 
   releaseStorage(): void {
-    if (!this.reusable || this.state === 'idle') return;
+    if (this.storage === undefined || this.state === 'idle') return;
     if (this.state !== 'released')
       throw new Error('Reservation storage still owns queue capacity.');
     this.state = 'idle';
+    this.storage.returnIdle(this);
   }
 
   detachForHandlerTurn(): void {
@@ -185,10 +186,14 @@ export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
   }
 }
 
-/** Connection-owned storage; queue accounting remains with the host queue. */
+/**
+ * Connection-owned storage; queue accounting remains with the host queue.
+ * The rotation budget is a count reserved from the queue. Only a record that
+ * is actually received takes a permit, from the idle storage stack, so a
+ * rotation that receives one record touches one permit.
+ */
 class ApplicationJobReceiveRotation implements ApplicationJobReceiveRotationPort {
-  private readonly storage: ApplicationJobQueuePermit[] = [];
-  private readonly grants: (ApplicationJobQueuePermit | undefined)[];
+  private readonly idle: ApplicationJobQueuePermit[] = [];
   private granted = 0;
   private consumed = 0;
 
@@ -196,47 +201,33 @@ class ApplicationJobReceiveRotation implements ApplicationJobReceiveRotationPort
     private readonly owner: ApplicationJobQueue,
     private readonly capacity: number,
     private readonly origin: ApplicationJobOrigin
-  ) {
-    this.grants = new Array<ApplicationJobQueuePermit | undefined>(capacity);
-    this.prepareStorage();
-  }
-
-  private prepareStorage(): void {
-    for (let index = 0; index < this.capacity; index++)
-      this.storage.push(new ApplicationJobQueuePermit(this.owner, this.origin, true));
-  }
+  ) {}
 
   reserve(): void {
     this.releaseUnused();
     const count = this.owner.receiveRotationCapacity(this.capacity);
     if (count === 0) return;
-    for (let index = 0; index < this.storage.length; index++) {
-      const permit = this.storage[index]!;
-      if (permit.reserveStorage()) this.grants[this.granted++] = permit;
-      if (this.granted === count) break;
-    }
-    if (this.granted < count) {
-      const start = this.storage.length;
-      this.prepareStorage();
-      for (let index = start; this.granted < count; index++) {
-        const permit = this.storage[index]!;
-        permit.reserveStorage();
-        this.grants[this.granted++] = permit;
-      }
-    }
+    this.granted = count;
     this.owner.reserveReceiveRotation(count);
   }
 
   take(): ApplicationJobQueuePermit | undefined {
     if (this.consumed === this.granted) return undefined;
-    return this.grants[this.consumed++];
+    this.consumed++;
+    const permit = this.idle.pop() ?? new ApplicationJobQueuePermit(this.owner, this.origin, this);
+    permit.reserveStorage();
+    return permit;
   }
 
   releaseUnused(): void {
-    this.owner.releaseUnusedReceiveRotation(this.grants, this.consumed, this.granted);
-    // Keep the prepared grant slots and reset only the logical count.
+    // Unconsumed budget never became a permit; it returns as a count.
+    this.owner.releaseUnusedReceiveRotation(this.granted - this.consumed);
     this.granted = 0;
     this.consumed = 0;
+  }
+
+  returnIdle(permit: ApplicationJobQueuePermit): void {
+    this.idle.push(permit);
   }
 }
 
@@ -479,19 +470,9 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
     if (state !== undefined) this.release(state);
   }
 
-  releaseUnusedReceiveRotation(
-    grants: readonly (ApplicationJobQueuePermit | undefined)[],
-    consumed: number,
-    granted: number
-  ): void {
-    const count = granted - consumed;
+  releaseUnusedReceiveRotation(count: number): void {
+    // Unconsumed budget still belongs to this receive round; no record has acquired it.
     if (count === 0) return;
-    // Unconsumed grants still belong to this receive round; no record has acquired them.
-    for (let index = consumed; index < granted; index++) {
-      const permit = grants[index]!;
-      permit.takeReleaseState();
-      permit.releaseStorage();
-    }
     this.release('reserved', count);
   }
 

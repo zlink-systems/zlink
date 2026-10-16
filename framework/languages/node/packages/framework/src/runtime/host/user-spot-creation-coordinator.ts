@@ -1,3 +1,4 @@
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { createHash } from 'node:crypto';
 import {
   type RoutingId,
@@ -154,7 +155,7 @@ export class ZLinkUserSpotCreationCoordinator {
           true
         );
       }
-      if (excludedNodeRids.has(String(target.nodeRid))) {
+      if (excludedNodeRids.has(encodeRoutingIdStorageHex(target.nodeRid))) {
         deadline.close();
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
@@ -218,7 +219,7 @@ export class ZLinkUserSpotCreationCoordinator {
         );
       }
       if (reserved.kind !== 'placementCapacityExhausted') break;
-      excludedNodeRids.add(String(target.nodeRid));
+      excludedNodeRids.add(encodeRoutingIdStorageHex(target.nodeRid));
     }
     if (
       reserved.kind === 'alreadyExists' ||
@@ -478,7 +479,7 @@ export class ZLinkUserSpotCreationCoordinator {
           current.allocation.stableType === record.stableType &&
           current.objectGeneration === record.reservation.objectGeneration &&
           current.authorityOwnerGeneration === record.reservation.authorityOwnerGeneration &&
-          String(current.allocation.descriptor.rid) === record.reservation.targetNodeRid &&
+          routingIdsEqual(current.allocation.descriptor.rid, record.reservation.targetNodeRid) &&
           current.allocation.descriptorLifecycleGeneration ===
             record.reservation.targetNodeGeneration &&
           current.ownerId === record.reservation.targetOwnerId &&
@@ -931,7 +932,7 @@ function requireCloseTarget(
     decoded.ownerLeaseGeneration !== current.ownerLeaseGeneration ||
     allocation.objectKind !== 'user_spot' ||
     allocation.state !== 'active' ||
-    String(allocation.descriptor.rid) !== fence.nodeRid ||
+    !routingIdsEqual(allocation.descriptor.rid, fence.nodeRid) ||
     (fence.meshName !== undefined && allocation.descriptor.meshName !== fence.meshName) ||
     (fence.nodeGeneration !== undefined &&
       allocation.descriptorLifecycleGeneration !== fence.nodeGeneration) ||
@@ -1063,7 +1064,7 @@ function sameCreationTarget(
 ): boolean {
   return (
     snapshot.allocation.descriptor.meshName === target.meshName &&
-    String(snapshot.allocation.descriptor.rid) === String(target.nodeRid) &&
+    routingIdsEqual(snapshot.allocation.descriptor.rid, target.nodeRid) &&
     snapshot.allocation.descriptorLifecycleGeneration === target.nodeLifecycleGeneration &&
     snapshot.ownerId === target.owner.ownerId &&
     snapshot.ownerLeaseGeneration === target.owner.leaseGeneration

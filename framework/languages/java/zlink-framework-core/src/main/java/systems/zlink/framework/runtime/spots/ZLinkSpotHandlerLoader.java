@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscription;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
@@ -65,16 +66,45 @@ final class ZLinkSpotHandlerLoader {
             Class<?> spotType,
             List<Class<?>> configuredHandlerTypes,
             ScannedTimerRegistrar timerRegistrar) {
+        return load(spotType, configuredHandlerTypes, List.of(), timerRegistrar);
+    }
+
+    ZLinkSpotHandlerCatalog.Registrations load(
+            Class<?> spotType,
+            List<Class<?>> configuredHandlerTypes,
+            List<ZLinkSpotHandlerCatalog.ConfiguredSubscription> configuredSubscriptions,
+            ScannedTimerRegistrar timerRegistrar) {
         try {
             Map<String, SpotPacketHandlerRegistration> packetHandlers = new HashMap<>();
-            Map<String, List<SpotSubscriptionHandlerRegistration>> subscriptionHandlers =
-                    new HashMap<>();
+            Map<ZLinkBackendSubscription, List<SpotSubscriptionHandlerRegistration>>
+                    subscriptionHandlers = new HashMap<>();
             registerScannedSpotHandlers(
-                    spotType, packetHandlers, subscriptionHandlers, timerRegistrar);
+                    spotType,
+                    configuredHandlerTypes,
+                    configuredSubscriptions,
+                    packetHandlers,
+                    subscriptionHandlers,
+                    timerRegistrar);
             for (Class<?> handlerType : configuredHandlerTypes) {
                 registerConfiguredSpotHandler(
                         handlerType, spotType, packetHandlers, subscriptionHandlers);
                 handlerFactory.prepare(handlerType);
+            }
+            for (Class<?> handlerType :
+                    configuredSubscriptions.stream()
+                            .map(ZLinkSpotHandlerCatalog.ConfiguredSubscription::handlerType)
+                            .distinct()
+                            .toList()) {
+                if (!configuredHandlerTypes.contains(handlerType)) {
+                    registerAnnotatedSubscriptions(handlerType, spotType, subscriptionHandlers);
+                    handlerFactory.prepare(handlerType);
+                }
+            }
+            for (var configured : configuredSubscriptions) {
+                addConfiguredSubscriptionHandler(
+                        subscriptionHandlers,
+                        createSpotSubscriptionRegistration(
+                                configured.subscription(), configured.handlerType(), spotType));
             }
             return new ZLinkSpotHandlerCatalog.Registrations(packetHandlers, subscriptionHandlers);
         } catch (ZLinkConfigurationException failure) {
@@ -85,8 +115,11 @@ final class ZLinkSpotHandlerLoader {
 
     private void registerScannedSpotHandlers(
             Class<?> spotType,
+            List<Class<?>> configuredHandlerTypes,
+            List<ZLinkSpotHandlerCatalog.ConfiguredSubscription> configuredSubscriptions,
             Map<String, SpotPacketHandlerRegistration> packetHandlers,
-            Map<String, List<SpotSubscriptionHandlerRegistration>> subscriptionHandlers,
+            Map<ZLinkBackendSubscription, List<SpotSubscriptionHandlerRegistration>>
+                    subscriptionHandlers,
             ScannedTimerRegistrar timerRegistrar) {
         for (ZLinkScannedHandler handler : scannedHandlers.handlers()) {
             if (!isScannedHandlerForSpot(handler, spotType)) {
@@ -99,6 +132,14 @@ final class ZLinkSpotHandlerLoader {
                 continue;
             }
             if (handler.kind() == ZLinkScannedHandlerKind.PUBLISH) {
+                if (configuredHandlerTypes.contains(handler.handlerType())
+                        || configuredSubscriptions.stream()
+                                .anyMatch(
+                                        configured ->
+                                                configured.handlerType()
+                                                        == handler.handlerType())) {
+                    continue;
+                }
                 addConfiguredSubscriptionHandler(
                         subscriptionHandlers, createScannedSpotSubscriptionRegistration(handler));
                 continue;
@@ -114,39 +155,64 @@ final class ZLinkSpotHandlerLoader {
             Class<?> handlerType,
             Class<?> expectedSpotType,
             Map<String, SpotPacketHandlerRegistration> packetHandlers,
-            Map<String, List<SpotSubscriptionHandlerRegistration>> subscriptionHandlers) {
+            Map<ZLinkBackendSubscription, List<SpotSubscriptionHandlerRegistration>>
+                    subscriptionHandlers) {
         boolean matched = false;
         if (isSpotPacketHandlerType(handlerType)) {
             addConfiguredPacketHandler(
                     packetHandlers, createSpotPacketRegistration(handlerType, expectedSpotType));
             matched = true;
         }
-        if (isSpotSubscriptionHandlerType(handlerType)) {
-            addConfiguredSubscriptionHandler(
-                    subscriptionHandlers,
-                    createConfiguredSpotSubscriptionRegistration(handlerType, expectedSpotType));
-            matched = true;
+        if (isSpotSubscriptionHandlerType(handlerType)
+                && handlerType.getAnnotation(ZLinkSpotSubscription.class) == null) {
+            ZLinkHandlerScanValidation.requireTopic(handlerType, (ZLinkSpotSubscription) null);
         }
+        matched |=
+                registerAnnotatedSubscriptions(handlerType, expectedSpotType, subscriptionHandlers);
         if (actorHandlers.registerConfigured(handlerType, expectedSpotType)) {
             matched = true;
-        }
-        for (Method method : handlerType.getMethods()) {
-            ZLinkSpotSubscription subscription = method.getAnnotation(ZLinkSpotSubscription.class);
-            if (subscription != null) {
-                addConfiguredSubscriptionHandler(
-                        subscriptionHandlers,
-                        createSpotSubscriptionRegistration(
-                                ZLinkHandlerScanValidation.requireTopic(handlerType, subscription),
-                                handlerType,
-                                expectedSpotType));
-                matched = true;
-            }
         }
         if (!matched) {
             throw new ZLinkConfigurationException(
                     "SPOT handler must declare a SPOT or actor handler contract: "
                             + handlerType.getName());
         }
+    }
+
+    private boolean registerAnnotatedSubscriptions(
+            Class<?> handlerType,
+            Class<?> expectedSpotType,
+            Map<ZLinkBackendSubscription, List<SpotSubscriptionHandlerRegistration>> handlers) {
+        boolean matched = false;
+        var annotation = handlerType.getAnnotation(ZLinkSpotSubscription.class);
+        if (annotation != null) {
+            addConfiguredSubscriptionHandler(
+                    handlers,
+                    createSpotSubscriptionRegistration(
+                            subscription(handlerType, annotation), handlerType, expectedSpotType));
+            matched = true;
+        }
+        for (Method method : handlerType.getMethods()) {
+            annotation = method.getAnnotation(ZLinkSpotSubscription.class);
+            if (annotation != null) {
+                addConfiguredSubscriptionHandler(
+                        handlers,
+                        createSpotSubscriptionMethodRegistration(
+                                subscription(handlerType, annotation),
+                                handlerType,
+                                expectedSpotType,
+                                method));
+                matched = true;
+            }
+        }
+        return matched;
+    }
+
+    private static ZLinkBackendSubscription subscription(
+            Class<?> handlerType, ZLinkSpotSubscription annotation) {
+        return ZLinkBackendSubscription.registration(
+                annotation.channelName(),
+                ZLinkHandlerScanValidation.requireTopic(handlerType, annotation));
     }
 
     private static boolean isScannedHandlerForSpot(ZLinkScannedHandler handler, Class<?> spotType) {
@@ -174,22 +240,18 @@ final class ZLinkSpotHandlerLoader {
     private SpotSubscriptionHandlerRegistration createScannedSpotSubscriptionRegistration(
             ZLinkScannedHandler handler) {
         return new SpotSubscriptionHandlerRegistration(
-                handler.topic(),
+                subscription(
+                        handler.handlerType(),
+                        handler.handlerMethod() == null
+                                ? handler.handlerType().getAnnotation(ZLinkSpotSubscription.class)
+                                : handler.handlerMethod()
+                                        .getAnnotation(ZLinkSpotSubscription.class)),
                 handler.handlerType(),
                 handler.handlerMethod(),
                 handler.spotType(),
                 handler.messageType(),
                 handler.packetName(),
                 suspendInvokers);
-    }
-
-    private SpotSubscriptionHandlerRegistration createConfiguredSpotSubscriptionRegistration(
-            Class<?> handlerType, Class<?> expectedSpotType) {
-        ZLinkSpotSubscription annotation = handlerType.getAnnotation(ZLinkSpotSubscription.class);
-        return createSpotSubscriptionRegistration(
-                ZLinkHandlerScanValidation.requireTopic(handlerType, annotation),
-                handlerType,
-                expectedSpotType);
     }
 
     private static boolean isSpotPacketHandlerType(Class<?> handlerType) {
@@ -224,19 +286,17 @@ final class ZLinkSpotHandlerLoader {
     }
 
     private static void addConfiguredSubscriptionHandler(
-            Map<String, List<SpotSubscriptionHandlerRegistration>> handlers,
+            Map<ZLinkBackendSubscription, List<SpotSubscriptionHandlerRegistration>> handlers,
             SpotSubscriptionHandlerRegistration registration) {
         List<SpotSubscriptionHandlerRegistration> topicHandlers =
-                handlers.computeIfAbsent(registration.topic(), ignored -> new ArrayList<>());
+                handlers.computeIfAbsent(registration.subscription(), ignored -> new ArrayList<>());
         for (SpotSubscriptionHandlerRegistration existing : topicHandlers) {
-            if (existing.packetName().equals(registration.packetName())
-                    && existing.messageType() != registration.messageType()) {
+            if (existing.packetName().equals(registration.packetName())) {
                 throw new ZLinkConfigurationException(
-                        "SPOT subscription handlers for topic '"
-                                + registration.topic()
-                                + "' and packet '"
-                                + registration.packetName()
-                                + "' must declare the same message type");
+                        "duplicate SPOT subscription for "
+                                + registration.subscription()
+                                + " and packet "
+                                + registration.packetName());
             }
         }
         topicHandlers.add(registration);
@@ -316,7 +376,9 @@ final class ZLinkSpotHandlerLoader {
     }
 
     private SpotSubscriptionHandlerRegistration createSpotSubscriptionRegistration(
-            String topic, Class<?> handlerType, Class<?> expectedSpotType) {
+            ZLinkBackendSubscription subscriptionTarget,
+            Class<?> handlerType,
+            Class<?> expectedSpotType) {
         ParameterizedType subscription =
                 findInterface(handlerType, ZLinkSpotSubscriptionHandler.class);
         if (subscription == null) {
@@ -328,7 +390,7 @@ final class ZLinkSpotHandlerLoader {
             requireExactSpotType(handlerType, expectedSpotType, spotType);
             Class<?> messageType = requireClassArgument(handlerType, arguments[1]);
             return new SpotSubscriptionHandlerRegistration(
-                    topic,
+                    subscriptionTarget,
                     handlerType,
                     null,
                     spotType,
@@ -337,32 +399,32 @@ final class ZLinkSpotHandlerLoader {
                     suspendInvokers);
         }
 
-        for (Method method : handlerType.getMethods()) {
-            ZLinkSpotSubscription annotation = method.getAnnotation(ZLinkSpotSubscription.class);
-            if (annotation == null) {
-                continue;
-            }
-            Class<?>[] parameters = ZLinkHandlerMethodInvoker.logicalParameterTypes(method);
-            requireSpotMessageShape(
-                    handlerType,
-                    method,
-                    parameters,
-                    ZLinkPublishMessageContext.class,
-                    "SPOT subscription handler method must have spot and event parameters: ");
-            requireExactSpotType(handlerType, expectedSpotType, parameters[0]);
-            return new SpotSubscriptionHandlerRegistration(
-                    topic,
-                    handlerType,
-                    method,
-                    parameters[0],
-                    parameters[1],
-                    resolvePacketName(parameters[1]),
-                    suspendInvokers);
-        }
-
         throw new ZLinkConfigurationException(
                 "SPOT subscription handler must implement ZLinkSpotSubscriptionHandler: "
                         + handlerType.getName());
+    }
+
+    private SpotSubscriptionHandlerRegistration createSpotSubscriptionMethodRegistration(
+            ZLinkBackendSubscription subscriptionTarget,
+            Class<?> handlerType,
+            Class<?> expectedSpotType,
+            Method method) {
+        Class<?>[] parameters = ZLinkHandlerMethodInvoker.logicalParameterTypes(method);
+        requireSpotMessageShape(
+                handlerType,
+                method,
+                parameters,
+                ZLinkPublishMessageContext.class,
+                "SPOT subscription handler method must have spot and event parameters: ");
+        requireExactSpotType(handlerType, expectedSpotType, parameters[0]);
+        return new SpotSubscriptionHandlerRegistration(
+                subscriptionTarget,
+                handlerType,
+                method,
+                parameters[0],
+                parameters[1],
+                resolvePacketName(parameters[1]),
+                suspendInvokers);
     }
 
     private static void requireSpotMessageShape(

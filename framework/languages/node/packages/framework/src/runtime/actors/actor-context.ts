@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import {
   type RoutingId,
   type SpotId,
@@ -286,7 +287,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             !result.accepted ||
             sourceNodeRid === undefined ||
             result.actor === undefined ||
-            String(sourceNodeRid) === String(result.actor.nodeRid)
+            routingIdsEqual(sourceNodeRid, result.actor.nodeRid)
           ) {
             await notifyJoinCompletion(this.actor, operationId, result, this.messageSerializers);
           } else {
@@ -421,7 +422,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
             !result.accepted ||
             sourceNodeRid === undefined ||
             result.actor === undefined ||
-            String(sourceNodeRid) === String(result.actor.nodeRid)
+            routingIdsEqual(sourceNodeRid, result.actor.nodeRid)
           ) {
             await notifyJoinCompletion(this.actor, operationId, result, this.messageSerializers);
           } else {

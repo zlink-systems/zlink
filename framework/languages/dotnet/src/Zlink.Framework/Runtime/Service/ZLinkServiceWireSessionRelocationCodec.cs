@@ -152,7 +152,8 @@ internal static partial class ZLinkServiceWireCodec
                 ToGenerated(record.RelocationId),
                 ToGenerated(record.Coordinator),
                 ToGenerated(record.Actor),
-                ToGenerated(record.Session)
+                ToGenerated(record.Session),
+                ServiceWirePilotCodec.SessionSealResult.Sealed
             )
         );
     }
@@ -174,6 +175,11 @@ internal static partial class ZLinkServiceWireCodec
             )
         )
             return false;
+        if (generated.SealResult != ServiceWirePilotCodec.SessionSealResult.Sealed)
+        {
+            error = DecodeError.InvalidField;
+            return false;
+        }
         record = new SessionRelocationSealedRecord(
             FromGenerated(generated.Relocation),
             FromGenerated(generated.Coordinator),

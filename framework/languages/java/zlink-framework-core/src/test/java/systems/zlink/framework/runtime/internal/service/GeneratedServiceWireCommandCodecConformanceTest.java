@@ -90,7 +90,13 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             assertArrayEquals(bytes, generatedCommandRoundTrip(bytes));
         }
         for (byte[] bytes : canonicalArray("session-relocation-barrier-v1.json")) {
-            assertArrayEquals(bytes, runtimeCommandRoundTrip(bytes));
+            if (bytes[3] == 43
+                    && ServiceWirePilotCodec.decodeSessionRelocationSealed43(bytes).sealResult()
+                            == ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT) {
+                assertThrows(Exception.class, () -> runtimeCommandRoundTrip(bytes));
+            } else {
+                assertArrayEquals(bytes, runtimeCommandRoundTrip(bytes));
+            }
             assertArrayEquals(bytes, generatedCommandRoundTrip(bytes));
         }
     }
@@ -98,6 +104,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
     @Test
     void batch3RuntimeAndGeneratedCodecsRejectTheSameMalformedBytes() throws Exception {
         List<byte[]> malformed = new ArrayList<>(array("relocation-control-v1.json", "malformed"));
+        malformed.addAll(array("session-relocation-barrier-v1.json", "malformed"));
         for (byte[] bytes : canonicalArray("reply-relay-v1.json")) {
             malformed.addAll(mutations(bytes));
         }

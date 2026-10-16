@@ -206,13 +206,19 @@ serializer는 하나만 두고, 타입 조건을 받는 serializer는 서로 겹
 | --- | --- | --- |
 | Spot 앞 one-way packet | `ZLinkSpotPacketHandler<TSpot, TMessage>` | `addHandler<THandler>()` |
 | Spot 앞 request | `ZLinkSpotRequestHandler<TSpot, TRequest, TReply>` | `addHandler<THandler>()` |
-| Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(topic)` + `addHandler<THandler>()` |
+| Logical Multicast 구독 이벤트 | `ZLinkSpotSubscriptionHandler<TSpot, TEvent>` | handler에 `@ZLinkSpotSubscription(spotNodeName = "game", channelName = "events", topic = "orders")` + `addHandler<THandler>()` |
 | timer tick | `ZLinkSpotTimerHandler<TSpot>` | `context.addTimer<THandler>(name, period, options)`([Timer와 worker](36-timer-worker.ko.md)) |
 | member Actor 앞 one-way packet | `ZLinkSpotActorSendHandler<TSpot, TActor, TMessage>` | handler에 `@ZLinkSpotActorSend` + `addHandler<THandler>()` |
 | member Actor 앞 request | `ZLinkSpotActorRequestHandler<TSpot, TActor, TRequest, TReply>` | handler에 `@ZLinkSpotActorRequest` + `addHandler<THandler>()` |
 
-**reified `addHandler<THandler>()`로 등록한다.** 무엇을 받는 handler인지는 구현한 interface와
-annotation이 정한다.
+**reified `addHandler<THandler>()`로 등록합니다.** 구현한 interface와 annotation이
+handler 종류를 정합니다. 동적 subscription은 Java와 같은 메서드를 호출합니다.
+
+```kotlin
+context().handlers().addSubscribe(ProjectionUpdatedHandler::class.java, channelName, topic)
+```
+
+annotation은 선택이며, 함께 있으면 별개 subscription으로 등록합니다.
 
 handler는 대상 Spot instance를 첫 인자로 받는다. Spot 안에서 실행되므로 상태를 락 없이
 직접 만진다.

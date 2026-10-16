@@ -253,16 +253,6 @@ runtime::relocation_id_generator_t &relocation_ids ()
     return value;
 }
 
-bool same_bound_session_relocation_identity (const bound_session_relocation_route_t &left,
-                                             const bound_session_relocation_route_t &right) noexcept
-{
-    return left.session_owner_node == right.session_owner_node
-           && left.session_owner_node_generation == right.session_owner_node_generation
-           && left.session_owner.owner_id == right.session_owner.owner_id
-           && left.session_owner.lease_generation == right.session_owner.lease_generation
-           && left.session == right.session && left.binding_generation == right.binding_generation;
-}
-
 bool valid_routing_id_prefix (std::string_view value) noexcept
 {
     if (value.empty () || value.size () > 64)
@@ -1124,7 +1114,6 @@ mesh_node_runtime_t::seal_bound_sessions (
         }
         if (!session)
             continue;
-        const auto seal_boundary_sequence = session->observed_sequence;
         if (session->session_owner_node.to_bytes ().empty ()
             || session->session_owner_node_generation == 0
             || session->session_owner.owner_id.empty ()
@@ -1188,24 +1177,7 @@ mesh_node_runtime_t::seal_bound_sessions (
             co_return outcome;
         }
 
-        auto sealed = *completed.result;
-        bool converged = false;
-        std::optional<bound_session_relocation_route_t> current;
-        try {
-            current = co_await _bound_session_relocation_resolver (source);
-        }
-        catch (...) {
-            report_resolver_failure (source);
-            current.reset ();
-        }
-        converged = current && same_bound_session_relocation_identity (*session, *current)
-                    && current->observed_sequence == seal_boundary_sequence;
-        outcome.checkpoints.push_back (
-          {source, authority, *session, std::move (sealed), seal_boundary_sequence});
-        if (!converged) {
-            outcome.recovery_required = !co_await abort_prepared ();
-            co_return outcome;
-        }
+        outcome.checkpoints.push_back ({source, *session, *completed.result});
     }
     outcome.completed = true;
     co_return outcome;
