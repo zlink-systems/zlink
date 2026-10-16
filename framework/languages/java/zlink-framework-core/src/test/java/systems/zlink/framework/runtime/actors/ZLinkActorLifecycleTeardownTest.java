@@ -11,6 +11,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutor;
 
 import java.util.List;
@@ -18,6 +19,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -70,8 +72,8 @@ final class ZLinkActorLifecycleTeardownTest {
                                                         ACTOR,
                                                         () -> {
                                                             order.add("host-close");
-                                                            return CompletableFuture
-                                                                    .completedFuture(null);
+                                                            cleanupEntered.complete(null);
+                                                            return cleanupRelease;
                                                         }))
                                 .get(BOUND_SECONDS, TimeUnit.SECONDS);
                 assertFalse(close.toCompletableFuture().isDone());
@@ -94,7 +96,7 @@ final class ZLinkActorLifecycleTeardownTest {
             if (hostClose) assertFalse(close.toCompletableFuture().isDone());
             cleanupRelease.complete(null);
             cleanup.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
-            assertEquals(List.of("settlement"), order);
+            assertEquals(hostClose ? List.of("host-close") : List.of("settlement"), order);
             assertFalse(barrier.toCompletableFuture().isDone());
         } finally {
             cleanupRelease.complete(null);
@@ -103,8 +105,7 @@ final class ZLinkActorLifecycleTeardownTest {
             close.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
             dispatches.awaitQuiescence().toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
         }
-        assertEquals(
-                hostClose ? List.of("settlement", "host-close") : List.of("settlement"), order);
+        assertEquals(hostClose ? List.of("host-close") : List.of("settlement"), order);
     }
 
     private ZLinkActorDispatchSerials dispatches(ZLinkUserSpotExecutionMode mode) {
@@ -123,6 +124,81 @@ final class ZLinkActorLifecycleTeardownTest {
                         CompletableFuture.completedFuture(
                                 new ZLinkActorDispatchTarget.ActivationSnapshot(
                                         target, incarnation)));
+    }
+
+    @Test
+    void queuedCleanupResumesOnSharedGateAfterBusyRegistry() throws Exception {
+        var ready = new LinkedBlockingQueue<Runnable>();
+        var target =
+                new ZLinkSpotSerialExecutor(
+                        new ZLinkSerialExecutionQueue(ready::add, ZLinkExecutionLanePolicy.spot()),
+                        Runnable::run,
+                        ready::add,
+                        ZLinkUserSpotExecutionMode.SPOT_WIDE,
+                        false);
+        var dispatches =
+                new ZLinkActorDispatchSerials(
+                        new Object(),
+                        Runnable::run,
+                        actorId ->
+                                CompletableFuture.completedFuture(
+                                        new ZLinkActorDispatchTarget.ActivationSnapshot(
+                                                target, ACTOR)));
+        var claim =
+                dispatches
+                        .prepareAsync(ACTOR)
+                        .toCompletableFuture()
+                        .get(BOUND_SECONDS, TimeUnit.SECONDS);
+        var registryField = ZLinkActorDispatchSerials.class.getDeclaredField("stateLane");
+        registryField.setAccessible(true);
+        var registry = (ZLinkStateLane) registryField.get(dispatches);
+        var controlField =
+                ZLinkSerialExecutionQueue.SharedSpotGate.class.getDeclaredField("CURRENT_CONTROL");
+        controlField.setAccessible(true);
+        var control = (ThreadLocal<?>) controlField.get(null);
+        var observedGate = new AtomicReference<Object>();
+        var teardown =
+                dispatches.beginTeardown(
+                        ACTOR,
+                        () -> {
+                            observedGate.set(control.get());
+                            return CompletableFuture.completedFuture(null);
+                        });
+        var entered = new CompletableFuture<Void>();
+        var release = new CompletableFuture<Void>();
+        assertTrue(
+                registry.tryPost(
+                        () -> {
+                            entered.complete(null);
+                            return release;
+                        }));
+        try {
+            entered.get(BOUND_SECONDS, TimeUnit.SECONDS);
+            var mailboxField = registry.getClass().getDeclaredField("mailbox");
+            mailboxField.setAccessible(true);
+            var mailbox = (java.util.Queue<?>) mailboxField.get(registry);
+            while (mailbox.isEmpty()) {
+                Runnable drain = ready.poll(BOUND_SECONDS, TimeUnit.SECONDS);
+                assertNotNull(drain, "queued lifecycle work must reach the registry claim");
+                drain.run();
+            }
+            assertFalse(teardown.toCompletableFuture().isDone());
+        } finally {
+            release.complete(null);
+            while (!teardown.toCompletableFuture().isDone()) {
+                Runnable drain = ready.poll(BOUND_SECONDS, TimeUnit.SECONDS);
+                if (drain != null) drain.run();
+                else
+                    assertTrue(
+                            teardown.toCompletableFuture().isDone(),
+                            "teardown must finish after registry release");
+            }
+            teardown.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+        }
+        assertSame(
+                claim.activation().relocationLane().sharedSpotGate(),
+                observedGate.get(),
+                "registry completion must reacquire the existing shared execution gate");
     }
 
     @Test
