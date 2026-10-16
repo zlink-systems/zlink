@@ -206,7 +206,10 @@ internal sealed record ZLinkObjectCapability(
     string StableType,
     ZLinkObjectMaintenancePolicyKind Policy,
     bool HasSnapshotAdapter,
-    int Limit
+    int Limit,
+    // True only for an Actor stable type that this node's registered Entry
+    // Spot type accepts; new Actor creation selects only such nodes.
+    bool EntryAccepted = false
 );
 
 internal sealed record ZLinkPopulationCapacity(int Active, int Reserved, int Limit);

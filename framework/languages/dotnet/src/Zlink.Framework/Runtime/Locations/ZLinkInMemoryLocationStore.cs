@@ -477,7 +477,7 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
         && current
             .ChannelWeights.Keys.ToHashSet(StringComparer.Ordinal)
             .SetEquals(incoming.ChannelWeights.Keys)
-        && ObjectCapabilitiesEqual(current.ObjectCapabilities, incoming.ObjectCapabilities)
+        && current.ObjectCapabilities.SequenceEqual(incoming.ObjectCapabilities)
         && current.Capacity.Actors.Limit == incoming.Capacity.Actors.Limit
         && current.Capacity.Spots.Limit == incoming.Capacity.Spots.Limit;
 
@@ -498,29 +498,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                 .ThenBy(static capability => capability.StableType, Utf8StringComparer.Instance)
                 .ToArray(),
         };
-
-    private static bool ObjectCapabilitiesEqual(
-        IReadOnlyList<ZLinkObjectCapability> current,
-        IReadOnlyList<ZLinkObjectCapability> incoming
-    )
-    {
-        if (current.Count != incoming.Count)
-            return false;
-        for (var index = 0; index < current.Count; index++)
-        {
-            var left = current[index];
-            var right = incoming[index];
-            if (
-                left.ObjectKind != right.ObjectKind
-                || left.StableType != right.StableType
-                || left.Policy != right.Policy
-                || left.HasSnapshotAdapter != right.HasSnapshotAdapter
-                || left.Limit != right.Limit
-            )
-                return false;
-        }
-        return true;
-    }
 
     private static void ValidateMeshNodeDescriptor(ZLinkMeshNodeDescriptor descriptor)
     {
@@ -588,6 +565,8 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                     != capability.HasSnapshotAdapter
                 || capability.Limit < 0
                 || capability.ObjectKind == ZLinkPlacementObjectKind.Actor && capability.Limit != 0
+                || capability.ObjectKind != ZLinkPlacementObjectKind.Actor
+                    && capability.EntryAccepted
             )
                 throw new ArgumentException(
                     "The MeshNode object capabilities are invalid.",
