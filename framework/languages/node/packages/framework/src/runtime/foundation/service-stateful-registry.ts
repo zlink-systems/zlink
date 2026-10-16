@@ -1,4 +1,9 @@
-import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
+import {
+  ZLINK_MAX_IDENTITY_TEXT_BYTES,
+  ZLINK_MAX_ROUTING_ID_BYTES
+} from '../../contracts/Common/CoreTypes';
+import { routingIdsEqual } from '../routing-id';
+import { encodeServiceWireRoutingId } from './service-wire-binary-primitives';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 
 export type ServiceSpotKind = 'entry' | 'user' | 'instance';
@@ -401,7 +406,9 @@ export class ServiceStatefulRegistry {
     sessionOwnerLeaseGeneration?: bigint
   ): ServiceSessionBinding {
     const current = this.requireActorCore(actor);
-    requireText(sessionRid, 'sessionRid');
+    encodeServiceWireRoutingId(sessionRid, 'sessionRid', ZLINK_MAX_ROUTING_ID_BYTES, (message) => {
+      throw new RangeError(message);
+    });
     requireText(sessionOwnerNodeRid, 'sessionOwnerNodeRid');
     const binding: ServiceSessionBinding = Object.freeze({
       actor: Object.freeze({ ...current.ref }),
@@ -455,7 +462,8 @@ export class ServiceStatefulRegistry {
     if (binding === undefined) return false;
     if (
       binding.bindingGeneration !== expectedBindingGeneration ||
-      (expectedSessionRid !== undefined && binding.sessionRid !== expectedSessionRid) ||
+      (expectedSessionRid !== undefined &&
+        !routingIdsEqual(binding.sessionRid, expectedSessionRid)) ||
       (expectedSessionOwnerNodeRid !== undefined &&
         binding.sessionOwnerNodeRid !== expectedSessionOwnerNodeRid)
     ) {

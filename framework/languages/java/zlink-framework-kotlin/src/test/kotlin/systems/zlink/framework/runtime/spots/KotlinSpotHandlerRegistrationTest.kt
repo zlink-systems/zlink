@@ -53,7 +53,43 @@ class KotlinSpotHandlerRegistrationTest {
         )
     }
 
-    private fun load(spotType: Class<*>, handlerTypes: List<Class<*>>) {
+    @Test
+    fun `Kotlin calls the Java dynamic subscription registry`() {
+        val catalogType =
+            Class.forName("systems.zlink.framework.runtime.spots.ZLinkSpotHandlerCatalog")
+        val catalog =
+            catalogType
+                .getDeclaredConstructor(String::class.java)
+                .also { it.trySetAccessible() }
+                .newInstance("closed")
+        val registry = catalog as ZLinkSpotHandlerRegistry
+        val topic = "runtime.${EntrySpotProbe::class.java.simpleName}"
+        registry.addSubscribe(MissingTopicSubscriptionHandler::class.java, "events", topic)
+        val close =
+            catalogType
+                .getDeclaredMethod("closeRegistration", java.util.function.BiFunction::class.java)
+                .also { it.trySetAccessible() }
+        val loader =
+            java.util.function.BiFunction<List<Class<*>>, List<*>, Any> { types, subscriptions ->
+                load(EntrySpotProbe::class.java, types, subscriptions)
+            }
+        close.invoke(catalog, loader)
+        val targets =
+            catalogType
+                .getDeclaredMethod("subscriptions")
+                .also { it.trySetAccessible() }
+                .invoke(catalog) as Set<*>
+        assertEquals(1, targets.size)
+        val target = targets.single()!!
+        assertEquals("events", target.javaClass.getMethod("channelName").invoke(target))
+        assertEquals(topic, target.javaClass.getMethod("topic").invoke(target))
+    }
+
+    private fun load(
+        spotType: Class<*>,
+        handlerTypes: List<Class<*>>,
+        subscriptions: List<*> = emptyList<Any>(),
+    ): Any {
         val scannedHandlers = ZLinkScannedHandlerCatalog(emptyList())
         val actorCatalogType =
             Class.forName("systems.zlink.framework.runtime.spots.ZLinkSpotActorHandlerCatalog")
@@ -86,11 +122,17 @@ class KotlinSpotHandlerRegistrationTest {
             }
         val load =
             loaderType
-                .getDeclaredMethod("load", Class::class.java, List::class.java, timerRegistrarType)
+                .getDeclaredMethod(
+                    "load",
+                    Class::class.java,
+                    List::class.java,
+                    List::class.java,
+                    timerRegistrarType,
+                )
                 .also { it.trySetAccessible() }
 
         try {
-            load.invoke(loader, spotType, handlerTypes, timerRegistrar)
+            return load.invoke(loader, spotType, handlerTypes, subscriptions, timerRegistrar)
         } catch (failure: InvocationTargetException) {
             throw failure.targetException
         }
@@ -98,6 +140,10 @@ class KotlinSpotHandlerRegistrationTest {
 
     private class RecordingSpotRegistry : ZLinkSpotHandlerRegistry {
         val handlerTypes = mutableListOf<Class<*>>()
+
+        override fun addSubscribe(handlerType: Class<*>, channelName: String, topic: String) {
+            error("This recording registry only records addHandler")
+        }
 
         override fun addHandler(handlerType: Class<*>) {
             handlerTypes += handlerType

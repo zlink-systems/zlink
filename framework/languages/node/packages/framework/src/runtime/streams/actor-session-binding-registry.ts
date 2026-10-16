@@ -6,6 +6,8 @@ import {
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import { createAbortError, throwIfAborted } from '../abort';
 import { ZLinkStateLane } from '../execution/state-lane';
+import type { RoutingId } from '../../contracts';
+import { routingIdsEqual } from '../routing-id';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -19,7 +21,7 @@ export interface ZLinkActorSessionBindingActor {
 }
 
 export interface ZLinkActorSessionBindingContext<TActor extends ZLinkActorSessionBindingActor> {
-  readonly routingId?: unknown;
+  readonly routingId?: RoutingId;
   readonly actorSlotControls?: {
     enqueueBound(actorSlot: number, actorId: string): Promise<void>;
     enqueueUnbound(actorSlot: number): Promise<void>;
@@ -36,7 +38,7 @@ export interface ZLinkActorSessionRoute<
   readonly actor: TActor;
   readonly bindingToken: string;
   readonly actorSlot?: number;
-  readonly sessionIdentity?: string;
+  readonly sessionIdentity?: RoutingId;
   readonly activeFrames: ZLinkActorSessionActiveFrames;
   sealId?: string;
   authorityFence?: ZLinkActorSessionAuthorityFence;
@@ -46,8 +48,8 @@ export interface ZLinkActorSessionRelocationClaim {
   readonly actorId: string;
   readonly actorGeneration: bigint;
   readonly bindingGeneration: bigint;
-  readonly sessionIdentity?: string;
-  readonly actorNodeRid?: string;
+  readonly sessionIdentity?: RoutingId;
+  readonly actorNodeRid?: RoutingId;
   readonly actorNodeGeneration?: bigint;
   readonly sealId: string;
 }
@@ -88,8 +90,8 @@ interface ZLinkActorSessionRelocationState {
   readonly actorId: string;
   readonly actorGeneration: bigint;
   readonly bindingGeneration: bigint;
-  readonly sessionIdentity?: string;
-  readonly actorNodeRid?: string;
+  readonly sessionIdentity?: RoutingId;
+  readonly actorNodeRid?: RoutingId;
   readonly actorNodeGeneration?: bigint;
   readonly sealId: string;
   phase: 'sealed' | 'applying' | 'applied' | 'terminal';
@@ -170,7 +172,7 @@ export class ZLinkActorSessionBindingRegistry<
     actor: TActor,
     bindingToken: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string,
+    sessionIdentity?: RoutingId,
     commitActor?: () => void
   ): Promise<void> {
     await this.lane.run(() =>
@@ -192,7 +194,7 @@ export class ZLinkActorSessionBindingRegistry<
     actor: TActor,
     bindingToken: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string,
+    sessionIdentity?: RoutingId,
     commitActor?: () => void
   ): void {
     const current = this.routes.get(actor.actorId);
@@ -285,7 +287,7 @@ export class ZLinkActorSessionBindingRegistry<
     actor: TActor,
     bindingToken: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string,
+    sessionIdentity?: RoutingId,
     commitActor?: () => void
   ): Promise<void> {
     await this.lane.run(() =>
@@ -308,7 +310,7 @@ export class ZLinkActorSessionBindingRegistry<
     bindingToken: string,
     sealId: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string,
+    sessionIdentity?: RoutingId,
     commitActor?: () => void
   ): Promise<void> {
     await this.lane.run(() =>
@@ -332,7 +334,7 @@ export class ZLinkActorSessionBindingRegistry<
     bindingToken: string,
     sealId: string,
     authorityFence?: ZLinkActorSessionAuthorityFence,
-    sessionIdentity?: string,
+    sessionIdentity?: RoutingId,
     commitActor?: () => void
   ): void {
     if (previous.sealId !== sealId) {
@@ -378,13 +380,13 @@ export class ZLinkActorSessionBindingRegistry<
   /** Selects the route only when it is the exact Session binding (§8.1 validation values). */
   async routeForSessionBinding(
     actorId: string,
-    sessionRid: string,
+    sessionRid: RoutingId,
     bindingGeneration?: bigint
   ): Promise<ZLinkActorSessionRoute<TContext, TActor> | undefined> {
     return await this.lane.run(() => {
       const route = this.routeCore(actorId);
       const generation = route?.actor.ref.bindingGeneration;
-      return route?.sessionIdentity === sessionRid &&
+      return routingIdsEqual(route?.sessionIdentity, sessionRid) &&
         (bindingGeneration === undefined || generation === bindingGeneration)
         ? route
         : undefined;
@@ -1044,7 +1046,7 @@ export class ZLinkActorSessionBindingRegistry<
     const ownsActiveSeal =
       activeState !== undefined &&
       activeState.phase !== 'terminal' &&
-      activeState.sessionIdentity === route.sessionIdentity;
+      routingIdsEqual(activeState.sessionIdentity, route.sessionIdentity);
     if (!ownsActiveSeal) {
       // Nothing this exact route still holds open — leave terminal
       // retention and any other Session's active seal untouched.
@@ -1356,8 +1358,8 @@ function assertRelocationClaim(
   if (
     state.actorGeneration !== claim.actorGeneration ||
     state.bindingGeneration !== claim.bindingGeneration ||
-    state.sessionIdentity !== claim.sessionIdentity ||
-    state.actorNodeRid !== claim.actorNodeRid ||
+    !routingIdsEqual(state.sessionIdentity, claim.sessionIdentity) ||
+    !routingIdsEqual(state.actorNodeRid, claim.actorNodeRid) ||
     state.actorNodeGeneration !== claim.actorNodeGeneration
   ) {
     throw createInternalFrameworkException(
@@ -1379,7 +1381,7 @@ function assertSuccessorSessionIdentity(
   if (
     predecessor.actorGeneration !== successor.actorGeneration ||
     predecessor.bindingGeneration !== successor.bindingGeneration ||
-    predecessor.sessionIdentity !== successor.sessionIdentity
+    !routingIdsEqual(predecessor.sessionIdentity, successor.sessionIdentity)
   ) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.ActorLocationStale,
@@ -1415,8 +1417,8 @@ function routeMatchesFence<
 function sessionIdentityFromContext<
   TActor extends ZLinkActorSessionBindingActor,
   TContext extends ZLinkActorSessionBindingContext<TActor>
->(context: TContext): string | undefined {
-  return context.routingId === undefined ? undefined : String(context.routingId);
+>(context: TContext): RoutingId | undefined {
+  return context.routingId;
 }
 
 function waitForSessionRelocation(operation: Promise<void>, signal?: AbortSignal): Promise<void> {

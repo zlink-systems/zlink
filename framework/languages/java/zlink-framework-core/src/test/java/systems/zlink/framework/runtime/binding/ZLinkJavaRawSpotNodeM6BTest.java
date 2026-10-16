@@ -1957,7 +1957,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             right.start();
             right.connectPeer(endpoint, leftRid);
             ZLinkBackendSpot remote = left.spotNode().createSpot("jvm-m6b-multicast-target");
-            remote.setSubscription("orders");
+            remote.setSubscription("events", "orders");
 
             awaitAdmitted(right, leftRid);
             assertEquals(leftRid, awaitPlacementTarget(right));
@@ -2059,7 +2059,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             for (int index = 0; index < childCount; index++) {
                 ZLinkBackendSpot target =
                         left.spotNode().createSpot("jvm-m6b-multicast-permit-target-" + index);
-                target.setSubscription("orders");
+                target.setSubscription("events", "orders");
                 target.onDispatchEvent(
                         new ZLinkInternalAsyncSpotDispatchHandler() {
                             @Override

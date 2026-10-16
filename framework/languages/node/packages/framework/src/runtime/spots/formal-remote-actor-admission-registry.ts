@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import type { ActorRef, RoutingId, ZLinkActor, ZLinkActorJoinOperationId } from '../../contracts';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors/actor-runtime-state';
@@ -417,9 +418,9 @@ function sameProvisionalAdmission(
     left.requestFingerprint === right.requestFingerprint &&
     sameOperationId(left.completionOperationId, right.completionOperationId) &&
     String(left.sourceSpotId ?? '') === String(right.sourceSpotId ?? '') &&
-    String(left.sourceActorNodeRid ?? '') === String(right.sourceActorNodeRid ?? '') &&
+    routingIdsEqual(left.sourceActorNodeRid, right.sourceActorNodeRid) &&
     left.actorRef.actorId === right.actorRef.actorId &&
-    String(left.actorRef.nodeRid) === String(right.actorRef.nodeRid) &&
+    routingIdsEqual(left.actorRef.nodeRid, right.actorRef.nodeRid) &&
     left.actorRef.objectGeneration === right.actorRef.objectGeneration
   );
 }

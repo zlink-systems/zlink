@@ -1,3 +1,4 @@
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
@@ -566,7 +567,7 @@ export class ServiceStatefulRuntime {
     if (
       current?.bindingGeneration === bindingGeneration &&
       current.sessionOwnerNodeRid === sessionNodeRid &&
-      current.sessionRid === sessionRid
+      routingIdsEqual(current.sessionRid, sessionRid)
     ) {
       return;
     }
@@ -1913,7 +1914,7 @@ export class ServiceStatefulRuntime {
     const delivery = this.sessionDeliveries.get(actorKey(actor));
     if (
       delivery === undefined ||
-      delivery.binding.sessionRid !== sessionRid ||
+      !routingIdsEqual(delivery.binding.sessionRid, sessionRid) ||
       delivery.binding.bindingGeneration !== expectedBindingGeneration
     ) {
       this.operations.reply(
@@ -1943,7 +1944,7 @@ export class ServiceStatefulRuntime {
   sessionBindings(sessionRid: string): readonly ServiceStreamSessionBinding[] {
     return [...this.sessionDeliveries.values()]
       .map((value) => value.binding)
-      .filter((binding) => binding.sessionRid === sessionRid)
+      .filter((binding) => routingIdsEqual(binding.sessionRid, sessionRid))
       .map((binding) => {
         const owner = requireSessionOwnerIdentity(binding);
         return {
@@ -1965,7 +1966,7 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload
   ): Promise<number> {
     const delivery = this.sessionDeliveries.get(actorKey(actor));
-    if (delivery === undefined || delivery.binding.sessionRid !== sessionRid) {
+    if (delivery === undefined || !routingIdsEqual(delivery.binding.sessionRid, sessionRid)) {
       return SubmitResult.NotFound;
     }
     return this.sendToActor(
@@ -2263,7 +2264,7 @@ export class ServiceStatefulRuntime {
             record.boundSession.bindingGeneration
           );
           if (
-            binding.sessionRid !== record.boundSession.sessionRid ||
+            !routingIdsEqual(binding.sessionRid, record.boundSession.sessionRid) ||
             binding.sessionOwnerNodeRid !== ingress.sourceRoutingId
           ) {
             throw new ServiceStaleGenerationError('binding', record.target.actor.actorId);
@@ -3602,7 +3603,7 @@ export class ServiceStatefulRuntime {
       current === undefined ||
       sourceGeneration === undefined ||
       current.bindingGeneration !== record.binding.retiredGeneration ||
-      current.sessionRid !== record.sessionRid ||
+      !routingIdsEqual(current.sessionRid, record.sessionRid) ||
       current.sessionOwnerNodeRid !== ingress.sourceRoutingId ||
       current.sessionOwnerNodeGeneration !== sourceGeneration ||
       current.sessionOwnerId !== ingress.sourceRoutingId ||
@@ -5421,7 +5422,7 @@ function actorKey(actor: ServiceActorRef): string {
 function sameSessionBinding(left: ServiceSessionBinding, right: ServiceSessionBinding): boolean {
   return (
     sameActorRef(left.actor, right.actor) &&
-    left.sessionRid === right.sessionRid &&
+    routingIdsEqual(left.sessionRid, right.sessionRid) &&
     sameSessionOwnerIdentity(left, right) &&
     left.bindingGeneration === right.bindingGeneration
   );
@@ -5430,7 +5431,7 @@ function sameSessionBinding(left: ServiceSessionBinding, right: ServiceSessionBi
 function sameSessionIdentity(left: ServiceSessionBinding, right: ServiceSessionBinding): boolean {
   return (
     sameActorRef(left.actor, right.actor) &&
-    left.sessionRid === right.sessionRid &&
+    routingIdsEqual(left.sessionRid, right.sessionRid) &&
     sameSessionOwnerIdentity(left, right)
   );
 }
@@ -5493,7 +5494,7 @@ function sessionDeliveryKey(
   >
 ): string {
   return (
-    `${actorKey(binding.actor)}\0${binding.sessionOwnerNodeRid}\0${binding.sessionRid}` +
+    `${actorKey(binding.actor)}\0${binding.sessionOwnerNodeRid}\0${encodeRoutingIdStorageHex(binding.sessionRid)}` +
     `\0${binding.sessionOwnerNodeGeneration ?? ''}` +
     `\0${binding.sessionOwnerId ?? ''}` +
     `\0${binding.sessionOwnerLeaseGeneration ?? ''}` +
@@ -5506,7 +5507,7 @@ function exactRetiredDelivery(
   retired: ServiceRetiredBoundSessionRouteFence
 ): boolean {
   return (
-    binding.sessionRid === retired.sessionRid &&
+    routingIdsEqual(binding.sessionRid, retired.sessionRid) &&
     binding.sessionOwnerNodeRid === retired.sessionOwnerNodeRid &&
     binding.sessionOwnerNodeGeneration === retired.sessionOwnerNodeGeneration &&
     binding.sessionOwnerId === retired.sessionOwnerId &&
@@ -5526,7 +5527,7 @@ function replacementNoticeKey(
     `\0${record.retiredSession.sessionOwnerNodeGeneration}` +
     `\0${record.retiredSession.sessionOwnerId}` +
     `\0${record.retiredSession.sessionOwnerLeaseGeneration}` +
-    `\0${record.retiredSession.sessionRid}` +
+    `\0${encodeRoutingIdStorageHex(record.retiredSession.sessionRid)}` +
     `\0${record.retiredSession.retiredBindingGeneration}`
   );
 }

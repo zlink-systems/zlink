@@ -134,7 +134,7 @@ export class ZLinkSessionActorCoordinator {
     const sessionActor =
       reuseActor ??
       new DefaultZLinkSessionActor(this.sessionActorRuntime, boundActorRef, bindingToken);
-    const sessionIdentity = String(this.actorBindingRoutingId(context));
+    const sessionIdentity = this.actorBindingRoutingId(context);
     if (previous === undefined) {
       if (releaseSeal !== undefined) {
         throw createInternalFrameworkException(

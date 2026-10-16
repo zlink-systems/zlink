@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -226,7 +227,64 @@ public sealed class ServiceWireSessionRelocationCodecTests
         );
     }
 
-    private static byte[] ReadGolden(string name)
+    [Theory]
+    [InlineData("sessionRelocationSealed", "sealed")]
+    [InlineData("sessionRelocationBindingAbsent", "bindingAbsent")]
+    public void SealResult_GeneratedCodecsAcceptBothAndRuntimeRequiresSealed(
+        string name,
+        string result
+    )
+    {
+        var bytes = ReadGolden(name);
+        var context = ServiceWireCodec.DecodeContext.Empty;
+        var generated = ServiceWireCodec.DecodeSessionRelocationSealed43(bytes, context);
+        Assert.Equal(
+            result == "sealed"
+                ? ServiceWireCodec.SessionSealResult.Sealed
+                : ServiceWireCodec.SessionSealResult.BindingAbsent,
+            generated.SealResult
+        );
+        Assert.Equal(
+            bytes,
+            ServiceWireCodec.EncodeSessionRelocationSealed43(generated, context)[0]
+        );
+        var pilot = ServiceWirePilotCodec.DecodeSessionRelocationSealed43(bytes);
+        Assert.Equal(bytes, ServiceWirePilotCodec.EncodeSessionRelocationSealed43(pilot));
+        var accepted = ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed(
+            bytes,
+            out _,
+            out var error
+        );
+        Assert.Equal(result == "sealed", accepted);
+        Assert.Equal(
+            result == "sealed"
+                ? ZLinkServiceWireCodec.DecodeError.None
+                : ZLinkServiceWireCodec.DecodeError.InvalidField,
+            error
+        );
+    }
+
+    [Theory]
+    [InlineData("missingSealResult")]
+    [InlineData("zeroSealResult")]
+    [InlineData("unknownSealResult")]
+    [InlineData("trailingSealResult")]
+    public void SealResult_MalformedBytesAreRejected(string name)
+    {
+        var bytes = ReadGolden(name, "malformed");
+        Assert.ThrowsAny<Exception>(() =>
+            ServiceWireCodec.DecodeSessionRelocationSealed43(
+                bytes,
+                ServiceWireCodec.DecodeContext.Empty
+            )
+        );
+        Assert.ThrowsAny<Exception>(() =>
+            ServiceWirePilotCodec.DecodeSessionRelocationSealed43(bytes)
+        );
+        Assert.False(ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed(bytes, out _, out _));
+    }
+
+    private static byte[] ReadGolden(string name, string section = "canonical")
     {
         var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
         var fixturePath = Path.GetFullPath(
@@ -235,7 +293,7 @@ public sealed class ServiceWireSessionRelocationCodecTests
         );
         using var document = JsonDocument.Parse(File.ReadAllText(fixturePath));
         var fixture = document
-            .RootElement.GetProperty("canonical")
+            .RootElement.GetProperty(section)
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == name);
         return Convert.FromHexString(fixture.GetProperty("hex").GetString()!);
