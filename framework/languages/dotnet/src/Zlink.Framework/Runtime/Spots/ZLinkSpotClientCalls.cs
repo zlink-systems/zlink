@@ -264,8 +264,14 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
     }
 
     public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
-        ZLinkRequestAdmission.Run<TReply>(admission =>
-            ExecuteAsync<TReply>(ZLinkNestedRequestTerminator.Async, cancellationToken, admission)
+        ZLinkRequestAdmission.Run(
+            (Call: this, Token: cancellationToken),
+            static (state, admission) =>
+                state.Call.ExecuteAsync<TReply>(
+                    ZLinkNestedRequestTerminator.Async,
+                    state.Token,
+                    admission
+                )
         );
 
     public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>
@@ -502,8 +508,9 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
 
     public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default)
     {
-        return ZLinkRequestAdmission.Run<TReply>(admission =>
-            ExecuteAsync<TReply>(cancellationToken, admission)
+        return ZLinkRequestAdmission.Run(
+            (Call: this, Token: cancellationToken),
+            static (state, admission) => state.Call.ExecuteAsync<TReply>(state.Token, admission)
         );
     }
 

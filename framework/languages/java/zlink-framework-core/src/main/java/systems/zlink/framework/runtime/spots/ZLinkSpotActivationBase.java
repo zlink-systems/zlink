@@ -255,7 +255,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                     ZLinkActor actor = localActor.get();
                     var control =
                             host.dispatchActorControlPacket(
-                                    packetHeader, headerPart, actor, pendingHeader);
+                                    packetHeader, headerPart, bodyPart, actor, pendingHeader);
                     if (control != null) {
                         dispatches.add(control);
                         continue;
