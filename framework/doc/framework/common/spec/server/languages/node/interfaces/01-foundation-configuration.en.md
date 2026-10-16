@@ -296,7 +296,8 @@ The receive path performs an serializer lookup using the canonical content type 
 the wire. An unregistered or noncanonical value isn't reinterpreted as JSON and completes
 with `ZLinkFrameworkErrorKind.ProtocolError`.
 
-Entry Spot registration only takes the implementation type. The Entry
+Entry Spot registration only takes the implementation type and the Actor stable
+type that Entry Spot accepts. The Entry
 Spot's `SpotId` is issued by the framework in the format
 `<prefix>-entry-<lowercase-canonical-uuid-v4>`. An option for the
 caller to specify a fixed `RoutingId` or `SpotId` isn't provided.

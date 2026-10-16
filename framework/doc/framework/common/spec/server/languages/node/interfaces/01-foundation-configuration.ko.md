@@ -290,7 +290,7 @@ Registry는 startup 뒤 바뀌지 않는다. 송신 선택 결과는 declared ty
 않았거나 canonical form이 아닌 값은 JSON으로 다시 해석하지 않고
 `ZLinkFrameworkErrorKind.ProtocolError`로 완료한다.
 
-Entry Spot 등록은 구현 type만 받는다. Entry Spot의 `SpotId`는 Framework가
+Entry Spot 등록은 구현 type과 그 Entry Spot이 받는 Actor stable type만 받는다. Entry Spot의 `SpotId`는 Framework가
 `<prefix>-entry-<lowercase-canonical-uuid-v4>` 형식으로 발급한다. caller가 fixed `RoutingId`나
 `SpotId`를 지정하는 option은 제공하지 않는다.
 
