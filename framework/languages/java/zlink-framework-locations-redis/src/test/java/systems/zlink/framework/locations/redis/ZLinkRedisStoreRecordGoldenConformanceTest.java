@@ -1099,7 +1099,8 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
                                         capability.path("stableType").asText(),
                                         policyFromWire(capability.path("policy").asText()),
                                         capability.path("hasSnapshotAdapter").asBoolean(),
-                                        capability.path("limit").asInt())));
+                                        capability.path("limit").asInt(),
+                                        capability.path("entryAccepted").asBoolean())));
         return capabilities;
     }
 
