@@ -6,7 +6,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/generate-framework-json-schemas.mjs --project tsconfig.json --source server/shared --out dist/.zlink-framework-json-schemas.cjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint server e2e",
     "format": "prettier --write .",

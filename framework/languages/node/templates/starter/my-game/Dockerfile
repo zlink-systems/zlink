@@ -5,6 +5,7 @@ WORKDIR /template
 COPY package.json ./
 RUN npm install
 COPY tsconfig.json ./
+COPY scripts scripts
 COPY server server
 COPY e2e e2e
 RUN npm run build && npm prune --omit=dev

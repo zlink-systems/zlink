@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { diagnostics } from './diagnostics';
+import '../../.zlink-framework-json-schemas.cjs';
 import { NestFactory } from '@nestjs/core';
 import { Global, Module, type Type } from '@nestjs/common';
 import { createInterface } from 'node:readline';

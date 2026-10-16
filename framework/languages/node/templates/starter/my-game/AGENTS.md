@@ -52,7 +52,7 @@ The channels in `mmo-world-channels` are player-selected game spaces within a wo
 
 After each addition, extend settings and registrations, `zlink.structure.json`, its checker, and e2e together. Keep game rules in Domain/Application modules when they appear; put Framework callbacks and transport adapters under Infrastructure/ZLink. Do not create empty layers in this starter.
 
-When adding typed packets, transfer `board-tables/my-game/scripts/generate-framework-json-schemas.mjs`, its build command, and the schema import in hosting together. Follow the sample handler's packet-name-to-class restoration for typed payloads (#1731); this starter registers no typed handlers.
+The build generates packet schemas with `scripts/generate-framework-json-schemas.mjs` and hosting registers them. When adding typed packets, follow the sample handler's packet-name-to-class restoration (#1731); this starter registers no typed handlers.
 
 ## Public API boundaries
 

@@ -52,7 +52,7 @@
 
 기능마다 설정·등록, `zlink.structure.json`, 검사기와 e2e를 함께 확장한다. 게임 규칙이 생기면 Domain/Application에 두고 Framework callback과 transport adapter는 Infrastructure/ZLink에 둔다. 현재 셋업에는 빈 계층을 만들지 않는다.
 
-Typed 패킷을 추가할 때 `board-tables/my-game/scripts/generate-framework-json-schemas.mjs`, build 명령과 hosting의 schema import를 함께 가져온다. Typed payload는 샘플 handler의 패킷 이름→class 복원 방식(#1731)을 따른다. 현재 셋업에는 typed handler가 없다.
+build는 `scripts/generate-framework-json-schemas.mjs`로 패킷 schema를 생성하고 hosting이 이를 등록한다. Typed 패킷을 추가하면 샘플 handler의 패킷 이름→class 복원 방식(#1731)을 따른다. 현재 셋업에는 typed handler가 없다.
 
 ## 공개 API 경계
 
