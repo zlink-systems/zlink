@@ -17,6 +17,8 @@ Use typed messages and the default Framework JSON serializer. Reply to the reque
 
 ## Changes and verification
 
+Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e. Build images with `--build-only` or `-BuildOnly`; check structure with `--check-structure` or `-CheckStructure`. Use `--local` or `-Local` for local process debugging with JDK 25.
+
 Keep channel, dungeon, reconnect and update scenarios and their order. Run the structure check and e2e runner after changes. Inspect `.logs/run-<id>/` node stderr, including message-flow diagnostics. A single intermittent failure is a defect. Cleanup errors must fail the run. Keep public dependency versions centralized in build.gradle.kts. README and AGENTS are English; code comments are English. The final README section provides brief Korean execution instructions.
 
 Town and Instance register the shared application Entry and first-admission handler. Declare one Entry for each of these nodes and none for roles without application Entry registration; Framework default Entries are not part of the structure. Keep dynamic Dungeon declarations complete for every owning Instance. Preserve one Dungeon slot per Instance in the e2e configuration; it makes replacement placement deterministic. Keep the Message Follow duration and derived SafeToShutdown observation budget under their shared lifecycle constants.

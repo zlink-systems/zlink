@@ -20,4 +20,4 @@ Use typed messages and the default Framework JSON serializer. Relocation adapter
 
 ## Changes and verification
 
-Keep `cross`, `border`, `reconnect` and `update` in that order. Update configuration and `zlink.structure.json` together. Run the structure checker and the selected e2e scenarios after changes. A single intermittent failure is a defect. Preserve the first failure and message-flow records in `.logs/run-<id>/`; do not treat a later successful run as a correction.
+Keep `cross`, `border`, `reconnect` and `update` in that order. Update configuration and `zlink.structure.json` together. Run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1` for Docker e2e after changes. Use `--check-structure` or `-CheckStructure` for structure validation, and `--local` or `-Local` for local process debugging. Build images with `--build-only` or `-BuildOnly`. A single intermittent failure is a defect. Preserve the first failure and message-flow records in `.logs/run-<id>/`; do not treat a later successful run as a correction.

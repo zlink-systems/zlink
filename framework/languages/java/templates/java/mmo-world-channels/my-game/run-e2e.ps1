@@ -1,14 +1,76 @@
-param([string]$Scenario = '', [switch]$CheckStructure)
+param(
+    [switch]$Local,
+    [switch]$NoBuild,
+    [switch]$BuildOnly,
+    [switch]$CheckStructure,
+    [string]$Scenario,
+    [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
+)
 $ErrorActionPreference = 'Stop'
-Push-Location $PSScriptRoot
-try {
-    New-Item -ItemType Directory -Force .logs | Out-Null
-    & ./gradlew.bat --no-daemon installDist :e2e:javaHome *> .logs/build.log
-    if ($LASTEXITCODE -ne 0) { Get-Content .logs/build.log -Tail 35; exit 1 }
-    $javaHomePath = (Get-Content .logs/java-home.txt -Raw).Trim()
-    $arguments = @()
-    if ($CheckStructure) { $arguments = @('--check-structure') }
-    elseif ($Scenario) { $arguments = @('--scenario', $Scenario) }
-    & "$javaHomePath/bin/java.exe" --enable-native-access=ALL-UNNAMED '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.Program @arguments
+Set-StrictMode -Version Latest
+if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
+$root = $PSScriptRoot
+Set-Location $root
+if ($CheckStructure) { $RunnerArguments = @('--check-structure') }
+New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
+if ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if ($Local) {
+    if (-not $NoBuild) {
+        & ./gradlew.bat --no-daemon installDist :e2e:javaHome *> (Join-Path $root '.logs/build.log')
+        if ($LASTEXITCODE -ne 0) {
+            Get-Content (Join-Path $root '.logs/build.log') -Tail 35 | Write-Host
+            exit 1
+        }
+    }
+    if ($BuildOnly) { exit 0 }
+    $javaHomePath = (Get-Content (Join-Path $root '.logs/java-home.txt') -Raw).Trim()
+    & "$javaHomePath/bin/java.exe" --enable-native-access=ALL-UNNAMED '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.Program @RunnerArguments
     exit $LASTEXITCODE
-} finally { Pop-Location }
+}
+if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
+$project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
+$logs = Join-Path $root ".logs/docker-$project"
+New-Item -ItemType Directory $logs | Out-Null
+$compose = @('compose', '-f', (Join-Path $root 'docker-compose.yml'), '-p', $project, '--profile', 'docker')
+$result = 1
+Write-Host "Docker logs: $logs"
+try {
+    & docker @compose build *> (Join-Path $logs 'build.log')
+    if ($LASTEXITCODE -ne 0) {
+        Get-Content (Join-Path $logs 'build.log') -Tail 30 | Write-Host
+        throw 'Docker image build failed.'
+    }
+    if ($BuildOnly) { $result = 0 }
+    else {
+        & docker @compose run --rm --no-deps -T --name "$project-check" runner --check-structure
+        if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
+        if ($RunnerArguments -contains '--check-structure') { $result = 0 }
+        else {
+            & docker @compose up -d --wait --wait-timeout 30 dbA dbB *> (Join-Path $logs 'redis-start.log')
+            if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }
+            & docker @compose run --rm --no-deps -T --name "$project-control" runner @RunnerArguments
+            $result = $LASTEXITCODE
+        }
+    }
+}
+catch { Write-Host $_ -ForegroundColor Red }
+finally {
+    $containers = @(& docker ps -aq --filter "label=my-game.e2e=$project")
+    if ($LASTEXITCODE -ne 0) { $result = 1 }
+    if ($containers.Count -gt 0) {
+        & docker rm -f @containers *> (Join-Path $logs 'containers-stop.log')
+        if ($LASTEXITCODE -ne 0) { $result = 1 }
+    }
+    & docker @compose logs --no-color dbA dbB *> (Join-Path $logs 'redis.log')
+    if ($LASTEXITCODE -ne 0) { $result = 1 }
+    & docker @compose down --volumes *> (Join-Path $logs 'cleanup.log')
+    if ($LASTEXITCODE -ne 0) { $result = 1 }
+    foreach ($image in @("$project-node", "$project-runner")) {
+        & docker image inspect $image *> $null
+        if ($LASTEXITCODE -eq 0) {
+            & docker image rm $image *>> (Join-Path $logs 'cleanup.log')
+            if ($LASTEXITCODE -ne 0) { $result = 1 }
+        }
+    }
+}
+exit $result

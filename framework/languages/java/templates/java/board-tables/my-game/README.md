@@ -11,7 +11,7 @@ flowchart LR
 
 ## Prerequisites
 
-- JDK 25, Docker with Compose v2, and PowerShell 7 on Windows.
+- Docker with Compose v2, and PowerShell 7 on Windows.
 - Network access to Maven Central and the Redis container registry.
 - Published ZLink Framework 0.30.1 and binding 1.19.0. Versions are owned by `build.gradle.kts`.
 
@@ -22,18 +22,25 @@ The Gradle wrapper and all server modules are included. Copy this directory to b
 Linux or WSL:
 
 ```sh
-./gradlew --no-daemon installDist
+./run-e2e.sh --build-only
 ```
 
 Windows:
 
 ```powershell
-./gradlew.bat --no-daemon installDist
+pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-The build installs separate Session and Table launchers under each module's `build/install` directory, plus the Java e2e runner.
+The build creates a shared node image and a Java e2e runner image.
 
-## Local e2e
+## Docker e2e
+
+Docker runs the Java e2e runner and every node role in containers. Nodes share the runner's network namespace and keep the existing stdin/stdout control protocol. Only the runner mounts the Docker socket. Each invocation removes its own containers, network and image tags; logs remain under `.logs/`.
+
+For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
+
+> **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.1+8 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
+
 
 Linux or WSL:
 
@@ -79,6 +86,8 @@ The e2e runner sets each node's optional `tableCapacity` to the number of select
 
 ## 한국어 실행 안내
 
-JDK 25와 Docker Compose v2를 준비한 뒤 Linux·WSL에서는 `./run-e2e.sh`, Windows PowerShell 7에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 실행한다. runner는 독립 Redis와 Session·Table process를 기동하고 `table`, `reconnect`, `update` 시나리오를 검사한다.
+기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다.
+
+Docker Compose v2를 준비한 뒤 Linux·WSL에서는 `./run-e2e.sh`, Windows PowerShell 7에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 실행한다. runner는 독립 Redis와 Session·Table process를 기동하고 `table`, `reconnect`, `update` 시나리오를 검사한다.
 
 실행별 설정과 node 로그는 `.logs/run-<id>/`에 남는다. 운영 배포에서는 Redis를 먼저 준비하고 Table node를 기동한 뒤 Session node를 기동한다. Table node 교체 시에는 `drain`의 `SAFE_TO_SHUTDOWN`을 확인한 뒤 `shutdown`하고 같은 설정으로 대체 process를 기동한다.

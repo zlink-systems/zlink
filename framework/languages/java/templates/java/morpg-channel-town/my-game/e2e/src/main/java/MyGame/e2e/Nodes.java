@@ -17,6 +17,8 @@ public final class Nodes implements AutoCloseable {
     private final Map<String, Node> nodes = new LinkedHashMap<>();
     private final Map<String, Path> configs = new HashMap<>();
     private final Map<String, String> modules = new HashMap<>();
+    private static final String DOCKER_PROJECT = System.getenv("MY_GAME_DOCKER_PROJECT");
+    private static final boolean DOCKER = DOCKER_PROJECT != null;
     private boolean composeStarted;
     String endpoint;
 
@@ -57,9 +59,11 @@ public final class Nodes implements AutoCloseable {
     }
 
     void start() throws Exception {
-        composeStarted = true;
-        compose("up", "-d", "--wait");
-        String redis = compose("port", "redis", "6379");
+        if (!DOCKER) {
+            composeStarted = true;
+            compose("up", "-d", "--wait", "redis");
+        }
+        String redis = (DOCKER ? "redis:6379" : compose("port", "redis", "6379"));
         var structure = Json.MAPPER.readTree(root.resolve("zlink.structure.json").toFile());
         var declarations = new ArrayList<JsonNode>();
         structure.path("nodes").forEach(declarations::add);
@@ -131,33 +135,74 @@ public final class Nodes implements AutoCloseable {
         if (failure != null) throw failure;
     }
 
+    private static void docker(String... arguments) throws Exception {
+        var command = new ArrayList<>(List.of("docker"));
+        command.addAll(List.of(arguments));
+        var process = new ProcessBuilder(command).redirectErrorStream(true).start();
+        String output =
+                process.inputReader().lines().collect(java.util.stream.Collectors.joining("\n"));
+        Structure.require(process.waitFor() == 0, "Docker failed: " + output);
+    }
+
     private static final class Node {
         private final String id;
         private final Process process;
+        private final String container;
         private final BufferedWriter input;
         private final LinkedBlockingQueue<String> output = new LinkedBlockingQueue<>();
 
         Node(String id, String module, Path config, Path root, Path logs) throws Exception {
             this.id = id;
+            List<String> command;
+            container =
+                    DOCKER
+                            ? DOCKER_PROJECT
+                                    + "-"
+                                    + id.toLowerCase(Locale.ROOT)
+                                    + "-"
+                                    + UUID.randomUUID()
+                            : null;
+            if (DOCKER) {
+                docker(
+                        "create",
+                        "-i",
+                        "--name",
+                        container,
+                        "--label",
+                        "my-game.e2e=" + DOCKER_PROJECT,
+                        "--network",
+                        "container:" + System.getenv("MY_GAME_RUNNER_CONTAINER"),
+                        System.getenv("MY_GAME_NODE_IMAGE"),
+                        "-cp",
+                        "/app/" + module + "/lib/*",
+                        "MyGame." + module + ".Program",
+                        "/app/config.json");
+                docker("cp", config.toString(), container + ":/app/config.json");
+                command = new ArrayList<>(List.of("docker", "start", "-a", "-i", container));
+            } else {
+                command =
+                        new ArrayList<>(
+                                List.of(
+                                        Path.of(
+                                                        System.getProperty("java.home"),
+                                                        "bin",
+                                                        windows() ? "java.exe" : "java")
+                                                .toString(),
+                                        "--enable-native-access=ALL-UNNAMED",
+                                        "-cp",
+                                        root.resolve(
+                                                                "server/"
+                                                                        + module
+                                                                        + "/build/install/"
+                                                                        + module
+                                                                        + "/lib")
+                                                        .toString()
+                                                + "/*",
+                                        "MyGame." + module + ".Program",
+                                        config.toString()));
+            }
             process =
-                    new ProcessBuilder(
-                                    Path.of(
-                                                    System.getProperty("java.home"),
-                                                    "bin",
-                                                    windows() ? "java.exe" : "java")
-                                            .toString(),
-                                    "--enable-native-access=ALL-UNNAMED",
-                                    "-cp",
-                                    root.resolve(
-                                                            "server/"
-                                                                    + module
-                                                                    + "/build/install/"
-                                                                    + module
-                                                                    + "/lib")
-                                                    .toString()
-                                            + "/*",
-                                    "MyGame." + module + ".Program",
-                                    config.toString())
+                    new ProcessBuilder(command)
                             .directory(root.toFile())
                             .redirectError(logs.resolve(id + "-stderr.log").toFile())
                             .start();
@@ -218,6 +263,7 @@ public final class Nodes implements AutoCloseable {
                     id + " failed to exit");
             Structure.require(
                     process.exitValue() == 0, id + " shutdown exit: " + process.exitValue());
+            if (container != null) docker("rm", container);
         }
 
         void cleanup() throws Exception {
@@ -232,6 +278,7 @@ public final class Nodes implements AutoCloseable {
                     if (process.isAlive()) {
                         process.destroyForcibly();
                         process.waitFor();
+                        if (container != null) docker("rm", "-f", container);
                     }
                 } catch (Exception | Error error) {
                     if (primary != null) primary.addSuppressed(error);
